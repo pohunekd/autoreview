@@ -1,4 +1,4 @@
-# pohunek-autoreview
+# autoreview
 
 Policy-driven AI pull request review on top of [pohunek](https://github.com/zajca/pohunek) sessions.
 
@@ -26,7 +26,9 @@ one GitHub review with inline comments.
   answered, taking the PR discussion into account.
 - **Durable state** - SQLite store, retries with backoff, approval deadlines,
   session cleanup, an hourly review-queue digest.
-- **Notifications** - action / digest / log levels routed to a notifier.
+- **Notifications** - action / digest / log levels routed to one or more
+  notifier backends (none, Matrix and webhook first; the layer is built for
+  any channel).
 
 ## Architecture
 
@@ -48,10 +50,11 @@ and the service unit.
 | Phase | Goal | Done when |
 |---|---|---|
 | 1. Extract and decouple | Fresh history, rename, move every personal or organisation-specific value into configuration, `Notifier` interface | Tests pass; `validate` accepts an example policy with no Matrix configured |
-| 2. Adapters and installer | Claude and Codex adapters without hard-coded paths, pohunek profile generator, release binaries, systemd unit, `init` | A clean host goes from `init` to a published review by following the docs |
+| 2. Adapters and installer | Claude and Codex adapters without hard-coded paths, pohunek profile generator, release binaries, container image, systemd unit, `autoreview init` | A clean host goes from `init` to a published review by following the docs |
 | 3. Safe defaults for public repositories | Author/fork-aware rules, `base` checkout for untrusted authors, threat model, pohunek version check | A fork pull request cannot be auto-approved and never runs head code with setup hooks |
 | 4. Migrate the original deployment | The private deployment consumes a release; legacy review markers and state still read | Incremental reviews continue on pull requests reviewed before the migration |
 | 5. Examples, docs, dogfooding | One small policy per scenario over the pohunek repositories, validated in CI; live on `pohunekd/*` | Every example passes `validate` in CI; the org's pull requests are reviewed by it |
+| 6. After v1 | Approval by a GitHub comment command, GitHub App identity, more notifier backends | Decided one by one when started |
 
 ### Planned examples
 
@@ -74,7 +77,7 @@ repositories:
 - pohunek daemon on one or more review hosts with the repositories registered
 - `gh` CLI and a token of the reviewing GitHub account
 - Claude Code and/or Codex CLI on the review hosts
-- Linux with systemd for the packaged service
+- Linux with systemd for the packaged service, or a container runtime for the image
 
 ## Security model (planned)
 
@@ -83,8 +86,16 @@ instructions found in the diff, comments or repository files. For public
 repositories the defaults keep untrusted authors behind a maintainer label,
 review them from a base checkout, and never auto-approve them.
 
-## Open decisions
+## Decisions so far
 
-Naming of binaries and configuration, configuration defaults, notifier scope,
-approval channel, GitHub identity model (personal token, machine user or
-GitHub App) and the default prompt are still open.
+- Binary `autoreview`; one YAML configuration file with every key required
+  and written out in full by `autoreview init`; secrets only in `AUTOREVIEW_*`
+  and `GH_TOKEN` environment variables.
+- Reviews are posted by a personal token or a machine user; a GitHub App
+  comes after v1.
+- Clean reviews that wait for a human are approved through the CLI, with an
+  optional Hermes Agent integration; approval by GitHub comment comes after v1.
+- Untrusted authors are a policy class of their own and are never
+  auto-approved.
+- Distributed as release binaries with systemd units and as a container image.
+- MIT license.
