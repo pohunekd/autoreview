@@ -1,0 +1,50 @@
+name: Feature
+description: A new user-visible capability
+type: Feature
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: The outcome for the user, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+      description: What is in, and nearby work that is explicitly out.
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of done
+      description: Observable criteria with stable IDs. Each must be checkable by running a command, a named test, or the manual check described in verification.md.
+      placeholder: |
+        - D1: ...
+        - D2: ...
+    validations:
+      required: true
+  - type: textarea
+    id: entry-points
+    attributes:
+      label: Entry points
+      description: Packages, files, CLI commands, config keys or Integrations methods involved. Mark unknowns as unknown.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: Exact commands and manual steps that demonstrate each D item, and which tests (if any) the testing policy asks for.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Blocking issues (also set as native dependencies), or None.
+      placeholder: None
+    validations:
+      required: true

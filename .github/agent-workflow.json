@@ -1,0 +1,45 @@
+{
+  "comment": "Identifiers and vocabulary for agent work tracking. Skills read this file instead of hardcoding them. Opaque node IDs (project fields, status options) are resolved at run time with gh, never stored here.",
+  "repository": "pohunekd/autoreview",
+  "project": {
+    "owner": "pohunekd",
+    "number": 3,
+    "url": "https://github.com/orgs/pohunekd/projects/3",
+    "statusField": "Status",
+    "statusOptions": {
+      "Todo": "Tracked and actionable, not started.",
+      "In Progress": "Being implemented or awaiting merge. Blockers and review findings are comments plus the `blocked` label, not a separate status.",
+      "Done": "Issue closed as completed: for repository changes, the PR is merged to main and main CI is green; for pure investigation, the result is recorded on the issue."
+    }
+  },
+  "issueTypes": {
+    "Bug": "Observed behaviour differs from expected. Must be reproducible.",
+    "Feature": "New user-visible capability. Parent issues of epics are Features labelled `epic`.",
+    "Task": "Engineering work without new user-visible behaviour: refactor, CI, tooling, docs, spike."
+  },
+  "labels": {
+    "epic": "Parent issue whose scope is delivered by native sub-issues.",
+    "found-during-work": "Filed by an agent while working on another issue.",
+    "blocked": "Cannot progress; a comment names the blocker and a native dependency links it.",
+    "needs-decision": "Waiting for an owner decision; the issue states the options and a recommendation.",
+    "no-changelog": "No user-visible effect; no changelog fragment needed.",
+    "security": "Affects the trust boundary: tokens, untrusted content, approvals.",
+    "area:engine": "Discovery, scheduling, store, decisions, publication.",
+    "area:github": "GitHub access, credentials, triggers, identity.",
+    "area:reviewers": "Reviewer adapters, protocols, prompts, verifier.",
+    "area:notify": "Notifier backends, routing, review queue.",
+    "area:packaging": "Releases, systemd units, container image, workflow plugin, installer.",
+    "area:docs": "User documentation and examples.",
+    "area:ci": "CI, tooling, agent instructions.",
+    "duplicate": "This issue or pull request already exists.",
+    "invalid": "This does not seem right.",
+    "wontfix": "This will not be worked on."
+  },
+  "milestones": "M1 Extraction, M2 GitHub credentials, M3 Reviewers, notifications and safety, M4 Distribution and v0.1, M5 After v0.1. Every non-epic issue belongs to exactly one milestone.",
+  "authorization": "See .agents/instructions/workflow.md#standing-authorization. Agents never ask whether to file an issue; they deduplicate and file.",
+  "pullRequests": {
+    "shape": "One issue, one branch, one squash-merged PR. Split large issues into sub-issues instead of stacking PRs.",
+    "softMaxChangedLines": 400,
+    "closingKeyword": "Closes #N in the PR body, only when the PR meets the issue's full DoD; otherwise Refs #N."
+  }
+}

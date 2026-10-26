@@ -1,0 +1,4 @@
+# Changelog layout of this repository, read by the changelog tool (see
+# .agents/instructions/changelog.md). Single product: one changelog file.
+repository = "pohunekd/autoreview"
+changelog = "CHANGELOG.md"

@@ -1,0 +1,14 @@
+# Build output and local state
+/autoreview
+/bin/
+/dist/
+/logs/
+*.test
+*.out
+coverage.out
+/.venv/
+__pycache__/
+
+# Secrets and the owner's local-only lists
+.env*
+/.check-docs-forbidden

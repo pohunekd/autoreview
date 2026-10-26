@@ -1,0 +1,58 @@
+name: Bug
+description: Observed behaviour differs from what is expected
+type: Bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: "One or two sentences: what is wrong and where."
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: autoreview commit SHA or release version, pohunek version (`pohunek --version`), OS and version, Go version when built from source.
+      placeholder: |
+        - autoreview: <sha or version>
+        - pohunek: 0.x.y
+        - OS: Debian 13 / macOS 15.x
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands from a clean start, so another agent can reproduce it without asking. Include the config and policy used, with no secrets and no private repository names.
+      placeholder: |
+        1. `autoreview validate --config config.yaml`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happens instead, with the exact error text.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Log lines (JSON), command output, CI run links. Mark anything you inferred but did not observe as unconfirmed.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Found while
+      description: The issue or PR you were working on, if any, and whether this blocks it.
+      placeholder: Found while working on #N; not blocking.

@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Runs the repository gates, reports each gate's own result and exits non-zero
+# when any gate failed. Usage: scripts/gates [all|docs|go]; CI runs the docs
+# and go groups as separate jobs.
+set -uo pipefail
+# Deliberately no -e: a failing gate must not stop the others from running.
+
+cd "$(dirname "$0")/.." || exit 2
+
+# Pinned so that local runs and CI use the same analyzer.
+STATICCHECK_VERSION=v0.8.2
+
+group=${1:-all}
+case "$group" in
+    all | docs | go) ;;
+    *)
+        echo "usage: scripts/gates [all|docs|go]" >&2
+        exit 2
+        ;;
+esac
+
+names=()
+results=()
+failed=0
+
+run_gate() {
+    local name=$1
+    shift
+    echo "==> $name: $*"
+    local rc=0
+    "$@" || rc=$?
+    names+=("$name")
+    if [ "$rc" -eq 0 ]; then
+        results+=("passed")
+    else
+        results+=("failed (exit $rc)")
+        failed=1
+    fi
+}
+
+skip_gate() {
+    echo "==> $1: skipped, $2"
+    names+=("$1")
+    results+=("skipped ($2)")
+}
+
+# gofmt -l exits 0 even when it lists unformatted files, so the listing decides.
+check_fmt() {
+    local unformatted
+    unformatted="$(gofmt -l .)"
+    if [ -n "$unformatted" ]; then
+        echo "not gofmt-formatted:"
+        echo "$unformatted"
+        return 1
+    fi
+}
+
+docs_gates() {
+    run_gate check-docs python3 -I scripts/check-docs
+}
+
+go_gates() {
+    if [ ! -f go.mod ]; then
+        skip_gate fmt "no go.mod yet"
+        skip_gate vet "no go.mod yet"
+        skip_gate staticcheck "no go.mod yet"
+        skip_gate test "no go.mod yet"
+        return
+    fi
+    run_gate fmt check_fmt
+    run_gate vet go vet ./...
+    run_gate staticcheck go run "honnef.co/go/tools/cmd/staticcheck@$STATICCHECK_VERSION" ./...
+    run_gate test go test ./...
+}
+
+case "$group" in
+    all)
+        docs_gates
+        go_gates
+        ;;
+    docs) docs_gates ;;
+    go) go_gates ;;
+esac
+
+echo
+echo "Gate results:"
+for i in "${!names[@]}"; do
+    echo "  ${names[$i]}: ${results[$i]}"
+done
+exit "$failed"

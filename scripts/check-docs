@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Checks the public documentation under docs/ and the example policies.
+
+Checks, per page: relative links and their anchors, YAML code blocks, the
+status line, forbidden words and emoji. Every examples/**/*.yaml file must
+parse. Run as `python3 -I scripts/check-docs [ROOT]`; exits 1 on any finding.
+
+Words that must not appear in public pages are read from
+`.check-docs-forbidden` at the repository root, one per line, `#` for comments.
+The file is git-ignored so that the list itself stays out of the repository.
+"""
+
+import pathlib
+import re
+import sys
+
+try:
+    import yaml
+except ImportError:
+    sys.exit("check-docs: PyYAML is required (install pyyaml in the Python that runs this script)")
+
+ROOT = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path(__file__).resolve().parent.parent
+FORBIDDEN_FILE = ROOT / ".check-docs-forbidden"
+STATUS_LINE = re.compile(r"^> \*\*Status:", re.MULTILINE)
+EMOJI = re.compile(r"[\U0001F300-\U0001FAFF]")
+LINK = re.compile(r"\]\(([^)\s]+)\)")
+HEADING = re.compile(r"^#{1,6}\s+(.*)")
+YAML_BLOCK = re.compile(r"```yaml\n(.*?)```", re.DOTALL)
+
+
+def read(path):
+    return path.read_text(encoding="utf-8")
+
+
+def anchors(text):
+    """GitHub-style heading slugs of a Markdown document."""
+    out = set()
+    for line in text.splitlines():
+        match = HEADING.match(line)
+        if match:
+            slug = re.sub(r"[`*]", "", match.group(1).strip().lower())
+            slug = re.sub(r"[^\w\- ]", "", slug)
+            out.add(slug.replace(" ", "-"))
+    return out
+
+
+def prose(text):
+    """The text outside fenced code blocks."""
+    in_fence = False
+    lines = []
+    for line in text.splitlines():
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def forbidden_words():
+    if not FORBIDDEN_FILE.exists():
+        return []
+    words = []
+    for line in read(FORBIDDEN_FILE).splitlines():
+        word = line.strip().lower()
+        if word and not word.startswith("#"):
+            words.append(word)
+    return words
+
+
+def check_page(path, forbidden, errors):
+    text = read(path)
+    rel = path.relative_to(ROOT)
+    # Section index pages are navigation; only the guides index carries a status line.
+    if path.name != "index.md" or "guides" in path.parts:
+        if not STATUS_LINE.search(text):
+            errors.append(f"{rel}: no status line ('> **Status:' blockquote)")
+
+    for match in LINK.finditer(prose(text)):
+        target = match.group(1)
+        if target.startswith(("http://", "https://", "mailto:")):
+            continue
+        if target.startswith("#"):
+            if target[1:] not in anchors(text):
+                errors.append(f"{rel}: bad anchor {target}")
+            continue
+        file_part, _, anchor = target.partition("#")
+        resolved = (path.parent / file_part).resolve()
+        if not resolved.exists():
+            errors.append(f"{rel}: missing link target {target}")
+            continue
+        if anchor and resolved.suffix == ".md" and anchor not in anchors(read(resolved)):
+            errors.append(f"{rel}: bad anchor {target}")
+
+    for index, block in enumerate(YAML_BLOCK.findall(text)):
+        try:
+            list(yaml.safe_load_all(block))
+        except yaml.YAMLError as exc:
+            errors.append(f"{rel}: yaml block {index}: {str(exc).splitlines()[0]}")
+
+    lowered = text.lower()
+    for word in forbidden:
+        if word in lowered:
+            errors.append(f"{rel}: forbidden word {word!r}")
+
+    if EMOJI.search(text):
+        errors.append(f"{rel}: emoji")
+
+
+def main():
+    errors = []
+    forbidden = forbidden_words()
+    pages = sorted(p for p in (ROOT / "docs").glob("**/*.md") if "plan" not in p.parts)
+    for page in pages:
+        check_page(page, forbidden, errors)
+
+    for example in sorted((ROOT / "examples").glob("**/*.yaml")):
+        try:
+            list(yaml.safe_load_all(read(example)))
+        except yaml.YAMLError as exc:
+            errors.append(f"{example.relative_to(ROOT)}: {str(exc).splitlines()[0]}")
+
+    print(f"{len(pages)} pages checked")
+    for error in errors:
+        print(error)
+    if errors:
+        print(f"check-docs: {len(errors)} finding(s)")
+        return 1
+    print("check-docs: OK")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

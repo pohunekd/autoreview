@@ -1,0 +1,40 @@
+name: Task
+description: Engineering work without new user-visible behaviour (refactor, CI, tooling, docs, spike)
+type: Task
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What changes and why it is worth doing now.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+    validations:
+      required: true
+  - type: textarea
+    id: dod
+    attributes:
+      label: Definition of done
+      description: Checkable criteria with stable IDs.
+      placeholder: |
+        - D1: ...
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification
+      description: Exact commands or measurements that prove each D item.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      placeholder: None
+    validations:
+      required: true

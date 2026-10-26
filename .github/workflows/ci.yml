@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same PR cancels its older run; main runs are never
+# cancelled so every merge commit gets a result. A label change re-runs the
+# same head and must not cancel the run that is still producing its results.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' && github.event.action != 'unlabeled' }}
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # The docs checker needs PyYAML. A virtualenv keeps the pinned version
+      # out of the system Python, which Ubuntu's PEP 668 policy protects.
+      - name: Install the docs checker
+        run: |
+          python3 -m venv "$RUNNER_TEMP/docs-venv"
+          "$RUNNER_TEMP/docs-venv/bin/pip" install --disable-pip-version-check pyyaml==6.0.3
+      - name: Documentation gates
+        run: PATH="$RUNNER_TEMP/docs-venv/bin:$PATH" scripts/gates docs
+
+  # Runs only the Go gates. Until go.mod exists they report themselves as
+  # skipped, so the job stays green and the required check does not block.
+  go:
+    name: go
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Detect the Go module
+        id: module
+        run: |
+          if [ -f go.mod ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up Go
+        if: steps.module.outputs.present == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Go gates
+        run: scripts/gates go
+
+  # The only required status check. A job that did not succeed fails it, so a
+  # skipped or cancelled job cannot pass the merge gate by accident.
+  ci:
+    name: ci
+    needs: [docs, go]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Aggregate results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != "success" ]; then
+              echo "::error::a required job ended with '$r'"
+              exit 1
+            fi
+          done
