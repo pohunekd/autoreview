@@ -1,0 +1,56 @@
+version: 1
+
+reviewers:
+  sonnet:
+    protocol: claude-structured
+    agent_profile: autoreview-sonnet
+    label: Sonnet
+    finding_prefix: S
+
+pipelines:
+  site:
+    reviewers: [sonnet]
+    # Equal to reviewers: a clean review that approves on its own needs the same reviewers on re-review.
+    incremental_reviewers: [sonnet]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+    verifier:
+      reviewer: sonnet
+      prompt: prompts/verifier.md
+      # A demoted critical or high finding, or two demoted findings, turns the approval into a wait.
+      escalate_severities: [critical, high]
+      escalate_count: 2
+
+repositories:
+  - match: pohunekd/pohunek.dev
+    trigger: label:ai:review
+    pipeline: site
+    on_findings: request_changes
+    on_clean: approve
+    authors:
+      trusted:
+        permission: write
+      untrusted: skip
+
+unmatched: skip
+
+approval:
+  timeout_hours: 168
+
+notifications:
+  approval_requested: action
+  handoff_reminder: action
+  findings_on_own_pr: action
+  credential_invalid: action
+  credential_expiring: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log

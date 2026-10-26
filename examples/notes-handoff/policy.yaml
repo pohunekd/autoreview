@@ -1,0 +1,56 @@
+version: 1
+
+reviewers:
+  sonnet:
+    protocol: claude-structured
+    agent_profile: autoreview-sonnet
+    label: Sonnet
+    finding_prefix: S
+
+pipelines:
+  core:
+    reviewers: [sonnet]
+    incremental_reviewers: [sonnet]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+
+repositories:
+  - match: pohunekd/pohunek-companion
+    # on_notes requires review-requested: the author's renewed request ends the hand-off.
+    trigger: review-requested
+    pipeline: core
+    on_findings: request_changes
+    on_clean: await
+    # A review with only notes goes to the author as a comment first.
+    on_notes: comment
+    authors:
+      trusted:
+        permission: write
+      untrusted: skip
+
+unmatched: skip
+
+approval:
+  timeout_hours: 168
+
+# Required because a rule sets on_notes; a reminder is sent once after this many hours.
+notes_handoff:
+  reminder_hours: 24
+
+notifications:
+  approval_requested: action
+  handoff_reminder: action
+  findings_on_own_pr: action
+  credential_invalid: action
+  credential_expiring: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log

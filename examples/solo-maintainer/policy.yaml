@@ -1,0 +1,78 @@
+version: 1
+
+reviewers:
+  sonnet:
+    protocol: claude-structured
+    agent_profile: autoreview-sonnet
+    label: Sonnet
+    finding_prefix: S
+  codex:
+    protocol: codex-envelope
+    agent_profile: autoreview-codex
+    label: Codex
+    finding_prefix: X
+
+pipelines:
+  standard:
+    reviewers: [sonnet]
+    incremental_reviewers: [sonnet]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+  light:
+    reviewers: [codex]
+    incremental_reviewers: [codex]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+
+repositories:
+  # A repository has one trigger: a second rule for the same repository is unreachable.
+  - match: zajca/pohunek
+    trigger: review-requested
+    pipeline: standard
+    on_findings: request_changes
+    on_clean: approve
+    authors:
+      trusted:
+        logins: [zajca]
+        permission: write
+      untrusted:
+        pipeline: light
+        on_findings: comment
+        on_clean: comment
+  - match: zajca/pohunek-work
+    trigger: label:ai:review
+    pipeline: standard
+    on_findings: request_changes
+    on_clean: approve
+    authors:
+      trusted:
+        logins: [zajca]
+        permission: write
+      untrusted:
+        pipeline: light
+        on_findings: comment
+        on_clean: comment
+
+unmatched: skip
+
+approval:
+  timeout_hours: 168
+
+notifications:
+  approval_requested: action
+  handoff_reminder: action
+  findings_on_own_pr: action
+  credential_invalid: action
+  credential_expiring: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log

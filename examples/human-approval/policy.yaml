@@ -1,0 +1,61 @@
+version: 1
+
+reviewers:
+  opus:
+    protocol: claude-structured
+    agent_profile: autoreview-opus
+    label: Opus
+    finding_prefix: O
+  sonnet:
+    protocol: claude-structured
+    agent_profile: autoreview-sonnet
+    label: Sonnet
+    finding_prefix: S
+
+pipelines:
+  core:
+    reviewers: [opus, sonnet]
+    # A re-review settles earlier blocking findings, which needs the stronger model.
+    incremental_reviewers: [opus]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+    verifier:
+      reviewer: opus
+      prompt: prompts/verifier.md
+      # Escalation applies to approvals; on an await rule it has no effect on the wait.
+      escalate_severities: [critical]
+      escalate_count: 3
+
+repositories:
+  - match: zajca/pohunek
+    trigger: review-requested
+    pipeline: core
+    on_findings: request_changes
+    on_clean: await
+    authors:
+      trusted:
+        permission: write
+      untrusted: skip
+
+unmatched: skip
+
+approval:
+  timeout_hours: 168
+
+notifications:
+  approval_requested: action
+  handoff_reminder: action
+  findings_on_own_pr: action
+  credential_invalid: action
+  credential_expiring: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log

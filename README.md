@@ -30,6 +30,18 @@ one GitHub review with inline comments.
   notifier backends (none, Matrix and webhook first; the layer is built for
   any channel).
 
+## Documentation
+
+The documentation is written ahead of the first release and describes the
+design v0.1 implements.
+
+- [Features](docs/features.md) - what it does and a map of every page
+- [Quickstart](docs/knowledge/guides/quickstart.md) and
+  [use cases](docs/knowledge/guides/index.md), each with a complete policy in
+  [examples/](examples/)
+- Reference: [policy](docs/policy.md), [configuration](docs/configuration.md),
+  [CLI](docs/cli.md), [install](docs/install.md)
+
 ## Architecture
 
 ```
@@ -50,7 +62,7 @@ and the service unit.
 | Phase | Goal | Done when |
 |---|---|---|
 | 1. Extract and decouple | Fresh history, rename, move every personal or organisation-specific value into configuration, `Notifier` interface | Tests pass; `validate` accepts an example policy with no Matrix configured |
-| 2. Adapters and installer | Claude and Codex adapters without hard-coded paths, pohunek profile generator, release binaries, container image, systemd unit, `autoreview init` | A clean host goes from `init` to a published review by following the docs |
+| 2. Adapters and installer | Claude and Codex adapters with one result contract, pohunek profile generator, release binaries, container image, systemd unit, workflow plugin, `autoreview init` | A clean host goes from `init` to a published review by following the docs |
 | 3. Safe defaults for public repositories | Author/fork-aware rules, `base` checkout for untrusted authors, threat model, pohunek version check | A fork pull request cannot be auto-approved and never runs head code with setup hooks |
 | 4. Migrate the original deployment | The private deployment consumes a release; legacy review markers and state still read | Incremental reviews continue on pull requests reviewed before the migration |
 | 5. Examples, docs, dogfooding | One small policy per scenario over the pohunek repositories, validated in CI; live on `pohunekd/*` | Every example passes `validate` in CI; the org's pull requests are reviewed by it |
@@ -63,21 +75,21 @@ repositories:
 
 1. `single-repo-comment` - one repository, label trigger, one Codex reviewer, always comment
 2. `solo-maintainer` - own pull requests get a comment, others request changes or approve
-3. `critical-core-await` - two reviewers plus verifier, a human approves clean reviews
-4. `docs-auto-approve` - website repository, one reviewer, clean reviews approved
-5. `org-wildcard-overrides` - `pohunekd/*` with per-repository pipelines and prompts
+3. `human-approval` - two reviewers plus verifier, a human approves clean reviews
+4. `auto-approve` - website repository, one reviewer, clean reviews approved
+5. `org-wildcard` - `pohunekd/*` with per-repository pipelines and prompts
 6. `notes-handoff` - non-blocking notes go to the author first
 7. `coding-agent-drafts` - drafts of coding agents marked ready and reviewed
-8. `fork-safe` - external authors: label gate, base checkout, comment only
+8. `public-repositories` - external authors: label gate, base checkout, comment only
 9. `multihost` - several pohunek hosts and route overrides
 10. `notifiers` - none, Matrix and webhook side by side
 
 ## Requirements (planned)
 
 - pohunek daemon on one or more review hosts with the repositories registered
-- `gh` CLI and a token of the reviewing GitHub account
+- `gh` CLI and one or more GitHub tokens (per owner or repository, optionally a different account per owner)
 - Claude Code and/or Codex CLI on the review hosts
-- Linux with systemd for the packaged service, or a container runtime for the image
+- Linux with systemd, a container runtime, or pohunek's workflow plugin store
 
 ## Security model (planned)
 
@@ -90,12 +102,16 @@ review them from a base checkout, and never auto-approve them.
 
 - Binary `autoreview`; one YAML configuration file with every key required
   and written out in full by `autoreview init`; secrets only in `AUTOREVIEW_*`
-  and `GH_TOKEN` environment variables.
-- Reviews are posted by a personal token or a machine user; a GitHub App
-  comes after v1.
+  environment variables.
+- GitHub tokens as a list of credentials: one token, fine-grained tokens per
+  owner or per repository, and a different account per owner if wanted.
+  Failing or expiring tokens are reported and stop only their repositories.
+- Claude Code and Codex reviewers share one result contract.
 - Clean reviews that wait for a human are approved through the CLI, with an
-  optional Hermes Agent integration; approval by GitHub comment comes after v1.
+  optional Hermes Agent integration; approval by GitHub comment and a GitHub
+  App identity come after v1.
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
-- Distributed as release binaries with systemd units and as a container image.
+- Distributed as release binaries with systemd units, as a container image,
+  and as a pohunek workflow plugin.
 - MIT license.

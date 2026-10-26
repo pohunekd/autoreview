@@ -1,0 +1,47 @@
+version: 1
+
+reviewers:
+  codex:
+    protocol: codex-envelope
+    agent_profile: autoreview-codex
+    label: Codex
+    finding_prefix: X
+
+pipelines:
+  default:
+    reviewers: [codex]
+    incremental_reviewers: [codex]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+
+repositories:
+  - match: zajca/pohunek
+    trigger: label:ai:review
+    pipeline: default
+    on_findings: comment
+    on_clean: comment
+    authors:
+      trusted: any
+
+unmatched: skip
+
+approval:
+  timeout_hours: 168
+
+notifications:
+  approval_requested: action
+  handoff_reminder: action
+  findings_on_own_pr: action
+  credential_invalid: action
+  credential_expiring: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log

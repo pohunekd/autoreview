@@ -1,0 +1,105 @@
+version: 1
+policy_file: /etc/autoreview/policy.yaml
+
+github:
+  host: github.com
+  gh_bin: /usr/bin/gh
+  timeout_seconds: 30
+  credential_check_hours: 24
+  expiry_warning_days: 14
+  # Evaluated top to bottom; the first credential whose match covers a
+  # repository reviews it. Each token must belong to its login.
+  credentials:
+    - name: default
+      login: review-bot
+      token_env: AUTOREVIEW_GH_TOKEN
+      match: ["*"]
+
+pohunek:
+  bin: /usr/local/bin/pohunek
+  state_home: /var/lib/autoreview/.local/state
+  runtime_dir: /run/autoreview
+  # Session start includes the host's base fetch, so it needs more than 30 s.
+  timeout_seconds: 45
+  hosts: [review-host]
+  route_overrides: {}
+
+session:
+  branch_prefix: autoreview/
+  name_prefix: autoreview-
+  timeout_seconds: 7200
+  output_poll_seconds: 15
+  start_max_attempts: 3
+  start_retry_seconds: 15
+  cleanup_max_attempts: 3
+  cleanup_retry_seconds: 15
+  reviewer_run_max_attempts: 2
+  reviewer_run_retry_seconds: 30
+  terminal_cols: 240
+  terminal_rows: 200
+  # Codex keeps its whole transcript in the output, so the bound follows Codex.
+  output_max_bytes: 8388608
+  output_chunk_bytes: 65536
+  output_wait_ms: 8000
+
+schedule:
+  poll_interval_seconds: 60
+  worker_tick_seconds: 5
+  max_concurrent_reviews: 8
+  debounce_seconds: 120
+  retry_delays_seconds: [60, 300, 900]
+  step_retry_seconds: 900
+  step_retry_initial_seconds: 2
+  step_retry_max_interval_seconds: 60
+  discovery_lock_timeout_seconds: 300
+  discovery_lock_poll_ms: 500
+  poll_limit: 100
+  search_page_limit: 20
+  scheduler_max_bytes: 16777216
+  state_entry_limit: 10000
+
+limits:
+  result_max_bytes: 1048576
+  max_findings: 100
+  max_tests: 100
+  min_summary_characters: 40
+  max_summary_characters: 20000
+  max_title_characters: 512
+  max_body_characters: 20000
+  max_discussion_characters: 40000
+  max_path_characters: 4096
+  max_test_characters: 1024
+  excerpt_characters: 360
+
+store:
+  path: /var/lib/autoreview/autoreview.db
+  review_retention_seconds: 2592000
+  # A published decision older than this does not serve as the baseline of
+  # an incremental review.
+  published_retention_seconds: 7776000
+
+cli:
+  review_list_limit: 50
+
+publish:
+  # Last line of every review body and inline comment.
+  signature: "Written by AI: autoreview (posted from {login}'s GitHub account, not by a human)"
+  # Comments matching this are treated as machine-written in the discussion
+  # of earlier findings.
+  ai_signed_pattern: "Written by AI:"
+  # GitHub accepts at most 65536 characters per review body or comment.
+  github_body_max_bytes: 60000
+
+notify:
+  timeout_seconds: 30
+  max_characters: 8000
+  backends:
+    - name: log
+      type: none
+  routes:
+    action: [log]
+    digest: [log]
+    log: [log]
+  review_queue:
+    backends: [log]
+    max_items: 50

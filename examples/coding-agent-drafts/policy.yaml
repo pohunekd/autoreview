@@ -1,0 +1,67 @@
+version: 1
+
+reviewers:
+  sonnet:
+    protocol: claude-structured
+    agent_profile: autoreview-sonnet
+    label: Sonnet
+    finding_prefix: S
+  codex:
+    protocol: codex-envelope
+    agent_profile: autoreview-codex
+    label: Codex
+    finding_prefix: X
+
+pipelines:
+  core:
+    reviewers: [sonnet]
+    incremental_reviewers: [sonnet]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+  light:
+    reviewers: [codex]
+    incremental_reviewers: [codex]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+
+repositories:
+  - match: zajca/pohunek
+    # Drafts are marked ready only for a review request, so the trigger must be review-requested.
+    trigger: review-requested
+    pipeline: core
+    on_findings: request_changes
+    on_clean: await
+    authors:
+      trusted:
+        logins: [devin-ai-integration, copilot-swe-agent]
+        permission: write
+      untrusted:
+        pipeline: light
+        on_findings: comment
+        on_clean: comment
+
+unmatched: skip
+
+ready_draft_authors: [devin-ai-integration, copilot-swe-agent]
+
+approval:
+  timeout_hours: 168
+
+notifications:
+  approval_requested: action
+  handoff_reminder: action
+  findings_on_own_pr: action
+  credential_invalid: action
+  credential_expiring: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log
