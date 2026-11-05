@@ -6,5 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[dependencies]
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "time"] }
+
 [lints]
 workspace = true
