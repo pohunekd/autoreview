@@ -182,13 +182,11 @@ impl ReviewInput {
     /// Reports whether a finding holds the merge back.
     ///
     /// Inputs before the blocking gate version block every finding.
-    #[expect(dead_code, reason = "called by S11")]
     pub(crate) fn blocks(&self, finding: &Finding) -> bool {
         self.version < BLOCKING_GATE_VERSION || !finding.non_blocking
     }
 
     /// Splits the findings into those that hold the merge back and the notes.
-    #[expect(dead_code, reason = "called by S11")]
     pub(crate) fn split_findings(&self, findings: &[Finding]) -> (Vec<Finding>, Vec<Finding>) {
         let mut blocking = Vec::new();
         let mut notes = Vec::new();
@@ -249,7 +247,6 @@ impl Artifact {
     /// Returns the prior findings that this review left open.
     ///
     /// A republished prior finding counts as the new finding it became, so it is left out.
-    #[expect(dead_code, reason = "called by S11")]
     pub(crate) fn open_prior(&self) -> Vec<PriorResult> {
         self.prior_results
             .iter()

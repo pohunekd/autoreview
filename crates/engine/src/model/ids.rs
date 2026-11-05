@@ -13,7 +13,7 @@ use super::pull_request::{PullRequest, RejectedCandidate};
 pub(crate) const WORKFLOW_ID_PREFIX: &str = "prr-v2-";
 
 /// Contract version of the review input that discovery writes.
-#[expect(dead_code, reason = "called by S22")]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by S22"))]
 pub(crate) const INPUT_VERSION: i64 = 5;
 
 /// Oldest input version a review accepts, so a stored review resumes after an upgrade.
@@ -28,7 +28,6 @@ pub(crate) const BLOCKING_GATE_VERSION: i64 = 3;
 pub(crate) const PRIOR_FINDINGS_VERSION: i64 = 4;
 
 /// First input version whose blocking findings the verifier checks before publication.
-#[expect(dead_code, reason = "called by S16")]
 pub(crate) const VERIFIER_VERSION: i64 = 5;
 
 /// Characters a review ID keeps of the head SHA.

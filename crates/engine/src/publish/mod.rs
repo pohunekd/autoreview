@@ -1,8 +1,10 @@
-//! Publication of a review: the review marker and the neutralization of model output.
+//! Publication of a review: anchoring, the publication plan, the marker and neutralization.
 
 // Rust guideline compliant 2026-06-26
 
+pub(crate) mod anchor;
 pub(crate) mod neutralize;
+pub(crate) mod plan;
 
 use sha2::{Digest, Sha256};
 
