@@ -6,6 +6,8 @@
 
 // Rust guideline compliant 2026-06-26
 
+pub(crate) mod output;
+
 pub(crate) mod sessions;
 
 use std::collections::BTreeMap;
@@ -34,7 +36,7 @@ const PAGER_VARIABLE: &str = "PAGER";
 const PAGER_VALUE: &str = "cat";
 
 /// Field names of the pohunek JSON, in lower case; a key that only differs in case is refused.
-const KNOWN_KEYS: [&str; 20] = [
+const KNOWN_KEYS: [&str; 28] = [
     "ok",
     "err",
     "code",
@@ -55,6 +57,14 @@ const KNOWN_KEYS: [&str; 20] = [
     "detail",
     "worker_instance_id",
     "runtime_generation",
+    "session_id",
+    "history_start_offset",
+    "start_offset",
+    "next_offset",
+    "runtime_end_offset",
+    "data_base64",
+    "has_more",
+    "timed_out",
 ];
 
 /// One project of `pohunek project list --json`.
@@ -81,20 +91,24 @@ struct OkEnvelope<T> {
 }
 
 /// The envelope of a failed pohunek call.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
 struct FailureEnvelope {
     /// The error of the call.
     err: FailureDetail,
 }
 
+autoreview_go_compat::object_only_serde!(FailureEnvelope);
+
 /// The error object of a failed pohunek call.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
 struct FailureDetail {
     /// The allowlisted error code, or empty when the CLI reported none.
     code: String,
 }
+
+autoreview_go_compat::object_only_serde!(FailureDetail);
 
 /// Returns the environment of a pohunek child: the engine's variables without the pohunek session
 /// identity and the GitHub token, then the state, runtime and pager settings.
@@ -138,7 +152,6 @@ pub(crate) fn projects_arguments(host: &str) -> Vec<String> {
 /// Runs the pohunek CLI with `args` in the pohunek environment and returns its stdout.
 ///
 /// A failed run is returned as the error of [`pohunek_failure`].
-#[expect(dead_code, reason = "called by E07")]
 pub(crate) async fn pohunek_call(config: &Config, args: &[String]) -> Result<String, Error> {
     let environment = pohunek_environment(
         &config.pohunek_state,
@@ -196,11 +209,12 @@ pub(crate) fn decode_ok<T: DeserializeOwned>(output: &str) -> Option<T> {
     decode_strict::<OkEnvelope<T>>(output).and_then(|envelope| envelope.ok)
 }
 
-/// Decodes `text` as `T`, refusing any object key that differs from a known
-/// field name only in case, which Go would match.
+/// Decodes `text` as `T`, which must be a JSON object with no case-variant key.
+///
+/// A top-level array is refused, because serde would read it into a struct by position.
 fn decode_strict<T: DeserializeOwned>(text: &str) -> Option<T> {
     let value: Value = serde_json::from_str(text).ok()?;
-    if has_case_variant_key(&value) {
+    if !value.is_object() || has_case_variant_key(&value) {
         return None;
     }
     serde_json::from_str::<T>(text).ok()
