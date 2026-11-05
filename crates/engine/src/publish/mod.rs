@@ -52,7 +52,7 @@ pub(crate) fn review_marker(
 }
 
 /// Text of a decision as the marker and the GitHub review carry it.
-fn decision_text(decision: Decision) -> &'static str {
+pub(crate) fn decision_text(decision: Decision) -> &'static str {
     match decision {
         Decision::Approve => "APPROVE",
         Decision::RequestChanges => "REQUEST_CHANGES",
