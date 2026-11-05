@@ -1,0 +1,265 @@
+[
+  {
+    "name": "approve_without_findings",
+    "input": {
+      "decision": "APPROVE",
+      "findings": null,
+      "open_prior": null,
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:decision=APPROVE:findings=0:digest=253463d35fe132d9a8360d94f8c3b0d43c644a966193cb2f22fa7a06038725b5 -->"
+  },
+  {
+    "name": "request_changes_one_finding",
+    "input": {
+      "decision": "REQUEST_CHANGES",
+      "findings": [
+        {
+          "id": "O001",
+          "source_id": "",
+          "reviewer_id": "",
+          "reviewer_label": "",
+          "severity": "",
+          "confidence": "",
+          "path": "",
+          "line": 0,
+          "title": "",
+          "body": "",
+          "anchored": false
+        }
+      ],
+      "open_prior": null,
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:decision=REQUEST_CHANGES:findings=1:digest=dbbc1688fe7e375abe23494336f8d6d50a22fa8863ecb124165e865a59e0b09f -->"
+  },
+  {
+    "name": "comment_two_findings",
+    "input": {
+      "decision": "COMMENT",
+      "findings": [
+        {
+          "id": "O001",
+          "source_id": "",
+          "reviewer_id": "",
+          "reviewer_label": "",
+          "severity": "",
+          "confidence": "",
+          "path": "",
+          "line": 0,
+          "title": "",
+          "body": "",
+          "anchored": false
+        },
+        {
+          "id": "S001",
+          "source_id": "",
+          "reviewer_id": "",
+          "reviewer_label": "",
+          "severity": "",
+          "confidence": "",
+          "path": "",
+          "line": 0,
+          "title": "",
+          "body": "",
+          "anchored": false
+        }
+      ],
+      "open_prior": null,
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:decision=COMMENT:findings=2:digest=5703a80a650389e7bc023feee11582ec965fb099fa6830d2015365501657194a -->"
+  },
+  {
+    "name": "comment_two_findings_reversed",
+    "input": {
+      "decision": "COMMENT",
+      "findings": [
+        {
+          "id": "S001",
+          "source_id": "",
+          "reviewer_id": "",
+          "reviewer_label": "",
+          "severity": "",
+          "confidence": "",
+          "path": "",
+          "line": 0,
+          "title": "",
+          "body": "",
+          "anchored": false
+        },
+        {
+          "id": "O001",
+          "source_id": "",
+          "reviewer_id": "",
+          "reviewer_label": "",
+          "severity": "",
+          "confidence": "",
+          "path": "",
+          "line": 0,
+          "title": "",
+          "body": "",
+          "anchored": false
+        }
+      ],
+      "open_prior": null,
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:decision=COMMENT:findings=2:digest=5703a80a650389e7bc023feee11582ec965fb099fa6830d2015365501657194a -->"
+  },
+  {
+    "name": "open_prior_counted_by_key",
+    "input": {
+      "decision": "REQUEST_CHANGES",
+      "findings": null,
+      "open_prior": [
+        {
+          "finding": {
+            "key": "cccccccccccc:O001",
+            "id": "",
+            "head_sha": "",
+            "github_review_id": 0,
+            "severity": "",
+            "path": "",
+            "line": 0,
+            "title": "",
+            "body": ""
+          },
+          "key": "",
+          "status": "still_open",
+          "note": ""
+        }
+      ],
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:decision=REQUEST_CHANGES:findings=1:digest=58df99842dfa3d637d4175e93c96f25dbc1c309ca380513e2e26e7f65169b0c3 -->"
+  },
+  {
+    "name": "finding_and_open_prior",
+    "input": {
+      "decision": "COMMENT",
+      "findings": [
+        {
+          "id": "S001",
+          "source_id": "",
+          "reviewer_id": "",
+          "reviewer_label": "",
+          "severity": "",
+          "confidence": "",
+          "path": "",
+          "line": 0,
+          "title": "",
+          "body": "",
+          "anchored": false
+        }
+      ],
+      "open_prior": [
+        {
+          "finding": {
+            "key": "cccccccccccc:O001",
+            "id": "",
+            "head_sha": "",
+            "github_review_id": 0,
+            "severity": "",
+            "path": "",
+            "line": 0,
+            "title": "",
+            "body": ""
+          },
+          "key": "",
+          "status": "still_open",
+          "note": ""
+        }
+      ],
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:decision=COMMENT:findings=2:digest=3f9901d985ec9846b68b09703711d178ae8962319bde853a9caad846f04a8ea8 -->"
+  },
+  {
+    "name": "other_head_sha",
+    "input": {
+      "decision": "APPROVE",
+      "findings": null,
+      "open_prior": null,
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "<!-- hermes-pr-review:v1:acme/widget#5@cccccccccccccccccccccccccccccccccccccccc:decision=APPROVE:findings=0:digest=4e845f1b0388c01bf9d3a8ef78636fb6e9b906dbe01bc369f2b8e9f697b817aa -->"
+  }
+]
