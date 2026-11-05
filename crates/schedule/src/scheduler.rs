@@ -57,9 +57,9 @@ pub struct Record {
     pub identity: String,
     /// The current phase of the review.
     pub phase: String,
-    /// The attempt counter for this review identity.
+    /// Attempt numbers the runs of this identity and keeps their workflow IDs
+    /// unique; retries counts only the automatic retries after a failure.
     pub attempt: i64,
-    /// The number of retries already scheduled.
     pub retries: i64,
     /// The workflow ID of the current run.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -215,6 +215,7 @@ pub fn plan(
     r.blocking_workflows = blockers.into_iter().collect();
     blocked = blocked || !r.blocking_workflows.is_empty();
     if let Some(latest_run) = latest {
+        // The dispatch is durable but may not yet be visible in the run history.
         if !fresh && r.phase == "running" && r.attempt > latest_run.attempt {
             return Ok(Decision {
                 record: r,
@@ -242,10 +243,12 @@ pub fn plan(
                 notify: false,
             });
         }
+        // Each terminal result is handled once; later polls keep its retry deadline.
         if fresh || r.workflow_id != latest_run.workflow_id || r.phase == "running" {
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             let code = failure_code(&latest_run.failure);
+            // A superseded run left nothing behind; the head is reviewed anew.
             if superseded(&code) {
                 r.phase = "waiting".to_owned();
                 r.attempt = latest_run.attempt.wrapping_add(1);
@@ -334,21 +337,9 @@ pub fn failure_code(failure: &str) -> String {
 
 /// Checks whether `code` matches the failure code pattern.
 fn is_failure_code(code: &str) -> bool {
-    let bytes = code.as_bytes();
-    if bytes.is_empty() {
-        return false;
-    }
-    let first = bytes[0];
-    if !first.is_ascii_lowercase() {
-        return false;
-    }
-    for byte in &bytes[1..] {
-        let ok = byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_';
-        if !ok {
-            return false;
-        }
-    }
-    true
+    let mut bytes = code.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && bytes.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// Reports whether a failure code names a transient fault that the scheduler retries.
