@@ -491,7 +491,9 @@ fn go_elapsed_nanos(later: OffsetDateTime, earlier: OffsetDateTime) -> i64 {
 
 /// Hours of a duration as Go's `Duration.Hours` computes them, truncated as Go's `int` does.
 fn go_hours(nanos: i64) -> i64 {
-    ((nanos as f64) / NANOS_PER_HOUR as f64) as i64
+    let hours = nanos / NANOS_PER_HOUR;
+    let rest = nanos % NANOS_PER_HOUR;
+    (hours as f64 + rest as f64 / NANOS_PER_HOUR as f64) as i64
 }
 
 /// The message that reminds the owner of notes that wait for their author.

@@ -222,9 +222,11 @@ fn build_digest(
         );
     }
     for (index, entry) in entries[..count].iter().enumerate() {
-        if entry.priority == QueuePriority::WaitingAuthor
-            && (index == 0 || entries[index - 1].priority != QueuePriority::WaitingAuthor)
-        {
+        let previous_waiting = index
+            .checked_sub(1)
+            .and_then(|previous| entries.get(previous))
+            .is_some_and(|previous| previous.priority == QueuePriority::WaitingAuthor);
+        if entry.priority == QueuePriority::WaitingAuthor && !previous_waiting {
             push_section(
                 &mut plain,
                 &mut formatted,
