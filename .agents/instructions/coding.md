@@ -173,7 +173,10 @@ Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):
 
 - JSON object keys match exactly; Go's `encoding/json` matches
-  case-insensitively.
+  case-insensitively. Rust ignores a case-variant key such as `"TITLE"` as
+  unknown, so the field keeps its default where Go sets it, and Rust accepts a
+  row whose case-variant key holds a value that Go refuses, such as
+  `"NUMBER": -9223372036854775809`. Neither engine writes such a key.
 - A duplicate key in a reviewer or verifier result is an error; Go keeps the
   last value.
 - A top-level JSON `null` where an object is expected is an error; Go yields the
@@ -198,6 +201,11 @@ with the expected Rust error code):
   is refused; an empty or comment-only file fails the version check instead of
   Go's `EOF`; non-UTF-8 input reports the Rust decoding error. Every case stays
   `configuration_invalid` at the caller (`cmd/autoreview/config.go:195-196`).
+- Known gap until #125: serde's derived `Deserialize` also reads a persisted
+  struct from a JSON array, by position, so `[]` reads as the zero value where
+  Go refuses it with `cannot unmarshal array`. This holds for the policy,
+  schedule and engine types. Neither engine writes such a row; #125 adds an
+  object-only deserializer adapter in `autoreview-go-compat`.
 
 Invalid UTF-8 is not a divergence: the process runner decodes child stdout with
 `String::from_utf8_lossy` before parsing, which matches Go's replacement with

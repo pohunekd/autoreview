@@ -7,7 +7,16 @@ rust-version.workspace = true
 repository.workspace = true
 
 [dependencies]
+autoreview-go-compat = { path = "../go-compat" }
+autoreview-policy = { path = "../policy" }
+autoreview-schedule = { path = "../schedule" }
+hex = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
