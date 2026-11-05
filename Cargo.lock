@@ -38,6 +38,13 @@ version = "0.0.0"
 [[package]]
 name = "autoreview-schedule"
 version = "0.0.0"
+dependencies = [
+ "autoreview-go-compat",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+]
 
 [[package]]
 name = "deranged"
