@@ -39,39 +39,24 @@ pub struct WorkSession {
 /// Accepts 1 to 64 ASCII letters, digits, spaces, `.`, `_` and `-`, starting with a
 /// letter or digit and not ending with a space. Control and format characters fail.
 pub fn is_valid_session_group(group: &str) -> bool {
-    let bytes = group.as_bytes();
-    if bytes.is_empty() || bytes.len() > MAX_GROUP_LEN {
+    if group.len() > MAX_GROUP_LEN {
         return false;
     }
-    let Some((first, rest)) = bytes.split_first() else {
+    let Some((first, rest)) = group.as_bytes().split_first() else {
         return false;
     };
     if !first.is_ascii_alphanumeric() {
         return false;
     }
-    if rest.is_empty() {
-        return true;
-    }
-    let Some((last, _)) = bytes.split_last() else {
-        return false;
-    };
-    if !is_group_byte(*last) {
-        return false;
-    }
-    // Check every byte between first and last.
-    let Some((_, without_first)) = bytes.split_first() else {
-        return false;
-    };
-    let Some((_, middle)) = without_first.split_last() else {
-        // Length 2 case: no middle bytes.
-        return true;
-    };
-    for byte in middle {
-        if !is_group_byte(*byte) && *byte != b' ' {
-            return false;
+    match rest.split_last() {
+        None => true,
+        Some((last, middle)) => {
+            is_group_byte(*last)
+                && middle
+                    .iter()
+                    .all(|byte| is_group_byte(*byte) || *byte == b' ')
         }
     }
-    true
 }
 
 /// Returns the `session new --meta` arguments for `session` in a fixed order.
