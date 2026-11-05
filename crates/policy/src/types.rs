@@ -48,6 +48,11 @@ const MAX_SOURCE_LEN: usize = 32;
 /// it.
 pub const VERIFIER_REVIEWER_ID: &str = "verifier";
 
+/// Finding prefix of the prior findings published again.
+///
+/// No reviewer of the policy may take it, so its findings never collide with them.
+pub const REPUBLISHED_PREFIX: &str = "P";
+
 /// Names the input and output contract of a reviewer agent profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Protocol {
