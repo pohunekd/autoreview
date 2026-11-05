@@ -61,11 +61,34 @@ jobs:
       - name: Go gates
         run: scripts/gates go
 
+  # Runs the Rust gates with the toolchain pinned in rust-toolchain.toml, which
+  # rustup on the runner installs on the first cargo call.
+  rust:
+    name: rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: short
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # PRs restore main's cache and never overwrite it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Rust gates
+        run: scripts/gates rust
+
   # The only required status check. A job that did not succeed fails it, so a
   # skipped or cancelled job cannot pass the merge gate by accident.
   ci:
     name: ci
-    needs: [docs, go]
+    needs: [docs, rust, go]
     if: always()
     runs-on: ubuntu-24.04
     steps:

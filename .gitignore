@@ -12,3 +12,4 @@ __pycache__/
 # Secrets and the owner's local-only lists
 .env*
 /.check-docs-forbidden
+/target/

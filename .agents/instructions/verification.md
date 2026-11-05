@@ -3,8 +3,8 @@
 ## Gate set
 
 `scripts/gates` runs each gate, in the order below, and reports its own result.
-With no argument it runs every group; CI runs the `docs` and `go` groups as two
-jobs.
+With no argument it runs every group; CI runs the `docs`, `rust` and `go` groups
+as three jobs.
 
 Docs group:
 
@@ -13,12 +13,19 @@ Docs group:
    emoji in `docs/` (never `docs/plan/`), and that every `examples/**/*.yaml`
    parses.
 
-Go group, skipped with a reason while the repository has no `go.mod`:
+Rust group, on the toolchain pinned in `rust-toolchain.toml`:
 
-2. `fmt`: `gofmt -l .` lists no file.
-3. `vet`: `go vet ./...`
-4. `staticcheck`: the version pinned in `scripts/gates`, run with `go run`.
-5. `test`: `go test ./...`
+2. `rust-fmt`: `cargo fmt --all --check`
+3. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
+4. `rust-test`: `cargo test --workspace --locked`
+
+Go group (the Go reference), skipped with a reason while the repository has no
+`go.mod`:
+
+5. `fmt`: `gofmt -l .` lists no file.
+6. `vet`: `go vet ./...`
+7. `staticcheck`: the version pinned in `scripts/gates`, run with `go run`.
+8. `test`: `go test ./...`
 
 Planned, not gates yet: the changelog check (`scripts/changelog check`, with
 [changelog.md](changelog.md)) and validation of the example policies. Both land
@@ -55,6 +62,11 @@ Write a test only for:
   boundary: a candidate pull request is discovered, reviewed with a fake reviewer
   result, and published once. It is the only test that drives several packages
   together.
+
+Parity suite: tests ported from the Go reference and the parity goldens under
+`testdata/parity/` are kept until the Go code is deleted; this policy then
+applies to them. Outside the parity suite the rules above are unchanged, and a
+test is written only for really important logic.
 
 Do not write:
 
@@ -102,6 +114,9 @@ text. Describe checks against the owner's own daemons in words only.
 `.github/workflows/ci.yml` finishes in a few minutes:
 
 - `docs` runs `scripts/gates docs` with PyYAML pinned in a virtualenv.
+- `rust` runs `scripts/gates rust` on the toolchain pinned in
+  `rust-toolchain.toml`, with the dependency cache restored from `main` and
+  saved only by runs on `main`.
 - `go` runs `scripts/gates go`. Until `go.mod` exists the gates report
   themselves as skipped, so the job is green.
 - `ci` is the only required status check. It fails unless every job succeeded.
