@@ -19,7 +19,7 @@
           "review_request_id": 11,
           "decision": "REQUEST_CHANGES",
           "workflow_id": "prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025",
-          "published_at": "2026-01-01T00:00:00Z"
+          "published_at": "2026-01-01T00:01:00.5Z"
         },
         "acme/notes#4": {
           "repository": "acme/notes",
@@ -28,7 +28,7 @@
           "review_request_id": 11,
           "decision": "COMMENT",
           "workflow_id": "prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7",
-          "published_at": "2026-01-01T00:00:00Z",
+          "published_at": "2026-01-01T00:03:00Z",
           "awaits_author": true
         }
       },
@@ -48,7 +48,7 @@
           "attempt": 0,
           "retries": 0,
           "workflow_id": "prr-v2-ecb7e6e29ed550f59245c9d7a172ef682bd9516d5dbac5af2177981cfad5bd11",
-          "due_at": "2026-01-01T00:00:00Z"
+          "due_at": "2026-01-01T00:02:00Z"
         },
         "acme/findings#2": {
           "identity": "acme/findings#2@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11",
@@ -77,33 +77,9 @@
         "released": false,
         "cleanup_pending": false,
         "outcome": "{\"outcome\":\"published\",\"publication\":{\"decision\":\"COMMENT\",\"github_review_id\":3,\"review_url\":\"https://github.com/acme/notes/pull/4#review\",\"reused\":false}}",
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-        "completed_at": "2026-01-01T00:00:00Z"
-      },
-      {
-        "workflow_id": "prr-v2-0266103af5337459b0812fb7d9b0a037f54d628ed56a7e08238d55f5a83e7c78",
-        "key": "acme/approve#1",
-        "status": "completed",
-        "result": "success",
-        "released": false,
-        "cleanup_pending": false,
-        "outcome": "{\"outcome\":\"published\",\"publication\":{\"decision\":\"APPROVE\",\"github_review_id\":1,\"review_url\":\"https://github.com/acme/approve/pull/1#review\",\"reused\":false}}",
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-        "completed_at": "2026-01-01T00:00:00Z"
-      },
-      {
-        "workflow_id": "prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025",
-        "key": "acme/findings#2",
-        "status": "completed",
-        "result": "success",
-        "released": false,
-        "cleanup_pending": false,
-        "outcome": "{\"outcome\":\"published\",\"publication\":{\"decision\":\"REQUEST_CHANGES\",\"github_review_id\":2,\"review_url\":\"https://github.com/acme/findings/pull/2#review\",\"reused\":false}}",
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-        "completed_at": "2026-01-01T00:00:00Z"
+        "created_at": "2026-01-01T00:03:00Z",
+        "updated_at": "2026-01-01T00:03:00Z",
+        "completed_at": "2026-01-01T00:03:00Z"
       },
       {
         "workflow_id": "prr-v2-ecb7e6e29ed550f59245c9d7a172ef682bd9516d5dbac5af2177981cfad5bd11",
@@ -113,6 +89,30 @@
         "failure": "review_label_removed",
         "released": false,
         "cleanup_pending": false,
+        "created_at": "2026-01-01T00:02:00Z",
+        "updated_at": "2026-01-01T00:02:00Z",
+        "completed_at": "2026-01-01T00:02:00Z"
+      },
+      {
+        "workflow_id": "prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025",
+        "key": "acme/findings#2",
+        "status": "completed",
+        "result": "success",
+        "released": false,
+        "cleanup_pending": false,
+        "outcome": "{\"outcome\":\"published\",\"publication\":{\"decision\":\"REQUEST_CHANGES\",\"github_review_id\":2,\"review_url\":\"https://github.com/acme/findings/pull/2#review\",\"reused\":false}}",
+        "created_at": "2026-01-01T00:01:00.5Z",
+        "updated_at": "2026-01-01T00:01:00.5Z",
+        "completed_at": "2026-01-01T00:01:00.5Z"
+      },
+      {
+        "workflow_id": "prr-v2-0266103af5337459b0812fb7d9b0a037f54d628ed56a7e08238d55f5a83e7c78",
+        "key": "acme/approve#1",
+        "status": "completed",
+        "result": "success",
+        "released": false,
+        "cleanup_pending": false,
+        "outcome": "{\"outcome\":\"published\",\"publication\":{\"decision\":\"APPROVE\",\"github_review_id\":1,\"review_url\":\"https://github.com/acme/approve/pull/1#review\",\"reused\":false}}",
         "created_at": "2026-01-01T00:00:00Z",
         "updated_at": "2026-01-01T00:00:00Z",
         "completed_at": "2026-01-01T00:00:00Z"
@@ -162,16 +162,16 @@
       },
       {
         "Target": {
-          "repository": "acme/approve",
-          "number": 1,
+          "repository": "acme/failing",
+          "number": 3,
           "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "review_request_id": 11
         },
-        "WorkflowID": "prr-v2-0266103af5337459b0812fb7d9b0a037f54d628ed56a7e08238d55f5a83e7c78",
+        "WorkflowID": "prr-v2-ecb7e6e29ed550f59245c9d7a172ef682bd9516d5dbac5af2177981cfad5bd11",
         "Attempt": 0,
         "Status": "completed",
-        "Result": "success",
-        "Failure": "",
+        "Result": "failure",
+        "Failure": "review_label_removed",
         "Released": false,
         "CleanupPending": false
       },
@@ -192,16 +192,16 @@
       },
       {
         "Target": {
-          "repository": "acme/failing",
-          "number": 3,
+          "repository": "acme/approve",
+          "number": 1,
           "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "review_request_id": 11
         },
-        "WorkflowID": "prr-v2-ecb7e6e29ed550f59245c9d7a172ef682bd9516d5dbac5af2177981cfad5bd11",
+        "WorkflowID": "prr-v2-0266103af5337459b0812fb7d9b0a037f54d628ed56a7e08238d55f5a83e7c78",
         "Attempt": 0,
         "Status": "completed",
-        "Result": "failure",
-        "Failure": "review_label_removed",
+        "Result": "success",
+        "Failure": "",
         "Released": false,
         "CleanupPending": false
       }
@@ -214,7 +214,7 @@
     },
     {
       "name": "published",
-      "value": "{\"acme/approve#1\":{\"repository\":\"acme/approve\",\"number\":1,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"decision\":\"APPROVE\",\"workflow_id\":\"prr-v2-0266103af5337459b0812fb7d9b0a037f54d628ed56a7e08238d55f5a83e7c78\",\"published_at\":\"2026-01-01T00:00:00Z\"},\"acme/findings#2\":{\"repository\":\"acme/findings\",\"number\":2,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"decision\":\"REQUEST_CHANGES\",\"workflow_id\":\"prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025\",\"published_at\":\"2026-01-01T00:00:00Z\"},\"acme/notes#4\":{\"repository\":\"acme/notes\",\"number\":4,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"decision\":\"COMMENT\",\"workflow_id\":\"prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7\",\"published_at\":\"2026-01-01T00:00:00Z\",\"awaits_author\":true}}"
+      "value": "{\"acme/approve#1\":{\"repository\":\"acme/approve\",\"number\":1,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"decision\":\"APPROVE\",\"workflow_id\":\"prr-v2-0266103af5337459b0812fb7d9b0a037f54d628ed56a7e08238d55f5a83e7c78\",\"published_at\":\"2026-01-01T00:00:00Z\"},\"acme/findings#2\":{\"repository\":\"acme/findings\",\"number\":2,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"decision\":\"REQUEST_CHANGES\",\"workflow_id\":\"prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025\",\"published_at\":\"2026-01-01T00:01:00.5Z\"},\"acme/notes#4\":{\"repository\":\"acme/notes\",\"number\":4,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"decision\":\"COMMENT\",\"workflow_id\":\"prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7\",\"published_at\":\"2026-01-01T00:03:00Z\",\"awaits_author\":true}}"
     },
     {
       "name": "rejected",
@@ -222,13 +222,13 @@
     },
     {
       "name": "schedule",
-      "value": "{\"acme/approve#1\":{\"identity\":\"acme/approve#1@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11\",\"phase\":\"completed\",\"attempt\":0,\"retries\":0,\"workflow_id\":\"prr-v2-0266103af5337459b0812fb7d9b0a037f54d628ed56a7e08238d55f5a83e7c78\",\"due_at\":\"0001-01-01T00:00:00Z\"},\"acme/failing#3\":{\"identity\":\"acme/failing#3@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11\",\"phase\":\"running\",\"attempt\":0,\"retries\":0,\"workflow_id\":\"prr-v2-ecb7e6e29ed550f59245c9d7a172ef682bd9516d5dbac5af2177981cfad5bd11\",\"due_at\":\"2026-01-01T00:00:00Z\"},\"acme/findings#2\":{\"identity\":\"acme/findings#2@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11\",\"phase\":\"completed\",\"attempt\":0,\"retries\":0,\"workflow_id\":\"prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025\",\"due_at\":\"0001-01-01T00:00:00Z\"},\"acme/notes#4\":{\"identity\":\"acme/notes#4@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11\",\"phase\":\"completed\",\"attempt\":0,\"retries\":0,\"workflow_id\":\"prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7\",\"due_at\":\"0001-01-01T00:00:00Z\"}}"
+      "value": "{\"acme/approve#1\":{\"identity\":\"acme/approve#1@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11\",\"phase\":\"completed\",\"attempt\":0,\"retries\":0,\"workflow_id\":\"prr-v2-0266103af5337459b0812fb7d9b0a037f54d628ed56a7e08238d55f5a83e7c78\",\"due_at\":\"0001-01-01T00:00:00Z\"},\"acme/failing#3\":{\"identity\":\"acme/failing#3@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11\",\"phase\":\"running\",\"attempt\":0,\"retries\":0,\"workflow_id\":\"prr-v2-ecb7e6e29ed550f59245c9d7a172ef682bd9516d5dbac5af2177981cfad5bd11\",\"due_at\":\"2026-01-01T00:02:00Z\"},\"acme/findings#2\":{\"identity\":\"acme/findings#2@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11\",\"phase\":\"completed\",\"attempt\":0,\"retries\":0,\"workflow_id\":\"prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025\",\"due_at\":\"0001-01-01T00:00:00Z\"},\"acme/notes#4\":{\"identity\":\"acme/notes#4@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@11\",\"phase\":\"completed\",\"attempt\":0,\"retries\":0,\"workflow_id\":\"prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7\",\"due_at\":\"0001-01-01T00:00:00Z\"}}"
     }
   ],
   "review_state": [
     {
       "name": "collect_deadline",
-      "value": "\"2026-01-01T00:00:40Z\"",
+      "value": "\"2026-01-01T00:03:40Z\"",
       "workflow_id": "prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7"
     },
     {
@@ -248,7 +248,7 @@
     },
     {
       "name": "collect_deadline",
-      "value": "\"2026-01-01T00:00:40Z\"",
+      "value": "\"2026-01-01T00:01:40.5Z\"",
       "workflow_id": "prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025"
     },
     {
@@ -258,7 +258,7 @@
     },
     {
       "name": "collect_deadline",
-      "value": "\"2026-01-01T00:00:40Z\"",
+      "value": "\"2026-01-01T00:02:40Z\"",
       "workflow_id": "prr-v2-ecb7e6e29ed550f59245c9d7a172ef682bd9516d5dbac5af2177981cfad5bd11"
     },
     {
@@ -270,12 +270,12 @@
   "review_steps": [
     {
       "name": "artifact",
-      "output": "{\"repository\":\"acme/notes\",\"number\":4,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":{\"mode\":\"full\"},\"summaries\":[{\"reviewer_id\":\"opus\",\"label\":\"Opus\",\"summary\":\"Reviewed the change thoroughly and found the listed issues.\"}],\"findings\":[{\"id\":\"O001\",\"source_id\":\"C001\",\"reviewer_id\":\"opus\",\"reviewer_label\":\"Opus\",\"severity\":\"low\",\"confidence\":\"high\",\"path\":\"src/a.go\",\"line\":3,\"title\":\"Naming\",\"body\":\"Could be clearer.\",\"anchored\":true,\"non_blocking\":true}],\"tests\":[],\"reviewed_at\":\"2026-01-01T00:00:00Z\"}",
+      "output": "{\"repository\":\"acme/notes\",\"number\":4,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":{\"mode\":\"full\"},\"summaries\":[{\"reviewer_id\":\"opus\",\"label\":\"Opus\",\"summary\":\"Reviewed the change thoroughly and found the listed issues.\"}],\"findings\":[{\"id\":\"O001\",\"source_id\":\"C001\",\"reviewer_id\":\"opus\",\"reviewer_label\":\"Opus\",\"severity\":\"low\",\"confidence\":\"high\",\"path\":\"src/a.go\",\"line\":3,\"title\":\"Naming\",\"body\":\"Could be clearer.\",\"anchored\":true,\"non_blocking\":true}],\"tests\":[],\"reviewed_at\":\"2026-01-01T00:03:00Z\"}",
       "workflow_id": "prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7"
     },
     {
       "name": "artifact/combined",
-      "output": "{\"artifact\":{\"repository\":\"acme/notes\",\"number\":4,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":{\"mode\":\"full\"},\"summaries\":[{\"reviewer_id\":\"opus\",\"label\":\"Opus\",\"summary\":\"Reviewed the change thoroughly and found the listed issues.\"}],\"findings\":[{\"id\":\"O001\",\"source_id\":\"C001\",\"reviewer_id\":\"opus\",\"reviewer_label\":\"Opus\",\"severity\":\"low\",\"confidence\":\"high\",\"path\":\"src/a.go\",\"line\":3,\"title\":\"Naming\",\"body\":\"Could be clearer.\",\"anchored\":false,\"non_blocking\":true}],\"tests\":[],\"reviewed_at\":\"2026-01-01T00:00:00Z\"}}",
+      "output": "{\"artifact\":{\"repository\":\"acme/notes\",\"number\":4,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":{\"mode\":\"full\"},\"summaries\":[{\"reviewer_id\":\"opus\",\"label\":\"Opus\",\"summary\":\"Reviewed the change thoroughly and found the listed issues.\"}],\"findings\":[{\"id\":\"O001\",\"source_id\":\"C001\",\"reviewer_id\":\"opus\",\"reviewer_label\":\"Opus\",\"severity\":\"low\",\"confidence\":\"high\",\"path\":\"src/a.go\",\"line\":3,\"title\":\"Naming\",\"body\":\"Could be clearer.\",\"anchored\":false,\"non_blocking\":true}],\"tests\":[],\"reviewed_at\":\"2026-01-01T00:03:00Z\"}}",
       "workflow_id": "prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7"
     },
     {
@@ -305,7 +305,7 @@
     },
     {
       "name": "published_at",
-      "output": "\"2026-01-01T00:00:00Z\"",
+      "output": "\"2026-01-01T00:03:00Z\"",
       "workflow_id": "prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7"
     },
     {
@@ -355,12 +355,12 @@
     },
     {
       "name": "artifact",
-      "output": "{\"repository\":\"acme/findings\",\"number\":2,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":{\"mode\":\"full\"},\"summaries\":[{\"reviewer_id\":\"opus\",\"label\":\"Opus\",\"summary\":\"Reviewed the change thoroughly and found the listed issues.\"}],\"findings\":[{\"id\":\"O001\",\"source_id\":\"C001\",\"reviewer_id\":\"opus\",\"reviewer_label\":\"Opus\",\"severity\":\"high\",\"confidence\":\"high\",\"path\":\"src/a.go\",\"line\":3,\"title\":\"Broken\",\"body\":\"It breaks.\",\"anchored\":true}],\"tests\":[],\"reviewed_at\":\"2026-01-01T00:00:00Z\"}",
+      "output": "{\"repository\":\"acme/findings\",\"number\":2,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":{\"mode\":\"full\"},\"summaries\":[{\"reviewer_id\":\"opus\",\"label\":\"Opus\",\"summary\":\"Reviewed the change thoroughly and found the listed issues.\"}],\"findings\":[{\"id\":\"O001\",\"source_id\":\"C001\",\"reviewer_id\":\"opus\",\"reviewer_label\":\"Opus\",\"severity\":\"high\",\"confidence\":\"high\",\"path\":\"src/a.go\",\"line\":3,\"title\":\"Broken\",\"body\":\"It breaks.\",\"anchored\":true}],\"tests\":[],\"reviewed_at\":\"2026-01-01T00:01:00Z\"}",
       "workflow_id": "prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025"
     },
     {
       "name": "artifact/combined",
-      "output": "{\"artifact\":{\"repository\":\"acme/findings\",\"number\":2,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":{\"mode\":\"full\"},\"summaries\":[{\"reviewer_id\":\"opus\",\"label\":\"Opus\",\"summary\":\"Reviewed the change thoroughly and found the listed issues.\"}],\"findings\":[{\"id\":\"O001\",\"source_id\":\"C001\",\"reviewer_id\":\"opus\",\"reviewer_label\":\"Opus\",\"severity\":\"high\",\"confidence\":\"high\",\"path\":\"src/a.go\",\"line\":3,\"title\":\"Broken\",\"body\":\"It breaks.\",\"anchored\":false}],\"tests\":[],\"reviewed_at\":\"2026-01-01T00:00:00Z\"}}",
+      "output": "{\"artifact\":{\"repository\":\"acme/findings\",\"number\":2,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":{\"mode\":\"full\"},\"summaries\":[{\"reviewer_id\":\"opus\",\"label\":\"Opus\",\"summary\":\"Reviewed the change thoroughly and found the listed issues.\"}],\"findings\":[{\"id\":\"O001\",\"source_id\":\"C001\",\"reviewer_id\":\"opus\",\"reviewer_label\":\"Opus\",\"severity\":\"high\",\"confidence\":\"high\",\"path\":\"src/a.go\",\"line\":3,\"title\":\"Broken\",\"body\":\"It breaks.\",\"anchored\":false}],\"tests\":[],\"reviewed_at\":\"2026-01-01T00:01:00Z\"}}",
       "workflow_id": "prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025"
     },
     {
@@ -390,7 +390,7 @@
     },
     {
       "name": "published_at",
-      "output": "\"2026-01-01T00:00:00Z\"",
+      "output": "\"2026-01-01T00:01:00.5Z\"",
       "workflow_id": "prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025"
     },
     {
@@ -414,8 +414,8 @@
       "approval": null,
       "approval_deadline": null,
       "cleanup_pending": 0,
-      "completed_at": "2026-01-01T00:00:00Z",
-      "created_at": "2026-01-01T00:00:00Z",
+      "completed_at": "2026-01-01T00:03:00Z",
+      "created_at": "2026-01-01T00:03:00Z",
       "failure": null,
       "input": "{\"version\":5,\"pull_request\":{\"repository\":\"acme/notes\",\"number\":4,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"title\":\"Change\",\"url\":\"https://github.com/acme/notes/pull/4\",\"author\":\"colleague\",\"head_branch\":\"feature\",\"base_branch\":\"main\",\"base_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"attempt\":0,\"rule\":{\"match\":\"acme/notes\",\"trigger\":{\"kind\":\"review-requested\"},\"pipeline\":{\"name\":\"single\",\"protocol\":\"claude-structured\",\"reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"incremental_reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"prompt\":\"Review the pull request.\",\"checkout\":\"base\",\"project_sources\":[\"manual\"]},\"on_findings\":\"request_changes\",\"on_clean\":\"await\",\"on_notes\":\"comment\"},\"reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"scope\":{\"mode\":\"full\"},\"route\":{\"host\":\"review-host\",\"project_id\":\"project\"},\"notifications\":{\"approval_expired\":\"digest\",\"approval_requested\":\"action\",\"approved\":\"digest\",\"changes_requested\":\"digest\",\"cleanup_manual\":\"action\",\"command_failed\":\"action\",\"commented\":\"digest\",\"findings_on_own_pr\":\"action\",\"handoff_reminder\":\"action\",\"retry_scheduled\":\"log\",\"review_stopped\":\"action\",\"started\":\"log\",\"superseded\":\"log\"},\"approval_timeout_seconds\":3600,\"policy_digest\":\"ba694e1f5e0b97784b3f2ca1e27fc2db786fb17b3f21f51c9de37f5738df04cd\",\"publisher_login\":\"reviewer\",\"limits\":{\"session_timeout_ms\":20000,\"output_poll_ms\":100,\"session_start_attempts\":2,\"session_start_retry_ms\":100,\"session_cleanup_attempts\":2,\"session_cleanup_retry_ms\":50,\"reviewer_run_attempts\":2,\"reviewer_run_retry_ms\":100,\"step_retry_ms\":5000,\"step_retry_initial_ms\":10,\"step_retry_max_interval_ms\":100}}",
       "outcome": "{\"outcome\":\"published\",\"publication\":{\"decision\":\"COMMENT\",\"github_review_id\":3,\"review_url\":\"https://github.com/acme/notes/pull/4#review\",\"reused\":false}}",
@@ -423,7 +423,7 @@
       "result": "success",
       "review_key": "acme/notes#4",
       "status": "completed",
-      "updated_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:03:00Z",
       "workflow_id": "prr-v2-017be50d04b0899f237bcd1f58a4a2a2ae18b0260687c2fa1339becb6f3736b7"
     },
     {
@@ -446,8 +446,8 @@
       "approval": null,
       "approval_deadline": null,
       "cleanup_pending": 0,
-      "completed_at": "2026-01-01T00:00:00Z",
-      "created_at": "2026-01-01T00:00:00Z",
+      "completed_at": "2026-01-01T00:01:00.5Z",
+      "created_at": "2026-01-01T00:01:00.5Z",
       "failure": null,
       "input": "{\"version\":5,\"pull_request\":{\"repository\":\"acme/findings\",\"number\":2,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"title\":\"Change\",\"url\":\"https://github.com/acme/findings/pull/2\",\"author\":\"colleague\",\"head_branch\":\"feature\",\"base_branch\":\"main\",\"base_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"attempt\":0,\"rule\":{\"match\":\"acme/findings\",\"trigger\":{\"kind\":\"review-requested\"},\"pipeline\":{\"name\":\"single\",\"protocol\":\"claude-structured\",\"reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"incremental_reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"prompt\":\"Review the pull request.\",\"checkout\":\"base\",\"project_sources\":[\"manual\"]},\"on_findings\":\"request_changes\",\"on_clean\":\"approve\"},\"reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"scope\":{\"mode\":\"full\"},\"route\":{\"host\":\"review-host\",\"project_id\":\"project\"},\"notifications\":{\"approval_expired\":\"digest\",\"approval_requested\":\"action\",\"approved\":\"digest\",\"changes_requested\":\"digest\",\"cleanup_manual\":\"action\",\"command_failed\":\"action\",\"commented\":\"digest\",\"findings_on_own_pr\":\"action\",\"handoff_reminder\":\"action\",\"retry_scheduled\":\"log\",\"review_stopped\":\"action\",\"started\":\"log\",\"superseded\":\"log\"},\"approval_timeout_seconds\":3600,\"policy_digest\":\"ba694e1f5e0b97784b3f2ca1e27fc2db786fb17b3f21f51c9de37f5738df04cd\",\"publisher_login\":\"reviewer\",\"limits\":{\"session_timeout_ms\":20000,\"output_poll_ms\":100,\"session_start_attempts\":2,\"session_start_retry_ms\":100,\"session_cleanup_attempts\":2,\"session_cleanup_retry_ms\":50,\"reviewer_run_attempts\":2,\"reviewer_run_retry_ms\":100,\"step_retry_ms\":5000,\"step_retry_initial_ms\":10,\"step_retry_max_interval_ms\":100}}",
       "outcome": "{\"outcome\":\"published\",\"publication\":{\"decision\":\"REQUEST_CHANGES\",\"github_review_id\":2,\"review_url\":\"https://github.com/acme/findings/pull/2#review\",\"reused\":false}}",
@@ -455,15 +455,15 @@
       "result": "success",
       "review_key": "acme/findings#2",
       "status": "completed",
-      "updated_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:01:00.5Z",
       "workflow_id": "prr-v2-6365bdf0787f7d21333cf87ca4c733157090e6ef39561587d33b6b99a6d37025"
     },
     {
       "approval": null,
       "approval_deadline": null,
       "cleanup_pending": 0,
-      "completed_at": "2026-01-01T00:00:00Z",
-      "created_at": "2026-01-01T00:00:00Z",
+      "completed_at": "2026-01-01T00:02:00Z",
+      "created_at": "2026-01-01T00:02:00Z",
       "failure": "review_label_removed",
       "input": "{\"version\":5,\"pull_request\":{\"repository\":\"acme/failing\",\"number\":3,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"title\":\"Change\",\"url\":\"https://github.com/acme/failing/pull/3\",\"author\":\"colleague\",\"head_branch\":\"feature\",\"base_branch\":\"main\",\"base_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"attempt\":0,\"rule\":{\"match\":\"acme/failing\",\"trigger\":{\"kind\":\"review-requested\"},\"pipeline\":{\"name\":\"single\",\"protocol\":\"claude-structured\",\"reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"incremental_reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"prompt\":\"Review the pull request.\",\"checkout\":\"base\",\"project_sources\":[\"manual\"]},\"on_findings\":\"request_changes\",\"on_clean\":\"approve\"},\"reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"claude-structured\",\"agent_profile\":\"claude-profile\",\"finding_prefix\":\"O\"}],\"scope\":{\"mode\":\"full\"},\"route\":{\"host\":\"review-host\",\"project_id\":\"project\"},\"notifications\":{\"approval_expired\":\"digest\",\"approval_requested\":\"action\",\"approved\":\"digest\",\"changes_requested\":\"digest\",\"cleanup_manual\":\"action\",\"command_failed\":\"action\",\"commented\":\"digest\",\"findings_on_own_pr\":\"action\",\"handoff_reminder\":\"action\",\"retry_scheduled\":\"log\",\"review_stopped\":\"action\",\"started\":\"log\",\"superseded\":\"log\"},\"approval_timeout_seconds\":3600,\"policy_digest\":\"ba694e1f5e0b97784b3f2ca1e27fc2db786fb17b3f21f51c9de37f5738df04cd\",\"publisher_login\":\"reviewer\",\"limits\":{\"session_timeout_ms\":20000,\"output_poll_ms\":100,\"session_start_attempts\":2,\"session_start_retry_ms\":100,\"session_cleanup_attempts\":2,\"session_cleanup_retry_ms\":50,\"reviewer_run_attempts\":2,\"reviewer_run_retry_ms\":100,\"step_retry_ms\":5000,\"step_retry_initial_ms\":10,\"step_retry_max_interval_ms\":100}}",
       "outcome": null,
@@ -471,8 +471,46 @@
       "result": "failure",
       "review_key": "acme/failing#3",
       "status": "completed",
-      "updated_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:02:00Z",
       "workflow_id": "prr-v2-ecb7e6e29ed550f59245c9d7a172ef682bd9516d5dbac5af2177981cfad5bd11"
+    }
+  ],
+  "schema": [
+    {
+      "name": "reviews_created_at",
+      "sql": "CREATE INDEX reviews_created_at ON reviews (created_at)",
+      "tbl_name": "reviews",
+      "type": "index"
+    },
+    {
+      "name": "reviews_status",
+      "sql": "CREATE INDEX reviews_status ON reviews (status)",
+      "tbl_name": "reviews",
+      "type": "index"
+    },
+    {
+      "name": "discovery",
+      "sql": "CREATE TABLE discovery (\n\tname  TEXT PRIMARY KEY,\n\tvalue TEXT NOT NULL\n)",
+      "tbl_name": "discovery",
+      "type": "table"
+    },
+    {
+      "name": "review_state",
+      "sql": "CREATE TABLE review_state (\n\tworkflow_id TEXT NOT NULL REFERENCES reviews (workflow_id) ON DELETE CASCADE,\n\tname        TEXT NOT NULL,\n\tvalue       TEXT NOT NULL,\n\tPRIMARY KEY (workflow_id, name)\n)",
+      "tbl_name": "review_state",
+      "type": "table"
+    },
+    {
+      "name": "review_steps",
+      "sql": "CREATE TABLE review_steps (\n\tworkflow_id TEXT NOT NULL REFERENCES reviews (workflow_id) ON DELETE CASCADE,\n\tname        TEXT NOT NULL,\n\toutput      TEXT NOT NULL,\n\tPRIMARY KEY (workflow_id, name)\n)",
+      "tbl_name": "review_steps",
+      "type": "table"
+    },
+    {
+      "name": "reviews",
+      "sql": "CREATE TABLE reviews (\n\tworkflow_id       TEXT PRIMARY KEY,\n\treview_key        TEXT NOT NULL,\n\tinput             TEXT NOT NULL,\n\tstatus            TEXT NOT NULL CHECK (status IN ('queued', 'running', 'awaiting', 'completed')),\n\tresult            TEXT CHECK (result IS NULL OR result IN ('success', 'failure')),\n\tfailure           TEXT,\n\treleased          INTEGER NOT NULL DEFAULT 0,\n\tcleanup_pending   INTEGER NOT NULL DEFAULT 0,\n\tapproval          TEXT CHECK (approval IS NULL OR approval IN ('approve', 'expired', 'superseded')),\n\tapproval_deadline TEXT,\n\toutcome           TEXT,\n\tcreated_at        TEXT NOT NULL,\n\tupdated_at        TEXT NOT NULL,\n\tcompleted_at      TEXT\n)",
+      "tbl_name": "reviews",
+      "type": "table"
     }
   ],
   "user_version": 1

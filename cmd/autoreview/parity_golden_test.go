@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -513,11 +514,39 @@ func parityPersistedCases(t *testing.T) []parityCase {
 	}
 }
 
-// parityStoreInstant is the one instant every store and engine clock reads in
-// the store golden, so stored timestamps do not depend on when the test runs.
-var parityStoreInstant = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+// parityStoreClock is the clock the store and the engine read in the store
+// golden. It moves only when the scenario sets it, so stored timestamps do not
+// depend on when the test runs. The engine reads it from its own goroutines.
+type parityStoreClock struct {
+	mu      sync.Mutex
+	instant time.Time
+}
 
-func parityStoreClock() time.Time { return parityStoreInstant }
+func (clock *parityStoreClock) now() time.Time {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	return clock.instant
+}
+
+func (clock *parityStoreClock) set(instant time.Time) {
+	clock.mu.Lock()
+	defer clock.mu.Unlock()
+	clock.instant = instant
+}
+
+// parityStoreInstants are the clock readings of the four scenarios in run
+// order. They increase, so created_at DESC lists the reviews in reverse run
+// order, which is not their workflow_id order. The second has a fractional
+// second, stored as ".5" in RFC3339Nano text. Each lies in its own minute,
+// because in that text "00:00:00.5Z" sorts before "00:00:00Z". The steps of
+// one minute stay below the approval timeout and the hand-off reminder of
+// parityStorePolicy.
+var parityStoreInstants = [4]time.Time{
+	time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	time.Date(2026, 1, 1, 0, 1, 0, 500000000, time.UTC),
+	time.Date(2026, 1, 1, 0, 2, 0, 0, time.UTC),
+	time.Date(2026, 1, 1, 0, 3, 0, 0, time.UTC),
+}
 
 // parityStorePolicy routes each repository to one Claude reviewer. With one
 // reviewer per review, session IDs are assigned in a fixed order.
@@ -551,8 +580,8 @@ notifications:
 `
 
 // parityStoreHarness starts an engine on a fresh store whose clocks read
-// parityStoreInstant. It repeats startHarness, which reads time.Now.
-func parityStoreHarness(t *testing.T) *harness {
+// clock. It repeats startHarness, which reads time.Now.
+func parityStoreHarness(t *testing.T, clock *parityStoreClock) *harness {
 	t.Helper()
 	parsed, err := policy.Parse([]byte(parityStorePolicy), func(string) ([]byte, error) { return []byte("Review the pull request."), nil })
 	if err != nil {
@@ -560,10 +589,11 @@ func parityStoreHarness(t *testing.T) *harness {
 	}
 	cfg := integrationConfig(t)
 	cfg.Policy = parsed
-	// The schedule runs a review once now is not before its due time. With a
-	// fixed clock a non-zero debounce is never reached, so it is removed here.
+	// The schedule runs a review once now is not before its due time. The clock
+	// stands still within a scenario, so a non-zero debounce is never reached
+	// there, and it is removed here.
 	cfg.Schedule.Debounce = 0
-	store, err := OpenStore(cfg.StateDBPath, parityStoreClock)
+	store, err := OpenStore(cfg.StateDBPath, clock.now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -572,7 +602,7 @@ func parityStoreHarness(t *testing.T) *harness {
 	h.fake.output = reviewerOutput(t, nil)
 	h.fake.commentable = CommentableLines{"src/a.go": {3}}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h.engine = NewEngine(cfg, store, h.fake, logger, parityStoreClock, sleepWithContext)
+	h.engine = NewEngine(cfg, store, h.fake, logger, clock.now, sleepWithContext)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- h.engine.Serve(ctx) }()
@@ -589,8 +619,9 @@ func parityStorePR(repository string, number int) PullRequest {
 }
 
 // parityStoreReviews returns the stored reviews of the pull request key, newest
-// first. The scenario looks reviews up by key, because the workflow ID the
-// engine stores is not the one pr.WorkflowID computes for the test's pull request.
+// first. The lookup is by key, not by pr.WorkflowID(0), so it returns every
+// attempt of the pull request, and a wait for exactly one review fails on a
+// second attempt.
 func parityStoreReviews(h *harness, key string) []StoredReview {
 	h.t.Helper()
 	reviews, err := h.store.listReviews(context.Background(), "review_key = ?", h.cfg.ReviewListLimit, key)
@@ -640,7 +671,14 @@ func parityStoreFailRun(h *harness, pr PullRequest) {
 // from column name to value.
 func parityStoreTable(t *testing.T, store *Store, table, orderBy string) []map[string]any {
 	t.Helper()
-	rows, err := store.db.Query(`SELECT * FROM ` + table + ` ORDER BY ` + orderBy)
+	return parityStoreQuery(t, store, table, `SELECT * FROM `+table+` ORDER BY `+orderBy)
+}
+
+// parityStoreQuery returns the rows of query as objects from column name to
+// value. label names the rows in a failure message.
+func parityStoreQuery(t *testing.T, store *Store, label, query string) []map[string]any {
+	t.Helper()
+	rows, err := store.db.Query(query)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +700,7 @@ func parityStoreTable(t *testing.T, store *Store, table, orderBy string) []map[s
 		row := make(map[string]any, len(columns))
 		for index, column := range columns {
 			if _, blob := values[index].([]byte); blob {
-				t.Fatalf("%s.%s holds a BLOB, which the golden cannot represent", table, column)
+				t.Fatalf("%s.%s holds a BLOB, which the golden cannot represent", label, column)
 			}
 			row[column] = values[index]
 		}
@@ -674,8 +712,9 @@ func parityStoreTable(t *testing.T, store *Store, table, orderBy string) []map[s
 	return collected
 }
 
-// parityStoreDump returns the store-v1 golden: the schema version, every row of
-// the four tables, and what the Go store API and the engine return over them.
+// parityStoreDump returns the store-v1 golden: the schema version, the DDL of
+// every table and index as SQLite stores it, every row of the four tables, and
+// what the Go store API and the engine return over them.
 func parityStoreDump(t *testing.T, h *harness) map[string]any {
 	t.Helper()
 	ctx := context.Background()
@@ -705,6 +744,7 @@ func parityStoreDump(t *testing.T, h *harness) map[string]any {
 	}
 	return map[string]any{
 		"user_version": version,
+		"schema":       parityStoreQuery(t, h.store, "sqlite_master", "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"),
 		"discovery":    parityStoreTable(t, h.store, "discovery", "name"),
 		"reviews":      parityStoreTable(t, h.store, "reviews", "workflow_id"),
 		"review_steps": parityStoreTable(t, h.store, "review_steps", "workflow_id, name"),
@@ -752,15 +792,20 @@ func parityCheckStoreGolden(t *testing.T, name string, value any) {
 }
 
 // TestWriteStoreGolden runs the fake harness to one approved review, one review
-// with findings, one failed review and one notes hand-off, then compares or
-// writes store-v1.json.
+// with findings, one failed review and one notes hand-off, each at its own
+// instant of parityStoreInstants, then compares or writes store-v1.json.
 func TestWriteStoreGolden(t *testing.T) {
-	h := parityStoreHarness(t)
+	// The start-up discovery pass runs at the instant of the first scenario.
+	clock := &parityStoreClock{instant: parityStoreInstants[0]}
+	h := parityStoreHarness(t, clock)
 	h.setOutput(reviewerOutput(t, nil))
 	parityStoreRun(h, parityStorePR("acme/approve", 1))
+	clock.set(parityStoreInstants[1])
 	h.setOutput(reviewerOutput(t, []map[string]any{{"severity": "high", "confidence": "high", "path": "src/a.go", "line": 3, "title": "Broken", "body": "It breaks."}}))
 	parityStoreRun(h, parityStorePR("acme/findings", 2))
+	clock.set(parityStoreInstants[2])
 	parityStoreFailRun(h, parityStorePR("acme/failing", 3))
+	clock.set(parityStoreInstants[3])
 	h.setOutput(reviewerOutput(t, []map[string]any{{"severity": "low", "confidence": "high", "blocking": false, "path": "src/a.go", "line": 3, "title": "Naming", "body": "Could be clearer."}}))
 	parityStoreRun(h, parityStorePR("acme/notes", 4))
 	// A poll that sees a published head rewrites its schedule record (discovery.go:283-284),
