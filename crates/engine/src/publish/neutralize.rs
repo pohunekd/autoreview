@@ -7,7 +7,6 @@
 // Rust guideline compliant 2026-06-26
 
 /// Neutralizes model Markdown so that GitHub cannot mention, embed or fetch from it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S12"))]
 pub(crate) fn neutralize(value: &str) -> String {
     let mut lines: Vec<String> = value
         .split('\n')
@@ -41,7 +40,7 @@ pub(crate) fn neutralize(value: &str) -> String {
 }
 
 /// Returns the opening fence: three or more backticks or tildes at the line start.
-fn opening_fence(line: &str) -> Option<&str> {
+pub(crate) fn opening_fence(line: &str) -> Option<&str> {
     for &character in b"`~" {
         let mut run = 0;
         let bytes = line.as_bytes();
@@ -59,7 +58,7 @@ fn opening_fence(line: &str) -> Option<&str> {
 }
 
 /// Reports a closing fence line of at least the opener's length, then whitespace only.
-fn closes_fence(line: &str, fence: &str) -> bool {
+pub(crate) fn closes_fence(line: &str, fence: &str) -> bool {
     let first = fence.as_bytes().first().copied().unwrap_or(b'`');
     let mut run = 0;
     let bytes = line.as_bytes();

@@ -5,6 +5,7 @@
 pub(crate) mod anchor;
 pub(crate) mod neutralize;
 pub(crate) mod plan;
+pub(crate) mod render;
 
 use sha2::{Digest, Sha256};
 
@@ -15,7 +16,6 @@ use crate::model::{Decision, Finding, PriorResult, PullRequest};
 /// It carries the decision and the number of findings the caller passes, so a clean review
 /// differs from one with blocking findings even when GitHub forces COMMENT. The caller passes
 /// only the blocking findings. An open prior finding is counted under its key.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S12"))]
 pub(crate) fn review_marker(
     pr: &PullRequest,
     decision: Decision,
