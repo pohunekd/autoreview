@@ -93,7 +93,7 @@ func TestAwaitedApprovalWaitsForTheUserAndPublishesOnce(t *testing.T) {
 	if err != nil || resolved.HeadSHA != pr.HeadSHA {
 		t.Fatalf("resolve = %+v, %v", resolved, err)
 	}
-	result, err := h.approve(resolved.WorkflowID, pr)
+	result, err := h.approveWhenAwaiting(pr)
 	if err != nil || result.PublicationStatus != "pending" {
 		t.Fatalf("approve = %+v, %v", result, err)
 	}
@@ -336,11 +336,7 @@ func TestFailedPublicationAfterApprovalIsReportedAndRetried(t *testing.T) {
 	h.fake.mu.Lock()
 	h.fake.publishFail = "github_request_rejected"
 	h.fake.mu.Unlock()
-	resolved, err := h.resolve(pr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.approve(resolved.WorkflowID, pr); err != nil {
+	if _, err := h.approveWhenAwaiting(pr); err != nil {
 		t.Fatal(err)
 	}
 	h.waitFor("the failure report", func() bool {
@@ -405,6 +401,8 @@ func TestRestartDuringCollectResumesWithoutStartingReviewersAgain(t *testing.T) 
 	pr := integrationPullRequest("acme/widget", sha("a"))
 	h.fake.open(pr, h.rule(pr.Repository))
 	h.pollUntil("both reviewer sessions", func() bool { return h.startedCount() == 2 })
+	// Stopping before the started notice is stored sends it again after the restart.
+	h.waitFor("the started notice to be stored", func() bool { return h.stepRecorded(notifyStepPrefix + "started") })
 	h.stopEngine()
 	h.start()
 	h.setOutput(reviewerOutput(t, nil))
@@ -484,11 +482,7 @@ func TestNotesOnlyReviewOfAnAwaitRuleAsksForApprovalAndPublishesTheNotes(t *test
 	if !h.fake.hasNote(policy.LevelAction, "Non-blocking notes: 2") || h.publications() != 0 {
 		t.Fatal("the approval request must list the notes and nothing may be posted yet")
 	}
-	resolved, err := h.resolve(pr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.approve(resolved.WorkflowID, pr); err != nil {
+	if _, err := h.approveWhenAwaiting(pr); err != nil {
 		t.Fatal(err)
 	}
 	h.waitFor("the approval", func() bool { return h.publications() == 1 })
@@ -697,11 +691,7 @@ func TestHumanReviewSignalHoldsACleanAutomaticApprovalForTheUser(t *testing.T) {
 	if !h.fake.hasNote(policy.LevelAction, "human review signals: label needs-human; deleted test files pkg/tests/OwnerTest.php.") || h.publications() != 0 {
 		t.Fatal("the approval request must name the matched signals and nothing may be posted yet")
 	}
-	resolved, err := h.resolve(pr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.approve(resolved.WorkflowID, pr); err != nil {
+	if _, err := h.approveWhenAwaiting(pr); err != nil {
 		t.Fatal(err)
 	}
 	h.waitFor("the approval", func() bool { return h.publications() == 1 })

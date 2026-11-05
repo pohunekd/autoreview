@@ -199,7 +199,11 @@ func (f *fakeIntegration) SessionOutput(_ context.Context, session SessionIdenti
 	return output(request), nil
 }
 
-func (f *fakeIntegration) RemoveSessionConfirmed(_ context.Context, session SessionIdentity) error {
+func (f *fakeIntegration) RemoveSessionConfirmed(ctx context.Context, session SessionIdentity) error {
+	// Like the host, it fails once ctx has ended, so a stopping engine keeps its reviewer sessions.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.removeFailing[session.SessionID] {
@@ -613,6 +617,34 @@ func (h *harness) resolve(pr PullRequest) (ResolveResult, error) {
 
 func (h *harness) approve(workflowID string, pr PullRequest) (ApprovalResult, error) {
 	return h.engine.Approve(context.Background(), workflowID, ApproveRequest{Repository: pr.Repository, Number: pr.Number, HeadSHA: pr.HeadSHA})
+}
+
+// approveWhenAwaiting approves the review of pr once it is stored as awaiting.
+// The approval request is sent before that status is stored, and Approve
+// refuses a review that is not awaiting yet.
+func (h *harness) approveWhenAwaiting(pr PullRequest) (ApprovalResult, error) {
+	h.t.Helper()
+	resolved, err := h.resolve(pr)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.waitFor("the stored approval wait", func() bool {
+		stored, found, err := h.store.getReview(context.Background(), resolved.WorkflowID)
+		return err == nil && found && stored.Status == reviewAwaiting
+	})
+	return h.approve(resolved.WorkflowID, pr)
+}
+
+// stepRecorded reports whether the review of the first started session has
+// stored the named step.
+func (h *harness) stepRecorded(name string) bool {
+	_, _, started, _ := h.fake.snapshot()
+	if len(started) == 0 {
+		return false
+	}
+	var recorded bool
+	found, err := h.store.loadStep(context.Background(), started[0].WorkflowID, name, &recorded)
+	return err == nil && found
 }
 
 func (h *harness) retry(pr PullRequest) (RetryResult, error) {

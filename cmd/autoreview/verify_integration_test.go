@@ -59,14 +59,7 @@ func TestDemotedCriticalFindingOnAnApprovingRuleWaitsForTheUser(t *testing.T) {
 	if !h.fake.hasNote(policy.LevelAction, "the verification demoted these blocking findings, check before approving:\nO001 [NOTE, NOT BLOCKING BY VERIFICATION, CRITICAL") || h.publications() != 0 {
 		t.Fatal("the approval request must name the demoted critical finding and nothing may be posted yet")
 	}
-	// The notification precedes the stored wait by a moment.
-	var resolved ResolveResult
-	h.waitFor("the stored wait", func() bool {
-		var err error
-		resolved, err = h.resolve(pr)
-		return err == nil
-	})
-	if _, err := h.approve(resolved.WorkflowID, pr); err != nil {
+	if _, err := h.approveWhenAwaiting(pr); err != nil {
 		t.Fatal(err)
 	}
 	h.waitFor("the approval", func() bool { return h.publications() == 1 })
