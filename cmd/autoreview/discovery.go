@@ -119,7 +119,7 @@ func (engine *Engine) planReview(ctx context.Context, candidate Candidate, publi
 
 // priorFindings reads the blocking findings of a published review and the
 // prior findings it left open. stored is false when that review's result is
-// gone, such as after retention or under the earlier engine.
+// gone, such as after retention or for a review this engine did not make.
 func (engine *Engine) priorFindings(ctx context.Context, published PublishedRecord) (prior []PriorFinding, stored bool, err error) {
 	if !strings.HasPrefix(published.WorkflowID, workflowIDPrefix) {
 		return nil, false, nil

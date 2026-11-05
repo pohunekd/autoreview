@@ -118,7 +118,7 @@ func TestMissingOrUnsafeConfigurationFailsFast(t *testing.T) {
 			t.Fatalf("%s=%s was accepted", name, value)
 		}
 	}
-	for _, signature := range []string{"  ", "AI review\nby @example-user", "AI review by @example-user", "AI <!-- review -->", " AI review", strings.Repeat("a", 201), "**AI review**: machine-written", "🤖 AI review: Hermes"} {
+	for _, signature := range []string{"  ", "AI review\nby @example-user", "AI review by @example-user", "AI <!-- review -->", " AI review", strings.Repeat("a", 201), "**AI review**: machine-written", "🤖 AI review: example-agent"} {
 		values := deployedEnvironment(t)
 		values["HERMES_PR_REVIEW_AI_SIGNATURE"] = signature
 		if _, err := loadDeployed(t, values); err == nil {
