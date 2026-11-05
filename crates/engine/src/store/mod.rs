@@ -350,9 +350,9 @@ fn store_error(code: &str, permanent: bool, cause: impl Into<BoxError>) -> Error
 fn encode_go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let text = serde_json::to_string(value)?;
     Ok(text
-        .replace('<', "<u003c")
-        .replace('>', "<u003e")
-        .replace('&', "<u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029"))
 }

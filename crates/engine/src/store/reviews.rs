@@ -190,11 +190,7 @@ impl Store {
         let reviews = self.list_reviews(&ReviewFilter::All, limit.wrapping_add(1))?;
         let count = i64::try_from(reviews.len()).unwrap_or(i64::MAX);
         if count > limit {
-            return Err(store_error(
-                "review_history_limit_exceeded",
-                true,
-                "review history is larger than the limit",
-            ));
+            return Err(Error::workflow("review_history_limit_exceeded", true, None));
         }
         Ok(reviews
             .into_iter()
