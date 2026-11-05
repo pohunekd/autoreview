@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/pohunekd/autoreview/policy"
+	"github.com/pohunekd/autoreview/schedule"
 )
 
 // parityGoldenDir is relative to the package directory, which go test uses as
@@ -99,6 +100,7 @@ func TestWriteParityGolden(t *testing.T) {
 		{"neutralize", parityNeutralizeCases},
 		{"render", parityRenderCases},
 		{"protocol", parityProtocolCases},
+		{"persisted", parityPersistedCases},
 	}
 	for _, file := range files {
 		t.Run(file.name, func(t *testing.T) {
@@ -425,5 +427,85 @@ func parityProtocolCases(t *testing.T) []parityCase {
 		parityVerifierCase(t, "verifier_duplicate_key_last_wins", parityWrap(parityStdout("Prose summary.",
 			`{"repository":"acme/widget","number":5,"head_sha":"`+sha("a")+`","findings":[],"findings":`+verifierChecks+`,"prior_findings":`+verifierPrior+`}`)), "claude_result_invalid"),
 		parityVerifierCase(t, "verifier_top_level_null", parityWrap("null"), "claude_result_invalid"),
+	}
+}
+
+// parityPersisted returns a persisted value as its zero or fixed shape. The
+// input is null because the Go value itself is the case.
+func parityPersisted(name string, value any) parityCase {
+	return parityOK(name, nil, value)
+}
+
+// parityArtifactFull fills every field of Artifact that is persisted in a step.
+func parityArtifactFull() Artifact {
+	return Artifact{
+		Repository: "acme/widget", Number: 5, HeadSHA: sha("a"),
+		Scope:     ReviewScope{Mode: scopeIncremental, PreviousHeadSHA: sha("c")},
+		Summaries: []ReviewerSummary{{ReviewerID: "opus", Label: "Opus", Summary: "Reviewed the change."}},
+		Findings: []Finding{{ID: "O001", SourceID: "C001", ReviewerID: "opus", ReviewerLabel: "Opus", Severity: "low", Confidence: "high",
+			Path: "src/a.go", Line: 4, Title: "Naming", Body: "Rename it.", Anchored: true, NonBlocking: true}},
+		Tests:      []string{"Opus: go test ./..."},
+		ReviewedAt: "2026-01-01T00:00:00Z",
+		PriorResults: []PriorResult{{
+			Finding:      PriorFinding{Key: priorKey(sha("c"), "O001"), ID: "O001", HeadSHA: sha("c"), GitHubReviewID: 99, Severity: "high", Path: "src/a.go", Line: 3, Title: "Bug", Body: "Breaks."},
+			PriorVerdict: PriorVerdict{Key: priorKey(sha("c"), "O001"), Status: priorAnswered, Note: "Settled.", ReliesOn: "reviewer"},
+			Reopened:     true,
+		}},
+		Verification: &Verification{ReviewerLabel: "Opus", Findings: []FindingCheck{{ID: "O001", Verdict: verdictNotBlocking, Note: "Minor."}},
+			Prior: []PriorCheck{{Key: priorKey(sha("c"), "O001"), Verdict: verdictReopened, Note: "Still there."}}},
+		HumanReview: []string{"label needs-human-review"},
+	}
+}
+
+func parityPersistedCases(t *testing.T) []parityCase {
+	pr := testPullRequest(5)
+	dueAt := time.Unix(1767225600, 0).UTC()
+	publishedAt := time.Unix(1767225600, 500000000).UTC()
+	return []parityCase{
+		parityPersisted("review_input_nil_slices", ReviewInput{Version: inputVersion, Rule: policy.Rule{Match: "acme/*",
+			Trigger:    policy.Trigger{Kind: policy.TriggerReviewRequested},
+			Pipeline:   policy.Pipeline{Name: "main", Protocol: policy.ProtocolClaudeStructured, Checkout: policy.CheckoutBase},
+			OnFindings: policy.FindingsRequestChanges, OnClean: policy.CleanApprove}}),
+		parityPersisted("review_input_with_verifier", testInput(verifiedRule(policy.CleanApprove), pr)),
+		parityPersisted("review_outcome_superseded", ReviewOutcome{Outcome: OutcomeSuperseded}),
+		parityPersisted("review_outcome_published", ReviewOutcome{Outcome: OutcomePublished, Publication: &PublishResult{Decision: DecisionApprove,
+			GitHubReviewID: 42, ReviewURL: "https://github.com/acme/widget/pull/5#pullrequestreview-42", Reused: true}}),
+		parityPersisted("publication_plan_zero", PublicationPlan{}),
+		parityPersisted("publication_plan_await", PublicationPlan{Decision: DecisionApprove, Await: true}),
+		parityPersisted("published_record_zero", PublishedRecord{}),
+		parityPersisted("published_record_awaiting", PublishedRecord{Repository: "acme/widget", Number: 5, HeadSHA: sha("a"), ReviewRequestID: 7,
+			Decision: DecisionComment, WorkflowID: pr.WorkflowID(1), PublishedAt: publishedAt, AwaitsAuthor: true, Reminded: true}),
+		parityPersisted("await_record_zero", AwaitRecord{}),
+		parityPersisted("await_record_label_trigger", AwaitRecord{Repository: "acme/widget", Number: 5, HeadSHA: sha("a"), ReviewRequestID: 7,
+			Trigger: policy.Trigger{Kind: policy.TriggerLabel, Label: "ai:review"}, WorkflowID: pr.WorkflowID(1)}),
+		parityPersisted("schedule_record_zero", schedule.Record{}),
+		parityPersisted("schedule_record_failed", schedule.Record{BlockingWorkflows: []string{}, Identity: pr.Target().Identity(), Phase: "retry",
+			Attempt: 1, Retries: 1, WorkflowID: pr.WorkflowID(1), DueAt: dueAt, ErrorCode: "review_output_invalid"}),
+		parityPersisted("discovery_rejected_nil", map[string]string(nil)),
+		parityPersisted("discovery_rejected_empty", map[string]string{}),
+		parityPersisted("discovery_rejected_entry", map[string]string{"acme/widget#6": "artifact_invalid"}),
+		parityPersisted("artifact_nil_slices", Artifact{}),
+		parityPersisted("artifact_empty_slices", Artifact{Summaries: []ReviewerSummary{}, Findings: []Finding{}, Tests: []string{}}),
+		parityPersisted("artifact_full", parityArtifactFull()),
+		parityPersisted("finding_zero", Finding{}),
+		parityPersisted("finding_blocking_verdict", Finding{ID: "S001", SourceID: "C002", ReviewerID: "sonnet", ReviewerLabel: "Sonnet",
+			Severity: "high", Confidence: "medium", Path: "a.go", Line: 4, Title: "Bug", Body: "Breaks.", Anchored: true, Verdict: verdictConfirmed}),
+		parityPersisted("reviewer_result_nil", ReviewerResult{}),
+		parityPersisted("reviewer_result_empty", ReviewerResult{ReviewerID: "opus", Summary: "Reviewed.", Findings: []Finding{}, Tests: []string{}, Prior: []PriorVerdict{}}),
+		parityPersisted("prior_finding_zero", PriorFinding{}),
+		parityPersisted("prior_result_zero", PriorResult{}),
+		parityPersisted("verification_zero", Verification{}),
+		parityPersisted("verification_error", Verification{ReviewerLabel: "Opus", ErrorCode: "review_output_invalid"}),
+		parityPersisted("session_request_zero", SessionRequest{}),
+		parityPersisted("slot_state_zero", slotState{}),
+		parityPersisted("slot_state_with_session_and_result", slotState{Run: 1, Start: 2,
+			Session:      &SessionIdentity{Host: "review-host", SessionID: "session-1", WorkerInstanceID: "worker-1", RuntimeGeneration: "generation-1", ReviewerID: "opus"},
+			Result:       &ReviewerResult{ReviewerID: "opus", Summary: "Reviewed.", Findings: []Finding{}, Tests: []string{}},
+			Verification: &verifierResult{Findings: []FindingCheck{}, Prior: []PriorCheck{}}}),
+		parityPersisted("commentable_lines_nil", CommentableLines(nil)),
+		parityPersisted("commentable_lines_one_file", CommentableLines{"src/a.go": []int{3, 4}}),
+		parityPersisted("policy_rule_zero", policy.Rule{}),
+		parityPersisted("github_review_zero", GitHubReview{}),
+		parityPersisted("discussion_zero", Discussion{}),
 	}
 }
