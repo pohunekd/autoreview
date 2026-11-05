@@ -21,7 +21,6 @@ pub(crate) const INPUT_VERSION: i64 = 5;
 pub(crate) const MIN_INPUT_VERSION: i64 = 2;
 
 /// First input version whose findings may be non-blocking; before it every finding blocks.
-#[expect(dead_code, reason = "called by S08")]
 pub(crate) const BLOCKING_GATE_VERSION: i64 = 3;
 
 /// First input version that may carry the blocking findings of earlier reviews.
@@ -167,16 +166,13 @@ mod tests {
     use serde_json::Value;
 
     use super::PullRequest;
+    use crate::model::review::{AwaitRecord, PublishedRecord, prior_key};
 
     /// Go-written identifiers, shared with the Go reference tests.
     const GOLDEN: &str = include_str!("../../../../testdata/parity/ids.json");
 
     /// Golden cases of identifiers that later slices port, so this test skips them.
     const LATER_CASES: &[&str] = &[
-        "prior_key_full_sha",
-        "prior_key_short_head",
-        "published_record_key",
-        "await_record_key",
         "session_run1_base",
         "session_run1_start2",
         "session_run2_head_checkout",
@@ -195,6 +191,13 @@ mod tests {
     struct WorkflowInput {
         pull_request: PullRequest,
         attempt: i64,
+    }
+
+    /// The input of a prior key case.
+    #[derive(Debug, Deserialize)]
+    struct PriorKeyInput {
+        head: String,
+        id: String,
     }
 
     /// Reads a golden input as a pull request.
@@ -216,6 +219,21 @@ mod tests {
                         .unwrap_or_else(|error| panic!("{}: workflow input: {error}", case.name));
                     Value::from(input.pull_request.workflow_id(input.attempt))
                 }
+                "prior_key_full_sha" | "prior_key_short_head" => {
+                    let input: PriorKeyInput = serde_json::from_value(case.input.clone())
+                        .unwrap_or_else(|error| panic!("{}: prior key input: {error}", case.name));
+                    Value::from(prior_key(&input.head, &input.id))
+                }
+                "published_record_key" => {
+                    let record: PublishedRecord = serde_json::from_value(case.input.clone())
+                        .unwrap_or_else(|error| panic!("{}: record input: {error}", case.name));
+                    Value::from(record.key())
+                }
+                "await_record_key" => {
+                    let record: AwaitRecord = serde_json::from_value(case.input.clone())
+                        .unwrap_or_else(|error| panic!("{}: record input: {error}", case.name));
+                    Value::from(record.key())
+                }
                 "target_key_and_identity" => {
                     let target = pull_request(case).target();
                     serde_json::json!({"key": target.key(), "identity": target.identity()})
@@ -232,8 +250,8 @@ mod tests {
             checked += 1;
         }
         assert_eq!(
-            checked, 5,
-            "golden has the five identifier cases of this module"
+            checked, 9,
+            "golden has the nine identifier cases of this module"
         );
     }
 }
