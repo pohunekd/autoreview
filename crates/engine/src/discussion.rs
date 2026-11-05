@@ -20,8 +20,7 @@ pub(crate) const DISCUSSION_ROLE_OTHER: &str = "other";
 /// Blank lines and lines that start with an HTML comment are skipped. Optional signature
 /// symbols may precede the prefix. Only that line counts: a signature above a later line of
 /// text is not recognised.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E05"))]
-pub(crate) fn ai_signed(body: &str) -> bool {
+pub fn ai_signed(body: &str) -> bool {
     let pieces: Vec<&str> = body.split('\n').collect();
     for piece in pieces.iter().rev() {
         let trimmed = piece.trim();
@@ -45,8 +44,7 @@ const FINDING_HEADING_SEPARATOR: &str = " — ";
 /// A heading is `**`, one ASCII uppercase letter, three or more ASCII digits, a space, a
 /// severity and the separator, such as `**O001 HIGH — Bug**`. A `**` may overlap the one
 /// before it.
-#[expect(dead_code, reason = "called by E05")]
-pub(crate) fn finding_heading_id(body: &str) -> Option<&str> {
+pub fn finding_heading_id(body: &str) -> Option<&str> {
     let len = body.len();
     if len < 2 {
         return None;
@@ -106,8 +104,7 @@ pub(crate) fn finding_heading_id(body: &str) -> Option<&str> {
 ///
 /// The publishing account is compared first, so a publisher who also wrote the pull request
 /// is the reviewer.
-#[expect(dead_code, reason = "called by E05")]
-pub(crate) fn discussion_role(login: &str, pr: &PullRequest, publisher: &str) -> &'static str {
+pub fn discussion_role(login: &str, pr: &PullRequest, publisher: &str) -> &'static str {
     if login.eq_ignore_ascii_case(publisher) {
         DISCUSSION_ROLE_REVIEWER
     } else if login.eq_ignore_ascii_case(pr.author.as_str()) {
@@ -121,9 +118,8 @@ pub(crate) fn discussion_role(login: &str, pr: &PullRequest, publisher: &str) ->
 ///
 /// A body over the remaining budget is cut to fit and ends with `…`. Once the budget is
 /// spent, nothing more is handed out.
-#[expect(dead_code, reason = "called by E05")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DiscussionBudget {
+pub struct DiscussionBudget {
     /// Characters that the following bodies may still take.
     remaining: usize,
 }
@@ -132,8 +128,7 @@ impl DiscussionBudget {
     /// Creates a budget of `remaining` characters.
     ///
     /// A limit of zero or less hands out nothing.
-    #[expect(dead_code, reason = "called by E05")]
-    pub(crate) fn new(remaining: i64) -> Self {
+    pub fn new(remaining: i64) -> Self {
         Self {
             remaining: usize::try_from(remaining).unwrap_or(0),
         }
@@ -142,8 +137,7 @@ impl DiscussionBudget {
     /// Returns the part of `body` the budget holds, or `None` once it is spent.
     ///
     /// The count is in characters, so a multi-byte character takes one.
-    #[expect(dead_code, reason = "called by E05")]
-    pub(crate) fn take(&mut self, body: &str) -> Option<String> {
+    pub fn take(&mut self, body: &str) -> Option<String> {
         if self.remaining == 0 {
             return None;
         }
