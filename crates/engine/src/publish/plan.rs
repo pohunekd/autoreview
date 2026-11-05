@@ -6,14 +6,8 @@ use autoreview_policy::{Event, OnClean, OnFindings, OnNotes};
 use serde::{Deserialize, Serialize};
 
 use crate::model::finding::is_false;
-use crate::model::ids::VERIFIER_VERSION;
-use crate::model::{Artifact, Decision, Finding, ReviewInput};
-
-/// Verdict of the verifier that demotes a blocking finding to a note.
-const VERDICT_NOT_BLOCKING: &str = "not_blocking";
-
-/// Verdict of the verifier that refutes a blocking finding.
-const VERDICT_REFUTED: &str = "refuted";
+use crate::model::{Artifact, Decision, ReviewInput};
+use crate::verify::escalates;
 
 /// What the workflow does with a finished review.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,35 +95,6 @@ pub(crate) fn publication_event(plan: PublicationPlan, blocking: usize) -> Event
     } else {
         Event::Commented
     }
-}
-
-/// Reports whether verifier demotions escalate a clean approval to the user.
-///
-/// A demoted finding of an escalate severity escalates at once. Otherwise the demoted
-/// findings must reach the rule's escalate count.
-pub(crate) fn escalates(input: &ReviewInput, artifact: &Artifact) -> bool {
-    let Some(verifier) = &input.rule.pipeline.verifier else {
-        return false;
-    };
-    if input.version < VERIFIER_VERSION || input.rule.on_clean != OnClean::Approve {
-        return false;
-    }
-    let mut demoted_count: i64 = 0;
-    for finding in &artifact.findings {
-        if !demoted(finding) {
-            continue;
-        }
-        if verifier.escalate_severities.contains(&finding.severity) {
-            return true;
-        }
-        demoted_count += 1;
-    }
-    demoted_count >= verifier.escalate_count
-}
-
-/// Reports a blocking finding that the verifier turned into a note.
-fn demoted(finding: &Finding) -> bool {
-    finding.verdict == VERDICT_NOT_BLOCKING || finding.verdict == VERDICT_REFUTED
 }
 
 #[cfg(test)]

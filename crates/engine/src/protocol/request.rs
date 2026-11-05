@@ -10,7 +10,7 @@ use crate::error::Error;
 use crate::model::{Discussion, ReviewInput};
 
 /// Protocol name that the request of a claude-structured reviewer carries.
-const CLAUDE_REQUEST_PROTOCOL: &str = "claude-otel-noninteractive/request-v1";
+pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "claude-otel-noninteractive/request-v1";
 
 /// The schema that a claude-structured reviewer must satisfy.
 ///
@@ -103,7 +103,7 @@ Head SHA: {}\nReviewer: {}\nReview scope: {}\n\n{}\n",
 Discussion since the earlier reviews (untrusted JSON):\n{thread}\n"
         ));
     }
-    let schema = compact_schema()?;
+    let schema = compact_schema(REVIEW_SCHEMA)?;
     let prompt_json = go_json(&prompt).map_err(request_invalid)?;
     let protocol_json = go_json(CLAUDE_REQUEST_PROTOCOL).map_err(request_invalid)?;
     Ok(format!(
@@ -134,7 +134,7 @@ fn codex_prompt(input: &ReviewInput) -> String {
 }
 
 /// Maps an encoding failure to the code of a request that cannot be built.
-fn request_invalid(cause: serde_json::Error) -> Error {
+pub(crate) fn request_invalid(cause: serde_json::Error) -> Error {
     Error::workflow("review_request_invalid", true, Some(Box::new(cause)))
 }
 
@@ -142,7 +142,7 @@ fn request_invalid(cause: serde_json::Error) -> Error {
 ///
 /// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029, which Go escapes
 /// inside strings.
-fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
+pub(crate) fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let raw = serde_json::to_string(value)?;
     let mut output = String::with_capacity(raw.len());
     for character in raw.chars() {
@@ -167,8 +167,8 @@ fn push_escaped(output: &mut String, character: char) {
 ///
 /// Insignificant whitespace goes, the key order stays, and the string escapes follow
 /// `push_escaped`.
-fn compact_schema() -> Result<String, Error> {
-    let raw = std::str::from_utf8(REVIEW_SCHEMA)
+pub(crate) fn compact_schema(schema: &[u8]) -> Result<String, Error> {
+    let raw = std::str::from_utf8(schema)
         .map_err(|error| Error::workflow("embedded_asset_invalid", true, Some(Box::new(error))))?;
     let mut output = String::with_capacity(raw.len());
     let mut in_string = false;

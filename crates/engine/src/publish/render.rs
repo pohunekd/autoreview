@@ -2,8 +2,6 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
-
 use autoreview_policy::{HumanReview, OnFindings, Reviewer, match_glob};
 
 use super::neutralize::{closes_fence, neutralize, opening_fence};
@@ -12,7 +10,8 @@ use super::review_marker;
 use crate::error::Error;
 use crate::integrations::{GitHubReview, InlineComment};
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
-use crate::model::{Artifact, Finding, PriorResult, ReviewInput, Verification};
+use crate::model::{Artifact, Finding, PriorResult, ReviewInput};
+use crate::verify::verification_line;
 
 /// Configured values that shape the rendered review.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,12 +23,6 @@ pub(crate) struct RenderSettings {
     /// Character limit of one excerpted human review signal.
     pub(crate) excerpt_characters: i64,
 }
-
-const VERDICT_CONFIRMED: &str = "confirmed";
-const VERDICT_NOT_BLOCKING: &str = "not_blocking";
-const VERDICT_REFUTED: &str = "refuted";
-const VERDICT_UPHELD: &str = "upheld";
-const VERDICT_REOPENED: &str = "reopened";
 
 const NO_NEW_BLOCKING: &str = "No new blocking findings were identified.";
 const NO_BLOCKING: &str = "No blocking findings were identified.";
@@ -322,49 +315,6 @@ fn reviewer_labels(reviewers: &[Reviewer]) -> String {
         .map(|reviewer| reviewer.label.as_str())
         .collect();
     labels.join(" + ")
-}
-
-/// States the verifier outcome for the review body. An empty string means there was no verifier.
-fn verification_line(verification: Option<&Verification>) -> String {
-    let Some(verification) = verification else {
-        return String::new();
-    };
-    if !verification.error_code.is_empty() {
-        return format!(
-            "The verification of the blocking findings did not finish ({}), so they are published \
-             as the reviewers reported them.",
-            verification.error_code
-        );
-    }
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for check in &verification.findings {
-        *counts.entry(check.verdict.as_str()).or_default() += 1;
-    }
-    for check in &verification.prior {
-        *counts.entry(check.verdict.as_str()).or_default() += 1;
-    }
-    let count = |verdict: &str| counts.get(verdict).copied().unwrap_or_default();
-    let mut parts = Vec::new();
-    if !verification.findings.is_empty() {
-        parts.push(format!(
-            "blocking findings {} confirmed, {} not blocking, {} refuted",
-            count(VERDICT_CONFIRMED),
-            count(VERDICT_NOT_BLOCKING),
-            count(VERDICT_REFUTED)
-        ));
-    }
-    if !verification.prior.is_empty() {
-        parts.push(format!(
-            "earlier findings settled in the discussion {} upheld, {} reopened",
-            count(VERDICT_UPHELD),
-            count(VERDICT_REOPENED)
-        ));
-    }
-    format!(
-        "Verification by {}: {}.",
-        verification.reviewer_label,
-        parts.join("; ")
-    )
 }
 
 /// Lists the signals of a human review that the pull request matches: each configured label it
