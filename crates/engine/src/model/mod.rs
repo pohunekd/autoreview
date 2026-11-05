@@ -35,7 +35,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
-    use crate::integrations::SessionRequest;
+    use crate::integrations::{CommentableLines, GitHubReview, SessionRequest};
 
     use super::{
         Artifact, AwaitRecord, Discussion, Finding, PriorFinding, PriorResult, PublishedRecord,
@@ -49,9 +49,6 @@ mod tests {
     const LATER_CASES: &[&str] = &[
         "slot_state_zero",                    // #91
         "slot_state_with_session_and_result", // #91
-        "commentable_lines_nil",              // #102
-        "commentable_lines_one_file",         // #102
-        "github_review_zero",                 // #102
         "discovery_rejected_nil",             // #85
         "discovery_rejected_empty",           // #85
         "discovery_rejected_entry",           // #85
@@ -112,6 +109,21 @@ mod tests {
         (actual, expected)
     }
 
+    /// Reads a golden `CommentableLines`; Go writes a nil map as `null`, which reads as empty.
+    ///
+    /// The alias carries no serde attribute, so the null rule is applied by this helper.
+    fn round_trip_commentable_lines(case: &Case) -> (Value, Value) {
+        let lines: CommentableLines = autoreview_go_compat::null_default::deserialize(&case.output)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let actual = serde_json::to_value(&lines).expect("the value serializes");
+        let expected = if case.output.is_null() {
+            json!({})
+        } else {
+            case.output.clone()
+        };
+        (actual, expected)
+    }
+
     #[test]
     fn persisted_types_read_go_golden() {
         let cases: Vec<Case> = serde_json::from_str(GOLDEN).expect("golden is JSON");
@@ -147,6 +159,10 @@ mod tests {
                 }
                 "schedule_record_zero" | "schedule_record_failed" => round_trip::<Record>(case),
                 "session_request_zero" => round_trip::<SessionRequest>(case),
+                "commentable_lines_nil" | "commentable_lines_one_file" => {
+                    round_trip_commentable_lines(case)
+                }
+                "github_review_zero" => round_trip::<GitHubReview>(case),
                 name => {
                     assert!(
                         LATER_CASES.contains(&name),
@@ -159,8 +175,8 @@ mod tests {
             checked += 1;
         }
         assert_eq!(
-            checked, 26,
-            "golden has the 26 persisted cases of this module"
+            checked, 29,
+            "golden has the 29 persisted cases of this module"
         );
     }
 }

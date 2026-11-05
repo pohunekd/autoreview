@@ -65,7 +65,13 @@ dependencies = [
 name = "autoreview-external"
 version = "0.0.0"
 dependencies = [
+ "autoreview-engine",
+ "autoreview-go-compat",
+ "autoreview-policy",
+ "serde",
+ "serde_json",
  "thiserror",
+ "time",
  "tokio",
 ]
 

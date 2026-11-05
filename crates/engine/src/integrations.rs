@@ -49,7 +49,8 @@ pub struct PullRequestState {
 pub type CommentableLines = BTreeMap<String, Vec<i64>>;
 
 /// One inline comment of a review submission.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
 pub struct InlineComment {
     /// Path of the commented file.
     pub path: String,
@@ -61,18 +62,24 @@ pub struct InlineComment {
     pub body: String,
 }
 
+autoreview_go_compat::object_only_serde!(InlineComment);
+
 /// One review submission. The marker makes the submission idempotent.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
 pub struct GitHubReview {
     /// GitHub review event of the submission.
     pub decision: Decision,
     /// Body text of the review.
     pub body: String,
     /// Inline comments of the review.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     pub comments: Vec<InlineComment>,
     /// Hidden marker that identifies the review.
     pub marker: String,
 }
+
+autoreview_go_compat::object_only_serde!(GitHubReview);
 
 /// An open, non-draft pull request that asks the configured login for a review.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
