@@ -28,6 +28,8 @@ pub use review::{
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use crate::publish::plan::PublicationPlan;
     use autoreview_policy::Rule;
     use autoreview_schedule::scheduler::Record;
@@ -49,9 +51,6 @@ mod tests {
     const LATER_CASES: &[&str] = &[
         "slot_state_zero",                    // #91
         "slot_state_with_session_and_result", // #91
-        "discovery_rejected_nil",             // #85
-        "discovery_rejected_empty",           // #85
-        "discovery_rejected_entry",           // #85
     ];
 
     /// Keys whose golden JSON null is the nil slice of a Go list field.
@@ -124,6 +123,22 @@ mod tests {
         (actual, expected)
     }
 
+    /// Reads a golden discovery `rejected` map. A Go nil map reads as empty.
+    fn round_trip_rejected(case: &Case) -> (Value, Value) {
+        #[rustfmt::skip]
+        let value: BTreeMap<String, String> = autoreview_go_compat::null_default::deserialize(
+            case.output.clone(),
+        )
+        .unwrap_or_else(|error| panic!("{}: the output reads as the map: {error}", case.name));
+        let actual = serde_json::to_value(&value).expect("the value serializes");
+        let expected = if case.output.is_null() {
+            json!({})
+        } else {
+            case.output.clone()
+        };
+        (actual, expected)
+    }
+
     #[test]
     fn persisted_types_read_go_golden() {
         let cases: Vec<Case> = serde_json::from_str(GOLDEN).expect("golden is JSON");
@@ -159,6 +174,9 @@ mod tests {
                 }
                 "schedule_record_zero" | "schedule_record_failed" => round_trip::<Record>(case),
                 "session_request_zero" => round_trip::<SessionRequest>(case),
+                "discovery_rejected_nil"
+                | "discovery_rejected_empty"
+                | "discovery_rejected_entry" => round_trip_rejected(case),
                 "commentable_lines_nil" | "commentable_lines_one_file" => {
                     round_trip_commentable_lines(case)
                 }
@@ -175,8 +193,8 @@ mod tests {
             checked += 1;
         }
         assert_eq!(
-            checked, 29,
-            "golden has the 29 persisted cases of this module"
+            checked, 32,
+            "golden has the 32 persisted cases of this module"
         );
     }
 }
