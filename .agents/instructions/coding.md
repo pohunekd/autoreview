@@ -181,6 +181,9 @@ with the expected Rust error code):
   last value.
 - A top-level JSON `null` where an object is expected is an error; Go yields the
   zero value.
+- A JSON `null` for a scalar, enum or struct field is an error, and so is a
+  lone surrogate escape such as `\ud800` and `-0` in an integer field. Go reads
+  the zero value for the `null`, U+FFFD for the lone surrogate and `0` for `-0`.
 - A persisted review input whose policy string enum holds an unknown value
   (protocol, checkout, trigger kind, on_findings, on_clean, on_notes,
   notification level or event) is refused when the row is read, with the code
@@ -189,6 +192,10 @@ with the expected Rust error code):
   run time (`cmd/autoreview/review.go:38-86`), so this is stricter than Go; Go
   writes only values that passed policy validation, so no Go-written row holds
   one.
+- The GitHub review event (`Decision`) and the review outcome (`Outcome`) are
+  enums. Rust refuses a stored value outside their listed values with a serde
+  error; Go reads any string. Neither engine writes another value. The store
+  slice maps the refusal to `store_state_invalid`.
 - The policy file is read with `serde_saphyr`, which refuses three inputs that
   Go's YAML decoder accepts: a null mapping key at any level (Go drops the
   entry), a leading-zero integer such as `030` (Go reads it as YAML 1.1 octal)
