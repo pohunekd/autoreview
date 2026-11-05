@@ -18,19 +18,19 @@ Rust group, on the toolchain pinned in `rust-toolchain.toml`:
 2. `rust-fmt`: `cargo fmt --all --check`
 3. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
 4. `rust-test`: `cargo test --workspace --locked`
+5. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
 
 Go group (the Go reference), skipped with a reason while the repository has no
 `go.mod`:
 
-5. `fmt`: `gofmt -l .` lists no file.
-6. `vet`: `go vet ./...`
-7. `staticcheck`: the version pinned in `scripts/gates`, run with `go run`.
-8. `test`: `go test ./...`
+6. `fmt`: `gofmt -l .` lists no file.
+7. `vet`: `go vet ./...`
+8. `staticcheck`: the version pinned in `scripts/gates`, run with `go run`.
+9. `test`: `go test ./...`
 
-Planned, not gates yet: the changelog check (`scripts/changelog check`, with
-[changelog.md](changelog.md)) and validation of the example policies. Both land
-with M1, which also decides how `validate` can run in CI without tokens or a
-running pohunek daemon. Until then, the gate set above is the complete list.
+Planned, not a gate yet: validation of the example policies. It lands with M1,
+which also decides how `validate` can run in CI without tokens or a running
+pohunek daemon. Until then, the gate set above is the complete list.
 
 Run `scripts/gates` on the final revision before every push and report each
 gate's real result as printed. Never report a gate as passed when it was skipped
@@ -119,6 +119,7 @@ text. Describe checks against the owner's own daemons in words only.
   saved only by runs on `main`.
 - `go` runs `scripts/gates go`. Until `go.mod` exists the gates report
   themselves as skipped, so the job is green.
+- `changelog` runs `scripts/changelog check` and, on a pull request, requires a fragment unless the pull request carries `no-changelog`.
 - `ci` is the only required status check. It fails unless every job succeeded.
 
 When a workflow file changes, run `actionlint` at a pinned version on it and

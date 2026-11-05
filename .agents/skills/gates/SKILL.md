@@ -1,8 +1,9 @@
 ---
 name: gates
 description: >-
-  Run the autoreview gate set (documentation checks, then cargo fmt, clippy and
-  test, then gofmt, go vet, staticcheck and go test for the Go reference)
+  Run the autoreview gate set (documentation checks, then cargo fmt, clippy, test
+  and the changelog check, then gofmt, go vet, staticcheck and go test for the Go
+  reference)
   locally and report each gate's real result. Use before any commit, push, or
   claim that a change is done.
 ---
@@ -11,7 +12,8 @@ description: >-
 
 Run `scripts/gates` from the repository root (or the worktree root). With no
 argument it runs every group: `docs` (`check-docs`), `rust` (`rust-fmt`,
-`rust-clippy`, `rust-test`) and `go` (`fmt`, `vet`, `staticcheck`, `test`).
+`rust-clippy`, `rust-test`, `changelog`) and `go` (`fmt`, `vet`, `staticcheck`,
+`test`).
 `scripts/gates docs`, `scripts/gates rust` and `scripts/gates go` run one
 group. It prints a per-gate summary and exits non-zero if any gate failed.
 
