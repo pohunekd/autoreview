@@ -28,6 +28,7 @@ pub use review::{
 
 #[cfg(test)]
 mod tests {
+    use crate::publish::plan::PublicationPlan;
     use autoreview_policy::Rule;
     use autoreview_schedule::scheduler::Record;
     use serde::de::DeserializeOwned;
@@ -46,8 +47,6 @@ mod tests {
 
     /// Golden cases of types that later slices port, so this test skips them.
     const LATER_CASES: &[&str] = &[
-        "publication_plan_zero",              // #77
-        "publication_plan_await",             // #77
         "slot_state_zero",                    // #91
         "slot_state_with_session_and_result", // #91
         "commentable_lines_nil",              // #102
@@ -143,6 +142,9 @@ mod tests {
                 "verification_zero" | "verification_error" => round_trip::<Verification>(case),
                 "policy_rule_zero" => round_trip::<Rule>(case),
                 "discussion_zero" => round_trip::<Discussion>(case),
+                "publication_plan_zero" | "publication_plan_await" => {
+                    round_trip::<PublicationPlan>(case)
+                }
                 "schedule_record_zero" | "schedule_record_failed" => round_trip::<Record>(case),
                 "session_request_zero" => round_trip::<SessionRequest>(case),
                 name => {
@@ -157,8 +159,8 @@ mod tests {
             checked += 1;
         }
         assert_eq!(
-            checked, 24,
-            "golden has the 24 persisted cases of this module"
+            checked, 26,
+            "golden has the 26 persisted cases of this module"
         );
     }
 }
