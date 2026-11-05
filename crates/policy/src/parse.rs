@@ -1015,7 +1015,7 @@ pub(crate) fn matches(pattern: &str, target: &str) -> bool {
 /// Splits value at its first slash, like Go's strings.Cut.
 ///
 /// Without a slash it returns the whole value and an empty string.
-fn cut(value: &str) -> (&str, &str) {
+pub(crate) fn cut(value: &str) -> (&str, &str) {
     if let Some((left, right)) = value.split_once('/') {
         (left, right)
     } else {
@@ -1035,10 +1035,11 @@ fn valid_text(value: &str, maximum: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::time::Duration;
 
-    use super::{load, matches, parse};
+    use super::{load, parse};
     use crate::Error;
-    use crate::types::{MAX_PROMPT_BYTES, OnClean, Policy, Rule};
+    use crate::types::{MAX_PROMPT_BYTES, OnClean, OnNotes};
 
     const VALID_POLICY: &str = "version: 1
 reviewers:
@@ -1076,14 +1077,6 @@ notifications:
             }
             _ => Err(io::Error::from(io::ErrorKind::NotFound)),
         }
-    }
-
-    /// Returns the first rule that matches the repository, as the policy resolves it.
-    fn resolve<'a>(policy: &'a Policy, repository: &str) -> Option<&'a Rule> {
-        policy
-            .rules
-            .iter()
-            .find(|rule| matches(&rule.match_glob, repository))
     }
 
     /// Sets on_notes comment on the acme/special rule.
@@ -1125,13 +1118,13 @@ notifications:
     #[test]
     fn valid_policy_parses() {
         let parsed = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
-        let special = resolve(&parsed, "acme/special").map(|rule| rule.on_clean);
+        let special = parsed.resolve("acme/special").map(|rule| rule.on_clean);
         assert_eq!(
             special,
             Some(OnClean::Await),
             "exact rule must win over the later owner rule"
         );
-        let other = resolve(&parsed, "acme/other").map(|rule| rule.on_clean);
+        let other = parsed.resolve("acme/other").map(|rule| rule.on_clean);
         assert_eq!(
             other,
             Some(OnClean::Approve),
@@ -1139,28 +1132,96 @@ notifications:
         );
         let again = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
         assert!(
-            parsed.digest == again.digest && parsed.digest.len() == 64,
+            parsed.digest() == again.digest() && parsed.digest().len() == 64,
             "the policy digest must be stable for identical input"
         );
     }
 
     #[test]
+    fn policy_digest_changes_with_the_verifier() {
+        let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        let document = VALID_POLICY.replacen("escalate_count: 2", "escalate_count: 3", 1);
+        let second = parse(document.as_bytes(), prompts).expect("the verifier policy parses");
+        assert_ne!(
+            first.digest(),
+            second.digest(),
+            "a verifier change must change the policy digest"
+        );
+    }
+
+    #[test]
+    fn on_notes_comment_parses_and_changes_the_digest() {
+        let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        let second = parse(with_handoff(VALID_POLICY, "24").as_bytes(), prompts)
+            .expect("the handoff policy parses");
+        assert!(
+            first.handoff_reminder() == Duration::ZERO
+                && second.handoff_reminder() == Duration::from_hours(24),
+            "handoff reminder = {:?} and {:?}",
+            first.handoff_reminder(),
+            second.handoff_reminder()
+        );
+        let third = parse(with_handoff(VALID_POLICY, "48").as_bytes(), prompts);
+        assert!(
+            third.is_ok_and(|third| third.digest() != second.digest()),
+            "a reminder change must change the policy digest"
+        );
+        let special = second.resolve("acme/special").map(|rule| rule.on_notes);
+        assert_eq!(special, Some(OnNotes::Comment), "on_notes");
+        let other = second.resolve("acme/other").map(|rule| rule.on_notes);
+        assert_eq!(
+            other,
+            Some(OnNotes::Unset),
+            "a rule without on_notes must follow its clean outcome"
+        );
+        assert_ne!(
+            first.digest(),
+            second.digest(),
+            "an on_notes change must change the policy digest"
+        );
+    }
+
+    #[test]
     fn human_review_parses_and_changes_the_digest() {
+        let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
         let document = with_human_review(
             VALID_POLICY,
             r#"{labels: [needs-human], deleted_tests: ["tests/**"]}"#,
         );
         let second = parse(document.as_bytes(), prompts).expect("the human review policy parses");
-        let human = resolve(&second, "acme/other").and_then(|rule| rule.human_review.as_ref());
+        let human = second
+            .resolve("acme/other")
+            .and_then(|rule| rule.human_review.as_ref());
         assert!(
             human.is_some_and(|human| human.labels.join(",") == "needs-human"
                 && human.deleted_tests.join(",") == "tests/**"),
             "human_review = {human:?}"
         );
-        let special = resolve(&second, "acme/special").and_then(|rule| rule.human_review.as_ref());
+        let special = second
+            .resolve("acme/special")
+            .and_then(|rule| rule.human_review.as_ref());
         assert!(
             special.is_none(),
             "a rule without human_review must not get one"
+        );
+        assert_ne!(
+            first.digest(),
+            second.digest(),
+            "a human_review change must change the policy digest"
+        );
+    }
+
+    #[test]
+    fn policy_digest_changes_with_the_prompt() {
+        let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        let second = parse(VALID_POLICY.as_bytes(), |_| {
+            Ok(b"Different instructions.".to_vec())
+        })
+        .expect("the policy with other prompts parses");
+        assert_ne!(
+            first.digest(),
+            second.digest(),
+            "a prompt change must change the policy digest"
         );
     }
 

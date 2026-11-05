@@ -464,7 +464,6 @@ impl Rule {
 
 /// The parsed review policy: its rules, notification levels and the digest that identifies it.
 #[derive(Debug)]
-#[expect(dead_code, reason = "called by S05")]
 pub struct Policy {
     /// The repository rules in file order; the first match wins.
     pub(crate) rules: Vec<Rule>,

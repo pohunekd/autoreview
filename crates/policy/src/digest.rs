@@ -6,7 +6,17 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::types::{Event, Level, Reviewer, Rule};
+use crate::types::{Event, Level, Policy, Reviewer, Rule};
+
+impl Policy {
+    /// Returns the hex SHA-256 digest that identifies the effective policy.
+    ///
+    /// Logs and review workflow inputs carry it.
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+}
 
 /// Returns the hex SHA-256 digest that identifies the effective policy.
 ///
@@ -91,4 +101,80 @@ fn reviewer_text(reviewer: &Reviewer) -> String {
         reviewer.agent_profile,
         reviewer.finding_prefix
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    use serde::Deserialize;
+
+    use crate::{load, parse};
+
+    /// Go-written policy digests, shared with the Go reference tests.
+    const GOLDEN: &str = include_str!("../../../testdata/parity/digest.json");
+
+    /// One golden case: a policy built from the fixture and its Go digest.
+    #[derive(Debug, Deserialize)]
+    struct Case {
+        name: String,
+        input: Input,
+        output: Output,
+    }
+
+    /// How the case builds its policy from the fixture.
+    #[derive(Debug, Deserialize)]
+    struct Input {
+        policy_file: String,
+        loader: Option<String>,
+        replacements: Option<Vec<(String, String)>>,
+        prompt_overrides: Option<BTreeMap<String, String>>,
+    }
+
+    /// The digest Go computed for the case.
+    #[derive(Debug, Deserialize)]
+    struct Output {
+        digest: String,
+    }
+
+    /// Returns the repository root, which the golden paths are relative to.
+    fn repository_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    #[test]
+    fn digest_matches_go_golden() {
+        let cases: Vec<Case> = serde_json::from_str(GOLDEN).expect("golden is JSON");
+        assert!(!cases.is_empty(), "golden has cases");
+        let root = repository_root();
+        for case in &cases {
+            let name = &case.name;
+            let policy_path = root.join(&case.input.policy_file);
+            let policy = if case.input.loader.as_deref() == Some("policy.Load") {
+                load(&policy_path).expect("the fixture loads")
+            } else {
+                let mut document =
+                    std::fs::read_to_string(&policy_path).expect("the fixture is readable");
+                for (target, replacement) in case.input.replacements.iter().flatten() {
+                    assert!(
+                        document.contains(target.as_str()),
+                        "{name}: replacement target {target:?} is not in the policy fixture"
+                    );
+                    document = document.replacen(target.as_str(), replacement, 1);
+                }
+                let directory = policy_path.parent().expect("the fixture has a directory");
+                let overrides = case.input.prompt_overrides.as_ref();
+                parse(document.as_bytes(), |relative| -> io::Result<Vec<u8>> {
+                    match overrides.and_then(|overrides| overrides.get(relative)) {
+                        Some(content) => Ok(content.clone().into_bytes()),
+                        None => std::fs::read(directory.join(relative)),
+                    }
+                })
+                .unwrap_or_else(|error| panic!("{name}: the policy parses: {error}"))
+            };
+            assert_eq!(policy.digest(), case.output.digest, "{name}");
+        }
+    }
 }
