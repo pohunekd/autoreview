@@ -76,23 +76,15 @@ pub(crate) fn child_environment(
     parent: impl IntoIterator<Item = (OsString, OsString)>,
     extra: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Vec<(OsString, OsString)> {
-    let mut out = Vec::new();
-    for (name, value) in parent {
-        let mut dropped = false;
-        for dropped_name in DROPPED_VARIABLES {
-            if name.as_os_str() == OsStr::new(dropped_name) {
-                dropped = true;
-                break;
-            }
-        }
-        if !dropped {
-            out.push((name, value));
-        }
-    }
-    for pair in extra {
-        out.push(pair);
-    }
-    out
+    parent
+        .into_iter()
+        .filter(|(name, _)| {
+            !DROPPED_VARIABLES
+                .iter()
+                .any(|dropped| name.as_os_str() == OsStr::new(dropped))
+        })
+        .chain(extra)
+        .collect()
 }
 
 /// Runs `binary` with `args` and returns its stdout.
@@ -122,18 +114,9 @@ pub(crate) async fn run(
         .kill_on_drop(true)
         .spawn()
         .map_err(io_error)?;
-    let mut stdin = match child.stdin.take() {
-        Some(pipe) => pipe,
-        None => return Err(not_piped("stdin")),
-    };
-    let mut stdout_pipe = match child.stdout.take() {
-        Some(pipe) => pipe,
-        None => return Err(not_piped("stdout")),
-    };
-    let mut stderr_pipe = match child.stderr.take() {
-        Some(pipe) => pipe,
-        None => return Err(not_piped("stderr")),
-    };
+    let mut stdin = child.stdin.take().ok_or_else(|| not_piped("stdin"))?;
+    let mut stdout_pipe = child.stdout.take().ok_or_else(|| not_piped("stdout"))?;
+    let mut stderr_pipe = child.stderr.take().ok_or_else(|| not_piped("stderr"))?;
     let write_block = async move {
         let result = stdin.write_all(input).await;
         drop(stdin);
@@ -159,20 +142,9 @@ pub(crate) async fn run(
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
         });
     };
-    let status = match status {
-        Ok(value) => value,
-        Err(source) => return Err(io_error(source)),
-    };
-    let stdout_read = match stdout_read {
-        Ok(value) => value,
-        Err(source) => return Err(io_error(source)),
-    };
-    let _ = stdout_read;
-    let stderr_read = match stderr_read {
-        Ok(value) => value,
-        Err(source) => return Err(io_error(source)),
-    };
-    let _ = stderr_read;
+    let status = status.map_err(io_error)?;
+    stdout_read.map_err(io_error)?;
+    stderr_read.map_err(io_error)?;
     if !status.success() {
         return Err(ProcessError::Exit {
             status: status_text(status),
