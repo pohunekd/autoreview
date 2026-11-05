@@ -3,4 +3,5 @@
 // Rust guideline compliant 2026-06-26
 
 mod github;
+mod pohunek;
 mod process;
