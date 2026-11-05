@@ -1,4 +1,4 @@
-//! Review policy parsing, types, glob matching and human review signals.
+//! Review policy parsing, queries, digest, types, glob matching and human review signals.
 
 // Rust guideline compliant 2026-06-26
 
@@ -8,6 +8,7 @@ use std::path::PathBuf;
 mod digest;
 mod human_review;
 mod parse;
+mod query;
 mod types;
 
 pub use human_review::{HumanReview, match_glob};
