@@ -15,12 +15,12 @@ serde = { workspace = true }
 rusqlite = { workspace = true }
 rustix = { workspace = true }
 sha2 = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 time = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
