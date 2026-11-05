@@ -57,9 +57,9 @@ pub struct Record {
     pub identity: String,
     /// The current phase of the review.
     pub phase: String,
-    /// Attempt numbers the runs of this identity and keeps their workflow IDs
-    /// unique; retries counts only the automatic retries after a failure.
+    /// Numbers the runs of this identity and keeps their workflow IDs unique.
     pub attempt: i64,
+    /// Counts only the automatic retries after a failure.
     pub retries: i64,
     /// The workflow ID of the current run.
     #[serde(skip_serializing_if = "String::is_empty")]
