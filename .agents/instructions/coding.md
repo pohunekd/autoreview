@@ -203,6 +203,9 @@ with the expected Rust error code):
 - Logins compare ASCII case-insensitively. Go's `strings.EqualFold` also folds
   non-ASCII letters, such as the Kelvin sign with `k`, so Rust can miss a match
   that Go finds and keep a finding open. GitHub logins are ASCII.
+- The store opens its database path as a plain file name. Go's SQLite driver
+  reads the path as a `file:` URI, so a `?` or `%` in the path selects another
+  file than the name says. Rust opens the name as written.
 - The GitHub review event (`Decision`) and the review outcome (`Outcome`) are
   enums. Rust refuses a stored value outside their listed values with a serde
   error; Go reads any string. Neither engine writes another value. The store

@@ -9,6 +9,7 @@ pub mod integrations;
 pub mod model;
 pub(crate) mod prior;
 pub mod publish;
+pub mod store;
 
 #[cfg(test)]
 mod testing;
