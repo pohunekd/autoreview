@@ -200,19 +200,28 @@ with the expected Rust error code):
   in Go 1.27. Go 1.26, which `go.mod` names, has Unicode 15.0.0, a subset, and
   reads a signature that leads with one of the 834 newer symbols as unsigned,
   so that comment can settle a finding without the user.
-- Logins compare ASCII case-insensitively. Go's `strings.EqualFold` also folds
-  non-ASCII letters, such as the Kelvin sign with `k`, so Rust can miss a match
-  that Go finds and keep a finding open. GitHub logins are ASCII.
+- Logins, repository names and pull request URLs compare and lowercase ASCII
+  only. Go's `strings.EqualFold` and `strings.ToLower` also fold non-ASCII
+  letters, such as the Kelvin sign with `k`, so Rust can miss a match that Go
+  finds: a finding stays open, or a pull request is not matched. GitHub logins
+  are ASCII.
 - The store opens its database path as a plain file name. Go's SQLite driver
   reads the path as a `file:` URI, so a `?` or `%` in the path selects another
   file than the name says. Rust opens the name as written.
+- JSON nested deeper than 128 levels is refused (the `serde_json` limit); Go's
+  decoder accepts far deeper nesting. Neither `gh` nor either engine writes it.
+- A `gh` call that prints `HTTP 422` and then runs past its timeout fails as
+  `github_request_failed` (retryable), because the process runner keeps no
+  stderr on a timeout. Go reads that stderr and fails the call as
+  `github_request_rejected` (permanent).
 - The GitHub review event (`Decision`) and the review outcome (`Outcome`) are
   enums. Rust refuses a stored value outside their listed values with a serde
   error; Go reads any string. Neither engine writes another value. The store
   slice maps the refusal to `store_state_invalid`.
-- A persisted time whose instant falls outside the years -9999 to 9999 after
-  its offset is applied, such as `9999-12-31T23:59:59-01:00`, is an error; Go
-  reads it, but Go's JSON encoder refuses to write a year above 9999.
+- A persisted or GitHub API time whose instant falls outside the years -9999
+  to 9999 after its offset is applied, such as `9999-12-31T23:59:59-01:00`, is
+  an error; Go reads it, but Go's JSON encoder refuses to write a year above
+  9999.
 - The policy file is read with `serde_saphyr`, which refuses three inputs that
   Go's YAML decoder accepts: a null mapping key at any level (Go drops the
   entry), a leading-zero integer such as `030` (Go reads it as YAML 1.1 octal)
