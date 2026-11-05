@@ -28,7 +28,9 @@ Go group (the Go reference), skipped with a reason while the repository has no
 8. `staticcheck`: the version pinned in `scripts/gates`, run with `go run`.
 9. `test`: `go test ./...`
 
-Planned, not a gate yet: validation of the example policies. It lands with M1, which also decides how `validate` can run in CI without tokens or a running pohunek daemon. Until then, the gate set above is the complete list.
+Planned, not a gate yet: validation of the example policies. It lands with M1,
+which also decides how `validate` can run in CI without tokens or a running
+pohunek daemon. Until then, the gate set above is the complete list.
 
 Run `scripts/gates` on the final revision before every push and report each
 gate's real result as printed. Never report a gate as passed when it was skipped
