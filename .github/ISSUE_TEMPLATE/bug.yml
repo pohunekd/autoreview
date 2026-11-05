@@ -13,7 +13,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: autoreview commit SHA or release version, pohunek version (`pohunek --version`), OS and version, Go version when built from source.
+      description: autoreview commit SHA or release version, pohunek version (`pohunek --version`), OS and version, Rust toolchain (`rustc --version`) when built from source.
       placeholder: |
         - autoreview: <sha or version>
         - pohunek: 0.x.y

@@ -52,7 +52,7 @@ GitHub (gh) --> discovery --> policy match --> review workflow (SQLite)
                                    parse -> verify -> publish review -> notify
 ```
 
-The engine needs three parts to be useful: the engine itself (Go), the
+The engine needs three parts to be useful: the engine itself (Rust), the
 reviewer adapters that turn a pohunek agent session into one structured,
 read-only review run, and an installer that creates the pohunek agent profiles
 and the service unit.

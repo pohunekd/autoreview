@@ -1,0 +1,6 @@
+# The engine reaches side effects only through the `Integrations` trait.
+disallowed-types = [
+    { path = "std::process::Command", reason = "spawn processes through the Integrations trait" },
+    { path = "tokio::process::Command", reason = "spawn processes through the Integrations trait" },
+    { path = "reqwest::Client", reason = "make HTTP requests through the Integrations trait" },
+]

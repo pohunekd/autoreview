@@ -1,0 +1,6 @@
+# Exact toolchain for local development and CI. rustup installs it on the first
+# cargo run inside the repository; CI relies on that instead of a setup action.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
