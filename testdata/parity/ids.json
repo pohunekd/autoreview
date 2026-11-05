@@ -1,0 +1,235 @@
+[
+  {
+    "name": "pull_request_key",
+    "input": {
+      "repository": "acme/widget",
+      "number": 5,
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "review_request_id": 7,
+      "title": "Add widget",
+      "url": "https://github.com/acme/widget/pull/5",
+      "author": "colleague",
+      "head_branch": "feature",
+      "base_branch": "main",
+      "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "output": "acme/widget#5"
+  },
+  {
+    "name": "review_id",
+    "input": {
+      "repository": "acme/widget",
+      "number": 5,
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "review_request_id": 7,
+      "title": "Add widget",
+      "url": "https://github.com/acme/widget/pull/5",
+      "author": "colleague",
+      "head_branch": "feature",
+      "base_branch": "main",
+      "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "output": "acme/widget#PR5@aaaaaaaaaaaa"
+  },
+  {
+    "name": "workflow_id_attempt_1",
+    "input": {
+      "attempt": 1,
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "prr-v2-d619a87a4b4d46355bd065b4a75b09ade3ac82813397f2124e1261b0b9283c4c"
+  },
+  {
+    "name": "workflow_id_attempt_2",
+    "input": {
+      "attempt": 2,
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    "output": "prr-v2-087c2465abd8c8751c343e31d81a6fc165b15c4d7e9663e6ae762de43b8dc61f"
+  },
+  {
+    "name": "prior_key_full_sha",
+    "input": {
+      "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "id": "O001"
+    },
+    "output": "aaaaaaaaaaaa:O001"
+  },
+  {
+    "name": "prior_key_short_head",
+    "input": {
+      "head": "abc",
+      "id": "S002"
+    },
+    "output": "abc:S002"
+  },
+  {
+    "name": "target_key_and_identity",
+    "input": {
+      "repository": "acme/widget",
+      "number": 5,
+      "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "review_request_id": 7,
+      "title": "Add widget",
+      "url": "https://github.com/acme/widget/pull/5",
+      "author": "colleague",
+      "head_branch": "feature",
+      "base_branch": "main",
+      "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "output": {
+      "identity": "acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@7",
+      "key": "acme/widget#5"
+    }
+  },
+  {
+    "name": "published_record_key",
+    "input": {
+      "number": 5,
+      "repository": "acme/widget"
+    },
+    "output": "acme/widget#5"
+  },
+  {
+    "name": "await_record_key",
+    "input": {
+      "number": 5,
+      "repository": "acme/widget"
+    },
+    "output": "acme/widget#5"
+  },
+  {
+    "name": "session_run1_base",
+    "input": {
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "route": {
+        "host": "",
+        "project_id": ""
+      },
+      "reviewer": {
+        "id": "opus",
+        "label": "Opus",
+        "protocol": "claude-structured",
+        "agent_profile": "claude-profile",
+        "finding_prefix": "O"
+      },
+      "checkout": "base",
+      "workflow_id": "prr-v2-d619a87a4b4d46355bd065b4a75b09ade3ac82813397f2124e1261b0b9283c4c",
+      "run": 1,
+      "prompt": ""
+    },
+    "output": {
+      "base_ref": "main",
+      "branch": "autoreview/review/prr-v2-d619a87a4b4d46355bd065b4a75b09ade3ac82813397f2124e1261b0b9283c4c-opus-run1",
+      "name": "github-review-prr-v2-d619a87a4b4d46355bd065b4a75b09ade3ac82813397f2124e1261b0b9283c4c-opus-run1"
+    }
+  },
+  {
+    "name": "session_run1_start2",
+    "input": {
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "route": {
+        "host": "",
+        "project_id": ""
+      },
+      "reviewer": {
+        "id": "opus",
+        "label": "Opus",
+        "protocol": "claude-structured",
+        "agent_profile": "claude-profile",
+        "finding_prefix": "O"
+      },
+      "checkout": "base",
+      "workflow_id": "prr-v2-d619a87a4b4d46355bd065b4a75b09ade3ac82813397f2124e1261b0b9283c4c",
+      "run": 1,
+      "start": 2,
+      "prompt": ""
+    },
+    "output": {
+      "base_ref": "main",
+      "branch": "autoreview/review/prr-v2-d619a87a4b4d46355bd065b4a75b09ade3ac82813397f2124e1261b0b9283c4c-opus-run1-start2",
+      "name": "github-review-prr-v2-d619a87a4b4d46355bd065b4a75b09ade3ac82813397f2124e1261b0b9283c4c-opus-run1-start2"
+    }
+  },
+  {
+    "name": "session_run2_head_checkout",
+    "input": {
+      "pull_request": {
+        "repository": "acme/widget",
+        "number": 5,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 7,
+        "title": "Add widget",
+        "url": "https://github.com/acme/widget/pull/5",
+        "author": "colleague",
+        "head_branch": "feature",
+        "base_branch": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "route": {
+        "host": "",
+        "project_id": ""
+      },
+      "reviewer": {
+        "id": "codex",
+        "label": "Codex",
+        "protocol": "codex-envelope",
+        "agent_profile": "codex-profile",
+        "finding_prefix": "X"
+      },
+      "checkout": "head",
+      "workflow_id": "prr-v2-087c2465abd8c8751c343e31d81a6fc165b15c4d7e9663e6ae762de43b8dc61f",
+      "run": 2,
+      "prompt": ""
+    },
+    "output": {
+      "base_ref": "refs/pull/5/head",
+      "branch": "autoreview/review/prr-v2-087c2465abd8c8751c343e31d81a6fc165b15c4d7e9663e6ae762de43b8dc61f-codex-run2",
+      "name": "github-review-prr-v2-087c2465abd8c8751c343e31d81a6fc165b15c4d7e9663e6ae762de43b8dc61f-codex-run2"
+    }
+  }
+]

@@ -125,6 +125,10 @@ follow:
   by it (`store.go:339,387`); a fixed nine-digit format would mis-order Go and
   Rust rows. Reading accepts any RFC3339 value with an offset, including Go's
   zero time `0001-01-01T00:00:00Z`.
+  Exception: `Artifact.reviewed_at`, written by `CombineResults`
+  (`protocol.go:353`), is Go's `time.RFC3339` in UTC with whole seconds and no
+  fraction, written by `autoreview_go_compat::go_time::format_rfc3339_seconds`;
+  `testdata/parity/timestamps.json` records both forms per instant.
 - **R10 Identifiers.** Byte-identical: `PullRequest::workflow_id` =
   `"prr-v2-" + hex(sha256("pr-review-v2\0{repo}\0{number}\0{head}\0{request_id}\0{attempt}"))`
   (`model.go:68-73`, prefix `model.go:18`), `review_id` (`model.go:62-64`), `key`
