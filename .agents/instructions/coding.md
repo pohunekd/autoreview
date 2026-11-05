@@ -191,11 +191,11 @@ with the expected Rust error code):
   last value.
 - A top-level JSON `null` where an object is expected is an error; Go yields the
   zero value.
-- A JSON `null` for a scalar, enum or struct field or for a list entry is an
-  error, and so is a lone surrogate escape such as `\ud800` and `-0` in an
-  integer field. Go reads the zero value for the `null`, U+FFFD for the lone
-  surrogate and `0` for `-0`. For a search result this fails the whole search, where Go
-  rejects only that pull request.
+- A JSON `null` for a scalar, enum or struct field, for a map value or for a
+  list entry is an error, and so is a lone surrogate escape such as `\ud800`
+  and `-0` in an integer field. Go reads the zero value for the `null`, U+FFFD
+  for the lone surrogate and `0` for `-0`. For a search result this fails the
+  whole search, where Go rejects only that pull request.
 - A persisted review input whose policy string enum holds an unknown value
   (protocol, checkout, trigger kind, on_findings, on_clean, on_notes,
   notification level or event) is refused when the row is read, with the code

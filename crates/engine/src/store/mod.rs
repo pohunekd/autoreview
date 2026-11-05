@@ -19,6 +19,18 @@ use rustix::fs::{FlockOperation, flock};
 use time::OffsetDateTime;
 
 use crate::{BoxError, Error};
+use serde::Serialize;
+
+pub mod discovery;
+pub mod reviews;
+
+pub use discovery::{
+    DiscoveryState, STATE_AWAITING, STATE_PUBLISHED, STATE_REJECTED, STATE_SCHEDULE,
+};
+pub use reviews::{
+    RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
+    REVIEW_RUNNING, ReviewFilter, StoredReview,
+};
 
 /// Schema version stored in `PRAGMA user_version`; a newer database is refused.
 const STORE_SCHEMA_VERSION: i64 = 1;
@@ -333,13 +345,35 @@ fn store_error(code: &str, permanent: bool, cause: impl Into<BoxError>) -> Error
     Error::workflow(code, permanent, Some(cause.into()))
 }
 
+/// Encodes `value` as Go's `encoding/json` does, which escapes `<`, `>`, `&` and the two line
+/// separators, so the stored text is byte-identical to the Go reference.
+fn encode_go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
+    let text = serde_json::to_string(value)?;
+    Ok(text
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029"))
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
+    use autoreview_schedule::scheduler::Run;
+    use rusqlite::types::Value as SqlValue;
+    use serde::Serialize;
+    use serde_json::{Value, json};
     use time::OffsetDateTime;
 
-    use super::Store;
+    use super::{ReviewFilter, Store};
+
+    /// Store golden written by the Go reference, shared with the Go reference tests.
+    const STORE_GOLDEN: &str = include_str!("../../../../testdata/parity/store-v1.json");
+
+    /// Page size of the list reads in `go_store_golden_opens`; the golden holds fewer reviews.
+    const GOLDEN_LIST_LIMIT: i64 = 100;
 
     fn test_now() -> OffsetDateTime {
         OffsetDateTime::UNIX_EPOCH
@@ -400,5 +434,163 @@ mod tests {
             .err()
             .expect("newer schema refused");
         assert_eq!(crate::error_code(&err), "store_version_unsupported");
+    }
+
+    /// Converts one golden cell into the SQLite value it was stored as.
+    fn sql_value(cell: &Value) -> SqlValue {
+        match cell {
+            Value::Null => SqlValue::Null,
+            Value::String(text) => SqlValue::Text(text.clone()),
+            Value::Number(number) => SqlValue::Integer(number.as_i64().expect("golden integer")),
+            other => panic!("golden cell {other} is not a scalar the store holds"),
+        }
+    }
+
+    /// Writes the golden rows of one table with SQL, one column per golden key.
+    fn insert_golden_rows(connection: &rusqlite::Connection, table: &str, rows: &[Value]) {
+        for row in rows {
+            let object = row.as_object().expect("golden row is an object");
+            let columns: Vec<&str> = object.keys().map(String::as_str).collect();
+            let values: Vec<SqlValue> = object.values().map(sql_value).collect();
+            let placeholders = vec!["?"; columns.len()].join(", ");
+            let sql = format!(
+                "INSERT INTO {table} ({}) VALUES ({placeholders})",
+                columns.join(", ")
+            );
+            connection
+                .execute(&sql, rusqlite::params_from_iter(values))
+                .expect("golden row inserts");
+        }
+    }
+
+    /// Serializes a value for comparison with the golden JSON.
+    fn to_value<T: Serialize>(value: &T) -> Value {
+        serde_json::to_value(value).expect("the value serializes")
+    }
+
+    /// Writes the Go run-history shape of one run, which keeps Go's field names.
+    fn run_value(run: &Run) -> Value {
+        json!({
+            "Target": {
+                "repository": run.target.repository,
+                "number": run.target.number,
+                "head_sha": run.target.head_sha,
+                "review_request_id": run.target.request_id,
+            },
+            "WorkflowID": run.workflow_id,
+            "Attempt": run.attempt,
+            "Status": run.status,
+            "Result": run.result,
+            "Failure": run.failure,
+            "Released": run.released,
+            "CleanupPending": run.cleanup_pending,
+        })
+    }
+
+    /// Opens a store holding the rows of the Go golden and reads every part the store owns.
+    ///
+    /// The engine's `prior_findings` section is not checked here; it belongs to the engine.
+    #[test]
+    fn go_store_golden_opens() {
+        let golden: Value = serde_json::from_str(STORE_GOLDEN).expect("golden is JSON");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = open_store(&dir.path().join("golden.db"));
+        store
+            .in_tx(|transaction| {
+                for table in ["discovery", "reviews", "review_steps", "review_state"] {
+                    let rows = golden[table].as_array().expect("golden table is an array");
+                    insert_golden_rows(transaction, table, rows);
+                }
+                Ok(())
+            })
+            .expect("golden rows insert");
+
+        {
+            let connection = store.lock_connection().expect("connection locks");
+            let version: i64 = connection
+                .pragma_query_value(None, "user_version", |row| row.get(0))
+                .expect("version reads");
+            assert_eq!(Some(version), golden["user_version"].as_i64());
+            let mut statement = connection
+                .prepare(
+                    "SELECT type, name, tbl_name, sql FROM sqlite_master \
+                     WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+                )
+                .expect("schema query prepares");
+            let schema: Vec<Value> = statement
+                .query_map([], |row| {
+                    Ok(json!({
+                        "type": row.get::<_, String>(0)?,
+                        "name": row.get::<_, String>(1)?,
+                        "tbl_name": row.get::<_, String>(2)?,
+                        "sql": row.get::<_, String>(3)?,
+                    }))
+                })
+                .expect("schema rows query")
+                .map(|row| row.expect("schema row reads"))
+                .collect();
+            assert_eq!(Value::Array(schema), golden["schema"]);
+        }
+
+        let state = store.load_discovery().expect("discovery reads");
+        assert_eq!(
+            to_value(&state.schedule),
+            golden["api"]["discovery"]["schedule"]
+        );
+        assert_eq!(
+            to_value(&state.published),
+            golden["api"]["discovery"]["published"]
+        );
+        assert_eq!(
+            to_value(&state.awaiting),
+            golden["api"]["discovery"]["awaiting"]
+        );
+        assert_eq!(
+            to_value(&state.rejected),
+            golden["api"]["discovery"]["rejected"]
+        );
+
+        let reviews = store
+            .list_reviews(&ReviewFilter::All, GOLDEN_LIST_LIMIT)
+            .expect("reviews read");
+        assert_eq!(to_value(&reviews), golden["api"]["list_reviews"]);
+        let runs = store
+            .run_history(GOLDEN_LIST_LIMIT)
+            .expect("run history reads");
+        let run_values: Vec<Value> = runs.iter().map(run_value).collect();
+        assert_eq!(Value::Array(run_values), golden["api"]["run_history"]);
+        assert!(
+            store
+                .ready_reviews()
+                .expect("ready reviews read")
+                .is_empty()
+        );
+
+        for step in golden["review_steps"].as_array().expect("golden steps") {
+            let workflow_id = step["workflow_id"].as_str().expect("workflow id");
+            let name = step["name"].as_str().expect("step name");
+            let output: Value = store
+                .load_step(workflow_id, name)
+                .expect("step reads")
+                .expect("golden step exists");
+            assert_eq!(
+                output,
+                serde_json::from_str::<Value>(step["output"].as_str().expect("output"))
+                    .expect("golden output is JSON")
+            );
+        }
+        for state_row in golden["review_state"].as_array().expect("golden state") {
+            let workflow_id = state_row["workflow_id"].as_str().expect("workflow id");
+            let name = state_row["name"].as_str().expect("state name");
+            let value: Value = store
+                .get_state(workflow_id, name)
+                .expect("state reads")
+                .expect("golden state exists");
+            assert_eq!(
+                value,
+                serde_json::from_str::<Value>(state_row["value"].as_str().expect("value"))
+                    .expect("golden value is JSON")
+            );
+        }
     }
 }
