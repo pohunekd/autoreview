@@ -6,5 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[dependencies]
+autoreview-go-compat = { path = "../go-compat" }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
 [lints]
 workspace = true
