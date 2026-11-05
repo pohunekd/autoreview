@@ -1,0 +1,92 @@
+# Synthetic review policy used by the tests. Repository rules are evaluated top
+# to bottom; the first match wins and a rule shadowed by an earlier one is
+# rejected at startup.
+version: 1
+
+reviewers:
+  opus:
+    protocol: claude-structured
+    agent_profile: claude-noninteractive
+    label: Opus
+    finding_prefix: O
+  sonnet:
+    protocol: claude-structured
+    agent_profile: claude-noninteractive-sonnet
+    label: Sonnet
+    finding_prefix: S
+  codex:
+    protocol: codex-envelope
+    agent_profile: codex-review
+    label: Codex
+    finding_prefix: X
+
+pipelines:
+  # Clean reviews of this pipeline are approved without a human, so a
+  # re-review gets both reviewers too.
+  strict:
+    reviewers: [opus, sonnet]
+    incremental_reviewers: [opus, sonnet]
+    prompt: prompts/strict.md
+    checkout: base
+    project_sources: [manual]
+    # Every blocking finding the verifier demotes asks a human.
+    verifier:
+      reviewer: opus
+      prompt: prompts/verifier.md
+      escalate_severities: [critical, high]
+      escalate_count: 1
+  generic:
+    reviewers: [opus, sonnet]
+    incremental_reviewers: [opus, sonnet]
+    prompt: prompts/generic.md
+    checkout: base
+    project_sources: [manual]
+    verifier:
+      reviewer: opus
+      prompt: prompts/verifier.md
+      escalate_severities: [critical]
+      escalate_count: 3
+  personal:
+    reviewers: [codex]
+    incremental_reviewers: [codex]
+    prompt: prompts/personal.md
+    checkout: head
+    project_sources: [manual, auto]
+
+repositories:
+  # A clean review waits for a human when the author asks for it with the
+  # label, or when the pull request deletes a test file.
+  - {match: example-org/example-repo, trigger: review-requested, pipeline: strict, on_findings: request_changes, on_clean: approve, human_review: {labels: [needs-human-review], deleted_tests: ["**/tests/**"]}}
+  - match: example-org/*
+    trigger: review-requested
+    pipeline: generic
+    on_findings: request_changes
+    on_clean: approve
+  - match: example-owner/*
+    trigger: label:ai:review
+    pipeline: personal
+    on_findings: request_changes
+    on_clean: approve
+
+unmatched: skip
+
+# Coding agents that open pull requests as drafts and never mark them ready.
+ready_draft_authors: [devin-ai-integration]
+
+approval:
+  timeout_hours: 168
+
+notifications:
+  approval_requested: action
+  handoff_reminder: action
+  findings_on_own_pr: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log
