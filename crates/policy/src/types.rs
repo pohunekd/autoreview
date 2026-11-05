@@ -1,4 +1,5 @@
-//! Policy value types, their string enums, the pattern limits of the policy file and the policy digest inputs.
+//! Policy value types, their string enums, the pattern limits of the policy file and the policy
+//! digest inputs.
 
 // Rust guideline compliant 2026-06-26
 
@@ -53,16 +54,19 @@ const MAX_LABEL_LEN: usize = 50;
 #[expect(dead_code, reason = "called by S04")]
 const MAX_SOURCE_LEN: usize = 32;
 
-/// Reviewer id that names the verifier's session and state; a reviewer of the policy cannot take it.
+/// Reviewer id that names the verifier's session and state; a reviewer of the policy cannot take
+/// it.
 pub const VERIFIER_REVIEWER_ID: &str = "verifier";
 
 /// Names the input and output contract of a reviewer agent profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Protocol {
-    /// Sends a JSON request with an enforced schema and reads the claude-otel-noninteractive structured result wrapper.
+    /// Sends a JSON request with an enforced schema and reads the claude-otel-noninteractive
+    /// structured result wrapper.
     #[serde(rename = "claude-structured")]
     ClaudeStructured,
-    /// Sends a plain prompt and reads the base64 result envelope printed by the pohunek Codex review wrapper.
+    /// Sends a plain prompt and reads the base64 result envelope printed by the pohunek Codex
+    /// review wrapper.
     #[serde(rename = "codex-envelope")]
     CodexEnvelope,
     /// The empty value Go writes for an unset field; parsing never produces it.
@@ -74,7 +78,8 @@ pub enum Protocol {
 /// Selects the commit the reviewer worktree starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Checkout {
-    /// Starts at the base branch tip, so repository instructions are read from trusted content before the reviewer fetches the head.
+    /// Starts at the base branch tip, so repository instructions are read from trusted content
+    /// before the reviewer fetches the head.
     #[serde(rename = "base")]
     Base,
     /// Starts at refs/pull/<number>/head.
@@ -148,7 +153,8 @@ pub enum OnClean {
 /// Decides a review whose findings are all non-blocking. Unset follows the rule's clean outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OnNotes {
-    /// Hands the notes to the author in a comment first; once the author requests the review again, the clean outcome follows.
+    /// Hands the notes to the author in a comment first; once the author requests the review again,
+    /// the clean outcome follows.
     #[serde(rename = "comment")]
     Comment,
     /// The empty value, which means the rule's clean outcome applies.
@@ -171,7 +177,8 @@ pub enum Level {
     Log,
 }
 
-/// Notification event. The variants are declared in wire-name order, so the derived Ord sorts map keys as Go sorts them.
+/// Notification event. The variants are declared in wire-name order, so the derived Ord sorts map
+/// keys as Go sorts them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Event {
     /// Approval expired event.
@@ -232,7 +239,8 @@ pub const EVENTS: &[Event] = &[
     Event::HandoffReminder,
 ];
 
-/// Events a review workflow sends itself, so its input carries their levels. Discovery sends the others with the current policy.
+/// Events a review workflow sends itself, so its input carries their levels. Discovery sends the
+/// others with the current policy.
 pub const WORKFLOW_EVENTS: &[Event] = &[
     Event::ApprovalRequested,
     Event::FindingsOnOwnPr,
@@ -317,7 +325,8 @@ pub struct Pipeline {
         serialize_with = "nil_when_empty"
     )]
     pub project_sources: Vec<String>,
-    /// Checks every blocking finding before it is published. Absent for a pipeline that publishes its findings unchecked.
+    /// Checks every blocking finding before it is published. Absent for a pipeline that publishes
+    /// its findings unchecked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verifier: Option<Verifier>,
 }
@@ -330,7 +339,9 @@ pub struct Verifier {
     pub reviewer: Reviewer,
     /// Prompt for the verifier.
     pub prompt: String,
-    /// On a rule that approves clean reviews without the user, the user decides instead once the verifier demoted a blocking finding of one of these severities, or escalate_count blocking findings.
+    /// On a rule that approves clean reviews without the user, the user decides instead once the
+    /// verifier demoted a blocking finding of one of these severities, or escalate_count blocking
+    /// findings.
     #[serde(
         deserialize_with = "autoreview_go_compat::null_default::deserialize",
         serialize_with = "nil_when_empty"
@@ -340,7 +351,8 @@ pub struct Verifier {
     pub escalate_count: i64,
 }
 
-/// The resolved policy for one repository. It is copied into each review workflow input, so a policy change affects only reviews dispatched after it.
+/// The resolved policy for one repository. It is copied into each review workflow input, so a
+/// policy change affects only reviews dispatched after it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Rule {
@@ -358,13 +370,15 @@ pub struct Rule {
     /// Outcome for notes-only findings.
     #[serde(skip_serializing_if = "is_unset_notes")]
     pub on_notes: OnNotes,
-    /// Signals that make a clean review wait for a human. Absent on a rule whose clean reviews need no signal check before an automatic approval.
+    /// Signals that make a clean review wait for a human. Absent on a rule whose clean reviews need
+    /// no signal check before an automatic approval.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub human_review: Option<HumanReview>,
 }
 
 impl Rule {
-    /// Reports whether a clean review of this rule can end in an approval, which decides whether a later review may be incremental.
+    /// Reports whether a clean review of this rule can end in an approval, which decides whether a
+    /// later review may be incremental.
     #[must_use]
     pub fn approves_clean(&self) -> bool {
         self.on_clean == OnClean::Approve || self.on_clean == OnClean::Await
@@ -373,21 +387,20 @@ impl Rule {
 
 /// The parsed review policy: its rules, notification levels and the digest that identifies it.
 #[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "fields are read by the policy parser and digest (S04, S05)"
-)]
+#[expect(dead_code, reason = "called by S04 and S05")]
 pub struct Policy {
     rules: Vec<Rule>,
     ready_draft_authors: Vec<String>,
     notifications: BTreeMap<Event, Level>,
     approval_timeout: Duration,
-    /// How long notes handed to an author wait before the user is reminded; zero when no rule hands notes off.
+    /// How long notes handed to an author wait before the user is reminded; zero when no rule hands
+    /// notes off.
     handoff_reminder: Duration,
     digest: String,
 }
 
-/// Writes an empty list as JSON null, which Go writes for a nil slice. Every list a parsed policy stores is non-empty, so null marks the absent list.
+/// Writes an empty list as JSON null, which Go writes for a nil slice. Every list a parsed policy
+/// stores is non-empty, so null marks the absent list.
 fn nil_when_empty<T: Serialize, S: Serializer>(
     value: &[T],
     serializer: S,
@@ -404,7 +417,8 @@ fn is_unset_notes(value: &OnNotes) -> bool {
     *value == OnNotes::Unset
 }
 
-/// Reports whether value is 1 to max_len ASCII bytes whose first byte matches first and whose other bytes match rest.
+/// Reports whether value is 1 to max_len ASCII bytes whose first byte matches first and whose other
+/// bytes match rest.
 fn is_token(value: &str, max_len: usize, first: fn(u8) -> bool, rest: fn(u8) -> bool) -> bool {
     if value.is_empty() {
         return false;

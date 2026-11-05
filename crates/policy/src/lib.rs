@@ -1,4 +1,5 @@
-//! Review policy types: the rules, pipelines and reviewers a review input stores, glob matching and human review signals.
+//! Review policy types: the rules, pipelines and reviewers a review input stores, glob matching and
+//! human review signals.
 
 // Rust guideline compliant 2026-06-26
 

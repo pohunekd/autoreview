@@ -1,4 +1,5 @@
-//! Human review signals: the labels and deleted-test globs that hold a clean review for a person, and the glob matching they use.
+//! Human review signals: the labels and deleted-test globs that hold a clean review for a person,
+//! and the glob matching they use.
 
 // Rust guideline compliant 2026-06-26
 
@@ -19,14 +20,17 @@ const SEPARATOR: u8 = b'/';
 /// Code point that Go's UTF-8 decoder returns for an invalid byte sequence.
 const RUNE_ERROR: u32 = 0xFFFD;
 
-/// Names the signals of a pull request that make a clean review of an auto-approving rule wait for the user. The engine evaluates them from GitHub data, never from reviewer output.
+/// Names the signals of a pull request that make a clean review of an auto-approving rule wait for
+/// the user. The engine evaluates them from GitHub data, never from reviewer output.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HumanReview {
-    /// Holds the review when the pull request carries one of these labels, so an author can ask for a human.
+    /// Holds the review when the pull request carries one of these labels, so an author can ask for
+    /// a human.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
-    /// Path globs; deleting a file that matches one holds the review, because a deleted test may be the only proof of a contract.
+    /// Path globs; deleting a file that matches one holds the review, because a deleted test may be
+    /// the only proof of a contract.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deleted_tests: Vec<String>,
 }
@@ -47,7 +51,8 @@ pub(crate) struct FileHumanReview {
 ///
 /// # Errors
 ///
-/// Returns an error when the section sits on a rule whose clean outcome is not approve, sets no entries, lists too many entries, or repeats or malforms a label or glob.
+/// Returns an error when the section sits on a rule whose clean outcome is not approve, sets no
+/// entries, lists too many entries, or repeats or malforms a label or glob.
 #[expect(dead_code, reason = "called by S04")]
 pub(crate) fn parse_human_review(
     raw: Option<&FileHumanReview>,
@@ -96,7 +101,8 @@ pub(crate) fn parse_human_review(
     }))
 }
 
-/// Reports whether glob is a slash-separated relative pattern whose segments are path patterns or **.
+/// Reports whether glob is a slash-separated relative pattern whose segments are path patterns or
+/// **.
 #[expect(dead_code, reason = "called by S04")]
 fn valid_glob(glob: &str) -> bool {
     if glob.is_empty()
@@ -123,7 +129,8 @@ fn valid_glob(glob: &str) -> bool {
     true
 }
 
-/// Reports whether a repository path matches a glob of valid_glob: *, ? and classes match within one segment, and ** matches any number of segments, including none.
+/// Reports whether a repository path matches a glob of valid_glob: *, ? and classes match within
+/// one segment, and ** matches any number of segments, including none.
 pub fn match_glob(glob: &str, name: &str) -> bool {
     let pattern: Vec<&str> = glob.split('/').collect();
     let target: Vec<&str> = name.split('/').collect();
@@ -158,7 +165,8 @@ fn match_segments(pattern: &[&str], name: &[&str]) -> bool {
     name.is_empty()
 }
 
-/// Matches name against pattern with the rules of Go's path.Match. The error is BadPattern when the pattern is malformed, which Go reports even when the name does not match.
+/// Matches name against pattern with the rules of Go's path.Match. The error is BadPattern when the
+/// pattern is malformed, which Go reports even when the name does not match.
 fn path_match(pattern: &str, name: &str) -> Result<bool, Error> {
     match_bytes(pattern.as_bytes(), name.as_bytes())
 }
@@ -206,7 +214,8 @@ fn match_bytes(mut pattern: &[u8], mut name: &[u8]) -> Result<bool, Error> {
     Ok(name.is_empty())
 }
 
-/// Splits the next chunk off a path.Match pattern: whether leading stars were seen, the chunk up to the next star outside a class, and the rest of the pattern.
+/// Splits the next chunk off a path.Match pattern: whether leading stars were seen, the chunk up to
+/// the next star outside a class, and the rest of the pattern.
 fn scan_chunk(mut pattern: &[u8]) -> (bool, &[u8], &[u8]) {
     let mut star = false;
     while !pattern.is_empty() && pattern[0] == b'*' {
@@ -237,7 +246,8 @@ fn scan_chunk(mut pattern: &[u8]) -> (bool, &[u8], &[u8]) {
     (star, pattern, &[])
 }
 
-/// Matches one chunk at the start of name. It returns the rest of the name on a match, None on a mismatch, and an error when the chunk is malformed, which is reported even after a mismatch.
+/// Matches one chunk at the start of name. It returns the rest of the name on a match, None on a
+/// mismatch, and an error when the chunk is malformed, which is reported even after a mismatch.
 fn match_chunk<'a>(mut chunk: &[u8], mut name: &'a [u8]) -> Result<Option<&'a [u8]>, Error> {
     let mut failed = false;
     let mut rune: u32 = 0;
@@ -301,7 +311,8 @@ fn match_chunk<'a>(mut chunk: &[u8], mut name: &'a [u8]) -> Result<Option<&'a [u
     if failed { Ok(None) } else { Ok(Some(name)) }
 }
 
-/// Reads one class bound from chunk, which may be escaped with a backslash. It returns the code point and the rest of the chunk.
+/// Reads one class bound from chunk, which may be escaped with a backslash. It returns the code
+/// point and the rest of the chunk.
 fn escaped_rune(chunk: &[u8]) -> Result<(u32, &[u8]), Error> {
     if chunk.is_empty() || chunk[0] == b'-' || chunk[0] == b']' {
         return Err(Error::BadPattern);
@@ -324,7 +335,8 @@ fn escaped_rune(chunk: &[u8]) -> Result<(u32, &[u8]), Error> {
     Ok((value, remaining))
 }
 
-/// Decodes the first UTF-8 code point of bytes as Go's utf8.DecodeRuneInString does: an invalid or truncated sequence, including a continuation byte, yields RUNE_ERROR with width 1.
+/// Decodes the first UTF-8 code point of bytes as Go's utf8.DecodeRuneInString does: an invalid or
+/// truncated sequence, including a continuation byte, yields RUNE_ERROR with width 1.
 fn decode_rune(bytes: &[u8]) -> (u32, usize) {
     if bytes.is_empty() {
         return (RUNE_ERROR, 0);
