@@ -34,6 +34,8 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
+    use crate::integrations::SessionRequest;
+
     use super::{
         Artifact, AwaitRecord, Discussion, Finding, PriorFinding, PriorResult, PublishedRecord,
         ReviewInput, ReviewOutcome, ReviewerResult, Verification,
@@ -46,7 +48,6 @@ mod tests {
     const LATER_CASES: &[&str] = &[
         "publication_plan_zero",              // #77
         "publication_plan_await",             // #77
-        "session_request_zero",               // #86
         "slot_state_zero",                    // #91
         "slot_state_with_session_and_result", // #91
         "commentable_lines_nil",              // #102
@@ -143,6 +144,7 @@ mod tests {
                 "policy_rule_zero" => round_trip::<Rule>(case),
                 "discussion_zero" => round_trip::<Discussion>(case),
                 "schedule_record_zero" | "schedule_record_failed" => round_trip::<Record>(case),
+                "session_request_zero" => round_trip::<SessionRequest>(case),
                 name => {
                     assert!(
                         LATER_CASES.contains(&name),
@@ -155,8 +157,8 @@ mod tests {
             checked += 1;
         }
         assert_eq!(
-            checked, 23,
-            "golden has the 23 persisted cases of this module"
+            checked, 24,
+            "golden has the 24 persisted cases of this module"
         );
     }
 }
