@@ -33,7 +33,7 @@ const GITHUB_LOGIN_MAX_LEN: usize = 39;
 const AI_SIGNATURE_MAX_BYTES: usize = 200;
 
 /// Text that every AI signature starts with, after its optional leading symbols.
-const AI_SIGNATURE_PREFIX: &str = "Written by AI:";
+pub(crate) const AI_SIGNATURE_PREFIX: &str = "Written by AI:";
 
 /// Host of the only plain HTTP Matrix homeserver the engine accepts.
 const LOOPBACK_HOST: &str = "127.0.0.1";
@@ -676,7 +676,7 @@ fn signature_valid(signature: &str) -> bool {
 }
 
 /// Reports whether `symbol` may start an AI signature.
-fn is_signature_symbol(symbol: char) -> bool {
+pub(crate) fn is_signature_symbol(symbol: char) -> bool {
     symbol == ' ' || symbol == '\u{FE0F}' || symbols::is_so(symbol)
 }
 

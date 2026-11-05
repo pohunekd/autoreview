@@ -195,6 +195,13 @@ with the expected Rust error code):
   run time (`cmd/autoreview/review.go:38-86`), so this is stricter than Go; Go
   writes only values that passed policy validation, so no Go-written row holds
   one.
+- The AI signature symbols in `config/symbols.rs` are Unicode 17.0.0 `So`, as
+  in Go 1.27. Go 1.26, which `go.mod` names, has Unicode 15.0.0, a subset, and
+  reads a signature that leads with one of the 834 newer symbols as unsigned,
+  so that comment can settle a finding without the user.
+- Logins compare ASCII case-insensitively. Go's `strings.EqualFold` also folds
+  non-ASCII letters, such as the Kelvin sign with `k`, so Rust can miss a match
+  that Go finds and keep a finding open. GitHub logins are ASCII.
 - The GitHub review event (`Decision`) and the review outcome (`Outcome`) are
   enums. Rust refuses a stored value outside their listed values with a serde
   error; Go reads any string. Neither engine writes another value. The store

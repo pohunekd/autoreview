@@ -16,14 +16,13 @@ use super::pull_request::{PriorFinding, PullRequest, ReviewInput, ReviewScope, R
 const PRIOR_KEY_HEAD_CHARS: usize = 12;
 
 /// Verdict of a prior finding that the code settled as fixed.
-#[expect(dead_code, reason = "called by S13")]
+#[expect(dead_code, reason = "called by S14")]
 pub(crate) const PRIOR_FIXED: &str = "fixed";
 
 /// Verdict of a prior finding that stays open. Only an open one keeps blocking.
 pub(crate) const PRIOR_OPEN: &str = "still_open";
 
 /// Verdict of a prior finding that its author answered.
-#[expect(dead_code, reason = "called by S13")]
 pub(crate) const PRIOR_ANSWERED: &str = "answered";
 
 /// Kind of an approval decision that approves the review.
@@ -41,7 +40,7 @@ pub(crate) const APPROVAL_KIND_EXPIRED: &str = "expired";
 /// Returns the key of a prior finding, the head cut to 12 characters, a colon and the ID.
 ///
 /// Go's `%.12s` counts runes, so the cut is by `char`, not by byte.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S13"))]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by E05"))]
 pub(crate) fn prior_key(head: &str, id: &str) -> String {
     let short: String = head.chars().take(PRIOR_KEY_HEAD_CHARS).collect();
     format!("{short}:{id}")
