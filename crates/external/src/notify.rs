@@ -226,14 +226,15 @@ fn room_of(matrix: &Matrix, level: Level) -> &str {
 /// A limit below one character is refused, because Go panics on it.
 fn truncated(message: &str, max_characters: i64) -> Result<String, Error> {
     let limit = usize::try_from(max_characters)
-        .map_err(|error| Error::workflow("matrix_request_invalid", true, Some(Box::new(error))))?;
-    if limit == 0 {
-        return Err(Error::workflow(
-            "matrix_request_invalid",
-            true,
-            Some(Box::new(io::Error::other(LIMIT_CAUSE))),
-        ));
-    }
+        .ok()
+        .filter(|limit| *limit >= 1)
+        .ok_or_else(|| {
+            Error::workflow(
+                "matrix_request_invalid",
+                true,
+                Some(Box::new(io::Error::other(LIMIT_CAUSE))),
+            )
+        })?;
     if message.chars().count() <= limit {
         return Ok(message.to_owned());
     }

@@ -258,16 +258,16 @@ with the expected Rust error code):
   stricter than Go for unknown fields.
 
 Intentional notification divergences (stricter than Go; checked by a
-   differential run against the Go reference, not by a golden case):
+differential run against the Go reference, not by a golden case):
 
-   - A `matrix_max_characters` below 1 is refused with `matrix_request_invalid`
-     when a message is not blank. Go panics on that input
-     (`cmd/autoreview/notify.go:50-51`). Until #5 checks this bound at startup,
-     both engines accept such a limit.
-   - A Matrix homeserver URL whose port is above 65535 is refused with
-     `matrix_request_invalid` when a message is sent. Go dials the URL, the dial
-     fails, and Go drops a digest or log message as `matrix_unavailable`. Until #5
-     checks this bound at startup, both engines accept such a port.
+- A `matrix_max_characters` below 1 is refused with `matrix_request_invalid`
+  when a message is not blank. Go panics on that input
+  (`cmd/autoreview/notify.go:50-51`). Until #5 checks this bound at startup,
+  both engines accept such a limit.
+- A Matrix homeserver URL whose port is above 65535 is refused with
+  `matrix_request_invalid` when a message is sent. Go dials the URL, the dial
+  fails, and Go drops a digest or log message as `matrix_unavailable`. Until #5
+  checks this bound at startup, both engines accept such a port.
 
 Invalid UTF-8 is not a divergence for the parsers, but the process runner's
 `String::from_utf8_lossy` does not give Go's count of replacement characters. It
