@@ -4,10 +4,14 @@
 
 use std::collections::BTreeSet;
 
+use autoreview_go_compat::go_time::format_rfc3339_seconds;
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, UtcOffset, macros::datetime};
 
-use crate::Error;
+use crate::{Error, diagnostic::failure_explanation};
+
+/// Characters of the head SHA that a notification shows, as Go's `%.12s`.
+const NOTIFICATION_HEAD_CHARS: usize = 12;
 
 /// The pull request and head that a review request names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -370,6 +374,41 @@ pub fn superseded(code: &str) -> bool {
     )
 }
 
+/// Returns the published notification for a failed review of `target`.
+///
+/// A `retry_wait` record names the next attempt and its due time; any other phase
+/// says that no automatic attempt follows.
+pub fn notification(target: &Target, record: &Record) -> String {
+    let description = failure_explanation(&record.error_code);
+    let head: String = target
+        .head_sha
+        .chars()
+        .take(NOTIFICATION_HEAD_CHARS)
+        .collect();
+    let next = record.attempt.wrapping_add(1);
+    if record.phase == "retry_wait" {
+        let due = format_rfc3339_seconds(record.due_at);
+        format!(
+            "Review for {} at {}: {} Next automatic attempt: {} at {}. Diagnostic: {}.",
+            target.key(),
+            head,
+            description,
+            next,
+            due,
+            record.error_code
+        )
+    } else {
+        format!(
+            "Review for {} at {} stopped after attempt {}. {} No further automatic attempt is scheduled. Fix the cause, then retry this PR. Diagnostic: {}.",
+            target.key(),
+            head,
+            next,
+            description,
+            record.error_code
+        )
+    }
+}
+
 /// Adds `delay` to `now`, failing instead of panicking when the result leaves the range of `time`.
 fn due_after(now: OffsetDateTime, delay: Duration) -> Result<OffsetDateTime, Error> {
     now.checked_add(delay).ok_or(Error::TimeOutOfRange)
@@ -381,7 +420,8 @@ mod tests {
 
     use time::{Duration, OffsetDateTime};
 
-    use super::{Policy, Record, Run, Target, plan, reconcile_completed};
+    use super::{Policy, Record, Run, Target, notification, plan, reconcile_completed, retryable};
+    use crate::diagnostic::{diagnostic, failure_explanation};
 
     fn fixture() -> (Target, OffsetDateTime, Policy) {
         (
@@ -838,5 +878,71 @@ mod tests {
             "supersedes consumed the retry budget: {:?}",
             decision.record
         );
+    }
+
+    #[test]
+    fn diagnostics_do_not_expose_raw_errors() {
+        let disk = std::io::Error::other("secret-token: No space left on device");
+        assert!(
+            diagnostic(Some(&disk)) == "disk_full",
+            "disk failure not classified"
+        );
+        let raw = std::io::Error::other("token=secret prompt=private");
+        let got = diagnostic(Some(&raw));
+        assert!(
+            got == "unclassified_cli_failure",
+            "raw detail escaped: {got}"
+        );
+    }
+
+    #[test]
+    fn request_timeout_is_retryable_and_explained() {
+        assert!(
+            retryable("pohunek_request_timeout"),
+            "a Pohunek request timeout must be retried"
+        );
+        assert!(
+            failure_explanation("pohunek_request_timeout").contains("did not answer within"),
+            "request timeout lacks a specific explanation"
+        );
+        let err = std::io::Error::other("exit status 1: pohunek error code request_timeout");
+        let got = diagnostic(Some(&err));
+        assert!(got == "timeout", "diagnostic = {got}");
+    }
+
+    #[test]
+    fn failure_notifications_explain_cause_and_next_step() {
+        let (target, now, _) = fixture();
+        for phase in ["retry_wait", "failed"] {
+            let message = notification(
+                &target,
+                &Record {
+                    phase: phase.to_owned(),
+                    error_code: "pohunek_base_fetch_timeout".to_owned(),
+                    attempt: 2,
+                    due_at: now,
+                    ..Record::default()
+                },
+            );
+            for want in [
+                target.key().as_str(),
+                "Git timed out",
+                "keyring",
+                "Diagnostic: pohunek_base_fetch_timeout",
+            ] {
+                assert!(
+                    message.contains(want),
+                    "notification lacks {want:?}: {message}"
+                );
+            }
+            assert!(
+                phase != "retry_wait" || message.contains("Next automatic attempt: 3 at"),
+                "{message}"
+            );
+            assert!(
+                phase != "failed" || message.contains("No further automatic attempt"),
+                "{message}"
+            );
+        }
     }
 }
