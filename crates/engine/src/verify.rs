@@ -28,10 +28,10 @@ const VERIFY_SCHEMA: &[u8] = include_bytes!("../schemas/verify-schema.json");
 const VERDICT_CONFIRMED: &str = "confirmed";
 
 /// Verdict on a blocking finding: the defect exists, but the merge causes no blocking harm.
-const VERDICT_NOT_BLOCKING: &str = "not_blocking";
+pub(crate) const VERDICT_NOT_BLOCKING: &str = "not_blocking";
 
 /// Verdict on a blocking finding: the defect does not exist, or the claim misreads the code.
-const VERDICT_REFUTED: &str = "refuted";
+pub(crate) const VERDICT_REFUTED: &str = "refuted";
 
 /// Verdict on an answered prior finding: the code or a reviewer comment shows it needs no change.
 const VERDICT_UPHELD: &str = "upheld";

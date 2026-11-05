@@ -9,6 +9,7 @@ use super::plan::{PublicationPlan, blocking_count};
 use super::review_marker;
 use crate::error::Error;
 use crate::integrations::{GitHubReview, InlineComment};
+use crate::messages::excerpt;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Artifact, Finding, PriorResult, ReviewInput};
 use crate::verify::verification_line;
@@ -304,12 +305,12 @@ fn close_open_fence(value: &str) -> String {
 }
 
 /// Returns the first twelve characters of a commit SHA, as Go's `%.12s` prints them.
-fn head_prefix(sha: &str) -> String {
+pub(crate) fn head_prefix(sha: &str) -> String {
     sha.chars().take(12).collect()
 }
 
 /// Joins the reviewer labels of a review.
-fn reviewer_labels(reviewers: &[Reviewer]) -> String {
+pub(crate) fn reviewer_labels(reviewers: &[Reviewer]) -> String {
     let labels: Vec<&str> = reviewers
         .iter()
         .map(|reviewer| reviewer.label.as_str())
@@ -352,26 +353,12 @@ pub(crate) fn human_review_signals(
 }
 
 /// Joins the matched signals, each cut to the excerpt limit.
-fn human_review_text(signals: &[String], limit: i64) -> String {
+pub(crate) fn human_review_text(signals: &[String], limit: i64) -> String {
     let parts: Vec<String> = signals
         .iter()
         .map(|signal| excerpt(signal, limit))
         .collect();
     parts.join("; ")
-}
-
-/// Joins the words of a value and cuts the result to `limit` characters, the last one an ellipsis.
-///
-/// Config validation keeps the limit positive, so the clamp to zero is never reached in a run.
-fn excerpt(value: &str, limit: i64) -> String {
-    let words: Vec<&str> = value.split_whitespace().collect();
-    let normalized = words.join(" ");
-    let limit = usize::try_from(limit).unwrap_or_default();
-    if normalized.chars().count() > limit {
-        let kept: String = normalized.chars().take(limit.saturating_sub(1)).collect();
-        return format!("{}…", kept.trim());
-    }
-    normalized
 }
 
 /// Compares a carried label with a configured label as Go's `strings.EqualFold` does.
@@ -408,6 +395,7 @@ mod tests {
     use super::{RenderSettings, human_review_signals, render_review};
     use crate::error::error_code;
     use crate::integrations::GitHubReview;
+    use crate::messages::{APPROVAL_REQUESTED_TITLE, approval_requested_message};
     use crate::model::ids::INPUT_VERSION;
     use crate::model::review::{PRIOR_ANSWERED, PRIOR_OPEN, prior_key};
     use crate::model::{
@@ -834,6 +822,24 @@ mod tests {
             notes.contains("```\n\n</details>"),
             "an unclosed fence of a note must be closed before the section ends:\n{notes}"
         );
+        let message = approval_requested_message(
+            200,
+            &input,
+            &Artifact {
+                findings: artifact.findings.iter().skip(1).cloned().collect(),
+                ..Artifact::default()
+            },
+        );
+        let reply = message.find("Reply to this message with: approve");
+        let notes_at = message.find("Notes:");
+        assert!(
+            message.starts_with(APPROVAL_REQUESTED_TITLE)
+                && message.contains("Blocking findings: 0\nNon-blocking notes: 1")
+                && message.contains("O002 [NOTE, LOW")
+                && reply.is_some()
+                && reply <= notes_at,
+            "approval request = {message}"
+        );
     }
 
     #[test]
@@ -987,6 +993,17 @@ mod tests {
         assert!(
             plan.decision == Decision::Approve && plan.await_approval,
             "settled prior findings must leave the review clean: {plan:?}"
+        );
+        let message = approval_requested_message(200, &input, &artifact);
+        let check = format!(
+            "check before approving:\n{} Name (relies on a comment by reviewer)",
+            artifact.prior_results[0].finding.key
+        );
+        assert!(
+            message.contains(&check)
+                && message.find("Reply to this message with: approve")
+                    <= message.find("check before approving"),
+            "an answered prior finding must be shown below the reply instruction: {message}"
         );
     }
 
