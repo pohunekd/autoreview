@@ -37,7 +37,9 @@ pub struct Finding {
     pub body: String,
     /// Whether the finding is anchored.
     pub anchored: bool,
-    /// A note published without asking for changes; the zero value blocks, so a finding without the flag keeps blocking.
+    /// Marks a note that is published without asking for changes.
+    ///
+    /// The zero value blocks, so a finding without the flag keeps blocking.
     #[serde(skip_serializing_if = "is_false")]
     pub non_blocking: bool,
     /// Verdict of the finding.
