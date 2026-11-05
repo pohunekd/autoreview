@@ -3,7 +3,7 @@
 // Rust guideline compliant 2026-06-26
 
 pub mod config;
-pub(crate) mod discussion;
+pub mod discussion;
 pub mod error;
 pub mod integrations;
 pub mod model;

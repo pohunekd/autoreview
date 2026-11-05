@@ -23,7 +23,7 @@ pub use review::{
     ApprovalDecision, ApprovalResult, ApproveRequest, Artifact, AwaitRecord, Decision, Discussion,
     DiscussionComment, DiscussionThread, FindingCheck, Outcome, PollResult, PriorCheck,
     PriorResult, PriorVerdict, PublishResult, PublishedRecord, ResolveRequest, ResolveResult,
-    RetryRequest, RetryResult, ReviewOutcome, SessionIdentity, Verification,
+    RetryRequest, RetryResult, ReviewOutcome, SessionIdentity, Verification, prior_key,
 };
 
 #[cfg(test)]

@@ -39,8 +39,7 @@ pub(crate) const APPROVAL_KIND_EXPIRED: &str = "expired";
 /// Returns the key of a prior finding, the head cut to 12 characters, a colon and the ID.
 ///
 /// Go's `%.12s` counts runes, so the cut is by `char`, not by byte.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E05"))]
-pub(crate) fn prior_key(head: &str, id: &str) -> String {
+pub fn prior_key(head: &str, id: &str) -> String {
     let short: String = head.chars().take(PRIOR_KEY_HEAD_CHARS).collect();
     format!("{short}:{id}")
 }

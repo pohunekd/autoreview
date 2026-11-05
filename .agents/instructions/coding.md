@@ -216,6 +216,10 @@ with the expected Rust error code):
   `github_request_failed` (retryable), because the process runner keeps no
   stderr on a timeout. Go reads that stderr and fails the call as
   `github_request_rejected` (permanent).
+- The GraphQL node types of the discussion read refuse an unknown key, a
+  case-variant key included, because the query names every field it reads.
+  Go ignores unknown keys and matches keys case-insensitively. The REST
+  comparison and the response envelopes keep the R4 rule.
 - The GitHub review event (`Decision`) and the review outcome (`Outcome`) are
   enums. Rust refuses a stored value outside their listed values with a serde
   error; Go reads any string. Neither engine writes another value. The store
