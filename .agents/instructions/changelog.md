@@ -38,9 +38,10 @@ until the credential is replaced.
 
 ## Commands
 
-The changelog tool is filed as M1 work (`scripts/changelog`). Its CI check starts
-once the script exists; until then the pull request template still asks for the
-fragment, and reviewers hold the rule by hand. Its commands will be:
+`scripts/changelog` runs the ecosystem changelog tool (`crates/changelog`, a
+front end over the pohunek-companion crate pinned by git revision). CI runs `check`
+on every event and, on a pull request, requires a fragment unless the pull request
+carries `no-changelog`.
 
 ```bash
 scripts/changelog check                       # validate every fragment (CI runs it)

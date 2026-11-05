@@ -1,0 +1,11 @@
+#!/bin/sh
+# Runs the changelog contract tool (crates/changelog) from the repository root.
+#
+# usage: scripts/changelog check
+#        scripts/changelog fold <version> [--date YYYY-MM-DD]
+#        scripts/changelog notes <version>
+
+set -eu
+
+cd "$(dirname "$0")/.."
+exec cargo run --quiet --locked -p autoreview-changelog -- "$@"

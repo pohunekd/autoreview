@@ -1,0 +1,19 @@
+[package]
+name = "autoreview-changelog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Changelog fragments, fold and release notes for the ecosystem changelog contract."
+publish = false
+
+[[bin]]
+name = "changelog"
+path = "src/main.rs"
+
+[dependencies]
+pohunek-companion-changelog = { git = "https://github.com/pohunekd/pohunek-companion", rev = "01ee4e36807e3700c4d5ac9d78da76a3404e92ba" }
+
+[lints]
+workspace = true

@@ -63,6 +63,7 @@ rust_gates() {
     run_gate rust-fmt cargo fmt --all --check
     run_gate rust-clippy cargo clippy --workspace --all-targets --locked -- -D warnings
     run_gate rust-test cargo test --workspace --locked
+    run_gate changelog scripts/changelog check
 }
 
 go_gates() {

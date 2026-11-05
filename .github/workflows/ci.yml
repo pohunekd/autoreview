@@ -84,11 +84,50 @@ jobs:
       - name: Rust gates
         run: scripts/gates rust
 
+  # Validates every changelog fragment and, on a pull request, requires one unless
+  # the pull request carries `no-changelog`. Needs the full history for the base.
+  changelog:
+    name: changelog
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Toolchain
+        run: rustup show active-toolchain
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # PRs restore main's cache and never overwrite it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Validate the fragments
+        run: scripts/changelog check
+      - name: Require a fragment
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          NO_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+        run: |
+          set -euo pipefail
+          if [ "$NO_CHANGELOG" = "true" ]; then
+            echo "Labelled no-changelog: no fragment required."
+            exit 0
+          fi
+          # Only names that the contract accepts as fragments count; a hidden or misnamed file does not.
+          added="$(git diff --name-only --diff-filter=AM "$BASE_SHA" HEAD -- 'changelog.d/*.md' \
+            | grep -E '^changelog\.d/[1-9][0-9]*-[a-z0-9]+(-[a-z0-9]+)*\.md$' || true)"
+          if [ -z "$added" ]; then
+            echo "::error::add a changelog fragment under changelog.d/ or label the pull request no-changelog"
+            exit 1
+          fi
+          echo "$added"
+
   # The only required status check. A job that did not succeed fails it, so a
   # skipped or cancelled job cannot pass the merge gate by accident.
   ci:
     name: ci
-    needs: [docs, rust, go]
+    needs: [docs, rust, go, changelog]
     if: always()
     runs-on: ubuntu-24.04
     steps:
