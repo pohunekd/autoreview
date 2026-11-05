@@ -36,7 +36,7 @@ pub enum Error {
     Config {
         /// The stable code, for example `configuration_invalid`.
         code: String,
-        /// The name of the key that failed, for example `AUTOREVIEW_POLICY_FILE`.
+        /// The name of the key that failed, for example `policy_file`.
         name: String,
         /// The error that caused this failure, if any.
         #[source]
@@ -100,31 +100,33 @@ fn engine_errors<'a>(err: &'a (dyn StdError + 'static)) -> impl Iterator<Item = 
     .filter_map(|err| err.downcast_ref::<Error>())
 }
 
-/// Returns the code of `err`: the outermost workflow failure in its chain, else the outermost configuration error, else [`WORKFLOW_FAILED`].
+/// Returns the code of `err`.
+///
+/// The outermost workflow failure in the chain wins, otherwise the outermost
+/// configuration error, otherwise [`WORKFLOW_FAILED`].
 pub fn error_code<'a>(err: &'a (dyn StdError + 'static)) -> &'a str {
-    if let Some(err) = engine_errors(err).find(|e| matches!(e, Error::Workflow { .. })) {
-        match err {
-            Error::Workflow { code, .. } => code.as_str(),
-            _ => unreachable!(),
-        }
-    } else if let Some(err) = engine_errors(err).find(|e| matches!(e, Error::Config { .. })) {
-        match err {
-            Error::Config { code, .. } => code.as_str(),
-            _ => unreachable!(),
-        }
-    } else {
-        WORKFLOW_FAILED
-    }
+    let workflow = engine_errors(err).find_map(|error| match error {
+        Error::Workflow { code, .. } => Some(code.as_str()),
+        _ => None,
+    });
+    let config = || {
+        engine_errors(err).find_map(|error| match error {
+            Error::Config { code, .. } => Some(code.as_str()),
+            _ => None,
+        })
+    };
+    workflow.or_else(config).unwrap_or(WORKFLOW_FAILED)
 }
 
-/// Returns the pohunek error code of the outermost pohunek CLI failure in the chain of `err`, or `None` when the CLI reported no code.
+/// Returns the pohunek error code of `err`.
+///
+/// The outermost pohunek CLI failure in the chain, or `None` when the CLI
+/// reported no code.
 pub fn pohunek_error_code<'a>(err: &'a (dyn StdError + 'static)) -> Option<&'a str> {
-    engine_errors(err)
-        .find(|e| matches!(e, Error::PohunekCode { .. }))
-        .map(|err| match err {
-            Error::PohunekCode { code, .. } => code.as_str(),
-            _ => unreachable!(),
-        })
+    engine_errors(err).find_map(|error| match error {
+        Error::PohunekCode { code, .. } => Some(code.as_str()),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
