@@ -196,6 +196,9 @@ with the expected Rust error code):
   enums. Rust refuses a stored value outside their listed values with a serde
   error; Go reads any string. Neither engine writes another value. The store
   slice maps the refusal to `store_state_invalid`.
+- A persisted time whose instant falls outside the years -9999 to 9999 after
+  its offset is applied, such as `9999-12-31T23:59:59-01:00`, is an error; Go
+  reads it, but Go's JSON encoder refuses to write a year above 9999.
 - The policy file is read with `serde_saphyr`, which refuses three inputs that
   Go's YAML decoder accepts: a null mapping key at any level (Go drops the
   entry), a leading-zero integer such as `030` (Go reads it as YAML 1.1 octal)
