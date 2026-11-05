@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["repository", "number", "head_sha", "summary", "findings", "prior_findings"],
+  "properties": {
+    "repository": {"type": "string"},
+    "number": {"type": "integer", "minimum": 1},
+    "head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "summary": {"type": "string", "minLength": 40},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "confidence", "blocking", "path", "line", "side", "title", "body"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^C[0-9]{3,}$"},
+          "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+          "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+          "blocking": {"type": "boolean"},
+          "path": {"type": "string", "minLength": 1},
+          "line": {"type": "integer", "minimum": 1},
+          "side": {"const": "RIGHT"},
+          "title": {"type": "string", "minLength": 1},
+          "body": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "prior_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "status", "note", "relies_on"],
+        "properties": {
+          "key": {"type": "string", "minLength": 1},
+          "status": {"type": "string", "enum": ["fixed", "still_open", "answered"]},
+          "note": {"type": "string", "minLength": 1},
+          "relies_on": {"type": "string"}
+        }
+      }
+    }
+  }
+}

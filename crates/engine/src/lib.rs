@@ -8,6 +8,7 @@ pub mod error;
 pub mod integrations;
 pub mod model;
 pub(crate) mod prior;
+pub(crate) mod protocol;
 pub mod publish;
 pub mod store;
 

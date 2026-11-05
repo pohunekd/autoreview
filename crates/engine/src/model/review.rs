@@ -16,7 +16,6 @@ use super::pull_request::{PriorFinding, PullRequest, ReviewInput, ReviewScope, R
 const PRIOR_KEY_HEAD_CHARS: usize = 12;
 
 /// Verdict of a prior finding that the code settled as fixed.
-#[expect(dead_code, reason = "called by S14")]
 pub(crate) const PRIOR_FIXED: &str = "fixed";
 
 /// Verdict of a prior finding that stays open. Only an open one keeps blocking.
