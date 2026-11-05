@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,9 @@ func TestWriteParityGolden(t *testing.T) {
 		{"ids", parityIDsCases},
 		{"marker", parityMarkerCases},
 		{"timestamps", parityTimestampCases},
+		{"digest", parityDigestCases},
+		{"neutralize", parityNeutralizeCases},
+		{"render", parityRenderCases},
 	}
 	for _, file := range files {
 		t.Run(file.name, func(t *testing.T) {
@@ -178,5 +182,144 @@ func parityTimestampCases(t *testing.T) []parityCase {
 		parityTimestampCase(t, "nanos_123456789", map[string]int64{"unix_seconds": base, "nanos": 123456789}, time.Unix(base, 123456789).UTC()),
 		parityTimestampCase(t, "nanos_100", map[string]int64{"unix_seconds": base, "nanos": 100}, time.Unix(base, 100).UTC()),
 		parityTimestampCase(t, "zero_time", map[string]bool{"zero_time": true}, time.Time{}),
+	}
+}
+
+// parityTestdata holds the policy fixture and its prompts.
+var parityTestdata = filepath.Join("..", "..", "testdata")
+
+var parityPolicyPath = filepath.Join(parityTestdata, "review-policy.yaml")
+
+// parityDigest parses the policy fixture after applying each replacement once,
+// in order, and with the prompt contents of overrides keyed by the relative
+// path the document names.
+func parityDigest(t *testing.T, replacements [][2]string, overrides map[string]string) string {
+	t.Helper()
+	data, err := os.ReadFile(parityPolicyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := string(data)
+	for _, pair := range replacements {
+		if !strings.Contains(document, pair[0]) {
+			t.Fatalf("replacement target %q is not in the policy fixture", pair[0])
+		}
+		document = strings.Replace(document, pair[0], pair[1], 1)
+	}
+	readPrompt := func(relative string) ([]byte, error) {
+		if content, ok := overrides[relative]; ok {
+			return []byte(content), nil
+		}
+		return os.ReadFile(filepath.Join(parityTestdata, filepath.FromSlash(relative)))
+	}
+	parsed, err := policy.Parse([]byte(document), readPrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Digest()
+}
+
+func parityDigestCase(t *testing.T, name string, replacements [][2]string, overrides map[string]string) parityCase {
+	input := map[string]any{"policy_file": "testdata/review-policy.yaml", "replacements": replacements, "prompt_overrides": overrides}
+	return parityOK(name, input, map[string]string{"digest": parityDigest(t, replacements, overrides)})
+}
+
+func parityDigestCases(t *testing.T) []parityCase {
+	loaded, err := policy.Load(parityPolicyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []parityCase{
+		parityOK("fixture_via_load", map[string]any{"policy_file": "testdata/review-policy.yaml", "loader": "policy.Load"}, map[string]string{"digest": loaded.Digest()}),
+		parityDigestCase(t, "fixture_via_parse", nil, nil),
+		parityDigestCase(t, "approval_timeout_24_hours", [][2]string{{"timeout_hours: 168", "timeout_hours: 24"}}, nil),
+		parityDigestCase(t, "escalate_count_2", [][2]string{{"escalate_count: 1", "escalate_count: 2"}}, nil),
+		parityDigestCase(t, "approved_notification_action", [][2]string{{"approved: digest", "approved: action"}}, nil),
+		parityDigestCase(t, "ready_draft_authors_cleared", [][2]string{{"ready_draft_authors: [devin-ai-integration]", "ready_draft_authors: []"}}, nil),
+		parityDigestCase(t, "human_review_label_changed", [][2]string{{"labels: [needs-human-review]", "labels: [needs-review]"}}, nil),
+		parityDigestCase(t, "strict_prompt_content_changed", nil, map[string]string{"prompts/strict.md": "Review strictly. This prompt differs from the fixture.\n"}),
+	}
+}
+
+func parityNeutralize(name, text string) parityCase {
+	return parityOK(name, text, neutralize(text))
+}
+
+func parityNeutralizeCases(*testing.T) []parityCase {
+	return []parityCase{
+		parityNeutralize("indented_fence_is_code", "    ```\n@victim"),
+		parityNeutralize("fence_info_with_backtick_is_text", "```a`b\n@victim"),
+		parityNeutralize("mention_after_closed_fence", "```go\nx := @y\n```\n@after"),
+		parityNeutralize("tilde_fence_closed_by_tildes_only", "~~~~\n@kept\n~~~\n@kept too\n~~~~"),
+		parityNeutralize("image_outside_code_defused", "see ![x](https://example.org/a.png)"),
+		parityNeutralize("html_outside_code_defused", "<img src=x> and `<b>`"),
+		parityNeutralize("comment_delimiters_inside_fence", "```\n<!-- hidden -->\n```\n<!-- out -->"),
+		parityNeutralize("address_kept_mention_defused", "mail dev@example.com and @octocat"),
+		parityNeutralize("multibyte_before_mention", "é@octocat"),
+		parityNeutralize("at_after_letter_kept", "a@b"),
+		parityNeutralize("at_underscore_not_mention", "@_x"),
+		parityNeutralize("unclosed_backtick", "a `b @octocat"),
+		parityNeutralize("mention_inside_code_span_kept", "`@octocat` and @octocat"),
+	}
+}
+
+// parityRender renders the review. A render error is recorded as its code.
+func parityRender(t *testing.T, name string, cfg Config, input ReviewInput, artifact Artifact, plan PublicationPlan) parityCase {
+	t.Helper()
+	fixture := map[string]any{"config": cfg, "input": input, "artifact": artifact, "plan": plan}
+	review, err := RenderReview(cfg, input, artifact, plan)
+	if err != nil {
+		return parityFailure(t, name, fixture, err, "")
+	}
+	return parityOK(name, fixture, review)
+}
+
+func parityRenderCases(t *testing.T) []parityCase {
+	cfg := testConfig()
+	pr := testPullRequest(5)
+	requestChanges := testInput(testRule(opus, policy.FindingsRequestChanges, policy.CleanApprove), pr)
+	notesRule := testRule(opus, policy.FindingsRequestChanges, policy.CleanAwait)
+	notesRule.OnNotes = policy.NotesComment
+	notesInput := testInput(notesRule, pr)
+	summary := []ReviewerSummary{{ReviewerID: "opus", Label: "Opus", Summary: "Reviewed the change."}}
+	body := "Call `$client->send(@payload)` here:\n```php\n$map = ['a' => $b->c()]; // @param int $x\n```\nThanks @octocat, mail me at dev@example.com. <!-- hidden --> done"
+	mixed := Artifact{
+		Repository: "acme/widget", Number: 5, HeadSHA: sha("a"), Scope: ReviewScope{Mode: scopeFull},
+		Summaries: []ReviewerSummary{{ReviewerID: "opus", Label: "Opus", Summary: "Summary mentions @someone."}},
+		Findings: []Finding{
+			{ID: "O001", ReviewerLabel: "Opus", Severity: "high", Confidence: "high", Path: "src/a.go", Line: 3, Title: "Inline", Body: body, Anchored: true},
+			{ID: "O002", ReviewerLabel: "Opus", Severity: "low", Confidence: "medium", Path: "src/b.go", Line: 9, Title: "Elsewhere", Body: "Outside the diff."},
+		},
+	}
+	clean := Artifact{Repository: "acme/widget", Number: 5, HeadSHA: sha("a"), Scope: ReviewScope{Mode: scopeFull}, Summaries: summary, Findings: []Finding{}}
+	notes := clean
+	notes.Findings = []Finding{{ID: "O001", ReviewerLabel: "Opus", Severity: "low", Confidence: "high", Path: "src/a.go", Line: 4, Title: "Naming", Body: "Rename it:\n```go\nfunc better() {", Anchored: true, NonBlocking: true}}
+	outside := clean
+	outside.Findings = []Finding{{ID: "O001", ReviewerLabel: "Opus", Severity: "high", Confidence: "high", Path: "src/c.go", Line: 12, Title: "Outside", Body: "Outside the diff."}}
+	incremental := clean
+	incremental.Scope = ReviewScope{Mode: scopeIncremental, PreviousHeadSHA: sha("c")}
+	incremental.Findings = []Finding{{ID: "O001", ReviewerLabel: "Opus", Severity: "high", Confidence: "high", Path: "src/a.go", Line: 3, Title: "Bug", Body: "Breaks.", Anchored: true}}
+	incremental.Verification = &Verification{ReviewerLabel: "Opus", Findings: []FindingCheck{{ID: "O001", Verdict: verdictConfirmed, Note: "Reachable."}}}
+	priorOnly := clean
+	priorOnly.PriorResults = []PriorResult{{Finding: PriorFinding{Key: priorKey(sha("c"), "O001"), ID: "O001", HeadSHA: sha("c"), Severity: "high", Path: "src/a.go", Line: 3, Title: "Bug"}, PriorVerdict: PriorVerdict{Status: priorOpen, Note: "Still there."}}}
+	ownPR := clean
+	ownPR.Findings = []Finding{{ID: "O001", ReviewerLabel: "Opus", Severity: "high", Confidence: "high", Path: "src/a.go", Line: 3, Title: "Bug", Body: "Breaks.", Anchored: true}}
+	human := clean
+	human.HumanReview = []string{"label needs-human-review"}
+	verifierFailed := clean
+	verifierFailed.Verification = &Verification{ReviewerLabel: "Opus", ErrorCode: "review_output_invalid"}
+	small := cfg
+	small.GitHubBodyMaxBytes = 10
+	return []parityCase{
+		parityRender(t, "mixed_inline_and_outside", cfg, requestChanges, mixed, PublicationPlan{Decision: DecisionRequestChanges}),
+		parityRender(t, "clean_approve", cfg, requestChanges, clean, PublicationPlan{Decision: DecisionApprove}),
+		parityRender(t, "notes_handed_to_author", cfg, notesInput, notes, PublicationPlan{Decision: DecisionComment, NotesToAuthor: true}),
+		parityRender(t, "blocking_outside_changed_lines", cfg, requestChanges, outside, PublicationPlan{Decision: DecisionRequestChanges}),
+		parityRender(t, "incremental_with_verification", cfg, requestChanges, incremental, PublicationPlan{Decision: DecisionRequestChanges}),
+		parityRender(t, "open_prior_only", cfg, requestChanges, priorOnly, PublicationPlan{Decision: DecisionRequestChanges}),
+		parityRender(t, "own_pull_request_findings", cfg, requestChanges, ownPR, PublicationPlan{Decision: DecisionComment, OwnPullRequest: true}),
+		parityRender(t, "human_review_waited", cfg, requestChanges, human, PublicationPlan{Decision: DecisionComment}),
+		parityRender(t, "verifier_error_code", cfg, requestChanges, verifierFailed, PublicationPlan{Decision: DecisionApprove}),
+		parityRender(t, "body_over_limit", small, requestChanges, mixed, PublicationPlan{Decision: DecisionRequestChanges}),
 	}
 }

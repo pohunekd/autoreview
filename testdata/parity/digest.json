@@ -1,0 +1,116 @@
+[
+  {
+    "name": "fixture_via_load",
+    "input": {
+      "loader": "policy.Load",
+      "policy_file": "testdata/review-policy.yaml"
+    },
+    "output": {
+      "digest": "53916698da2d48df4fd5c618e0f9e9aa5b97b375a3444650aef2226ea63ba91f"
+    }
+  },
+  {
+    "name": "fixture_via_parse",
+    "input": {
+      "policy_file": "testdata/review-policy.yaml",
+      "prompt_overrides": null,
+      "replacements": null
+    },
+    "output": {
+      "digest": "53916698da2d48df4fd5c618e0f9e9aa5b97b375a3444650aef2226ea63ba91f"
+    }
+  },
+  {
+    "name": "approval_timeout_24_hours",
+    "input": {
+      "policy_file": "testdata/review-policy.yaml",
+      "prompt_overrides": null,
+      "replacements": [
+        [
+          "timeout_hours: 168",
+          "timeout_hours: 24"
+        ]
+      ]
+    },
+    "output": {
+      "digest": "2578afcbd271e0dfa986381ade3271ef680c0688900f5ff5ee1f6df78b61e15e"
+    }
+  },
+  {
+    "name": "escalate_count_2",
+    "input": {
+      "policy_file": "testdata/review-policy.yaml",
+      "prompt_overrides": null,
+      "replacements": [
+        [
+          "escalate_count: 1",
+          "escalate_count: 2"
+        ]
+      ]
+    },
+    "output": {
+      "digest": "8259bcd01986a565d9872c040d2211b78c75947248e914c393761652f32b9b3d"
+    }
+  },
+  {
+    "name": "approved_notification_action",
+    "input": {
+      "policy_file": "testdata/review-policy.yaml",
+      "prompt_overrides": null,
+      "replacements": [
+        [
+          "approved: digest",
+          "approved: action"
+        ]
+      ]
+    },
+    "output": {
+      "digest": "fa2803470aaf3ec93cda6a702de5df14a1bb0d285bb813c9ebb9ecd64a586ff6"
+    }
+  },
+  {
+    "name": "ready_draft_authors_cleared",
+    "input": {
+      "policy_file": "testdata/review-policy.yaml",
+      "prompt_overrides": null,
+      "replacements": [
+        [
+          "ready_draft_authors: [devin-ai-integration]",
+          "ready_draft_authors: []"
+        ]
+      ]
+    },
+    "output": {
+      "digest": "4baa379b4f70fe68bc78d276b1c8bff4f6c4aa6feec18322ca5d860292755722"
+    }
+  },
+  {
+    "name": "human_review_label_changed",
+    "input": {
+      "policy_file": "testdata/review-policy.yaml",
+      "prompt_overrides": null,
+      "replacements": [
+        [
+          "labels: [needs-human-review]",
+          "labels: [needs-review]"
+        ]
+      ]
+    },
+    "output": {
+      "digest": "7f7b5249b648c111980e416f9f807b6e70fb7ace22b55fce4caa5815803f4560"
+    }
+  },
+  {
+    "name": "strict_prompt_content_changed",
+    "input": {
+      "policy_file": "testdata/review-policy.yaml",
+      "prompt_overrides": {
+        "prompts/strict.md": "Review strictly. This prompt differs from the fixture.\n"
+      },
+      "replacements": null
+    },
+    "output": {
+      "digest": "5e5e51c73db0d6b810025dcc5046a3d8dbd620646d4330c1819a2df7f756c88d"
+    }
+  }
+]
