@@ -37,7 +37,7 @@ pub struct HumanReview {
 
 /// The human_review section of a rule as written in the policy file.
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct FileHumanReview {
     /// Labels from the file.
     #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
@@ -53,7 +53,6 @@ pub(crate) struct FileHumanReview {
 ///
 /// Returns an error when the section sits on a rule whose clean outcome is not approve, sets no
 /// entries, lists too many entries, or repeats or malforms a label or glob.
-#[expect(dead_code, reason = "called by S04")]
 pub(crate) fn parse_human_review(
     raw: Option<&FileHumanReview>,
     on_clean: OnClean,
@@ -103,7 +102,6 @@ pub(crate) fn parse_human_review(
 
 /// Reports whether glob is a slash-separated relative pattern whose segments are path patterns or
 /// **.
-#[expect(dead_code, reason = "called by S04")]
 fn valid_glob(glob: &str) -> bool {
     if glob.is_empty()
         || glob.len() > MAX_GLOB_BYTES
