@@ -12,46 +12,36 @@ use serde::{Deserialize, Serialize, Serializer};
 use crate::human_review::HumanReview;
 
 /// Largest policy file in bytes.
-#[expect(dead_code, reason = "called by S04")]
-const MAX_POLICY_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_POLICY_BYTES: usize = 256 * 1024;
 
 /// Largest prompt file in bytes.
-#[expect(dead_code, reason = "called by S04")]
-const MAX_PROMPT_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_PROMPT_BYTES: usize = 64 * 1024;
 
 /// Most rules a policy file may declare.
-#[expect(dead_code, reason = "called by S04")]
-const MAX_RULES: usize = 200;
+pub(crate) const MAX_RULES: usize = 200;
 
 /// Largest approval timeout and notes reminder in hours.
-#[expect(dead_code, reason = "called by S04")]
-const MAX_APPROVAL_HOURS: i64 = 720;
+pub(crate) const MAX_APPROVAL_HOURS: i64 = 720;
 
 /// Most reviewers a pipeline may select for one pull request.
-#[expect(dead_code, reason = "called by S04")]
-const MAX_REVIEWERS_PER_PR: usize = 4;
+pub(crate) const MAX_REVIEWERS_PER_PR: usize = 4;
 
 /// Longest reviewer id or pipeline name in bytes.
-#[expect(dead_code, reason = "called by S04")]
 const MAX_IDENTIFIER_LEN: usize = 32;
 
 /// Longest agent profile name in bytes.
-#[expect(dead_code, reason = "called by S04")]
 const MAX_PROFILE_LEN: usize = 128;
 
 /// Longest owner login in bytes.
-#[expect(dead_code, reason = "called by S04")]
 const MAX_OWNER_LEN: usize = 39;
 
 /// Longest repository name in bytes.
-#[expect(dead_code, reason = "called by S04")]
 const MAX_REPO_NAME_LEN: usize = 100;
 
 /// Longest label in bytes.
 const MAX_LABEL_LEN: usize = 50;
 
 /// Longest project source name in bytes.
-#[expect(dead_code, reason = "called by S04")]
 const MAX_SOURCE_LEN: usize = 32;
 
 /// Reviewer id that names the verifier's session and state; a reviewer of the policy cannot take
@@ -75,6 +65,17 @@ pub enum Protocol {
     Unset,
 }
 
+impl Protocol {
+    /// Returns the text Go writes for this value.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClaudeStructured => "claude-structured",
+            Self::CodexEnvelope => "codex-envelope",
+            Self::Unset => "",
+        }
+    }
+}
+
 /// Selects the commit the reviewer worktree starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Checkout {
@@ -89,6 +90,17 @@ pub enum Checkout {
     #[default]
     #[serde(rename = "")]
     Unset,
+}
+
+impl Checkout {
+    /// Returns the text Go writes for this value.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Base => "base",
+            Self::Head => "head",
+            Self::Unset => "",
+        }
+    }
 }
 
 /// Kind of event that starts a review.
@@ -108,7 +120,7 @@ pub enum TriggerKind {
 
 impl TriggerKind {
     /// Returns the text Go writes for this kind.
-    fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::ReviewRequested => "review-requested",
             Self::Label => "label",
@@ -132,6 +144,17 @@ pub enum OnFindings {
     Unset,
 }
 
+impl OnFindings {
+    /// Returns the text Go writes for this value.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::RequestChanges => "request_changes",
+            Self::Comment => "comment",
+            Self::Unset => "",
+        }
+    }
+}
+
 /// Decides the outcome of a clean review, one without findings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OnClean {
@@ -150,6 +173,18 @@ pub enum OnClean {
     Unset,
 }
 
+impl OnClean {
+    /// Returns the text Go writes for this value.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Approve => "approve",
+            Self::Await => "await",
+            Self::Comment => "comment",
+            Self::Unset => "",
+        }
+    }
+}
+
 /// Decides a review whose findings are all non-blocking. Unset follows the rule's clean outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OnNotes {
@@ -161,6 +196,16 @@ pub enum OnNotes {
     #[default]
     #[serde(rename = "")]
     Unset,
+}
+
+impl OnNotes {
+    /// Returns the text Go writes for this value.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Comment => "comment",
+            Self::Unset => "",
+        }
+    }
 }
 
 /// Level of the Matrix room a notification goes to. Only action messages mention the user.
@@ -175,6 +220,17 @@ pub enum Level {
     /// The log room.
     #[serde(rename = "log")]
     Log,
+}
+
+impl Level {
+    /// Returns the text Go writes for this value.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Action => "action",
+            Self::Digest => "digest",
+            Self::Log => "log",
+        }
+    }
 }
 
 /// Notification event. The variants are declared in wire-name order, so the derived Ord sorts map
@@ -220,6 +276,27 @@ pub enum Event {
     /// Superseded event.
     #[serde(rename = "superseded")]
     Superseded,
+}
+
+impl Event {
+    /// Returns the text Go writes for this value.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::ApprovalExpired => "approval_expired",
+            Self::ApprovalRequested => "approval_requested",
+            Self::Approved => "approved",
+            Self::ChangesRequested => "changes_requested",
+            Self::CleanupManual => "cleanup_manual",
+            Self::CommandFailed => "command_failed",
+            Self::Commented => "commented",
+            Self::FindingsOnOwnPr => "findings_on_own_pr",
+            Self::HandoffReminder => "handoff_reminder",
+            Self::RetryScheduled => "retry_scheduled",
+            Self::ReviewStopped => "review_stopped",
+            Self::Started => "started",
+            Self::Superseded => "superseded",
+        }
+    }
 }
 
 /// Every notification event; the policy must assign each a level.
@@ -387,16 +464,21 @@ impl Rule {
 
 /// The parsed review policy: its rules, notification levels and the digest that identifies it.
 #[derive(Debug)]
-#[expect(dead_code, reason = "called by S04 and S05")]
+#[expect(dead_code, reason = "called by S05")]
 pub struct Policy {
-    rules: Vec<Rule>,
-    ready_draft_authors: Vec<String>,
-    notifications: BTreeMap<Event, Level>,
-    approval_timeout: Duration,
+    /// The repository rules in file order; the first match wins.
+    pub(crate) rules: Vec<Rule>,
+    /// Sorted logins whose draft pull requests are marked ready for review.
+    pub(crate) ready_draft_authors: Vec<String>,
+    /// The level of every notification event.
+    pub(crate) notifications: BTreeMap<Event, Level>,
+    /// How long a review waits for the user's approval.
+    pub(crate) approval_timeout: Duration,
     /// How long notes handed to an author wait before the user is reminded; zero when no rule hands
     /// notes off.
-    handoff_reminder: Duration,
-    digest: String,
+    pub(crate) handoff_reminder: Duration,
+    /// Hex SHA-256 digest that identifies the effective policy.
+    pub(crate) digest: String,
 }
 
 /// Writes an empty list as JSON null, which Go writes for a nil slice. Every list a parsed policy
@@ -455,38 +537,33 @@ fn is_ascii_lowercase(byte: u8) -> bool {
 }
 
 /// Reports whether value is a reviewer id or pipeline name.
-#[expect(dead_code, reason = "called by S04")]
-fn is_identifier(value: &str) -> bool {
+pub(crate) fn is_identifier(value: &str) -> bool {
     is_token(value, MAX_IDENTIFIER_LEN, is_lower_alnum, |byte| {
         is_lower_alnum(byte) || byte == b'_' || byte == b'-'
     })
 }
 
 /// Reports whether value is an agent profile name.
-#[expect(dead_code, reason = "called by S04")]
-fn is_profile(value: &str) -> bool {
+pub(crate) fn is_profile(value: &str) -> bool {
     is_token(value, MAX_PROFILE_LEN, is_ascii_alphanumeric, |byte| {
         byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'_' || byte == b'-'
     })
 }
 
 /// Reports whether value is one uppercase ASCII letter.
-#[expect(dead_code, reason = "called by S04")]
-fn is_finding_prefix(value: &str) -> bool {
+pub(crate) fn is_finding_prefix(value: &str) -> bool {
     value.len() == 1 && value.as_bytes()[0].is_ascii_uppercase()
 }
 
 /// Reports whether value is a lowercase GitHub login.
-#[expect(dead_code, reason = "called by S04")]
-fn is_owner(value: &str) -> bool {
+pub(crate) fn is_owner(value: &str) -> bool {
     is_token(value, MAX_OWNER_LEN, is_lower_alnum, |byte| {
         is_lower_alnum(byte) || byte == b'-'
     })
 }
 
 /// Reports whether value is a repository name without its owner.
-#[expect(dead_code, reason = "called by S04")]
-fn is_repo_name(value: &str) -> bool {
+pub(crate) fn is_repo_name(value: &str) -> bool {
     is_token(value, MAX_REPO_NAME_LEN, is_repo_byte, is_repo_byte)
 }
 
@@ -498,8 +575,7 @@ pub(crate) fn is_label(value: &str) -> bool {
 }
 
 /// Reports whether value is a project source name.
-#[expect(dead_code, reason = "called by S04")]
-fn is_source(value: &str) -> bool {
+pub(crate) fn is_source(value: &str) -> bool {
     is_token(value, MAX_SOURCE_LEN, is_ascii_lowercase, |byte| {
         is_lower_alnum(byte) || byte == b'_' || byte == b'-'
     })
