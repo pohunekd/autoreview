@@ -7,7 +7,10 @@ use time::{OffsetDateTime, UtcOffset};
 
 use crate::Error;
 
-/// Go's JSON encoder rejects years outside `0..=GO_MAX_JSON_YEAR` and only `serialize` applies the bound.
+/// Largest year that Go's `time.Time` JSON encoding accepts.
+///
+/// Go's JSON encoder rejects years outside `0..=GO_MAX_JSON_YEAR` and only
+/// `serialize` applies the bound.
 const GO_MAX_JSON_YEAR: i32 = 9999;
 
 /// Formats `value` as Go's `time.RFC3339Nano` in UTC.
