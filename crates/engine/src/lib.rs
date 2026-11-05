@@ -5,6 +5,7 @@
 pub mod config;
 pub mod error;
 pub mod model;
+pub mod publish;
 
 #[doc(inline)]
 pub use error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
