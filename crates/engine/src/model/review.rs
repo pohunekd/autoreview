@@ -57,7 +57,7 @@ pub(crate) fn milliseconds(value: i64) -> Duration {
 
 /// Verdict of one reviewer on a prior finding.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct PriorVerdict {
     /// Key of the prior finding.
     pub key: String,
@@ -70,9 +70,11 @@ pub struct PriorVerdict {
     pub relies_on: String,
 }
 
+autoreview_go_compat::object_only_serde!(PriorVerdict);
+
 /// Combined verdict on a prior finding.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct PriorResult {
     /// Original prior finding.
     pub finding: PriorFinding,
@@ -87,9 +89,11 @@ pub struct PriorResult {
     pub reopened: bool,
 }
 
+autoreview_go_compat::object_only_serde!(PriorResult);
+
 /// Discussion on the pull request since earlier reviews.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Discussion {
     /// Threads linked to prior findings.
     #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
@@ -99,9 +103,11 @@ pub struct Discussion {
     pub comments: Vec<DiscussionComment>,
 }
 
+autoreview_go_compat::object_only_serde!(Discussion);
+
 /// Thread of replies for one inline comment.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct DiscussionThread {
     /// Key of the prior finding this thread answers.
     pub key: String,
@@ -112,9 +118,11 @@ pub struct DiscussionThread {
     pub replies: Vec<DiscussionComment>,
 }
 
+autoreview_go_compat::object_only_serde!(DiscussionThread);
+
 /// Single comment in a discussion thread.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct DiscussionComment {
     /// Login of the comment author.
     pub author: String,
@@ -126,9 +134,11 @@ pub struct DiscussionComment {
     pub body: String,
 }
 
+autoreview_go_compat::object_only_serde!(DiscussionComment);
+
 /// Identity of the session that ran the review.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct SessionIdentity {
     /// Host name of the session runner.
     pub host: String,
@@ -141,6 +151,8 @@ pub struct SessionIdentity {
     /// Reviewer that ran in the session.
     pub reviewer_id: String,
 }
+
+autoreview_go_compat::object_only_serde!(SessionIdentity);
 
 impl RunLimits {
     /// Reports whether every bound is positive and the poll interval fits the session timeout.
@@ -194,7 +206,7 @@ impl ReviewInput {
 
 /// Combined review of one pull request head.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Artifact {
     /// Repository of the pull request.
     pub repository: String,
@@ -232,6 +244,8 @@ pub struct Artifact {
     pub human_review: Vec<String>,
 }
 
+autoreview_go_compat::object_only_serde!(Artifact);
+
 impl Artifact {
     /// Returns the prior findings that this review left open.
     ///
@@ -248,7 +262,7 @@ impl Artifact {
 
 /// Result of the verifier on blocking claims.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Verification {
     /// Label of the verifier.
     pub reviewer_label: String,
@@ -263,9 +277,11 @@ pub struct Verification {
     pub error_code: String,
 }
 
+autoreview_go_compat::object_only_serde!(Verification);
+
 /// Verdict of the verifier on a finding.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct FindingCheck {
     /// Identifier of the finding.
     pub id: String,
@@ -275,9 +291,11 @@ pub struct FindingCheck {
     pub note: String,
 }
 
+autoreview_go_compat::object_only_serde!(FindingCheck);
+
 /// Verdict of the verifier on a prior finding.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct PriorCheck {
     /// Key of the prior finding.
     pub key: String,
@@ -286,6 +304,8 @@ pub struct PriorCheck {
     /// Note explaining the verdict.
     pub note: String,
 }
+
+autoreview_go_compat::object_only_serde!(PriorCheck);
 
 /// GitHub review event decision.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -307,7 +327,7 @@ pub enum Decision {
 
 /// Result of publishing a review to GitHub.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct PublishResult {
     /// Decision of the review.
     pub decision: Decision,
@@ -319,9 +339,11 @@ pub struct PublishResult {
     pub reused: bool,
 }
 
+autoreview_go_compat::object_only_serde!(PublishResult);
+
 /// Last published review for a pull request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct PublishedRecord {
     /// Repository of the pull request.
     pub repository: String,
@@ -345,6 +367,8 @@ pub struct PublishedRecord {
     #[serde(skip_serializing_if = "is_false")]
     pub reminded: bool,
 }
+
+autoreview_go_compat::object_only_serde!(PublishedRecord);
 
 impl Default for PublishedRecord {
     fn default() -> Self {
@@ -379,7 +403,7 @@ impl PublishedRecord {
 
 /// Clean review that waits for manual approval.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct AwaitRecord {
     /// Repository of the pull request.
     pub repository: String,
@@ -394,6 +418,8 @@ pub struct AwaitRecord {
     /// Workflow identifier of the waiting review.
     pub workflow_id: String,
 }
+
+autoreview_go_compat::object_only_serde!(AwaitRecord);
 
 impl AwaitRecord {
     /// Returns the `repository#number` key shared by every head of the pull request.
@@ -429,7 +455,7 @@ pub enum Outcome {
 
 /// Result of the review publication step.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct ReviewOutcome {
     /// Outcome of the review.
     pub outcome: Outcome,
@@ -437,6 +463,8 @@ pub struct ReviewOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub publication: Option<PublishResult>,
 }
+
+autoreview_go_compat::object_only_serde!(ReviewOutcome);
 
 /// Approval decision kind.
 #[derive(Debug, Clone, PartialEq, Eq)]

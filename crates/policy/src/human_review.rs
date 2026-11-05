@@ -23,7 +23,7 @@ const RUNE_ERROR: u32 = 0xFFFD;
 /// Names the signals of a pull request that make a clean review of an auto-approving rule wait for
 /// the user. The engine evaluates them from GitHub data, never from reviewer output.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct HumanReview {
     /// Holds the review when the pull request carries one of these labels, so an author can ask for
     /// a human.
@@ -34,6 +34,8 @@ pub struct HumanReview {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deleted_tests: Vec<String>,
 }
+
+autoreview_go_compat::object_only_serde!(HumanReview);
 
 /// The human_review section of a rule as written in the policy file.
 #[derive(Debug, Default, Deserialize)]

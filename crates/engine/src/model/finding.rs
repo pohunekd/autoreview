@@ -13,7 +13,7 @@ pub(crate) fn is_false(value: &bool) -> bool {
 
 /// Finding reported by a reviewer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Finding {
     /// Identifier of the finding.
     pub id: String,
@@ -47,9 +47,11 @@ pub struct Finding {
     pub verdict: String,
 }
 
+autoreview_go_compat::object_only_serde!(Finding);
+
 /// Output of one reviewer session.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct ReviewerResult {
     /// Identifier of the reviewer.
     pub reviewer_id: String,
@@ -69,9 +71,11 @@ pub struct ReviewerResult {
     pub prior: Vec<PriorVerdict>,
 }
 
+autoreview_go_compat::object_only_serde!(ReviewerResult);
+
 /// Summary of one reviewer in the artifact.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct ReviewerSummary {
     /// Identifier of the reviewer.
     pub reviewer_id: String,
@@ -80,3 +84,5 @@ pub struct ReviewerSummary {
     /// Summary of the review.
     pub summary: String,
 }
+
+autoreview_go_compat::object_only_serde!(ReviewerSummary);

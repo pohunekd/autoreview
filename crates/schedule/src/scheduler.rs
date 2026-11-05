@@ -49,7 +49,7 @@ pub struct Policy {
 
 /// The persisted schedule entry for one review identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Record {
     /// The workflow IDs that currently block dispatch.
     #[serde(
@@ -75,6 +75,8 @@ pub struct Record {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub error_code: String,
 }
+
+autoreview_go_compat::object_only_serde!(Record);
 
 impl Default for Record {
     fn default() -> Self {

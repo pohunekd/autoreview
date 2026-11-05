@@ -335,7 +335,7 @@ pub const WORKFLOW_EVENTS: &[Event] = &[
 
 /// Starts a review of a rule.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Trigger {
     /// Kind of the trigger.
     pub kind: TriggerKind,
@@ -343,6 +343,8 @@ pub struct Trigger {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub label: String,
 }
+
+autoreview_go_compat::object_only_serde!(Trigger);
 
 impl fmt::Display for Trigger {
     /// Formats the trigger as label:<name> for a label trigger and as its kind otherwise.
@@ -358,7 +360,7 @@ impl fmt::Display for Trigger {
 
 /// A reviewer agent profile as the policy declares it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Reviewer {
     /// Identifier of the reviewer.
     pub id: String,
@@ -372,9 +374,11 @@ pub struct Reviewer {
     pub finding_prefix: String,
 }
 
+autoreview_go_compat::object_only_serde!(Reviewer);
+
 /// The reviewers and prompt that run one review of a rule.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Pipeline {
     /// Name of the pipeline.
     pub name: String,
@@ -408,9 +412,11 @@ pub struct Pipeline {
     pub verifier: Option<Verifier>,
 }
 
+autoreview_go_compat::object_only_serde!(Pipeline);
+
 /// Checks every blocking finding of a review before it is published.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Verifier {
     /// Reviewer that verifies findings.
     pub reviewer: Reviewer,
@@ -428,10 +434,12 @@ pub struct Verifier {
     pub escalate_count: i64,
 }
 
+autoreview_go_compat::object_only_serde!(Verifier);
+
 /// The resolved policy for one repository. It is copied into each review workflow input, so a
 /// policy change affects only reviews dispatched after it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Rule {
     /// Glob over repository names, such as acme/*.
     #[serde(rename = "match")]
@@ -452,6 +460,8 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub human_review: Option<HumanReview>,
 }
+
+autoreview_go_compat::object_only_serde!(Rule);
 
 impl Rule {
     /// Reports whether a clean review of this rule can end in an approval, which decides whether a

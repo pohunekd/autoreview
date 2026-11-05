@@ -18,7 +18,7 @@ pub(crate) const SCOPE_INCREMENTAL: &str = "incremental";
 ///
 /// The scheduler reads `repository`, `number`, `head_sha` and `review_request_id` from it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct PullRequest {
     /// Repository as `owner/name`.
     pub repository: String,
@@ -53,6 +53,8 @@ pub struct PullRequest {
     pub labels: Vec<String>,
 }
 
+autoreview_go_compat::object_only_serde!(PullRequest);
+
 /// A pull request the policy covers, found by its rule's trigger.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Candidate {
@@ -86,7 +88,7 @@ pub struct CandidateList {
 
 /// Whether a review reads the whole pull request or only its newest commits.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct ReviewScope {
     /// Scope mode, `full` or `incremental`.
     pub mode: String,
@@ -94,6 +96,8 @@ pub struct ReviewScope {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub previous_head_sha: String,
 }
+
+autoreview_go_compat::object_only_serde!(ReviewScope);
 
 impl ReviewScope {
     /// Reports whether the scope mode is `incremental`.
@@ -105,7 +109,7 @@ impl ReviewScope {
 
 /// The pohunek host and project that run the reviewer sessions.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct ProjectRoute {
     /// Pohunek host name.
     pub host: String,
@@ -113,11 +117,13 @@ pub struct ProjectRoute {
     pub project_id: String,
 }
 
+autoreview_go_compat::object_only_serde!(ProjectRoute);
+
 /// Everything the workflow decides by.
 ///
 /// A policy or configuration change never alters a review that is already running.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct ReviewInput {
     /// Contract version of the input.
     pub version: i64,
@@ -159,6 +165,8 @@ pub struct ReviewInput {
     pub handoff: Option<NotesHandoff>,
 }
 
+autoreview_go_compat::object_only_serde!(ReviewInput);
+
 impl ReviewInput {
     /// Reports whether the review takes the stored result of its handoff.
     #[expect(dead_code, reason = "called by S28")]
@@ -171,7 +179,7 @@ impl ReviewInput {
 ///
 /// Adopt means the head is unchanged and its result is stored, so the review reuses it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct NotesHandoff {
     /// Workflow ID of the published review.
     pub workflow_id: String,
@@ -182,11 +190,13 @@ pub struct NotesHandoff {
     pub adopt: bool,
 }
 
+autoreview_go_compat::object_only_serde!(NotesHandoff);
+
 /// A blocking finding of an earlier review.
 ///
 /// The key is unique across reviews, because each review numbers its findings from 1 again.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct PriorFinding {
     /// Key that is unique across reviews.
     pub key: String,
@@ -208,11 +218,13 @@ pub struct PriorFinding {
     pub body: String,
 }
 
+autoreview_go_compat::object_only_serde!(PriorFinding);
+
 /// Bounds of the loops of one review, in milliseconds.
 ///
 /// They are part of the input, so a resumed review keeps its limits after a config change.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct RunLimits {
     /// Timeout of one reviewer session.
     pub session_timeout_ms: i64,
@@ -238,6 +250,8 @@ pub struct RunLimits {
     pub step_retry_max_interval_ms: i64,
 }
 
+autoreview_go_compat::object_only_serde!(RunLimits);
+
 /// Reports whether a flag is unset, which Go omits from the JSON.
 fn is_false(value: &bool) -> bool {
     !*value
@@ -252,5 +266,21 @@ fn nil_when_empty<T: Serialize, S: Serializer>(
         serializer.serialize_none()
     } else {
         value.serialize(serializer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PullRequest;
+
+    #[test]
+    fn pull_request_refuses_json_arrays() {
+        let positional = r#"["acme/widget", 7, "0123", 9, "", "", "", false, "", "", "", []]"#;
+        for raw in ["[]", positional] {
+            let error = serde_json::from_str::<PullRequest>(raw).expect_err("array is refused");
+            assert!(error.to_string().contains("PullRequest"), "{error}");
+        }
+        let empty: PullRequest = serde_json::from_str("{}").expect("empty object");
+        assert_eq!(empty, PullRequest::default());
     }
 }
