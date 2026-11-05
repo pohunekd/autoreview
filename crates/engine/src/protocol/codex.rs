@@ -82,12 +82,7 @@ pub(crate) fn parse_codex_output(
     }
     let text = go_utf8_lossy(&decoded);
     refuse_case_variant_keys(&text, "review_result_invalid")?;
-    let mut decoder = serde_json::Deserializer::from_str(&text);
-    let report = CodexReport::deserialize(&mut decoder).map_err(|_| result_invalid())?;
-    let remainder = serde_json::Value::deserialize(&mut decoder).ok();
-    if remainder.is_some() {
-        return Err(result_invalid());
-    }
+    let report: CodexReport = serde_json::from_str(&text).map_err(|_| result_invalid())?;
     if report.findings.is_none()
         || report.tests.is_none()
         || report.status != "completed"
