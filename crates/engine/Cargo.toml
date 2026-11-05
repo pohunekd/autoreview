@@ -10,6 +10,7 @@ repository.workspace = true
 autoreview-go-compat = { path = "../go-compat" }
 autoreview-policy = { path = "../policy" }
 autoreview-schedule = { path = "../schedule" }
+base64 = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 rusqlite = { workspace = true }

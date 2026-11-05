@@ -49,6 +49,7 @@ dependencies = [
  "autoreview-go-compat",
  "autoreview-policy",
  "autoreview-schedule",
+ "base64 0.22.1",
  "hex",
  "rusqlite",
  "rustix",
@@ -109,6 +110,12 @@ dependencies = [
  "thiserror",
  "time",
 ]
+
+[[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "base64"
@@ -551,7 +558,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d43fb82d550b07e6f929a58d7d0935182602f48ddead875f5ee313c41c8f07fe"
 dependencies = [
  "annotate-snippets",
- "base64",
+ "base64 0.23.1",
  "encoding_rs_io",
  "granit-parser",
  "nohash-hasher",

@@ -234,10 +234,28 @@ with the expected Rust error code):
   is refused; an empty or comment-only file fails the version check instead of
   Go's `EOF`; non-UTF-8 input reports the Rust decoding error. Every case stays
   `configuration_invalid` at the caller (`cmd/autoreview/config.go:195-196`).
+- A JSON object in the prose result of a Claude session that does not read as
+  the structured artifact is refused with `claude_result_mismatch`. Go skips the
+  comparison when its typed decode fails, for example on `{"findings": 5}`, and
+  accepts the output. Rust refuses it, because the prose is model output and an
+  unchecked prose object is not safe to accept.
+- Two keys of one JSON object that differ only in ASCII case are refused in
+  model output, in the wrapper (`review_wrapper_invalid`), the outer message
+  (`claude_result_invalid`), the prose result (`claude_result_mismatch`) and the
+  Codex report (`review_result_invalid`). Go matches keys case-insensitively and
+  keeps the last value, so such a pair decides the value by position. The check
+  applies to every object of the decoded text, known or unknown fields, which is
+  stricter than Go for unknown fields.
 
-Invalid UTF-8 is not a divergence: the process runner decodes child stdout with
-`String::from_utf8_lossy` before parsing, which matches Go's replacement with
-U+FFFD.
+Invalid UTF-8 is not a divergence for the parsers, but the process runner's
+`String::from_utf8_lossy` does not give Go's count of replacement characters. It
+writes one U+FFFD for each maximal invalid subpart, and Go writes one for each
+invalid byte. In a generated set of 4,000 payloads with invalid sequences, 1,866
+differ in their count of U+FFFD. The parsers therefore decode model text from
+base64 payloads with `go_utf8_lossy`, which writes one U+FFFD for each invalid
+byte, as Go does. The runner is unchanged: its outer text is read only for ASCII
+fields (protocol, mode, base64 text and the exit line), so the replacement count
+there does not change an accepted value.
 
 ## Python adapters
 
