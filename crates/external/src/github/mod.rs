@@ -6,7 +6,9 @@
 // Rust guideline compliant 2026-06-26
 
 mod candidates;
+mod files;
 mod pull_request;
+mod reviews;
 
 use std::ffi::OsString;
 use std::fmt;

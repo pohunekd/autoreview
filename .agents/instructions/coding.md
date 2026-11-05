@@ -205,7 +205,8 @@ with the expected Rust error code):
   only. Go's `strings.EqualFold` and `strings.ToLower` also fold non-ASCII
   letters, such as the Kelvin sign with `k`, so Rust can miss a match that Go
   finds: a finding stays open, or a pull request is not matched. GitHub logins
-  are ASCII.
+  are ASCII. Publish reconciliation matches review authors as Go does,
+  including the Kelvin sign and the long s, so it never posts a second review.
 - The store opens its database path as a plain file name. Go's SQLite driver
   reads the path as a `file:` URI, so a `?` or `%` in the path selects another
   file than the name says. Rust opens the name as written.
