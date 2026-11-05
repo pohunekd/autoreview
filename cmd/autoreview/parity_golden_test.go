@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -508,4 +511,261 @@ func parityPersistedCases(t *testing.T) []parityCase {
 		parityPersisted("github_review_zero", GitHubReview{}),
 		parityPersisted("discussion_zero", Discussion{}),
 	}
+}
+
+// parityStoreInstant is the one instant every store and engine clock reads in
+// the store golden, so stored timestamps do not depend on when the test runs.
+var parityStoreInstant = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func parityStoreClock() time.Time { return parityStoreInstant }
+
+// parityStorePolicy routes each repository to one Claude reviewer. With one
+// reviewer per review, session IDs are assigned in a fixed order.
+const parityStorePolicy = `version: 1
+reviewers:
+  opus: {protocol: claude-structured, agent_profile: claude-profile, label: Opus, finding_prefix: O}
+pipelines:
+  single: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompt.md, checkout: base, project_sources: [manual]}
+repositories:
+  - {match: acme/approve, trigger: review-requested, pipeline: single, on_findings: request_changes, on_clean: approve}
+  - {match: acme/findings, trigger: review-requested, pipeline: single, on_findings: request_changes, on_clean: approve}
+  - {match: acme/failing, trigger: review-requested, pipeline: single, on_findings: request_changes, on_clean: approve}
+  - {match: acme/notes, trigger: review-requested, pipeline: single, on_findings: request_changes, on_clean: await, on_notes: comment}
+unmatched: skip
+approval: {timeout_hours: 1}
+notes_handoff: {reminder_hours: 24}
+notifications:
+  approval_requested: action
+  findings_on_own_pr: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log
+  handoff_reminder: action
+`
+
+// parityStoreHarness starts an engine on a fresh store whose clocks read
+// parityStoreInstant. It repeats startHarness, which reads time.Now.
+func parityStoreHarness(t *testing.T) *harness {
+	t.Helper()
+	parsed, err := policy.Parse([]byte(parityStorePolicy), func(string) ([]byte, error) { return []byte("Review the pull request."), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := integrationConfig(t)
+	cfg.Policy = parsed
+	// The schedule runs a review once now is not before its due time. With a
+	// fixed clock a non-zero debounce is never reached, so it is removed here.
+	cfg.Schedule.Debounce = 0
+	store, err := OpenStore(cfg.StateDBPath, parityStoreClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	h := &harness{t: t, cfg: cfg, fake: newFake(t), store: store}
+	h.fake.output = reviewerOutput(t, nil)
+	h.fake.commentable = CommentableLines{"src/a.go": {3}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h.engine = NewEngine(cfg, store, h.fake, logger, parityStoreClock, sleepWithContext)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.engine.Serve(ctx) }()
+	h.cancel, h.done = cancel, done
+	t.Cleanup(h.stopEngine)
+	h.waitFor("the start-up discovery pass", func() bool { return h.fake.listingCount() >= 1 })
+	return h
+}
+
+// parityStorePR is a pull request with a fixed number, so its workflow IDs are
+// the same on every run.
+func parityStorePR(repository string, number int) PullRequest {
+	return PullRequest{Repository: repository, Number: number, HeadSHA: sha("a"), ReviewRequestID: 11, Title: "Change", URL: "https://github.com/" + repository + "/pull/" + strconv.Itoa(number), Author: "colleague", HeadBranch: "feature", BaseBranch: "main", BaseSHA: sha("b")}
+}
+
+// parityStoreReviews returns the stored reviews of the pull request key, newest
+// first. The scenario looks reviews up by key, because the workflow ID the
+// engine stores is not the one pr.WorkflowID computes for the test's pull request.
+func parityStoreReviews(h *harness, key string) []StoredReview {
+	h.t.Helper()
+	reviews, err := h.store.listReviews(context.Background(), "review_key = ?", h.cfg.ReviewListLimit, key)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return reviews
+}
+
+// parityStartedFor counts the reviewer sessions the fake started for key.
+func parityStartedFor(h *harness, key string) int {
+	_, _, started, _ := h.fake.snapshot()
+	count := 0
+	for _, request := range started {
+		if request.PullRequest.Key() == key {
+			count++
+		}
+	}
+	return count
+}
+
+// parityStoreRun opens pr and polls until the one review of its key is stored as completed.
+func parityStoreRun(h *harness, pr PullRequest) {
+	h.t.Helper()
+	h.fake.open(pr, h.rule(pr.Repository))
+	h.pollUntil("the completed review of "+pr.Key(), func() bool {
+		reviews := parityStoreReviews(h, pr.Key())
+		return len(reviews) == 1 && reviews[0].Status == reviewCompleted
+	})
+}
+
+// parityStoreFailRun opens pr, waits for its reviewer session to start and then
+// lapses the pull request. The review ends as a failure with the lapse code.
+func parityStoreFailRun(h *harness, pr PullRequest) {
+	h.t.Helper()
+	h.setOutput(func(SessionRequest) []byte { return nil })
+	h.fake.open(pr, h.rule(pr.Repository))
+	h.pollUntil("the reviewer session of "+pr.Key(), func() bool { return parityStartedFor(h, pr.Key()) == 1 })
+	h.fake.lapse(pr, "review_label_removed")
+	h.waitFor("the failed review of "+pr.Key(), func() bool {
+		reviews := parityStoreReviews(h, pr.Key())
+		return len(reviews) == 1 && reviews[0].Status == reviewCompleted && reviews[0].Result == resultFailure
+	})
+}
+
+// parityStoreTable returns every row of table, ordered by orderBy, as objects
+// from column name to value.
+func parityStoreTable(t *testing.T, store *Store, table, orderBy string) []map[string]any {
+	t.Helper()
+	rows, err := store.db.Query(`SELECT * FROM ` + table + ` ORDER BY ` + orderBy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	collected := []map[string]any{}
+	for rows.Next() {
+		values := make([]any, len(columns))
+		pointers := make([]any, len(columns))
+		for index := range values {
+			pointers[index] = &values[index]
+		}
+		if err := rows.Scan(pointers...); err != nil {
+			t.Fatal(err)
+		}
+		row := make(map[string]any, len(columns))
+		for index, column := range columns {
+			if _, blob := values[index].([]byte); blob {
+				t.Fatalf("%s.%s holds a BLOB, which the golden cannot represent", table, column)
+			}
+			row[column] = values[index]
+		}
+		collected = append(collected, row)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return collected
+}
+
+// parityStoreDump returns the store-v1 golden: the schema version, every row of
+// the four tables, and what the Go store API and the engine return over them.
+func parityStoreDump(t *testing.T, h *harness) map[string]any {
+	t.Helper()
+	ctx := context.Background()
+	var version int
+	if err := h.store.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	state, err := h.store.loadDiscovery(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviews, err := h.store.listReviews(ctx, "", h.cfg.ReviewListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := h.store.runHistory(ctx, h.cfg.ReviewListLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priors := map[string]any{}
+	for key, record := range state.published {
+		prior, stored, err := h.engine.priorFindings(ctx, record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		priors[key] = map[string]any{"prior_findings": prior, "stored": stored}
+	}
+	return map[string]any{
+		"user_version": version,
+		"discovery":    parityStoreTable(t, h.store, "discovery", "name"),
+		"reviews":      parityStoreTable(t, h.store, "reviews", "workflow_id"),
+		"review_steps": parityStoreTable(t, h.store, "review_steps", "workflow_id, name"),
+		"review_state": parityStoreTable(t, h.store, "review_state", "workflow_id, name"),
+		"api": map[string]any{
+			"discovery":      map[string]any{"schedule": state.schedule, "published": state.published, "awaiting": state.awaiting, "rejected": state.rejected},
+			"list_reviews":   reviews,
+			"run_history":    runs,
+			"prior_findings": priors,
+		},
+	}
+}
+
+// parityCheckStoreGolden writes testdata/parity/<name>.json when
+// AUTOREVIEW_WRITE_GOLDEN=1. Otherwise it fails unless the stored file is
+// byte-identical to fresh output. It uses the same encoder settings as
+// parityCheckGolden, which only accepts a case list.
+func parityCheckStoreGolden(t *testing.T, name string, value any) {
+	t.Helper()
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		t.Fatal(err)
+	}
+	fresh := buffer.Bytes()
+	path := filepath.Join(parityGoldenDir, name+".json")
+	if os.Getenv(parityWriteEnv) == "1" {
+		if err := os.MkdirAll(parityGoldenDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, fresh, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("golden %s cannot be read (%v); write it with %s=1", path, err, parityWriteEnv)
+	}
+	if !bytes.Equal(stored, fresh) {
+		t.Fatalf("golden %s differs from the Go output; review the change and rewrite it with %s=1", path, parityWriteEnv)
+	}
+}
+
+// TestWriteStoreGolden runs the fake harness to one approved review, one review
+// with findings, one failed review and one notes hand-off, then compares or
+// writes store-v1.json.
+func TestWriteStoreGolden(t *testing.T) {
+	h := parityStoreHarness(t)
+	h.setOutput(reviewerOutput(t, nil))
+	parityStoreRun(h, parityStorePR("acme/approve", 1))
+	h.setOutput(reviewerOutput(t, []map[string]any{{"severity": "high", "confidence": "high", "path": "src/a.go", "line": 3, "title": "Broken", "body": "It breaks."}}))
+	parityStoreRun(h, parityStorePR("acme/findings", 2))
+	parityStoreFailRun(h, parityStorePR("acme/failing", 3))
+	h.setOutput(reviewerOutput(t, []map[string]any{{"severity": "low", "confidence": "high", "blocking": false, "path": "src/a.go", "line": 3, "title": "Naming", "body": "Could be clearer."}}))
+	parityStoreRun(h, parityStorePR("acme/notes", 4))
+	// A poll that sees a published head rewrites its schedule record (discovery.go:283-284),
+	// so the state is final only after polls have run past the last publication.
+	h.settle()
+	h.stopEngine()
+	parityCheckStoreGolden(t, "store-v1", parityStoreDump(t, h))
 }
