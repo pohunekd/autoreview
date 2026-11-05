@@ -3,5 +3,6 @@
 // Rust guideline compliant 2026-06-26
 
 mod github;
+mod notify;
 mod pohunek;
 mod process;

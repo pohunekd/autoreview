@@ -11,6 +11,9 @@ autoreview-engine = { path = "../engine" }
 autoreview-go-compat = { path = "../go-compat" }
 autoreview-policy = { path = "../policy" }
 autoreview-schedule = { path = "../schedule" }
+getrandom = { workspace = true, features = ["std"] }
+hex = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
