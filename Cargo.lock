@@ -46,6 +46,13 @@ dependencies = [
 name = "autoreview-engine"
 version = "0.0.0"
 dependencies = [
+ "autoreview-go-compat",
+ "autoreview-policy",
+ "autoreview-schedule",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror",
 ]
 

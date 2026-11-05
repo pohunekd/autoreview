@@ -3,6 +3,7 @@
 // Rust guideline compliant 2026-06-26
 
 pub mod error;
+pub mod model;
 
 #[doc(inline)]
 pub use error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
