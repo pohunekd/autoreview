@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde::de::{self, Deserializer, Unexpected, Visitor};
+use serde_saphyr::granit_parser::{Event as YamlEvent, Parser, ScalarStyle, Tag};
 
 use crate::Error;
 use crate::digest::digest_of;
@@ -36,6 +37,27 @@ const LABEL_TRIGGER_PREFIX: &str = "label:";
 
 /// Severities a blocking finding can have, so the only ones a verifier can demote.
 const BLOCKING_SEVERITIES: &[&str] = &["critical", "high"];
+
+/// The only `%YAML` directive version Go's YAML decoder accepts, as major and minor.
+const GO_YAML_VERSION: (u32, u32) = (1, 1);
+
+/// Go's error for a `%YAML` directive of another version.
+const INCOMPATIBLE_DOCUMENT: &str = "yaml: found incompatible YAML document";
+
+/// Go's error for a merge value that is not a mapping or a sequence of mappings.
+const MERGE_NOT_MAPPING: &str = "yaml: map merge requires map or sequence of maps as the value";
+
+/// The YAML merge key.
+const MERGE_KEY: &str = "<<";
+
+/// Handle of the YAML core schema tags.
+const CORE_TAG_HANDLE: &str = "tag:yaml.org,2002:";
+
+/// Suffix of the core schema merge tag.
+const MERGE_TAG_SUFFIX: &str = "merge";
+
+/// Handle of the non-specific tag `!`.
+const NON_SPECIFIC_TAG_HANDLE: &str = "!";
 
 /// Reads the prompt at a path as written in the policy file.
 type ReadPrompt<'a> = &'a dyn Fn(&str) -> io::Result<Vec<u8>>;
@@ -178,7 +200,10 @@ struct FilePolicy {
     ready_draft_authors: Vec<String>,
 }
 
-/// Reads an integer field as Go's YAML decoder does: null is zero and text is refused.
+/// Reads an integer field; null reads as zero and quoted text is refused.
+///
+/// Both match Go's YAML decoder. Go reads a leading-zero integer such as `030` as YAML 1.1 octal;
+/// serde_saphyr reads it as a float, which this reader refuses.
 fn go_int<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
     deserializer.deserialize_any(GoIntVisitor)
 }
@@ -235,7 +260,8 @@ pub fn load(path: &Path) -> Result<Policy, Error> {
         path: path.to_path_buf(),
         source,
     })?;
-    // A root or empty path has no parent; Go's filepath.Dir then returns the path itself.
+    // A root or empty path has no parent. Go's filepath.Dir gives "/" and "." for them, and a
+    // prompt path joined onto "/" or "" names the same file.
     let directory = path.parent().unwrap_or(path);
     parse(&data, |relative| {
         read_bounded(&directory.join(relative), MAX_PROMPT_BYTES)
@@ -271,6 +297,11 @@ pub fn parse(
     let text = std::str::from_utf8(data).map_err(|error| Error::InvalidYaml {
         message: error.to_string(),
     })?;
+    if let Some(message) = go_yaml_refusal(text) {
+        return Err(Error::InvalidYaml {
+            message: message.to_owned(),
+        });
+    }
     let document: FilePolicy = serde_saphyr::from_str(text).map_err(|error| yaml_error(&error))?;
     if document.version != POLICY_VERSION {
         return Err(Error::Version);
@@ -313,6 +344,139 @@ pub fn parse(
         handoff_reminder: Duration::from_hours(reminder_hours.unsigned_abs()),
         digest,
     })
+}
+
+/// What an alias names, as Go's merge check sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeKind {
+    /// A mapping.
+    Mapping,
+    /// A sequence or a scalar.
+    Other,
+}
+
+/// The collection that holds the next node, while walking parser events.
+#[derive(Debug)]
+enum Frame {
+    /// A mapping and the role of its next node.
+    Mapping {
+        /// Whether the next node is a key.
+        key: bool,
+        /// Whether the next node is the value of a merge key.
+        merge: bool,
+    },
+    /// A sequence.
+    Sequence {
+        /// Whether the sequence is the value of a merge key.
+        merge: bool,
+    },
+}
+
+/// Returns Go's error for YAML that Go's decoder refuses and serde_saphyr reads.
+///
+/// These are a `%YAML` directive other than 1.1 and a merge value other than a mapping, an alias
+/// of a mapping or a sequence of those (yaml.v3 `decoder.merge`). Only the first document is
+/// walked. A parser error returns `None`, so serde_saphyr reports it: Go parses the whole document
+/// before it decodes a merge, while a directive fails before the document content is read.
+fn go_yaml_refusal(text: &str) -> Option<&'static str> {
+    let mut anchors: BTreeMap<usize, NodeKind> = BTreeMap::new();
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut merge_refused = false;
+    for item in Parser::new_from_str(text) {
+        let Ok((event, _)) = item else {
+            return None;
+        };
+        match event {
+            YamlEvent::DocumentStart(_, Some(version))
+                if (version.major, version.minor) != GO_YAML_VERSION =>
+            {
+                return Some(INCOMPATIBLE_DOCUMENT);
+            }
+            YamlEvent::DocumentEnd => break,
+            YamlEvent::Scalar(value, style, anchor, tag) => {
+                record_anchor(&mut anchors, anchor, NodeKind::Other);
+                merge_refused |= !merge_accepts(&stack, NodeKind::Other, false);
+                let merge_key = value == MERGE_KEY && is_merge_key_tag(style, tag.as_deref());
+                finish_node(&mut stack, merge_key);
+            }
+            YamlEvent::Alias(anchor) => {
+                let kind = if anchors.get(&anchor) == Some(&NodeKind::Mapping) {
+                    NodeKind::Mapping
+                } else {
+                    NodeKind::Other
+                };
+                merge_refused |= !merge_accepts(&stack, kind, false);
+                finish_node(&mut stack, false);
+            }
+            YamlEvent::MappingStart(_, anchor, _) => {
+                record_anchor(&mut anchors, anchor, NodeKind::Mapping);
+                merge_refused |= !merge_accepts(&stack, NodeKind::Mapping, false);
+                stack.push(Frame::Mapping {
+                    key: true,
+                    merge: false,
+                });
+            }
+            YamlEvent::SequenceStart(_, anchor, _) => {
+                record_anchor(&mut anchors, anchor, NodeKind::Other);
+                merge_refused |= !merge_accepts(&stack, NodeKind::Other, true);
+                let merge = matches!(
+                    stack.last(),
+                    Some(Frame::Mapping {
+                        key: false,
+                        merge: true
+                    })
+                );
+                stack.push(Frame::Sequence { merge });
+            }
+            YamlEvent::MappingEnd | YamlEvent::SequenceEnd => {
+                stack.pop();
+                finish_node(&mut stack, false);
+            }
+            _ => {}
+        }
+    }
+    merge_refused.then_some(MERGE_NOT_MAPPING)
+}
+
+/// Records the kind of an anchored node; anchor 0 means the node has no anchor.
+fn record_anchor(anchors: &mut BTreeMap<usize, NodeKind>, anchor: usize, kind: NodeKind) {
+    if anchor != 0 {
+        anchors.insert(anchor, kind);
+    }
+}
+
+/// Reports whether Go's merge accepts a node of kind at the position the stack names.
+///
+/// A merge value may be a mapping or a sequence; an entry of that sequence must be a mapping.
+/// Nodes outside a merge value are always accepted.
+fn merge_accepts(stack: &[Frame], kind: NodeKind, sequence: bool) -> bool {
+    match stack.last() {
+        Some(Frame::Mapping {
+            key: false,
+            merge: true,
+        }) => kind == NodeKind::Mapping || sequence,
+        Some(Frame::Sequence { merge: true }) => kind == NodeKind::Mapping,
+        _ => true,
+    }
+}
+
+/// Moves the parent mapping from a finished key to its value, or from a value to the next key.
+fn finish_node(stack: &mut [Frame], merge_key: bool) {
+    if let Some(Frame::Mapping { key, merge }) = stack.last_mut() {
+        *merge = *key && merge_key;
+        *key = !*key;
+    }
+}
+
+/// Reports whether a `<<` scalar is a merge key for Go: plain without a tag, `!` or `!!merge`.
+fn is_merge_key_tag(style: ScalarStyle, tag: Option<&Tag>) -> bool {
+    match tag {
+        None => style == ScalarStyle::Plain,
+        Some(tag) => {
+            (tag.handle() == CORE_TAG_HANDLE && tag.suffix() == MERGE_TAG_SUFFIX)
+                || (tag.handle() == NON_SPECIFIC_TAG_HANDLE && tag.suffix().is_empty())
+        }
+    }
 }
 
 /// Maps a YAML reader error to the policy error.
