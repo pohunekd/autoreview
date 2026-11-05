@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +98,7 @@ func TestWriteParityGolden(t *testing.T) {
 		{"digest", parityDigestCases},
 		{"neutralize", parityNeutralizeCases},
 		{"render", parityRenderCases},
+		{"protocol", parityProtocolCases},
 	}
 	for _, file := range files {
 		t.Run(file.name, func(t *testing.T) {
@@ -321,5 +324,106 @@ func parityRenderCases(t *testing.T) []parityCase {
 		parityRender(t, "human_review_waited", cfg, requestChanges, human, PublicationPlan{Decision: DecisionComment}),
 		parityRender(t, "verifier_error_code", cfg, requestChanges, verifierFailed, PublicationPlan{Decision: DecisionApprove}),
 		parityRender(t, "body_over_limit", small, requestChanges, mixed, PublicationPlan{Decision: DecisionRequestChanges}),
+	}
+}
+
+// parityWrap returns the claude-structured wrapper around the stdout of a finished session.
+func parityWrap(stdout string) string {
+	wrapper, _ := json.Marshal(map[string]any{"protocol": claudeResultProtocol, "mode": "structured", "exit_code": 0, "stdout_base64": base64.StdEncoding.EncodeToString([]byte(stdout)), "stderr_base64": ""})
+	return string(wrapper) + "\n"
+}
+
+// parityStdout returns the stdout of a claude session with the prose result and the structured output JSON text.
+func parityStdout(result, structured string) string {
+	return `{"type":"result","subtype":"success","is_error":false,"result":` + strconv.Quote(result) + `,"structured_output":` + structured + `}`
+}
+
+// parityReviewJSON is a reviewer's structured output for the pull request with head and the findings JSON text.
+func parityReviewJSON(head, findings string) string {
+	return `{"repository":"acme/widget","number":5,"head_sha":"` + head + `","summary":"Reviewed the change thoroughly and found the listed issues.","findings":` + findings + `}`
+}
+
+// parityCodexRaw returns the codex envelope around the report JSON text.
+func parityCodexRaw(report string) string {
+	return "[pohunek-codex-review-result-v1:" + base64.StdEncoding.EncodeToString([]byte(report)) + "]\n[pohunek-codex-review exited with status 0]\n"
+}
+
+// parityCodexReport fills the head of a codex report literal.
+func parityCodexReport(report, head string) string {
+	return strings.ReplaceAll(report, "HEADSHA", head)
+}
+
+const parityCodexFindingsReport = `{"findings":[],"summary":"Full review of the pull request diff; details follow.","tests":["go test ./..."],"status":"completed","reviewed_head_sha":"HEADSHA"}`
+
+// parityReviewerCase parses a reviewer output for testPullRequest(5). rust is the
+// Rust error code proposed for an intentional parsing divergence, empty otherwise.
+func parityReviewerCase(t *testing.T, name string, reviewer policy.Reviewer, raw, rust string) parityCase {
+	t.Helper()
+	input := ReviewInput{PullRequest: testPullRequest(5)}
+	fixture := map[string]any{"config": testConfig(), "input": input, "discussion": Discussion{}, "reviewer": reviewer, "raw": raw}
+	result, err := ParseReviewerOutput(testConfig(), input, Discussion{}, reviewer, []byte(raw))
+	var c parityCase
+	if err != nil {
+		c = parityFailure(t, name, fixture, err, "")
+	} else {
+		c = parityOK(name, fixture, result)
+	}
+	c.RustExpectedError = rust
+	return c
+}
+
+// parityVerifierCase parses a verifier output for testPullRequest(5) with one
+// blocking finding pair and one prior finding. rust is as in parityReviewerCase.
+func parityVerifierCase(t *testing.T, name, raw, rust string) parityCase {
+	t.Helper()
+	pr := testPullRequest(5)
+	input := testInput(verifiedRule(policy.CleanApprove), pr)
+	claims := verificationClaims{Findings: []claimFinding{{ID: "O001"}, {ID: "S001"}}, Prior: []claimPrior{{Key: priorKey(sha("c"), "O001")}}}
+	fixture := map[string]any{"config": testConfig(), "input": input, "claims": claims, "raw": raw}
+	result, err := ParseVerifierOutput(testConfig(), input, claims, []byte(raw))
+	var c parityCase
+	if err != nil {
+		c = parityFailure(t, name, fixture, err, "")
+	} else {
+		c = parityOK(name, fixture, result)
+	}
+	c.RustExpectedError = rust
+	return c
+}
+
+func parityProtocolCases(t *testing.T) []parityCase {
+	validFinding := `[{"id":"C001","severity":"high","confidence":"high","path":"a.go","line":4,"side":"RIGHT","title":"Bug","body":"Details."}]`
+	validStdout := parityStdout("Prose summary.", parityReviewJSON(sha("a"), validFinding))
+	caseVariantWrapper := strings.NewReplacer(`"protocol"`, `"Protocol"`, `"mode"`, `"Mode"`, `"exit_code"`, `"EXIT_CODE"`,
+		`"stdout_base64"`, `"Stdout_Base64"`, `"stderr_base64"`, `"Stderr_Base64"`).Replace(parityWrap(validStdout))
+	verifierStdout := func(findings, priorFindings string) string {
+		return `{"repository":"acme/widget","number":5,"head_sha":"` + sha("a") + `","findings":` + findings + `,"prior_findings":` + priorFindings + `}`
+	}
+	verifierPrior := `[{"key":"cccccccccccc:O001","verdict":"` + verdictReopened + `","note":"Checked."}]`
+	verifierChecks := `[{"id":"O001","verdict":"` + verdictConfirmed + `","note":"Checked."},{"id":"S001","verdict":"` + verdictRefuted + `","note":"Checked."}]`
+	return []parityCase{
+		parityReviewerCase(t, "claude_valid_blocking_finding", opus, parityWrap(validStdout), ""),
+		parityReviewerCase(t, "claude_blocking_false_is_note", opus, parityWrap(parityStdout("Prose summary.", parityReviewJSON(sha("a"),
+			`[{"id":"C001","severity":"high","confidence":"high","path":"a.go","line":4,"side":"RIGHT","title":"Bug","body":"Details.","blocking":false}]`))), ""),
+		parityReviewerCase(t, "claude_side_left_rejected", opus, parityWrap(parityStdout("Prose summary.", parityReviewJSON(sha("a"),
+			`[{"id":"C001","severity":"high","confidence":"high","path":"a.go","line":4,"side":"LEFT","title":"Bug","body":"Details."}]`))), ""),
+		parityReviewerCase(t, "claude_head_mismatch_rejected", opus, parityWrap(parityStdout("Prose summary.", parityReviewJSON(sha("d"), "[]"))), ""),
+		parityReviewerCase(t, "claude_duplicate_key_last_wins", opus, parityWrap(parityStdout("Prose summary.",
+			`{"repository":"acme/widget","number":5,"head_sha":"`+sha("a")+`","summary":"Reviewed the change thoroughly and found the listed issues.","findings":[],"findings":`+validFinding+`}`)), "claude_result_invalid"),
+		parityReviewerCase(t, "claude_case_variant_wrapper_keys", opus, caseVariantWrapper, "review_wrapper_invalid"),
+		parityReviewerCase(t, "claude_wrapper_top_level_null", opus, "null\n", "review_wrapper_invalid"),
+		parityReviewerCase(t, "claude_stdout_top_level_null", opus, parityWrap("null"), "claude_result_invalid"),
+		parityReviewerCase(t, "claude_result_text_null", opus, parityWrap(parityStdout("null", parityReviewJSON(sha("a"), "[]"))), "claude_result_mismatch"),
+		parityReviewerCase(t, "codex_valid_report", codex, parityCodexRaw(parityCodexReport(parityCodexFindingsReport, sha("a"))), ""),
+		parityReviewerCase(t, "codex_reviewed_head_mismatch", codex, parityCodexRaw(parityCodexReport(parityCodexFindingsReport, sha("d"))), ""),
+		parityReviewerCase(t, "codex_case_variant_keys", codex, parityCodexRaw(parityCodexReport(
+			`{"Findings":[],"Summary":"Full review of the pull request diff; details follow.","Tests":["go test ./..."],"Status":"completed","Reviewed_Head_Sha":"HEADSHA"}`, sha("a"))), "review_result_invalid"),
+		parityReviewerCase(t, "codex_duplicate_key_last_wins", codex, parityCodexRaw(parityCodexReport(
+			`{"findings":[],"summary":"Full review of the pull request diff; details follow.","tests":["go test ./..."],"status":"failed","status":"completed","reviewed_head_sha":"HEADSHA"}`, sha("a"))), "review_result_invalid"),
+		parityReviewerCase(t, "codex_top_level_null", codex, parityCodexRaw("null"), "review_result_invalid"),
+		parityVerifierCase(t, "verifier_valid_verdicts", parityWrap(parityStdout("Prose summary.", verifierStdout(verifierChecks, verifierPrior))), ""),
+		parityVerifierCase(t, "verifier_duplicate_key_last_wins", parityWrap(parityStdout("Prose summary.",
+			`{"repository":"acme/widget","number":5,"head_sha":"`+sha("a")+`","findings":[],"findings":`+verifierChecks+`,"prior_findings":`+verifierPrior+`}`)), "claude_result_invalid"),
+		parityVerifierCase(t, "verifier_top_level_null", parityWrap("null"), "claude_result_invalid"),
 	}
 }
