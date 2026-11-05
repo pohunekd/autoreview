@@ -178,6 +178,7 @@ with the expected Rust error code):
   last value.
 - A top-level JSON `null` where an object is expected is an error; Go yields the
   zero value.
+- A persisted review input whose policy string enum holds an unknown value (protocol, checkout, trigger kind, on_findings, on_clean, on_notes, notification level or event) is refused when the row is read, with the code `store_state_invalid`. Go's read of the same row succeeds (`cmd/autoreview/store.go:313`) and Go rejects some of these values later, at run time (`cmd/autoreview/review.go:38-86`), so this is stricter than Go; Go writes only values that passed policy validation, so no Go-written row holds one.
 
 Invalid UTF-8 is not a divergence: the process runner decodes child stdout with
 `String::from_utf8_lossy` before parsing, which matches Go's replacement with

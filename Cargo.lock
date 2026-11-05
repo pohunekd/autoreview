@@ -37,6 +37,11 @@ dependencies = [
 [[package]]
 name = "autoreview-policy"
 version = "0.0.0"
+dependencies = [
+ "autoreview-go-compat",
+ "serde",
+ "thiserror",
+]
 
 [[package]]
 name = "autoreview-schedule"
