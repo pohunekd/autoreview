@@ -124,6 +124,18 @@ pub(crate) struct GitHubPullRequest {
 
 autoreview_go_compat::object_only_serde!(GitHubPullRequest);
 
+impl GitHubPullRequest {
+    /// Returns the lower-case repository and the number of the pull request as the search
+    /// names them.
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
+    pub(super) fn repository_and_number(&self) -> (String, i64) {
+        (
+            self.repository.name_with_owner.to_ascii_lowercase(),
+            self.number,
+        )
+    }
+}
+
 /// The author of a pull request.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
@@ -258,6 +270,34 @@ pub(crate) fn decode_pull_request_response(output: &str) -> Result<GitHubPullReq
     Ok(pull_request)
 }
 
+/// Returns the node identifier of a draft that `login` is asked to review and that `author`
+/// opened, or `None` when the pull request is not such a draft (the `ReadyDrafts` check).
+///
+/// The check compares the author, repository and number as ASCII case-insensitive text.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
+pub(super) fn ready_draft_id(
+    raw: &GitHubPullRequest,
+    author: &str,
+    repository: &str,
+    number: i64,
+    login: &str,
+) -> Option<String> {
+    let eligible = raw.state == OPEN_STATE
+        && raw.is_draft
+        && raw
+            .author
+            .as_ref()
+            .is_some_and(|raw_author| raw_author.login.eq_ignore_ascii_case(author))
+        && raw
+            .repository
+            .name_with_owner
+            .eq_ignore_ascii_case(repository)
+        && raw.number == number
+        && requests(raw, login)
+        && !raw.id.is_empty();
+    eligible.then(|| raw.id.clone())
+}
+
 /// Builds the argv of the GraphQL pull request query for `repository` and `number`.
 ///
 /// The identity is checked before any call, as Go checks it at `github.go:284-286`.
@@ -285,7 +325,7 @@ pub(crate) fn pull_request_args(repository: &str, number: i64) -> Result<Vec<Str
 
 /// Reports whether the pull request asks `login` for a review, ignoring ASCII case.
 #[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
-fn requests(raw: &GitHubPullRequest, login: &str) -> bool {
+pub(super) fn requests(raw: &GitHubPullRequest, login: &str) -> bool {
     for node in &raw.review_requests.nodes {
         if let Some(reviewer) = &node.requested_reviewer
             && reviewer.login.eq_ignore_ascii_case(login)
@@ -309,7 +349,7 @@ fn has_label(raw: &GitHubPullRequest, label: &str) -> bool {
 
 /// Reports whether `url` is the URL of the pull request `repository#number` on `host`.
 #[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
-fn url_matches(url: &str, host: &str, repository: &str, number: i64) -> bool {
+pub(super) fn url_matches(url: &str, host: &str, repository: &str, number: i64) -> bool {
     url.eq_ignore_ascii_case(&format!("https://{host}/{repository}/pull/{number}"))
 }
 
@@ -544,7 +584,7 @@ pub(crate) fn newest_review_request(events: &[ReviewRequestEvent]) -> Option<i64
 
 impl GitHub {
     /// Reads a pull request and checks it against the trigger of its rule (`GetPullRequest`).
-    #[expect(dead_code, reason = "called by E03")]
+    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn get_pull_request(
         &self,
         repository: &str,
@@ -565,7 +605,7 @@ impl GitHub {
     }
 
     /// Reads a pull request without a trigger check (`ReadPullRequestState`).
-    #[expect(dead_code, reason = "called by E03")]
+    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn read_pull_request_state(
         &self,
         repository: &str,
@@ -577,7 +617,7 @@ impl GitHub {
     }
 
     /// Reads the raw pull request data of one pull request (`fetchPullRequest`).
-    async fn fetch_pull_request(
+    pub(super) async fn fetch_pull_request(
         &self,
         repository: &str,
         number: i64,

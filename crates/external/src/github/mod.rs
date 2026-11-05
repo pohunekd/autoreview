@@ -5,6 +5,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+mod candidates;
 mod pull_request;
 
 use std::ffi::OsString;
@@ -78,6 +79,8 @@ pub(crate) struct GitHub {
     login: String,
     /// Timeout of one `gh` call.
     timeout: Duration,
+    /// Number of results a review request search may return before it fails as truncated.
+    poll_limit: i64,
     /// Number of pages a paged read may fetch before it fails.
     search_page_limit: i64,
 }
@@ -90,6 +93,7 @@ impl fmt::Debug for GitHub {
             .field("host", &self.host)
             .field("login", &self.login)
             .field("timeout", &self.timeout)
+            .field("poll_limit", &self.poll_limit)
             .field("search_page_limit", &self.search_page_limit)
             .finish_non_exhaustive()
     }
@@ -97,13 +101,14 @@ impl fmt::Debug for GitHub {
 
 impl GitHub {
     /// Creates the client from the `gh` settings of the configuration.
-    #[expect(dead_code, reason = "called by E03")]
+    #[expect(dead_code, reason = "called by E09")]
     pub(crate) fn new(
         binary: String,
         token: String,
         host: String,
         login: String,
         timeout: Duration,
+        poll_limit: i64,
         search_page_limit: i64,
     ) -> Self {
         Self {
@@ -112,6 +117,7 @@ impl GitHub {
             host,
             login,
             timeout,
+            poll_limit,
             search_page_limit,
         }
     }
