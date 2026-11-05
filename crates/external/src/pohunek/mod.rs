@@ -57,7 +57,7 @@ const KNOWN_KEYS: [&str; 20] = [
     "runtime_generation",
 ];
 
-/// Identifier of the project.
+/// One project of `pohunek project list --json`.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct PohunekProject {
@@ -206,6 +206,7 @@ fn decode_strict<T: DeserializeOwned>(text: &str) -> Option<T> {
     serde_json::from_str::<T>(text).ok()
 }
 
+/// Reports whether an object key of `value` is a known field name in another case.
 fn has_case_variant_key(value: &Value) -> bool {
     match value {
         Value::Object(map) => {
@@ -231,6 +232,7 @@ fn has_case_variant_key(value: &Value) -> bool {
     }
 }
 
+/// Reports whether `key` is not a known field name but equals one under Go's case folding.
 fn is_case_variant(key: &str) -> bool {
     if KNOWN_KEYS.contains(&key) {
         return false;
@@ -421,23 +423,22 @@ fn parse_url(raw: &str) -> Option<(String, String)> {
 /// `None` is an error, which is a scheme that starts with a colon.
 fn get_scheme(raw: &str) -> Option<(String, &str)> {
     let bytes = raw.as_bytes();
-    for (idx, &byte) in bytes.iter().enumerate() {
+    for (index, &byte) in bytes.iter().enumerate() {
         if byte.is_ascii_alphabetic() {
             continue;
         }
         if byte.is_ascii_digit() || byte == b'+' || byte == b'-' || byte == b'.' {
-            if idx == 0 {
+            if index == 0 {
                 return Some((String::new(), raw));
             }
             continue;
         }
         if byte == b':' {
-            if idx == 0 {
+            if index == 0 {
                 return None;
             }
-            let scheme = raw[..idx].to_ascii_lowercase();
-            let (_, after) = raw.split_at(idx + 1);
-            return Some((scheme, after));
+            let (scheme, rest) = raw.split_at(index);
+            return Some((scheme.to_ascii_lowercase(), rest.strip_prefix(':')?));
         }
         return Some((String::new(), raw));
     }
@@ -524,39 +525,33 @@ enum Mode {
 fn unescape(text: &str, mode: Mode) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
-    let mut idx = 0;
-    while idx < bytes.len() {
-        let byte = bytes[idx];
+    let mut index = 0;
+    while let Some(&byte) = bytes.get(index) {
         if byte == b'%' {
-            if idx + 2 >= bytes.len() {
-                return None;
-            }
-            let high = hex_value(bytes[idx + 1])?;
-            let low = hex_value(bytes[idx + 2])?;
+            let high = bytes.get(index + 1).copied().and_then(hex_value)?;
+            let low = bytes.get(index + 2).copied().and_then(hex_value)?;
             if mode == Mode::Host {
                 let value = (high << 4) | low;
                 if high < 8 && !(high == 2 && low == 5) {
                     return None;
                 }
-                // Check ASCII host byte restriction already handled by high<8,
-                // but also ensure we allow only %25 for ASCII?
-                // The above condition already covers ASCII (<128) except %25.
                 out.push(value);
             } else {
                 out.push((high << 4) | low);
             }
-            idx += 3;
+            index += 3;
         } else {
             if mode == Mode::Host && byte < 0x80 && !is_host_byte(byte) {
                 return None;
             }
             out.push(byte);
-            idx += 1;
+            index += 1;
         }
     }
     Some(out)
 }
 
+/// Returns the value of an ASCII hexadecimal digit.
 fn hex_value(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),

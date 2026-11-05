@@ -29,7 +29,7 @@ use crate::process::run;
 /// Name of the configuration key that holds the pohunek request timeout.
 const POHUNEK_TIMEOUT_KEY: &str = "pohunek_timeout";
 
-/// Identifier of the session.
+/// One session of `pohunek session list --json`.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct PohunekSession {
@@ -56,7 +56,7 @@ pub(crate) struct PohunekSession {
 
 autoreview_go_compat::object_only_serde!(PohunekSession);
 
-/// Kind of the warning; only `fetch` is a known kind.
+/// One warning of a pohunek session.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct PohunekWarning {
@@ -70,7 +70,7 @@ pub(crate) struct PohunekWarning {
 
 autoreview_go_compat::object_only_serde!(PohunekWarning);
 
-/// Lifecycle state of the runtime; `live` for a live runtime.
+/// The runtime of a pohunek session.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct PohunekRuntime {
