@@ -15,7 +15,8 @@ pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};
 pub use types::{
     Checkout, EVENTS, Event, Level, OnClean, OnFindings, OnNotes, Pipeline, Policy, Protocol,
-    Reviewer, Rule, Trigger, TriggerKind, VERIFIER_REVIEWER_ID, Verifier, WORKFLOW_EVENTS,
+    REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind, VERIFIER_REVIEWER_ID, Verifier,
+    WORKFLOW_EVENTS,
 };
 
 /// Errors from policy parsing, policy types and human review validation.
@@ -136,6 +137,15 @@ pub enum Error {
     ReviewerPrefix {
         /// The reviewer id.
         id: String,
+    },
+
+    /// A reviewer finding prefix is the one reserved for republished prior findings.
+    #[error("reviewer {id}: finding_prefix {prefix} is reserved for republished findings")]
+    ReviewerPrefixReserved {
+        /// The reviewer id.
+        id: String,
+        /// The reserved prefix.
+        prefix: String,
     },
 
     /// Two reviewers share a finding prefix.

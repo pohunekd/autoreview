@@ -171,6 +171,13 @@ What is not compatible, by decision:
   keys and codes (`command.go:22-47`).
 - **In-flight Go reviews** (statuses `queued`, `running`, `awaiting` at
   cutover): not supported.
+- **Reserved finding prefix:** a reviewer whose `finding_prefix` is `P` is refused
+  when the policy is parsed, with the message `reviewer <id>: finding_prefix P is
+  reserved for republished findings`. `P` numbers the prior findings published
+  again (`republishedPrefix`, `prior.go:11`). Go accepts it, so a reviewer's `P002`
+  can collide with a republished `P001` (`protocol.go:363`). A policy that Go
+  accepts with `P` needs another letter before it runs on Rust. The regression
+  test is `reserved_finding_prefix_is_rejected_naming_the_reviewer`.
 
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):

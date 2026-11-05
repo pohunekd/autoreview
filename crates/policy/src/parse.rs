@@ -19,8 +19,8 @@ use crate::human_review::{FileHumanReview, parse_human_review};
 use crate::types::{
     Checkout, EVENTS, Event, Level, MAX_APPROVAL_HOURS, MAX_POLICY_BYTES, MAX_PROMPT_BYTES,
     MAX_REVIEWERS_PER_PR, MAX_RULES, OnClean, OnFindings, OnNotes, Pipeline, Policy, Protocol,
-    Reviewer, Rule, Trigger, TriggerKind, VERIFIER_REVIEWER_ID, Verifier, is_finding_prefix,
-    is_identifier, is_label, is_owner, is_profile, is_repo_name, is_source,
+    REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind, VERIFIER_REVIEWER_ID, Verifier,
+    is_finding_prefix, is_identifier, is_label, is_owner, is_profile, is_repo_name, is_source,
 };
 
 /// Most characters a reviewer label may have.
@@ -539,6 +539,12 @@ fn parse_reviewers(
         }
         if !is_finding_prefix(&value.finding_prefix) {
             return Err(Error::ReviewerPrefix { id: id.clone() });
+        }
+        if value.finding_prefix == REPUBLISHED_PREFIX {
+            return Err(Error::ReviewerPrefixReserved {
+                id: id.clone(),
+                prefix: value.finding_prefix.clone(),
+            });
         }
         if let Some(first) = prefixes.get(&value.finding_prefix) {
             return Err(Error::SharedPrefix {
@@ -1301,6 +1307,18 @@ notifications:
                     "{name}: error = {error}, want it to mention {want:?}"
                 ),
             }
+        }
+    }
+
+    #[test]
+    fn reserved_finding_prefix_is_rejected_naming_the_reviewer() {
+        let document = VALID_POLICY.replacen("finding_prefix: X", "finding_prefix: P", 1);
+        match parse(document.as_bytes(), prompts) {
+            Ok(_) => panic!("finding_prefix P must be rejected"),
+            Err(error) => assert_eq!(
+                error.to_string(),
+                "reviewer codex: finding_prefix P is reserved for republished findings"
+            ),
         }
     }
 

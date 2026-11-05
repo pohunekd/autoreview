@@ -2,15 +2,10 @@
 
 // Rust guideline compliant 2026-06-26
 
-use autoreview_policy::OnClean;
+use autoreview_policy::{OnClean, REPUBLISHED_PREFIX};
 
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_OPEN};
 use crate::model::{Artifact, Discussion, Finding, PriorResult, ReviewInput};
-
-/// Prefix of the identifiers of republished prior findings.
-///
-/// It keeps them apart from the findings of the reviewers.
-const REPUBLISHED_PREFIX: &str = "P";
 
 /// Characters of the head SHA that a republished finding names.
 const REPUBLISHED_HEAD_CHARS: usize = 12;
