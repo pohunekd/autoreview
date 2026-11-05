@@ -16,6 +16,9 @@ dependencies = [
 [[package]]
 name = "autoreview-engine"
 version = "0.0.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "autoreview-external"
