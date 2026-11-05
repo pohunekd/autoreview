@@ -180,13 +180,14 @@ with the expected Rust error code):
   unknown, so the field keeps its default where Go sets it, and Rust accepts a
   row whose case-variant key holds a value that Go refuses, such as
   `"NUMBER": -9223372036854775809`. Neither engine writes such a key.
-- A duplicate key in a reviewer or verifier result is an error; Go keeps the
+- A duplicate field in a JSON object read as a struct is an error; Go keeps the
   last value.
 - A top-level JSON `null` where an object is expected is an error; Go yields the
   zero value.
-- A JSON `null` for a scalar, enum or struct field is an error, and so is a
-  lone surrogate escape such as `\ud800` and `-0` in an integer field. Go reads
-  the zero value for the `null`, U+FFFD for the lone surrogate and `0` for `-0`.
+- A JSON `null` for a scalar, enum or struct field or for a list entry is an
+  error, and so is a lone surrogate escape such as `\ud800` and `-0` in an
+  integer field. Go reads the zero value for the `null`, U+FFFD for the lone
+  surrogate and `0` for `-0`.
 - A persisted review input whose policy string enum holds an unknown value
   (protocol, checkout, trigger kind, on_findings, on_clean, on_notes,
   notification level or event) is refused when the row is read, with the code
