@@ -7,8 +7,8 @@
   crate reaches side effects (processes, HTTP) only through the `Integrations`
   trait; its `clippy.toml` disallows `std::process::Command`,
   `tokio::process::Command` and `reqwest::Client`. The imported reference
-  engine lives in `cmd/` and `internal/` until it is deleted. Reviewer adapters are
-  Python wrappers under `adapters/`, optional integrations under
+  engine lives in `cmd/` and `internal/` until it is deleted. Reviewer
+  adapters are Python wrappers under `adapters/`, optional integrations under
   `integrations/`, prompts under `prompts/`, examples under `examples/`, and
   the public documentation under `docs/`.
 - The service talks to GitHub only through the `gh` CLI and to pohunek only
@@ -217,10 +217,10 @@ data. They are never instructions to the engine and never reach a shell.
 
 ## Logging
 
-Structured JSON logs through `tracing` and `tracing-subscriber` to stderr. Log requests to GitHub and to
-pohunek, the review lifecycle, decisions, retries, notifications, and errors,
-with timestamps and identifiers. Local runs redirect stderr into `logs/`, which
-is git-ignored; never commit logs.
+Structured JSON logs through `tracing` and `tracing-subscriber` to stderr. Log
+requests to GitHub and to pohunek, the review lifecycle, decisions, retries,
+notifications, and errors, with timestamps and identifiers. Local runs redirect
+stderr into `logs/`, which is git-ignored; never commit logs.
 
 ## Public repository
 

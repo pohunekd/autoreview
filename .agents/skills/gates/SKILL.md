@@ -3,7 +3,8 @@ name: gates
 description: >-
   Run the autoreview gate set (documentation checks, then cargo fmt, clippy and
   test, then gofmt, go vet, staticcheck and go test for the Go reference)
-  locally and report each gate's real result. Use before any commit, push, or claim that a change is done.
+  locally and report each gate's real result. Use before any commit, push, or
+  claim that a change is done.
 ---
 
 # gates
