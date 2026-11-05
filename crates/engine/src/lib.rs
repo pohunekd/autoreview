@@ -2,6 +2,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+pub mod config;
 pub mod error;
 pub mod model;
 
