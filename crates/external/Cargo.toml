@@ -10,6 +10,7 @@ repository.workspace = true
 autoreview-engine = { path = "../engine" }
 autoreview-go-compat = { path = "../go-compat" }
 autoreview-policy = { path = "../policy" }
+autoreview-schedule = { path = "../schedule" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

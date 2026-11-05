@@ -69,6 +69,7 @@ dependencies = [
  "autoreview-engine",
  "autoreview-go-compat",
  "autoreview-policy",
+ "autoreview-schedule",
  "serde",
  "serde_json",
  "thiserror",

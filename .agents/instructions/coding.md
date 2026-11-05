@@ -220,6 +220,10 @@ with the expected Rust error code):
   case-variant key included, because the query names every field it reads.
   Go ignores unknown keys and matches keys case-insensitively. The REST
   comparison and the response envelopes keep the R4 rule.
+- The pohunek CLI output is read fail-closed: a key that differs from a known
+  field only in ASCII case is refused, where Go matches it case-insensitively.
+  Duplicate fields, `null` scalars, lone surrogates and out-of-range numbers
+  are refused as in the other decoders.
 - The GitHub review event (`Decision`) and the review outcome (`Outcome`) are
   enums. Rust refuses a stored value outside their listed values with a serde
   error; Go reads any string. Neither engine writes another value. The store
