@@ -25,6 +25,7 @@ pohunek:
   route_overrides: {}
 
 session:
+  group: autoreview
   branch_prefix: autoreview/
   name_prefix: autoreview-
   timeout_seconds: 7200

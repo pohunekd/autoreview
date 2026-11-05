@@ -57,6 +57,7 @@ pohunek:
   route_overrides: {}
 
 session:
+  group: autoreview
   branch_prefix: autoreview/
   name_prefix: autoreview-
   timeout_seconds: 7200
@@ -148,7 +149,7 @@ notify:
 
 | Key | Meaning |
 |---|---|
-| `host` | GitHub host; `github.com` or a GitHub Enterprise Server host |
+| `host` | GitHub host; `github.com` in this release |
 | `gh_bin` | Absolute path of the GitHub CLI |
 | `timeout_seconds` | Timeout of one `gh` call |
 | `credential_check_hours` | How often every token is checked while the service runs |
@@ -253,6 +254,7 @@ How reviewer sessions are named, started, read and cleaned up.
 
 | Key | Meaning |
 |---|---|
+| `group` | pohunek-companion group that every review session is placed in |
 | `branch_prefix` | Prefix of the review branches created on the review host |
 | `name_prefix` | Prefix of the pohunek session names |
 | `timeout_seconds` | Longest time one reviewer session may run |
