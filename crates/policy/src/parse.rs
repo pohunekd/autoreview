@@ -867,3 +867,237 @@ fn valid_text(value: &str, maximum: usize) -> bool {
         && value.chars().count() <= maximum
         && !value.contains(['\0', '\r', '\n'])
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use super::{load, matches, parse};
+    use crate::Error;
+    use crate::types::{MAX_PROMPT_BYTES, OnClean, Policy, Rule};
+
+    const VALID_POLICY: &str = "version: 1
+reviewers:
+  opus: {protocol: claude-structured, agent_profile: claude-profile, label: Opus, finding_prefix: O}
+  codex: {protocol: codex-envelope, agent_profile: codex-profile, label: Codex, finding_prefix: X}
+pipelines:
+  main: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompts/main.md, checkout: base, verifier: {reviewer: opus, prompt: prompts/verifier.md, escalate_severities: [critical], escalate_count: 2}, project_sources: [manual]}
+  side: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompts/side.md, checkout: head, project_sources: [manual, auto]}
+repositories:
+  - {match: acme/special, trigger: review-requested, pipeline: main, on_findings: request_changes, on_clean: await}
+  - {match: acme/*, trigger: review-requested, pipeline: main, on_findings: request_changes, on_clean: approve}
+  - {match: solo/*, trigger: \"label:ai:review\", pipeline: side, on_findings: comment, on_clean: comment}
+unmatched: skip
+approval: {timeout_hours: 24}
+notifications:
+  approval_requested: action
+  findings_on_own_pr: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log
+  handoff_reminder: action
+";
+
+    fn prompts(name: &str) -> io::Result<Vec<u8>> {
+        match name {
+            "prompts/main.md" | "prompts/side.md" | "prompts/verifier.md" => {
+                Ok(b"Review the pull request.\n".to_vec())
+            }
+            _ => Err(io::Error::from(io::ErrorKind::NotFound)),
+        }
+    }
+
+    /// Returns the first rule that matches the repository, as the policy resolves it.
+    fn resolve<'a>(policy: &'a Policy, repository: &str) -> Option<&'a Rule> {
+        policy
+            .rules
+            .iter()
+            .find(|rule| matches(&rule.match_glob, repository))
+    }
+
+    /// Sets on_notes comment on the acme/special rule.
+    fn with_handoff(document: &str, hours: &str) -> String {
+        let document =
+            document.replacen("on_clean: await}", "on_clean: await, on_notes: comment}", 1);
+        document.replacen(
+            "approval: {timeout_hours: 24}\n",
+            &format!(
+                "approval: {{timeout_hours: 24}}\nnotes_handoff: {{reminder_hours: {hours}}}\n"
+            ),
+            1,
+        )
+    }
+
+    /// Sets human_review on the approving acme/* rule.
+    fn with_human_review(document: &str, value: &str) -> String {
+        document.replacen(
+            "on_findings: request_changes, on_clean: approve}",
+            &format!("on_findings: request_changes, on_clean: approve, human_review: {value}}}"),
+            1,
+        )
+    }
+
+    /// Reports whether a cause in the chain of error is an I/O not-found error.
+    fn is_not_found(error: &Error) -> bool {
+        let mut current: Option<&(dyn std::error::Error + 'static)> = Some(error);
+        while let Some(cause) = current {
+            if let Some(io_error) = cause.downcast_ref::<io::Error>()
+                && io_error.kind() == io::ErrorKind::NotFound
+            {
+                return true;
+            }
+            current = cause.source();
+        }
+        false
+    }
+
+    #[test]
+    fn valid_policy_parses() {
+        let parsed = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        let special = resolve(&parsed, "acme/special").map(|rule| rule.on_clean);
+        assert_eq!(
+            special,
+            Some(OnClean::Await),
+            "exact rule must win over the later owner rule"
+        );
+        let other = resolve(&parsed, "acme/other").map(|rule| rule.on_clean);
+        assert_eq!(
+            other,
+            Some(OnClean::Approve),
+            "owner rule must cover other repositories"
+        );
+        let again = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        assert!(
+            parsed.digest == again.digest && parsed.digest.len() == 64,
+            "the policy digest must be stable for identical input"
+        );
+    }
+
+    #[test]
+    fn human_review_parses_and_changes_the_digest() {
+        let document = with_human_review(
+            VALID_POLICY,
+            r#"{labels: [needs-human], deleted_tests: ["tests/**"]}"#,
+        );
+        let second = parse(document.as_bytes(), prompts).expect("the human review policy parses");
+        let human = resolve(&second, "acme/other").and_then(|rule| rule.human_review.as_ref());
+        assert!(
+            human.is_some_and(|human| human.labels.join(",") == "needs-human"
+                && human.deleted_tests.join(",") == "tests/**"),
+            "human_review = {human:?}"
+        );
+        let special = resolve(&second, "acme/special").and_then(|rule| rule.human_review.as_ref());
+        assert!(
+            special.is_none(),
+            "a rule without human_review must not get one"
+        );
+    }
+
+    #[test]
+    fn invalid_policy_is_rejected() {
+        let valid = VALID_POLICY;
+        let weaker_re_review = valid
+            .replacen(
+                "  main: {reviewers: [opus], incremental_reviewers: [opus],",
+                "  main: {reviewers: [opus, extra], incremental_reviewers: [opus],",
+                1,
+            )
+            .replacen(
+                "  codex: {protocol: codex-envelope,",
+                "  extra: {protocol: claude-structured, agent_profile: extra-profile, label: Extra, finding_prefix: E}\n  codex: {protocol: codex-envelope,",
+                1,
+            );
+        let cases: Vec<(&str, String, &str)> = vec![
+            ("unknown field", valid.replacen("unmatched: skip", "unmatched: skip\nauto_approve: true", 1), "field auto_approve not found"),
+            ("version", valid.replacen("version: 1", "version: 2", 1), "version must be 1"),
+            ("unmatched", valid.replacen("unmatched: skip", "unmatched: review", 1), "unmatched must be skip"),
+            ("shadowed rule", valid.replacen("  - {match: acme/special,", "  - {match: acme/*, trigger: review-requested, pipeline: main, on_findings: comment, on_clean: comment}\n  - {match: acme/special,", 1), "unreachable"),
+            ("duplicate rule", valid.replacen("  - {match: solo/*,", "  - {match: acme/special, trigger: review-requested, pipeline: main, on_findings: comment, on_clean: comment}\n  - {match: solo/*,", 1), "unreachable"),
+            ("uppercase match", valid.replacen("match: acme/special", "match: Acme/special", 1), "lowercase"),
+            ("bad trigger", valid.replacen("trigger: \"label:ai:review\"", "trigger: assigned", 1), "trigger"),
+            ("unknown pipeline", valid.replacen("pipeline: side", "pipeline: missing", 1), "unknown pipeline"),
+            ("bad on_clean", valid.replacen("on_clean: await", "on_clean: merge", 1), "on_clean"),
+            ("on_notes without notes_handoff", valid.replacen("on_clean: await}", "on_clean: await, on_notes: comment}", 1), "needs notes_handoff.reminder_hours"),
+            ("notes_handoff without on_notes", valid.replacen("approval: {timeout_hours: 24}\n", "approval: {timeout_hours: 24}\nnotes_handoff: {reminder_hours: 24}\n", 1), "no rule sets on_notes"),
+            ("notes_handoff reminder out of range", with_handoff(valid, "0"), "reminder_hours must be between"),
+            ("human_review on an awaiting rule", valid.replacen("on_clean: await}", "on_clean: await, human_review: {labels: [needs-human]}}", 1), "human_review needs on_clean approve"),
+            ("empty human_review", with_human_review(valid, "{}"), "must set labels or deleted_tests"),
+            ("invalid human_review label", with_human_review(valid, "{labels: [\"needs human\"]}"), "human_review labels"),
+            ("duplicate human_review label", with_human_review(valid, "{labels: [needs-human, Needs-Human]}"), "human_review labels"),
+            ("absolute deleted_tests glob", with_human_review(valid, "{deleted_tests: [/tests/**]}"), "human_review deleted_tests"),
+            ("partial double star", with_human_review(valid, "{deleted_tests: [tests/**.php]}"), "human_review deleted_tests"),
+            ("parent segment", with_human_review(valid, "{deleted_tests: [../tests/*]}"), "human_review deleted_tests"),
+            ("broken class", with_human_review(valid, "{deleted_tests: [\"tests/[a\"]}"), "human_review deleted_tests"),
+            ("bad on_notes", valid.replacen("on_clean: await}", "on_clean: await, on_notes: approve}", 1), "on_notes must be comment"),
+            ("on_notes without a manual approval", valid.replacen("on_clean: approve}", "on_clean: approve, on_notes: comment}", 1), "on_notes comment needs on_clean await"),
+            ("on_notes on a label trigger", valid.replacen("on_clean: comment}", "on_clean: await, on_notes: comment}", 1), "on_notes comment needs on_clean await"),
+            ("bad on_findings", valid.replacen("on_findings: comment", "on_findings: ignore", 1), "on_findings"),
+            ("mixed protocols", valid.replacen("reviewers: [opus], incremental", "reviewers: [opus, codex], incremental", 1), "same protocol"),
+            ("incremental outside reviewers", valid.replacen("incremental_reviewers: [opus]", "incremental_reviewers: [codex]", 1), "is not one of its reviewers"),
+            ("unknown reviewer", valid.replacen("reviewers: [opus], incremental", "reviewers: [gpt], incremental", 1), "unknown or repeated reviewer"),
+            ("shared prefix", valid.replacen("finding_prefix: X", "finding_prefix: O", 1), "share finding_prefix"),
+            ("bad protocol", valid.replacen("protocol: codex-envelope", "protocol: plain", 1), "protocol must be"),
+            ("bad checkout", valid.replacen("checkout: head", "checkout: merge", 1), "checkout must be"),
+            ("prompt escapes directory", valid.replacen("prompt: prompts/side.md", "prompt: ../side.md", 1), "inside the policy directory"),
+            ("missing prompt", valid.replacen("prompt: prompts/side.md", "prompt: prompts/none.md", 1), "prompts/none.md"),
+            ("missing event", valid.replacen("  superseded: log\n", "", 1), "event superseded needs a level"),
+            ("unknown event", valid.replacen("  superseded: log\n", "  superseded: log\n  merged: log\n", 1), "unknown event"),
+            ("bad level", valid.replacen("superseded: log", "superseded: telegram", 1), "level must be"),
+            ("approval timeout", valid.replacen("timeout_hours: 24", "timeout_hours: 0", 1), "timeout_hours"),
+            ("no source", valid.replacen("project_sources: [manual]}", "project_sources: []}", 1), "project_sources"),
+            ("second document", format!("{valid}---\nversion: 1\n"), "exactly one YAML document"),
+            ("duplicate key", valid.replacen("unmatched: skip", "unmatched: skip\nunmatched: skip", 1), "mapping key \"unmatched\" already defined"),
+            ("verifier of another protocol", valid.replacen("verifier: {reviewer: opus,", "verifier: {reviewer: codex,", 1), "verifier must use protocol"),
+            ("unknown verifier", valid.replacen("verifier: {reviewer: opus,", "verifier: {reviewer: gpt,", 1), "verifier names unknown reviewer"),
+            ("verifier escalating a note", valid.replacen("escalate_severities: [critical]", "escalate_severities: [medium]", 1), "critical or high once each"),
+            ("verifier without escalation", valid.replacen("escalate_count: 2", "escalate_count: 0", 1), "escalate_count of at least 1"),
+            ("missing verifier prompt", valid.replacen("prompt: prompts/verifier.md", "prompt: prompts/none.md", 1), "prompts/none.md"),
+            ("reserved reviewer id", valid.replacen("  codex: {protocol", "  verifier: {protocol", 1), "invalid or reserved"),
+            ("ready draft author with the app prefix", format!("{valid}ready_draft_authors: [app/devin-ai-integration]\n"), "ready_draft_authors"),
+            ("repeated ready draft author", format!("{valid}ready_draft_authors: [devin, devin]\n"), "ready_draft_authors"),
+            ("weaker re-review before automatic approval", weaker_re_review, "incremental_reviewers equal to reviewers"),
+        ];
+        for (name, document, want) in cases {
+            assert_ne!(
+                document, valid,
+                "{name}: mutation did not change the policy"
+            );
+            match parse(document.as_bytes(), prompts) {
+                Ok(_) => panic!("{name}: parse succeeded, want an error mentioning {want:?}"),
+                Err(error) => assert!(
+                    error.to_string().contains(want),
+                    "{name}: error = {error}, want it to mention {want:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn load_rejects_oversized_prompt() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("prompts")).expect("prompts directory");
+        std::fs::write(
+            root.join("prompts").join("main.md"),
+            "a".repeat(MAX_PROMPT_BYTES + 1),
+        )
+        .expect("main prompt");
+        std::fs::write(root.join("prompts").join("side.md"), "Review.").expect("side prompt");
+        std::fs::write(root.join("policy.yaml"), VALID_POLICY).expect("policy file");
+        match load(&root.join("policy.yaml")) {
+            Ok(_) => panic!("an oversized prompt must be rejected"),
+            Err(error) => assert!(error.to_string().contains("exceeds"), "error = {error}"),
+        }
+        match load(&root.join("missing.yaml")) {
+            Ok(_) => panic!("a missing policy file must be rejected"),
+            Err(error) => assert!(is_not_found(&error), "missing policy error = {error}"),
+        }
+    }
+}

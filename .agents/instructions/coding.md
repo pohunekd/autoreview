@@ -186,6 +186,11 @@ with the expected Rust error code):
   run time (`cmd/autoreview/review.go:38-86`), so this is stricter than Go; Go
   writes only values that passed policy validation, so no Go-written row holds
   one.
+- The policy file is read with `serde_saphyr`. A float in an integer field
+  (Go truncates `24.5` to 24) and a null list entry (Go reads `""`) are refused
+  as invalid YAML. An empty or comment-only file fails the version check instead
+  of Go's `EOF`, and non-UTF-8 input reports the Rust decoding error. Every case
+  stays `configuration_invalid` at the caller (`cmd/autoreview/config.go:195-196`).
 
 Invalid UTF-8 is not a divergence: the process runner decodes child stdout with
 `String::from_utf8_lossy` before parsing, which matches Go's replacement with
