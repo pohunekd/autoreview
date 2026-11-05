@@ -11,6 +11,7 @@ pub(crate) mod prior;
 pub(crate) mod protocol;
 pub mod publish;
 pub mod store;
+pub(crate) mod verify;
 
 #[cfg(test)]
 mod testing;

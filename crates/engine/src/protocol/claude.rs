@@ -2,6 +2,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -35,8 +36,8 @@ autoreview_go_compat::object_only_serde!(ClaudeWrapper);
 
 /// Kind of the message, `result` for the final one.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, remote = "Self")]
-pub(crate) struct ClaudeOuter {
+#[serde(default)]
+pub(crate) struct ClaudeOuter<T> {
     /// Kind of the message, `result` for the final one.
     #[serde(rename = "type")]
     pub(crate) r#type: String,
@@ -47,10 +48,8 @@ pub(crate) struct ClaudeOuter {
     /// Prose result of the session.
     pub(crate) result: String,
     /// Schema-enforced output of the session.
-    pub(crate) structured_output: ClaudeArtifact,
+    pub(crate) structured_output: T,
 }
-
-autoreview_go_compat::object_only_serde!(ClaudeOuter);
 
 /// Repository that the review covers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,7 +119,7 @@ impl ClaudeFinding {
 /// the pull request or that has a finding the engine refuses.
 #[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn parse_claude_output(pr: &PullRequest, raw: &str) -> Result<ReviewerResult, Error> {
-    let artifact = decode_structured(raw)?;
+    let artifact: ClaudeArtifact = decode_structured(raw)?;
     if artifact.repository != pr.repository
         || artifact.number != pr.number
         || artifact.head_sha != pr.head_sha
@@ -160,7 +159,10 @@ pub(crate) fn parse_claude_output(pr: &PullRequest, raw: &str) -> Result<Reviewe
 /// Reads the schema-enforced structured output of a finished Claude session.
 ///
 /// The prose result is checked against the structured output by `check_prose_agreement`.
-fn decode_structured(raw: &str) -> Result<ClaudeArtifact, Error> {
+pub(crate) fn decode_structured<T>(raw: &str) -> Result<T, Error>
+where
+    T: DeserializeOwned + PartialEq + Default,
+{
     if raw.trim().is_empty() {
         return Err(Error::workflow("review_output_incomplete", false, None));
     }
@@ -178,7 +180,13 @@ fn decode_structured(raw: &str) -> Result<ClaudeArtifact, Error> {
     let stdout = decode_go_base64(&wrapper.stdout_base64).ok_or_else(wrapper_invalid)?;
     let text = go_utf8_lossy(&stdout);
     refuse_case_variant_keys(&text, "claude_result_invalid")?;
-    let outer: ClaudeOuter = serde_json::from_str(&text).map_err(|_| result_invalid())?;
+    if !text
+        .trim_start_matches([' ', '\t', '\n', '\r'])
+        .starts_with('{')
+    {
+        return Err(result_invalid());
+    }
+    let outer: ClaudeOuter<T> = serde_json::from_str(&text).map_err(|_| result_invalid())?;
     if outer.r#type != "result" || outer.subtype != "success" || outer.is_error {
         return Err(result_invalid());
     }
@@ -190,7 +198,10 @@ fn decode_structured(raw: &str) -> Result<ClaudeArtifact, Error> {
 ///
 /// Prose that is not a JSON object or `null` is not compared. A JSON object or `null` must read
 /// as the same artifact, so a duplicate key, a null field or a type error in it is refused.
-fn check_prose_agreement(prose: &str, structured: &ClaudeArtifact) -> Result<(), Error> {
+fn check_prose_agreement<T>(prose: &str, structured: &T) -> Result<(), Error>
+where
+    T: DeserializeOwned + PartialEq,
+{
     let value: Value = match serde_json::from_str(prose) {
         Ok(v) => v,
         Err(_) => return Ok(()),
@@ -201,7 +212,7 @@ fn check_prose_agreement(prose: &str, structured: &ClaudeArtifact) -> Result<(),
     if value.is_object() {
         refuse_case_variant_keys(prose, "claude_result_mismatch")?;
     }
-    let parsed: ClaudeArtifact = match serde_json::from_str(prose) {
+    let parsed: T = match serde_json::from_str(prose) {
         Ok(v) => v,
         Err(_) => return Err(claude_mismatch()),
     };
