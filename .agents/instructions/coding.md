@@ -101,7 +101,10 @@ follow:
   `integrations.go:51-55`) and `schedule::Record` (discovery entry `schedule`).
   Every persisted struct has `#[serde(default)]` at container level (Go leaves a
   missing field at its zero value) and no `deny_unknown_fields` (Go ignores
-  unknown fields).
+  unknown fields). It also has `remote = "Self"` in that attribute and an
+  `autoreview_go_compat::object_only_serde!` call, so a JSON array is refused
+  as Go refuses it. Read such a type only through the serde traits; its
+  inherent `deserialize` function still accepts an array.
 - **R5 Null-tolerant collections.** Every `Vec` and map field whose Go tag has
   no `omitempty` deserializes JSON `null` as empty through
   `autoreview_go_compat::null_default` (Go marshals a nil slice or map as
@@ -211,11 +214,6 @@ with the expected Rust error code):
   is refused; an empty or comment-only file fails the version check instead of
   Go's `EOF`; non-UTF-8 input reports the Rust decoding error. Every case stays
   `configuration_invalid` at the caller (`cmd/autoreview/config.go:195-196`).
-- Known gap until #125: serde's derived `Deserialize` also reads a persisted
-  struct from a JSON array, by position, so `[]` reads as the zero value where
-  Go refuses it with `cannot unmarshal array`. This holds for the policy,
-  schedule and engine types. Neither engine writes such a row; #125 adds an
-  object-only deserializer adapter in `autoreview-go-compat`.
 
 Invalid UTF-8 is not a divergence: the process runner decodes child stdout with
 `String::from_utf8_lossy` before parsing, which matches Go's replacement with
