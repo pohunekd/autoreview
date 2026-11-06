@@ -19,10 +19,13 @@ use crate::config::Config;
 use crate::engine::{Clock, Engine, SystemClock};
 use crate::error::Error;
 use crate::integrations::SessionRequest;
-use crate::model::{PollResult, PullRequest};
+use crate::model::{
+    ApprovalResult, ApproveRequest, PollResult, PullRequest, ResolveRequest, ResolveResult,
+    RetryRequest, RetryResult,
+};
 use crate::protocol::fixtures::sha;
 use crate::protocol::validate::tests::test_config;
-use crate::store::Store;
+use crate::store::{REVIEW_AWAITING, Store};
 
 /// A clock that moves only when a wait ends, so retry tests never sleep.
 pub(crate) struct FakeClock {
@@ -76,8 +79,14 @@ const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Pause between two checks of [`Harness::wait_for`].
 const WAIT_PAUSE: Duration = Duration::from_millis(100);
 
-/// Pause between two polls of [`Harness::poll_until`].
+/// Pause between two polls of [`Harness::poll_until`] and [`Harness::settle`].
 const POLL_PAUSE: Duration = Duration::from_millis(150);
+
+/// Number of discovery polls that [`Harness::settle`] runs.
+const SETTLE_POLLS: usize = 5;
+
+/// Length of the head prefix that the harness resolves and retries reviews by.
+pub(crate) const HEAD_PREFIX_CHARS: usize = 12;
 
 /// The engine of a harness: the fake integration and the process clock.
 pub(crate) type HarnessEngine = Engine<FakeIntegration, SystemClock>;
@@ -232,6 +241,16 @@ impl Harness {
             .expect("the discovery poll succeeds")
     }
 
+    /// Polls past the scheduling debounce so the worker can start what the polls queued.
+    ///
+    /// A review that must not start had the chance to.
+    pub(crate) async fn settle(&self) {
+        for _ in 0..SETTLE_POLLS {
+            self.poll().await;
+            tokio::time::sleep(POLL_PAUSE).await;
+        }
+    }
+
     /// Polls discovery until `condition` holds.
     pub(crate) async fn poll_until(&self, description: &str, condition: impl Fn() -> bool) {
         let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
@@ -248,6 +267,21 @@ impl Harness {
     pub(crate) async fn wait_for(&self, description: &str, condition: impl Fn() -> bool) {
         let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
         while !condition() {
+            if tokio::time::Instant::now() > deadline {
+                self.time_out(description);
+            }
+            tokio::time::sleep(WAIT_PAUSE).await;
+        }
+    }
+
+    /// Waits until the asynchronous `condition` holds.
+    pub(crate) async fn wait_for_async(
+        &self,
+        description: &str,
+        condition: impl AsyncFn() -> bool,
+    ) {
+        let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
+        while !condition().await {
             if tokio::time::Instant::now() > deadline {
                 self.time_out(description);
             }
@@ -293,6 +327,52 @@ impl Harness {
         self.fake.snapshot().2.len()
     }
 
+    /// Resolves the waiting review of `pr` by the prefix of its head.
+    pub(crate) fn resolve(&self, pr: &PullRequest) -> Result<ResolveResult, Error> {
+        let request = ResolveRequest {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            head_prefix: pr.head_sha[..HEAD_PREFIX_CHARS].to_owned(),
+        };
+        self.engine.resolve(&CancellationToken::new(), &request)
+    }
+
+    /// Approves the review `workflow_id` of `pr` at its full head.
+    pub(crate) fn approve(
+        &self,
+        workflow_id: &str,
+        pr: &PullRequest,
+    ) -> Result<ApprovalResult, Error> {
+        let request = ApproveRequest {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            head_sha: pr.head_sha.clone(),
+        };
+        self.engine
+            .approve(&CancellationToken::new(), workflow_id, &request)
+    }
+
+    /// Approves the review of `pr` once it is stored as awaiting.
+    ///
+    /// The approval request is sent before that status is stored, and `approve` refuses a
+    /// review that is not awaiting yet.
+    pub(crate) async fn approve_when_awaiting(
+        &self,
+        pr: &PullRequest,
+    ) -> Result<ApprovalResult, Error> {
+        let resolved = self
+            .resolve(pr)
+            .expect("the review of the pull request resolves");
+        self.wait_for("the stored approval wait", || {
+            matches!(
+                self.store.get_review(&resolved.workflow_id),
+                Ok(Some(stored)) if stored.status == REVIEW_AWAITING
+            )
+        })
+        .await;
+        self.approve(&resolved.workflow_id, pr)
+    }
+
     /// Reports whether the review of the first started session has stored the step `name`.
     pub(crate) fn step_recorded(&self, name: &str) -> bool {
         let (_, _, started, _) = self.fake.snapshot();
@@ -303,6 +383,16 @@ impl Harness {
             self.store.load_step::<bool>(&first.workflow_id, name),
             Ok(Some(_))
         )
+    }
+
+    /// Retries the stopped review of `pr` by the prefix of its head.
+    pub(crate) async fn retry(&self, pr: &PullRequest) -> Result<RetryResult, Error> {
+        let request = RetryRequest {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            head_sha: pr.head_sha[..HEAD_PREFIX_CHARS].to_owned(),
+        };
+        self.engine.retry(&CancellationToken::new(), &request).await
     }
 
     /// Returns the rule of the integration policy for `repository`.
