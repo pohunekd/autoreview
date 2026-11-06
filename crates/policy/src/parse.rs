@@ -604,7 +604,7 @@ fn parse_pipelines(
                 max: MAX_REVIEWERS_PER_PR,
             });
         };
-        let first_protocol = first.protocol;
+        let first_protocol = first.protocol.clone();
         if selected
             .iter()
             .any(|reviewer| reviewer.protocol != first_protocol)
@@ -905,7 +905,7 @@ fn parse_rule(
         // follow it.
         return Err(Error::RuleOnNotesNeedsAwait);
     }
-    let human_review = parse_human_review(value.human_review.as_ref(), on_clean)?;
+    let human_review = parse_human_review(value.human_review.as_ref(), on_clean.clone())?;
     Ok(Rule {
         match_glob: value.match_glob.clone(),
         trigger,
@@ -966,16 +966,16 @@ fn parse_notifications(
                 });
             }
         };
-        notifications.insert(*event, level);
+        notifications.insert(event.clone(), level);
     }
     Ok(notifications)
 }
 
 /// Returns the value among values whose text is raw.
-fn find_value<T: Copy>(values: &[T], raw: &str, text: fn(T) -> &'static str) -> Option<T> {
+fn find_value<T: Clone>(values: &[T], raw: &str, text: fn(&T) -> &str) -> Option<T> {
     for value in values {
-        if text(*value) == raw {
-            return Some(*value);
+        if text(value) == raw {
+            return Some(value.clone());
         }
     }
     None
@@ -1124,13 +1124,17 @@ notifications:
     #[test]
     fn valid_policy_parses() {
         let parsed = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
-        let special = parsed.resolve("acme/special").map(|rule| rule.on_clean);
+        let special = parsed
+            .resolve("acme/special")
+            .map(|rule| rule.on_clean.clone());
         assert_eq!(
             special,
             Some(OnClean::Await),
             "exact rule must win over the later owner rule"
         );
-        let other = parsed.resolve("acme/other").map(|rule| rule.on_clean);
+        let other = parsed
+            .resolve("acme/other")
+            .map(|rule| rule.on_clean.clone());
         assert_eq!(
             other,
             Some(OnClean::Approve),
@@ -1172,9 +1176,13 @@ notifications:
             third.is_ok_and(|third| third.digest() != second.digest()),
             "a reminder change must change the policy digest"
         );
-        let special = second.resolve("acme/special").map(|rule| rule.on_notes);
+        let special = second
+            .resolve("acme/special")
+            .map(|rule| rule.on_notes.clone());
         assert_eq!(special, Some(OnNotes::Comment), "on_notes");
-        let other = second.resolve("acme/other").map(|rule| rule.on_notes);
+        let other = second
+            .resolve("acme/other")
+            .map(|rule| rule.on_notes.clone());
         assert_eq!(
             other,
             Some(OnNotes::Unset),
