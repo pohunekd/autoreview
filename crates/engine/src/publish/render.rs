@@ -12,7 +12,7 @@ use crate::integrations::{GitHubReview, InlineComment};
 use crate::messages::excerpt;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Artifact, Finding, PriorResult, ReviewInput};
-use crate::verify::verification_line;
+use crate::verify::{demoted, verification_line};
 
 /// Configured values that shape the rendered review.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,13 +191,17 @@ fn own_pull_request_notice(
         || (total == 0 && input.rule.approves_clean())
 }
 
-/// Lists the validation the reviewers performed, each test neutralized.
+/// Lists the validation the reviewers performed in a collapsed section, each test neutralized.
 fn validation_section(tests: &[String]) -> String {
     let lines: Vec<String> = tests
         .iter()
         .map(|test| format!("- {}", neutralize(test)))
         .collect();
-    format!("### Validation performed\n{}", lines.join("\n"))
+    format!(
+        "<details>\n<summary>Validation performed: {} check(s)</summary>\n\n{}\n\n</details>",
+        tests.len(),
+        lines.join("\n")
+    )
 }
 
 /// Reports whether a text exceeds a GitHub limit. A length that does not fit `i64` is too large.
@@ -218,17 +222,24 @@ fn finding_heading(finding: &Finding) -> String {
 }
 
 /// Lists the non-blocking notes in a collapsed section that opens no inline thread.
+///
+/// A note shows its heading and location. Only a note the verifier demoted keeps its body,
+/// which carries the reason.
 fn render_notes(notes: &[Finding]) -> String {
     let items: Vec<String> = notes
         .iter()
         .map(|note| {
-            format!(
-                "{}\n`{}:{}`\n\n{}",
+            let location = format!(
+                "{}\n`{}:{}`",
                 finding_heading(note),
                 neutralize(&note.path),
-                note.line,
-                model_text(&note.body)
-            )
+                note.line
+            );
+            if demoted(note) {
+                format!("{location}\n\n{}", model_text(&note.body))
+            } else {
+                location
+            }
         })
         .collect();
     format!(
@@ -407,6 +418,14 @@ mod tests {
 
     /// Go-written render cases: the input and the GitHub review or the error code.
     const GOLDEN: &str = include_str!("../../../../testdata/parity/render.json");
+
+    /// Golden case whose note body the Rust review leaves out (#175).
+    const NOTE_BODY_CASE: &str = "notes_handed_to_author";
+
+    /// Note body of `NOTE_BODY_CASE` in the Go review.
+    ///
+    /// The Rust review leaves it out and renders the rest of the case unchanged.
+    const GO_NOTE_BODY: &str = "\n\nRename it:\n```go\nfunc better() {\n```";
 
     /// One golden case: a named input, and either the Go review or the Go error code.
     #[derive(Debug, Deserialize)]
@@ -819,9 +838,13 @@ mod tests {
                 && notes.contains("O002"),
             "notes section = {notes}"
         );
+        let location_only = concat!(
+            "**O002 LOW — Naming** (confidence: high, Opus)\n",
+            "`src/a.go:4`\n\n</details>"
+        );
         assert!(
-            notes.contains("```\n\n</details>"),
-            "an unclosed fence of a note must be closed before the section ends:\n{notes}"
+            notes.contains(location_only) && !notes.contains("Rename it"),
+            "a note must show its heading and location only:\n{notes}"
         );
         let message = approval_requested_message(
             200,
@@ -1068,7 +1091,12 @@ mod tests {
                 (None, Some(want)) => {
                     let review = result.expect("golden case renders");
                     assert_eq!(review.decision, want.decision, "case {}", case.name);
-                    assert_eq!(review.body, want.body, "case {}", case.name);
+                    let mut body = want.body.clone();
+                    if case.name == NOTE_BODY_CASE {
+                        assert!(body.contains(GO_NOTE_BODY), "case {}", case.name);
+                        body = body.replacen(GO_NOTE_BODY, "", 1);
+                    }
+                    assert_eq!(review.body, body, "case {}", case.name);
                     assert_eq!(review.marker, want.marker, "case {}", case.name);
                     let comments: Vec<GoComment> = review
                         .comments
