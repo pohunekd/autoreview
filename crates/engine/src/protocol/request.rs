@@ -274,6 +274,46 @@ mod tests {
     }
 
     #[test]
+    fn reviewer_requests_state_the_configured_output_limits() {
+        let mut cfg = test_config();
+        cfg.min_summary_characters = 40;
+        cfg.max_summary_characters = 600;
+        cfg.max_title_characters = 120;
+        cfg.max_body_characters = 900;
+        let limits = concat!(
+            "Output limits: the summary has 40 to 600 characters. Each finding has a one-line ",
+            "title of at most 120 characters and a body of at most 900 characters. Output ",
+            "outside these limits is refused."
+        );
+        let pr = test_pull_request(9);
+        let raw = build_reviewer_request(
+            &cfg,
+            &test_input(&opus(), pr.clone()),
+            &opus(),
+            &Discussion::default(),
+        )
+        .expect("claude request builds");
+        let request: serde_json::Value =
+            serde_json::from_str(&raw).expect("claude request is JSON");
+        let prompt = request["prompt"].as_str().expect("prompt is a string");
+        assert!(
+            prompt.contains(&format!("\n\n{limits}\n\nTrusted request context:\n")),
+            "claude prompt = {prompt}"
+        );
+        let prompt = build_reviewer_request(
+            &cfg,
+            &test_input(&codex(), pr),
+            &codex(),
+            &Discussion::default(),
+        )
+        .expect("codex prompt builds");
+        assert!(
+            prompt.contains(&format!("\n\n{limits}\n\nTrusted review context:\n")),
+            "codex prompt = {prompt}"
+        );
+    }
+
+    #[test]
     fn schema_copies_are_equal() {
         assert_eq!(
             REVIEW_SCHEMA,
