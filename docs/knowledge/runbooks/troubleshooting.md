@@ -232,7 +232,8 @@ pull request appears.
 Check that the `*_env` variable is set without printing it:
 `test -n "$AUTOREVIEW_WEBHOOK_URL" && echo set`. A `digest` or `log` message
 that cannot be delivered is dropped with a warning. An `action` message that
-cannot be delivered fails the step, and the step is retried. Test a backend
+cannot be delivered fails the step, and the step is retried; a failed
+`approval_requested` request is logged and the review keeps waiting. Test a backend
 with `autoreview review-queue`, which sends the queue to `notify.review_queue.backends`.
 
 ## Approval errors

@@ -15,6 +15,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, WORKFLOW_FAILED};
@@ -120,6 +121,8 @@ pub(crate) struct FakeState {
     pub(crate) queue_transactions: Vec<String>,
     /// Number of leading send attempts that fail transiently.
     pub(crate) queue_failures: usize,
+    /// Text of the notifications to hold, and the gate they wait on. `None` holds none.
+    pub(crate) held_notes: Option<(String, Arc<Semaphore>)>,
 }
 
 /// The fake of the [`Integrations`] boundary.
@@ -195,6 +198,15 @@ impl FakeIntegration {
     pub(crate) fn has_note(&self, level: Level, fragment: &str) -> bool {
         let (_, notes, _, _) = self.snapshot();
         count_notes(&notes, level, fragment) > 0
+    }
+
+    /// Holds every notification that contains `fragment` after it is recorded.
+    ///
+    /// A held notification returns once the returned gate has a permit.
+    pub(crate) fn hold_notes(&self, fragment: &str) -> Arc<Semaphore> {
+        let gate = Arc::new(Semaphore::new(0));
+        self.lock().held_notes = Some((fragment.to_owned(), Arc::clone(&gate)));
+        gate
     }
 }
 
@@ -580,14 +592,25 @@ impl Integrations for FakeIntegration {
         level: Level,
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        {
+        let gate = {
             let mut state = self.lock();
             state.notes.push(Note {
                 level,
                 message: message.to_string(),
             });
+            state
+                .held_notes
+                .as_ref()
+                .filter(|(fragment, _)| message.contains(fragment.as_str()))
+                .map(|(_, gate)| Arc::clone(gate))
+        };
+        async move {
+            if let Some(gate) = gate {
+                // The permit goes back when it drops, so one permit releases every held note.
+                let _permit = gate.acquire().await;
+            }
+            Ok(())
         }
-        ready(Ok(()))
     }
 }
 
