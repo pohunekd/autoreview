@@ -84,7 +84,6 @@ pub(crate) fn plan_publication(
 }
 
 /// Names the notification of a published review; `blocking` is its number of blocking findings.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 pub(crate) fn publication_event(plan: PublicationPlan, blocking: usize) -> Event {
     if plan.decision == Decision::Approve {
         Event::Approved

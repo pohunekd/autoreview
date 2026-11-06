@@ -118,7 +118,6 @@ pub(crate) struct VerificationClaims {
 }
 
 /// Verdicts of the verifier that the engine keeps after the output is checked.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct VerifierResult {

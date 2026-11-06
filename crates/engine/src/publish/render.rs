@@ -37,7 +37,6 @@ const OWN_PULL_REQUEST: &str = "GitHub does not let the reviewing account approv
 ///
 /// Anchored findings become inline comments and everything else goes in the body. The signature
 /// closes the body and every comment, and each block of model text has its fences closed.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 pub(crate) fn render_review(
     settings: &RenderSettings,
     input: &ReviewInput,

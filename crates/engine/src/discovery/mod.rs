@@ -20,6 +20,7 @@ use crate::store::DiscoveryState;
 pub(crate) mod commands;
 pub(crate) mod plan;
 pub(crate) mod poll;
+pub(crate) mod records;
 
 /// Error code of an engine whose configuration lacks a usable policy.
 const CONFIGURATION_INVALID: &str = "configuration_invalid";
