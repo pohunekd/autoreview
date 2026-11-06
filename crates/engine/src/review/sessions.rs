@@ -76,7 +76,6 @@ pub(crate) fn session_fault_from(err: Error) -> Error {
 }
 
 /// Reports whether `err` or an error in its chain is a [`SessionFault`].
-#[expect(dead_code, reason = "called by S26")]
 pub(crate) fn is_session_fault(err: &Error) -> bool {
     chain_has::<SessionFault>(err)
 }
