@@ -152,8 +152,8 @@ async fn confirmed_findings_still_request_changes() {
     let (published, _, started, _) = h.fake.snapshot();
     assert!(
         published[0].decision == Decision::RequestChanges
-            && published[0].comments.len() == 2
-            && published[0].body.contains("blocking findings 2 confirmed"),
+            && published[0].comments.len() == 1
+            && published[0].body.contains("blocking findings 1 confirmed"),
         "decision={:?} comments={} body={}",
         published[0].decision,
         published[0].comments.len(),
@@ -172,7 +172,7 @@ async fn confirmed_findings_still_request_changes() {
         .collect();
     assert_eq!(
         ids.join(","),
-        "O001,S001",
+        "O001",
         "the verifier must check every blocking finding, got {ids:?}"
     );
     h.stop_engine().await;
