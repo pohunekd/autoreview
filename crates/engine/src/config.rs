@@ -269,6 +269,10 @@ pub struct Config {
     pub terminal_rows: i64,
     /// The pohunek-companion group that every review session is placed in.
     pub session_group: String,
+    /// Prefix of every review session name.
+    pub session_name_prefix: String,
+    /// Prefix of every reviewer branch on the review host.
+    pub session_branch_prefix: String,
 }
 
 impl fmt::Debug for Config {
@@ -1086,6 +1090,8 @@ mod tests {
             terminal_cols: 120,
             terminal_rows: 100,
             session_group: "autoreview".to_owned(),
+            session_name_prefix: "github-review-".to_owned(),
+            session_branch_prefix: "autoreview/review/".to_owned(),
         }
     }
 

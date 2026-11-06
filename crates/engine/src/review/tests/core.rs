@@ -89,6 +89,30 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
 }
 
 #[tokio::test]
+async fn review_sessions_use_the_configured_name_and_branch_prefixes() {
+    let mut h = start_harness(|cfg| {
+        cfg.session_name_prefix = "team-review-".to_owned();
+        cfg.session_branch_prefix = "team/review/".to_owned();
+    })
+    .await;
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("an automatic approval", || h.publications() == 1)
+        .await;
+    let (_, _, started, _) = h.fake.snapshot();
+    assert_eq!(started.len(), 2, "started = {started:?}");
+    for request in &started {
+        let token = format!(
+            "{}-{}-run{}",
+            request.workflow_id, request.reviewer.id, request.run
+        );
+        assert_eq!(request.name(), format!("team-review-{token}"));
+        assert_eq!(request.branch(), format!("team/review/{token}"));
+    }
+    h.stop_engine().await;
+}
+
+#[tokio::test]
 async fn findings_request_changes_and_the_next_head_gets_a_full_review() {
     let mut h = start_harness(|_| {}).await;
     h.set_output(reviewer_output(vec![json!({

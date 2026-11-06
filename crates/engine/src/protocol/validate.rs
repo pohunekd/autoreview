@@ -345,6 +345,8 @@ pub(crate) mod tests {
             terminal_cols: 120,
             terminal_rows: 100,
             session_group: "autoreview".to_owned(),
+            session_name_prefix: "github-review-".to_owned(),
+            session_branch_prefix: "autoreview/review/".to_owned(),
         }
     }
 
