@@ -35,8 +35,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow("review_identity_invalid", true, None));
         }
         self.with_discovery(|| async {
+            live(cancel)?;
             self.store.update_discovery(|state, _| {
-                live(cancel)?;
                 state.awaiting.insert(record.key(), record.clone());
                 Ok(())
             })
@@ -55,8 +55,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         record: &AwaitRecord,
     ) -> Result<(), Error> {
         self.with_discovery(|| async {
+            live(cancel)?;
             self.store.update_discovery(|state, _| {
-                live(cancel)?;
                 let key = record.key();
                 if state
                     .awaiting
@@ -88,8 +88,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow("review_identity_invalid", true, None));
         }
         self.with_discovery(|| async {
+            live(cancel)?;
             self.store.update_discovery(|state, _| {
-                live(cancel)?;
                 let key = record.key();
                 state.published.insert(key.clone(), record.clone());
                 if state
