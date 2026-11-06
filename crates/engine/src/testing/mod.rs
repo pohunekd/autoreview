@@ -3,5 +3,4 @@
 // Rust guideline compliant 2026-06-26
 
 pub(crate) mod fake;
-#[expect(dead_code, reason = "called by S30")]
 pub(crate) mod harness;
