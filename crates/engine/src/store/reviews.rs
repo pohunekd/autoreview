@@ -152,25 +152,26 @@ impl Store {
         limit: i64,
     ) -> Result<Vec<StoredReview>, Error> {
         let connection = self.lock_connection()?;
+        let created = time_key("created_at");
         match filter {
             ReviewFilter::All => {
                 let sql = format!(
                     "SELECT {REVIEW_COLUMNS} FROM reviews \
-                     ORDER BY created_at DESC, workflow_id LIMIT ?1"
+                     ORDER BY {created} DESC, workflow_id LIMIT ?1"
                 );
                 collect_reviews(&connection, &sql, &[&limit])
             }
             ReviewFilter::ReviewKey(key) => {
                 let sql = format!(
                     "SELECT {REVIEW_COLUMNS} FROM reviews WHERE review_key = ?1 \
-                     ORDER BY created_at DESC, workflow_id LIMIT ?2"
+                     ORDER BY {created} DESC, workflow_id LIMIT ?2"
                 );
                 collect_reviews(&connection, &sql, &[key, &limit])
             }
             ReviewFilter::AwaitingUndecided => {
                 let sql = format!(
                     "SELECT {REVIEW_COLUMNS} FROM reviews WHERE status = ?1 AND approval IS NULL \
-                     ORDER BY created_at DESC, workflow_id LIMIT ?2"
+                     ORDER BY {created} DESC, workflow_id LIMIT ?2"
                 );
                 collect_reviews(&connection, &sql, &[&REVIEW_AWAITING, &limit])
             }
@@ -223,10 +224,11 @@ impl Store {
     /// when SQLite fails.
     pub fn ready_reviews(&self) -> Result<Vec<StoredReview>, Error> {
         let connection = self.lock_connection()?;
+        let created = time_key("created_at");
         let sql = format!(
             "SELECT {REVIEW_COLUMNS} FROM reviews \
              WHERE status IN (?1, ?2) OR (status = ?3 AND approval IS NOT NULL) \
-             ORDER BY created_at, workflow_id"
+             ORDER BY {created}, workflow_id"
         );
         collect_reviews(
             &connection,
@@ -234,6 +236,21 @@ impl Store {
             &[&REVIEW_QUEUED, &REVIEW_RUNNING, &REVIEW_AWAITING],
         )
     }
+}
+
+/// Returns SQL that maps stored time text `operand` to a time-ordered key.
+///
+/// Both engines write UTC text with the fraction's trailing zeros trimmed, so as text
+/// `...:05.5Z` sorts before `...:05Z`. The key is the text up to the seconds followed by the
+/// fraction padded to nine digits.
+fn time_key(operand: &str) -> String {
+    format!(
+        "(CASE WHEN instr({operand}, '.') > 0 \
+         THEN substr({operand}, 1, instr({operand}, '.') - 1) \
+         || substr(substr({operand}, instr({operand}, '.') + 1, \
+         length({operand}) - instr({operand}, '.') - 1) || '000000000', 1, 9) \
+         ELSE substr({operand}, 1, length({operand}) - 1) || '000000000' END)"
+    )
 }
 
 /// Maps a SQLite failure to `store_unavailable`.
@@ -563,11 +580,13 @@ impl Store {
     /// Returns `store_unavailable` when SQLite fails.
     pub fn prune_reviews(&self, cutoff: OffsetDateTime) -> Result<i64, Error> {
         let connection = self.lock_connection()?;
+        let sql = format!(
+            "DELETE FROM reviews WHERE status = ?1 AND {} < {}",
+            time_key("updated_at"),
+            time_key("?2")
+        );
         let rows = connection
-            .execute(
-                "DELETE FROM reviews WHERE status = ?1 AND updated_at < ?2",
-                params![REVIEW_COMPLETED, format_rfc3339_nano(cutoff)],
-            )
+            .execute(&sql, params![REVIEW_COMPLETED, format_rfc3339_nano(cutoff)])
             .map_err(unavailable)?;
         Ok(i64::try_from(rows).unwrap_or(i64::MAX))
     }
@@ -668,6 +687,8 @@ impl Store {
 }
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex, PoisonError};
+
     use autoreview_policy::{
         Checkout, OnClean, OnFindings, Pipeline, Protocol, Reviewer, Rule, Trigger, TriggerKind,
     };
@@ -678,6 +699,8 @@ mod tests {
     use crate::model::ReviewInput;
     use crate::model::ids::INPUT_VERSION;
     use crate::store::Store;
+
+    use super::{RESULT_SUCCESS, ReviewFilter, StoredReview};
 
     /// Approval decision that approves a review, the Go `approvalKindApprove`.
     const APPROVAL_APPROVE: &str = "approve";
@@ -876,5 +899,54 @@ mod tests {
             .run_history(0)
             .expect_err("a history above the limit must fail closed");
         assert_eq!(crate::error_code(&err), "review_history_limit_exceeded");
+    }
+
+    /// Two instants in one second order and prune by time, not by their text (#120).
+    #[test]
+    fn reviews_in_one_second_order_and_prune_by_time() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let whole = OffsetDateTime::UNIX_EPOCH;
+        let half = whole + time::Duration::milliseconds(500);
+        let clock = Arc::new(Mutex::new(whole));
+        let now = Arc::clone(&clock);
+        let store = Store::open(
+            &dir.path().join("state.db"),
+            Box::new(move || *now.lock().unwrap_or_else(PoisonError::into_inner)),
+        )
+        .expect("open store");
+        let set_clock = |at: OffsetDateTime| {
+            *clock.lock().unwrap_or_else(PoisonError::into_inner) = at;
+        };
+        let input = test_input(
+            test_rule(OnFindings::RequestChanges, OnClean::Approve),
+            test_pull_request(5),
+        );
+        enqueue_test_review(&store, "review-whole", &input);
+        set_clock(half);
+        enqueue_test_review(&store, "review-half", &input);
+        let ids = |reviews: Vec<StoredReview>| -> Vec<String> {
+            reviews
+                .into_iter()
+                .map(|review| review.workflow_id)
+                .collect()
+        };
+        let listed = store.list_reviews(&ReviewFilter::All, 10).expect("list");
+        assert_eq!(listed[0].created_at, "1970-01-01T00:00:00.5Z");
+        assert_eq!(listed[1].created_at, "1970-01-01T00:00:00Z");
+        assert_eq!(ids(listed), ["review-half", "review-whole"]);
+        let ready = store.ready_reviews().expect("ready reviews");
+        assert_eq!(ids(ready), ["review-whole", "review-half"]);
+        set_clock(whole);
+        store
+            .complete_review("review-whole", RESULT_SUCCESS, "", None)
+            .expect("complete");
+        set_clock(half);
+        store
+            .complete_review("review-half", RESULT_SUCCESS, "", None)
+            .expect("complete");
+        assert_eq!(store.prune_reviews(whole).expect("prune"), 0);
+        assert_eq!(store.prune_reviews(half).expect("prune"), 1);
+        let left = store.list_reviews(&ReviewFilter::All, 10).expect("list");
+        assert_eq!(ids(left), ["review-half"]);
     }
 }
