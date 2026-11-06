@@ -179,6 +179,7 @@ impl GitHub {
 #[serde(default, remote = "Self")]
 struct Viewer {
     /// Login of the account.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     login: String,
 }
 

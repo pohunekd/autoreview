@@ -4,6 +4,7 @@
 
 pub mod go_time;
 pub mod null_default;
+pub mod null_entries;
 pub mod object_only;
 
 /// Errors from the Go-compatible time helpers.

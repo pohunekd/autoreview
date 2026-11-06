@@ -234,8 +234,12 @@ fn commentable_lines_from_patch(patch: &str) -> Result<Vec<i64>, Error> {
     Ok(result)
 }
 /// Decodes one page of the changed-files API; `null` is refused and an empty list is accepted.
+///
+/// A `null` entry is a file with an empty name, which the path check refuses.
 fn decode_files_page(output: &str) -> Result<Vec<ChangedFileRecord>, Error> {
-    serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))
+    let entries: Vec<Option<ChangedFileRecord>> =
+        serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    Ok(autoreview_go_compat::null_entries::zero_entries(entries))
 }
 
 /// Returns the argv of one page of the changed-files API (`github.go:685-700`).

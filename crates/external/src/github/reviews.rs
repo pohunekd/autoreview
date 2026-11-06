@@ -138,8 +138,9 @@ fn review_page_step(
     head_sha: &str,
     login: &str,
 ) -> Result<PageStep, Error> {
-    let records: Vec<GitHubReviewRecord> =
+    let entries: Vec<Option<GitHubReviewRecord>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let records = autoreview_go_compat::null_entries::zero_entries(entries);
     for record in &records {
         let marker_found = record.body.contains(&review.marker);
         let has_id = record.id > 0;
