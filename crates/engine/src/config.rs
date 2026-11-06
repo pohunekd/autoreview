@@ -2,7 +2,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::Ipv6Addr;
 use std::time::Duration;
@@ -22,6 +22,9 @@ const CONFIGURATION_INVALID: &str = "configuration_invalid";
 
 /// Name of the configuration that a validation error reports.
 const CONFIG_NAME: &str = "config";
+
+/// Prefix of every variable that a `*_env` key of the configuration names.
+pub const SECRET_ENV_PREFIX: &str = "AUTOREVIEW_";
 
 /// Host that the GitHub login and token belong to.
 const GITHUB_HOST: &str = "github.com";
@@ -159,6 +162,10 @@ pub struct Config {
     pub matrix_homeserver_url: String,
     /// The Matrix access token; it never appears in debug output.
     pub matrix_access_token: String,
+    /// Names of the variables that hold the configured secrets.
+    ///
+    /// No child process inherits them; the `gh` child gets its token as `GH_TOKEN`.
+    pub secret_variables: BTreeSet<String>,
     /// The Matrix user that action messages mention.
     pub matrix_mention_user: String,
     /// The Matrix rooms of the three notification levels.
@@ -1023,6 +1030,7 @@ mod tests {
             route_overrides: std::collections::BTreeMap::new(),
             matrix_homeserver_url: "https://matrix.example.org".to_owned(),
             matrix_access_token: "placeholder-token".to_owned(),
+            secret_variables: std::collections::BTreeSet::new(),
             matrix_mention_user: "@example-user:example.org".to_owned(),
             matrix_rooms: MatrixRooms {
                 action: "!action:example.org".to_owned(),
