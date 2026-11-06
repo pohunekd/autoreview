@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_policy::Event;
-use autoreview_schedule::scheduler::{Record, Run};
-use time::OffsetDateTime;
+use autoreview_schedule::scheduler::{self, Record, Run};
+use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
 use super::PHASE_RETRY_WAIT;
@@ -16,7 +16,9 @@ use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::messages::{go_elapsed_nanos, handoff_reminder_message};
-use crate::model::{Candidate, RetryRequest};
+use crate::model::review::APPROVAL_KIND_SUPERSEDED;
+use crate::model::{Candidate, PollResult, RetryRequest, ReviewInput};
+use crate::store::discovery::save_discovery;
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
 
 /// Schedule phase of a review identity that waits for its debounce.
@@ -34,6 +36,9 @@ const PHASE_WITHDRAWN: &str = "withdrawn";
 /// Start value of the latest attempt, below every stored attempt.
 const NO_ATTEMPT: i64 = -1;
 
+/// Error code of a poll that would store more schedule records than the limit.
+const STATE_ENTRY_LIMIT_EXCEEDED: &str = "state_entry_limit_exceeded";
+
 /// Error code of a retry for a pull request that is not a candidate.
 const REVIEW_REQUEST_NOT_ACTIVE: &str = "review_request_not_active";
 
@@ -46,6 +51,15 @@ const REVIEW_ALREADY_RUNNING: &str = "review_already_running";
 /// Error code of a retry of a head whose review succeeded or was released.
 const REVIEW_ALREADY_COMPLETED: &str = "review_already_completed";
 
+/// Error code of a schedule time that the store cannot write.
+const STORE_STATE_INVALID: &str = "store_state_invalid";
+
+/// Error code of a store call that Go makes on a cancelled context.
+const STORE_UNAVAILABLE: &str = "store_unavailable";
+
+/// Cause text of a Go store call on a cancelled context, Go's `context.Canceled`.
+const CONTEXT_CANCELED: &str = "context canceled";
+
 /// Read error codes of a pull request that left the candidates after the search.
 const SKIPPABLE_CANDIDATE_CODES: [&str; 4] = [
     "pull_request_not_open",
@@ -54,7 +68,187 @@ const SKIPPABLE_CANDIDATE_CODES: [&str; 4] = [
     "review_label_removed",
 ];
 
+/// A review that the poll queues once the discovery state is saved.
+struct Dispatch {
+    /// Workflow ID of the queued attempt.
+    workflow_id: String,
+    /// Input of the queued attempt.
+    input: ReviewInput,
+}
+
 impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Plans every candidate under the discovery lock and queues the reviews that are due.
+    ///
+    /// # Errors
+    ///
+    /// Returns `discovery_busy` or `store_unavailable` from the lock, or the error of the pass.
+    #[expect(dead_code, reason = "called by S30")]
+    pub(crate) async fn poll(&self, cancel: &CancellationToken) -> Result<PollResult, Error> {
+        self.with_discovery(|| self.poll_pass(cancel, None)).await
+    }
+
+    /// Runs one discovery pass; `force` asks for a new attempt of one failed head.
+    ///
+    /// The caller holds the discovery lock. The queued reviews, the superseded waits and the
+    /// discovery state are written in one transaction at the end.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the candidate search, of the store, of a notification, of the
+    /// review planning or of `force`, and `state_entry_limit_exceeded` when the schedule is full.
+    pub(crate) async fn poll_pass(
+        &self,
+        cancel: &CancellationToken,
+        force: Option<&RetryRequest>,
+    ) -> Result<PollResult, Error> {
+        // A failure here leaves the drafts for the next pass and holds up no other review.
+        if let Err(err) = self.integration.ready_drafts().await
+            && !cancel.is_cancelled()
+        {
+            tracing::warn!(
+                error_code = error_code(&err),
+                "marking drafts ready for review failed"
+            );
+        }
+        let listed = retry_step(self.step_policy(), &self.clock, cancel, || {
+            self.integration.list_candidates()
+        })
+        .await?;
+        live(cancel)?;
+        let history = self.store.run_history(self.config.state_entry_limit)?;
+        let now = self.clock.wall_now().to_offset(UtcOffset::UTC);
+        live(cancel)?;
+        let mut state = self.store.load_discovery()?;
+        let open = i64::try_from(listed.candidates.len()).unwrap_or(i64::MAX);
+        let mut present: BTreeMap<String, Candidate> = BTreeMap::new();
+        for candidate in listed.candidates {
+            present.insert(candidate.pull_request.key(), candidate);
+        }
+        self.report_rejected(cancel, &mut state, &listed.rejected)
+            .await?;
+        let mut result = PollResult {
+            open,
+            ..PollResult::default()
+        };
+        let supersede = self
+            .supersede_awaiting(cancel, &mut state, &present, &history)
+            .await?;
+        result.superseded = i64::try_from(supersede.len()).unwrap_or(i64::MAX);
+        self.remind_handoffs(cancel, &mut state, &present, now)
+            .await?;
+        if let Some(force) = force {
+            self.apply_force(&mut state, &present, &history, force, now)?;
+        }
+        let mut dispatches = Vec::new();
+        for (key, candidate) in &present {
+            let pr = &candidate.pull_request;
+            let entries = i64::try_from(state.schedule.len()).unwrap_or(i64::MAX);
+            if !state.schedule.contains_key(key) && entries >= self.config.state_entry_limit {
+                return Err(Error::workflow(STATE_ENTRY_LIMIT_EXCEEDED, true, None));
+            }
+            if let Some(published) = state.published.get(key)
+                && published.covers(pr)
+            {
+                state.schedule.insert(
+                    key.clone(),
+                    Record {
+                        identity: pr.target().identity(),
+                        phase: PHASE_COMPLETED.to_owned(),
+                        workflow_id: published.workflow_id.clone(),
+                        ..Record::default()
+                    },
+                );
+                continue;
+            }
+            // The head already has a review that waits for the user's approval.
+            if state
+                .awaiting
+                .get(key)
+                .is_some_and(|waiting| waiting.matches(pr))
+            {
+                continue;
+            }
+            let target = pr.target();
+            // A key without a record plans from Go's zero record, which `Record::default` is.
+            let previous = state.schedule.get(key).cloned().unwrap_or_default();
+            let mut decision =
+                scheduler::plan(previous, &target, &history, now, &self.config.schedule)
+                    .map_err(schedule_error)?;
+            if decision.notify {
+                let level = self.notify_level(&decision.record)?;
+                let message = scheduler::notification(&target, &decision.record);
+                self.notify_now(cancel, level, &message).await?;
+            }
+            if decision.dispatch {
+                // A route failure is a scheduler failure with its own retry policy, so it is
+                // not retried here.
+                let sources = &candidate.rule.pipeline.project_sources;
+                match self
+                    .integration
+                    .resolve_project(&pr.repository, sources)
+                    .await
+                {
+                    Err(err) if cancel.is_cancelled() => return Err(err),
+                    Err(err) => {
+                        decision.record = scheduler::after_failure(
+                            decision.record,
+                            error_code(&err),
+                            now,
+                            &self.config.schedule,
+                        )
+                        .map_err(schedule_error)?;
+                        let level = self.notify_level(&decision.record)?;
+                        let message = scheduler::notification(&target, &decision.record);
+                        self.notify_now(cancel, level, &message).await?;
+                    }
+                    Ok(route) => {
+                        let published = state.published.get(key);
+                        let (scope, prior) = self.plan_review(cancel, candidate, published).await?;
+                        let handoff = self.notes_handoff(published, pr)?;
+                        let mode = scope.mode.clone();
+                        let prior_findings = prior.len();
+                        let attempt = decision.record.attempt;
+                        let input =
+                            self.build_input(candidate, route, scope, prior, handoff, attempt)?;
+                        decision.record.workflow_id = pr.workflow_id(attempt);
+                        dispatches.push(Dispatch {
+                            workflow_id: decision.record.workflow_id.clone(),
+                            input,
+                        });
+                        result.dispatched = result.dispatched.wrapping_add(1);
+                        tracing::info!(
+                            review_id = %pr.review_id(),
+                            rule = %candidate.rule.match_glob,
+                            pipeline = %candidate.rule.pipeline.name,
+                            scope = %mode,
+                            prior_findings,
+                            attempt = attempt.wrapping_add(1),
+                            "review scheduled"
+                        );
+                    }
+                }
+            }
+            state.schedule.insert(key.clone(), decision.record);
+        }
+        self.prune_discovery(&mut state, &present, now);
+        live(cancel)?;
+        self.store.in_tx(|transaction| {
+            for item in &dispatches {
+                self.store
+                    .enqueue_review(transaction, &item.workflow_id, &item.input)?;
+            }
+            for workflow_id in &supersede {
+                self.store.decide_approval_tx(
+                    transaction,
+                    workflow_id,
+                    APPROVAL_KIND_SUPERSEDED,
+                )?;
+            }
+            save_discovery(transaction, &state)
+        })?;
+        Ok(result)
+    }
+
     /// Returns the waits that no longer match their pull request and drops ended waits.
     ///
     /// A pull request missing from search is read directly first, because search lags behind.
@@ -62,7 +256,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns the read error of a pull request unless it is one that ends the candidate.
-    #[expect(dead_code, reason = "called by S23b")]
     async fn supersede_awaiting(
         &self,
         cancel: &CancellationToken,
@@ -118,7 +311,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// Returns `configuration_invalid` without a policy, the read error when `cancel` is
     /// cancelled, or the error of a notification.
-    #[expect(dead_code, reason = "called by S23b")]
     async fn remind_handoffs(
         &self,
         cancel: &CancellationToken,
@@ -191,7 +383,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// Returns `review_request_not_active`, `head_changed`, `review_already_running` or
     /// `review_already_completed`, all permanent.
-    #[expect(dead_code, reason = "called by S23b")]
     fn apply_force(
         &self,
         state: &mut DiscoveryState,
@@ -253,7 +444,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// Records of pull requests that left every trigger are withdrawn, and dropped once they
     /// ended and block nothing. Published decisions older than the retention are dropped.
-    #[expect(dead_code, reason = "called by S23b")]
     fn prune_discovery(
         &self,
         state: &mut DiscoveryState,
@@ -288,4 +478,23 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 /// It is simply not a candidate in this poll (`github.go:507-515`).
 fn skippable_candidate_error(err: &Error) -> bool {
     SKIPPABLE_CANDIDATE_CODES.contains(&error_code(err))
+}
+
+/// Fails as Go's store does on a cancelled context, so a cancelled pass writes nothing.
+///
+/// The Rust store ignores `cancel`; Go's `database/sql` refuses every call once the context ends.
+fn live(cancel: &CancellationToken) -> Result<(), Error> {
+    if cancel.is_cancelled() {
+        return Err(Error::workflow(
+            STORE_UNAVAILABLE,
+            false,
+            Some(CONTEXT_CANCELED.into()),
+        ));
+    }
+    Ok(())
+}
+
+/// Wraps a schedule time outside the range of `time`; Go fails writing it as JSON.
+fn schedule_error(err: autoreview_schedule::Error) -> Error {
+    Error::workflow(STORE_STATE_INVALID, true, Some(Box::new(err)))
 }

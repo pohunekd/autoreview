@@ -119,7 +119,10 @@ fn read_entry<T: DeserializeOwned + Default>(name: &str, value: &str) -> Result<
 }
 
 /// Writes the four entries in schedule, published, awaiting, rejected order.
-fn save_discovery(transaction: &Transaction<'_>, state: &DiscoveryState) -> Result<(), Error> {
+pub(crate) fn save_discovery(
+    transaction: &Transaction<'_>,
+    state: &DiscoveryState,
+) -> Result<(), Error> {
     write_entry(transaction, STATE_SCHEDULE, &state.schedule)?;
     write_entry(transaction, STATE_PUBLISHED, &state.published)?;
     write_entry(transaction, STATE_AWAITING, &state.awaiting)?;

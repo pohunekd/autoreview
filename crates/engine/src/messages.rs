@@ -466,7 +466,6 @@ pub(crate) fn session_cleanup_failed_message(
 }
 
 /// States how long notes have waited for their author, in whole hours.
-#[expect(dead_code, reason = "called by S23")]
 pub(crate) fn handoff_age(record: &PublishedRecord, now: OffsetDateTime) -> String {
     format!("{} h", go_hours(go_elapsed_nanos(now, record.published_at)))
 }
@@ -495,7 +494,6 @@ fn go_hours(nanos: i64) -> i64 {
 ///
 /// It carries no Review ID: nothing can be approved by replying to it while the review waits for
 /// its author.
-#[expect(dead_code, reason = "called by S23")]
 pub(crate) fn handoff_reminder_message(
     excerpt_characters: i64,
     record: &PublishedRecord,

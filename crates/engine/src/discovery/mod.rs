@@ -37,7 +37,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns `discovery_busy`, `store_unavailable` or the error of `run`.
-    #[expect(dead_code, reason = "called by S23")]
     pub(crate) async fn with_discovery<T, F, Fut>(&self, run: F) -> Result<T, Error>
     where
         F: FnOnce() -> Fut,
@@ -77,7 +76,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns `configuration_invalid` without a policy level, or the error of a notification.
-    #[expect(dead_code, reason = "called by S23")]
     pub(crate) async fn report_rejected(
         &self,
         cancel: &CancellationToken,
@@ -107,7 +105,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns `configuration_invalid` when the policy names no level for the event.
-    #[expect(dead_code, reason = "called by S23")]
     pub(crate) fn notify_level(&self, record: &Record) -> Result<Level, Error> {
         if record.phase == PHASE_RETRY_WAIT {
             self.level(Event::RetryScheduled)

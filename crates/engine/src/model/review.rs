@@ -29,7 +29,6 @@ pub(crate) const PRIOR_ANSWERED: &str = "answered";
 pub(crate) const APPROVAL_KIND_APPROVE: &str = "approve";
 
 /// Kind of an approval decision that a newer review superseded.
-#[expect(dead_code, reason = "called by S29")]
 pub(crate) const APPROVAL_KIND_SUPERSEDED: &str = "superseded";
 
 /// Kind of an approval decision whose wait expired.
@@ -385,7 +384,6 @@ impl PublishedRecord {
     }
 
     /// Reports whether this record covers the pull request.
-    #[expect(dead_code, reason = "called by S22")]
     pub(crate) fn covers(&self, pr: &PullRequest) -> bool {
         self.head_sha == pr.head_sha
             && !(self.awaits_author && self.review_request_id != pr.review_request_id)
@@ -420,7 +418,6 @@ impl AwaitRecord {
     }
 
     /// Reports whether the pull request matches the wait.
-    #[expect(dead_code, reason = "called by S23")]
     pub(crate) fn matches(&self, pr: &PullRequest) -> bool {
         pr.head_sha == self.head_sha
     }

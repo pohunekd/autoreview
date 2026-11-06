@@ -25,7 +25,6 @@ use crate::model::{
 /// review without a human could approve: an approval, a rule that never approves or waits for
 /// the user's approval, or a pull request the reviewing account authored. A rule that approves
 /// on its own gets a full review after a request for changes.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S23"))]
 pub(crate) fn review_scope(
     rule: &Rule,
     published: Option<&PublishedRecord>,
@@ -70,7 +69,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns a store error, or the history error when `cancel` is cancelled.
-    #[expect(dead_code, reason = "called by S23")]
     pub(crate) async fn plan_review(
         &self,
         cancel: &CancellationToken,
@@ -188,7 +186,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns the store error of the artifact read.
-    #[expect(dead_code, reason = "called by S23")]
     pub(crate) fn notes_handoff(
         &self,
         published: Option<&PublishedRecord>,
@@ -230,7 +227,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns `configuration_invalid` when the configuration has no policy.
-    #[expect(dead_code, reason = "called by S23")]
     pub(crate) fn build_input(
         &self,
         candidate: &Candidate,
