@@ -197,13 +197,18 @@ func parseClaudeOutput(pr PullRequest, raw []byte) (ReviewerResult, error) {
 	if err != nil {
 		return ReviewerResult{}, err
 	}
-	if artifact.Repository != pr.Repository || artifact.Number != pr.Number || artifact.HeadSHA != pr.HeadSHA || artifact.Findings == nil {
-		return ReviewerResult{}, workflowError("artifact_invalid", true, nil)
+	switch {
+	case artifact.Repository != pr.Repository || artifact.Number != pr.Number:
+		return ReviewerResult{}, reviewerOutputInvalid("the output names another pull request")
+	case artifact.HeadSHA != pr.HeadSHA:
+		return ReviewerResult{}, reviewerOutputInvalid("the output names another head commit")
+	case artifact.Findings == nil:
+		return ReviewerResult{}, reviewerOutputInvalid("the output has no findings list")
 	}
 	result := ReviewerResult{Summary: artifact.Summary, Findings: []Finding{}, Tests: []string{}, Prior: artifact.PriorFindings}
-	for _, source := range artifact.Findings {
+	for index, source := range artifact.Findings {
 		if source.Side != "RIGHT" || !sourceIDPattern.MatchString(source.ID) || source.Severity == "blocker" {
-			return ReviewerResult{}, workflowError("artifact_invalid", true, nil)
+			return ReviewerResult{}, reviewerOutputInvalid("finding %d has an invalid id, side or severity", index+1)
 		}
 		result.Findings = append(result.Findings, Finding{
 			SourceID: source.ID, Severity: source.Severity, Confidence: source.Confidence, Path: source.Path, Line: source.Line, Title: source.Title, Body: source.Body,
@@ -280,27 +285,47 @@ func boundedText(value string, maximum int, multiline bool) bool {
 	return multiline || !strings.ContainsAny(value, "\r\n")
 }
 
+// reviewerOutputInvalid rejects the output of one reviewer run. The reason
+// names the failed check without quoting the output, which is untrusted.
+func reviewerOutputInvalid(format string, args ...any) error {
+	return workflowError("review_output_invalid", true, fmt.Errorf(format, args...))
+}
+
 func validateReviewerResult(cfg Config, result *ReviewerResult) error {
-	if len([]rune(strings.TrimSpace(result.Summary))) < cfg.MinSummaryCharacters || !boundedText(result.Summary, cfg.MaxSummaryCharacters, true) ||
-		len(result.Findings) > cfg.MaxFindings || len(result.Tests) > cfg.MaxTests {
-		return workflowError("artifact_invalid", true, nil)
+	switch {
+	case len([]rune(strings.TrimSpace(result.Summary))) < cfg.MinSummaryCharacters || !boundedText(result.Summary, cfg.MaxSummaryCharacters, true):
+		return reviewerOutputInvalid("the summary is shorter than %d or longer than %d characters", cfg.MinSummaryCharacters, cfg.MaxSummaryCharacters)
+	case len(result.Findings) > cfg.MaxFindings:
+		return reviewerOutputInvalid("%d findings exceed the limit of %d", len(result.Findings), cfg.MaxFindings)
+	case len(result.Tests) > cfg.MaxTests:
+		return reviewerOutputInvalid("%d tests exceed the limit of %d", len(result.Tests), cfg.MaxTests)
 	}
 	seen := map[string]bool{}
-	for _, finding := range result.Findings {
+	for index, finding := range result.Findings {
+		number := index + 1
 		cleanPath := path.Clean(finding.Path)
-		if seen[finding.SourceID] || finding.Line <= 0 || cleanPath != finding.Path || path.IsAbs(cleanPath) || cleanPath == ".." || strings.HasPrefix(cleanPath, "../") ||
-			!boundedText(finding.Path, cfg.MaxPathCharacters, false) || !boundedText(finding.Title, cfg.MaxTitleCharacters, false) ||
-			!boundedText(finding.Body, cfg.MaxBodyCharacters, true) || !confidenceLevels[finding.Confidence] {
-			return workflowError("artifact_invalid", true, nil)
+		switch {
+		case seen[finding.SourceID]:
+			return reviewerOutputInvalid("finding %d repeats an id", number)
+		case finding.Line <= 0:
+			return reviewerOutputInvalid("finding %d has no line", number)
+		case cleanPath != finding.Path || path.IsAbs(cleanPath) || cleanPath == ".." || strings.HasPrefix(cleanPath, "../") || !boundedText(finding.Path, cfg.MaxPathCharacters, false):
+			return reviewerOutputInvalid("finding %d has a path that is not a clean relative path of at most %d characters", number, cfg.MaxPathCharacters)
+		case !boundedText(finding.Title, cfg.MaxTitleCharacters, false):
+			return reviewerOutputInvalid("finding %d has a title that is empty, multiline or longer than %d characters", number, cfg.MaxTitleCharacters)
+		case !boundedText(finding.Body, cfg.MaxBodyCharacters, true):
+			return reviewerOutputInvalid("finding %d has a body that is empty or longer than %d characters", number, cfg.MaxBodyCharacters)
+		case !confidenceLevels[finding.Confidence]:
+			return reviewerOutputInvalid("finding %d has an unknown confidence", number)
 		}
 		if _, ok := severityOrder[finding.Severity]; !ok {
-			return workflowError("artifact_invalid", true, nil)
+			return reviewerOutputInvalid("finding %d has an unknown severity", number)
 		}
 		seen[finding.SourceID] = true
 	}
-	for _, test := range result.Tests {
+	for index, test := range result.Tests {
 		if !boundedText(test, cfg.MaxTestCharacters, false) {
-			return workflowError("artifact_invalid", true, nil)
+			return reviewerOutputInvalid("test %d is empty, multiline or longer than %d characters", index+1, cfg.MaxTestCharacters)
 		}
 	}
 	return nil
