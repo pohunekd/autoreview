@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use super::input::{NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, SlotState, still_wanted};
+use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine, StepRetryPolicy, retry_step};
 use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
 use crate::integrations::{Integrations, SessionRequest};
@@ -198,11 +199,14 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         T: Serialize + DeserializeOwned,
         Fut: Future<Output = Result<T, Error>>,
     {
-        if let Some(value) = self.engine.store.load_step::<T>(&self.workflow_id, name)? {
+        let loaded = live(&self.cancel)
+            .and_then(|()| self.engine.store.load_step::<T>(&self.workflow_id, name))?;
+        if let Some(value) = loaded {
             return Ok(value);
         }
         match retry_step(self.retry_policy(), &self.engine.clock, &self.cancel, step).await {
             Ok(value) => {
+                live(&self.cancel)?;
                 self.engine
                     .store
                     .save_step(&self.workflow_id, name, &value)?;
@@ -280,6 +284,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Stores the progress of `slot` under `slot/<reviewer id>`.
     pub(crate) fn save_slot(&self, slot: &ReviewerSlot) -> Result<(), Error> {
         let name = format!("{SLOT_STATE_PREFIX}{}", slot.reviewer.id);
+        live(&self.cancel)?;
         self.engine
             .store
             .set_state(&self.workflow_id, &name, &slot.state)
@@ -287,6 +292,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Stores whether the review may still own open sessions.
     pub(crate) fn set_cleanup_pending(&self, pending: bool) -> Result<(), Error> {
+        live(&self.cancel)?;
         self.engine
             .store
             .set_review_flags(&self.workflow_id, None, Some(pending))
@@ -613,6 +619,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             )
             .await?;
         }
+        live(&self.cancel)?;
         self.engine
             .store
             .complete_review(&self.workflow_id, RESULT_FAILURE, &code, None)
@@ -623,11 +630,12 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// The first deadline is now plus the session timeout times the run attempts; the product
     /// wraps as Go's `time.Duration` does.
     pub(crate) fn deadline(&self, key: &str) -> Result<OffsetDateTime, Error> {
-        if let Some(deadline) = self
-            .engine
-            .store
-            .get_state::<Deadline>(&self.workflow_id, key)?
-        {
+        let stored = live(&self.cancel).and_then(|()| {
+            self.engine
+                .store
+                .get_state::<Deadline>(&self.workflow_id, key)
+        })?;
+        if let Some(deadline) = stored {
             return Ok(deadline.0);
         }
         let limits = self.limits();
@@ -635,6 +643,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             .unwrap_or_default();
         let total = time::Duration::nanoseconds(nanos.wrapping_mul(limits.reviewer_run_attempts));
         let deadline = self.engine.clock.wall_now().saturating_add(total);
+        live(&self.cancel)?;
         self.engine
             .store
             .set_state(&self.workflow_id, key, &Deadline(deadline))?;
