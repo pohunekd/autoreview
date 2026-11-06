@@ -67,7 +67,6 @@ autoreview_go_compat::object_only_serde!(CodexFinding);
 /// # Errors
 ///
 /// Returns `review_result_invalid` for an output, report or head that the engine refuses.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn parse_codex_output(
     cfg: &Config,
     pr: &PullRequest,
@@ -122,7 +121,6 @@ pub(crate) fn parse_codex_output(
 /// The output ends with the exit line followed by one of `ENDINGS`. Before the exit line comes one
 /// of `SEPARATORS`, after the `]` that closes the report. The base64 text runs back from that `]`
 /// to the marker. It holds no bracket and no line break, so only one envelope can match.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 fn envelope_payload(raw: &str) -> Option<&str> {
     let mut ending = None;
     for e in ENDINGS {
@@ -162,7 +160,6 @@ fn envelope_payload(raw: &str) -> Option<&str> {
 }
 
 /// Reports whether `character` belongs to the base64 alphabet that the envelope accepts.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 fn is_base64_char(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '+' || character == '/' || character == '='
 }

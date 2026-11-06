@@ -140,7 +140,6 @@ pub(crate) struct ReviewerSlot {
 }
 
 /// One running review of one pull request head.
-#[expect(dead_code, reason = "called by S28")]
 pub(crate) struct Review<'a, I, C> {
     /// The engine that runs the review.
     pub(crate) engine: &'a Engine<I, C>,
@@ -407,7 +406,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ///
     /// A slow host then does not cost a whole scheduler attempt. The integration finds a session
     /// started before a restart by its name.
-    #[expect(dead_code, reason = "called by S26")]
     pub(crate) async fn start_session(&mut self, id: SlotId) -> Result<(), Error> {
         let limits = self.limits().clone();
         let Some(state) = self.slot(id).map(|slot| slot.state.clone()) else {
@@ -624,7 +622,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ///
     /// The first deadline is now plus the session timeout times the run attempts; the product
     /// wraps as Go's `time.Duration` does.
-    #[expect(dead_code, reason = "called by S26")]
     pub(crate) fn deadline(&self, key: &str) -> Result<OffsetDateTime, Error> {
         if let Some(deadline) = self
             .engine

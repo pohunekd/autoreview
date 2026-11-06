@@ -15,7 +15,6 @@ const REPUBLISHED_HEAD_CHARS: usize = 12;
 /// An answered verdict stays answered only on a rule that waits for the user, or when the
 /// publishing account wrote the comment it relies on. Otherwise it becomes an open verdict.
 /// An open verdict without an unresolved thread is published again as a new finding.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 pub(crate) fn settle_prior(
     input: &ReviewInput,
     discussion: &Discussion,

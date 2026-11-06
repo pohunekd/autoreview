@@ -11,7 +11,6 @@ use crate::model::{Artifact, Finding};
 /// A finding elsewhere in a changed file moves to the closest changed line and says where it
 /// was reported. A finding in a file the pull request does not change stays unanchored, is
 /// listed in the review body and never blocks.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 pub(crate) fn anchor_findings(
     mut artifact: Artifact,
     commentable: &BTreeMap<String, Vec<i64>>,

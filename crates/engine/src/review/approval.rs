@@ -32,7 +32,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ///
     /// Returns the shutdown error, or the error of the store or of the discovery record. A
     /// failed approval request completes the review as a failure and returns `Ok`.
-    #[expect(dead_code, reason = "called by S28b")]
     pub(crate) async fn await_approval(&mut self, artifact: &Artifact) -> Result<(), Error> {
         let record = self.await_record();
         if let Err(err) = self.engine.mark_awaiting(&self.cancel, &record).await {
@@ -84,7 +83,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ///
     /// Returns the shutdown error, or the error of the store, a notification or the discovery
     /// record.
-    #[expect(dead_code, reason = "called by S28b")]
     pub(crate) async fn continue_after_approval(
         &mut self,
         approval: &str,

@@ -168,7 +168,6 @@ autoreview_go_compat::object_only_serde!(ReviewInput);
 
 impl ReviewInput {
     /// Reports whether the review takes the stored result of its handoff.
-    #[expect(dead_code, reason = "called by S28")]
     pub(crate) fn adopts_handoff(&self) -> bool {
         self.handoff.as_ref().is_some_and(|handoff| handoff.adopt)
     }

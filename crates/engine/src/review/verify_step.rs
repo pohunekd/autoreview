@@ -45,7 +45,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ///
     /// Returns the error of the verifier request, of the store, of the review, such as
     /// `head_changed`, and `workflow_failed` when the review has no verifier slot.
-    #[expect(dead_code, reason = "called by S28")]
     pub(crate) async fn verify(
         &mut self,
         claims: &VerificationClaims,

@@ -42,7 +42,6 @@ pub(crate) fn blocking_count(input: &ReviewInput, artifact: &Artifact) -> usize 
 /// waits for them when the verifier demoted findings the policy wants them to see, or when the
 /// pull request matched a human review signal of the rule. A rule with on_notes comment hands a
 /// review of notes only to a human author first, unless the author already had them.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 pub(crate) fn plan_publication(
     input: &ReviewInput,
     artifact: &Artifact,
