@@ -79,8 +79,11 @@ const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Pause between two checks of [`Harness::wait_for`].
 const WAIT_PAUSE: Duration = Duration::from_millis(100);
 
-/// Pause between two polls of [`Harness::poll_until`].
+/// Pause between two polls of [`Harness::poll_until`] and [`Harness::settle`].
 const POLL_PAUSE: Duration = Duration::from_millis(150);
+
+/// Number of discovery polls that [`Harness::settle`] runs.
+const SETTLE_POLLS: usize = 5;
 
 /// Length of the head prefix that the harness resolves and retries reviews by.
 pub(crate) const HEAD_PREFIX_CHARS: usize = 12;
@@ -238,6 +241,16 @@ impl Harness {
             .expect("the discovery poll succeeds")
     }
 
+    /// Polls past the scheduling debounce so the worker can start what the polls queued.
+    ///
+    /// A review that must not start had the chance to.
+    pub(crate) async fn settle(&self) {
+        for _ in 0..SETTLE_POLLS {
+            self.poll().await;
+            tokio::time::sleep(POLL_PAUSE).await;
+        }
+    }
+
     /// Polls discovery until `condition` holds.
     pub(crate) async fn poll_until(&self, description: &str, condition: impl Fn() -> bool) {
         let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
@@ -254,6 +267,21 @@ impl Harness {
     pub(crate) async fn wait_for(&self, description: &str, condition: impl Fn() -> bool) {
         let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
         while !condition() {
+            if tokio::time::Instant::now() > deadline {
+                self.time_out(description);
+            }
+            tokio::time::sleep(WAIT_PAUSE).await;
+        }
+    }
+
+    /// Waits until the asynchronous `condition` holds.
+    pub(crate) async fn wait_for_async(
+        &self,
+        description: &str,
+        condition: impl AsyncFn() -> bool,
+    ) {
+        let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
+        while !condition().await {
             if tokio::time::Instant::now() > deadline {
                 self.time_out(description);
             }

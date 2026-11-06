@@ -17,8 +17,8 @@ use crate::model::pull_request::SCOPE_FULL;
 use crate::model::review::Decision;
 use crate::model::{ProjectRoute, PullRequest, ReviewInput, ReviewScope, RunLimits};
 use crate::protocol::fixtures::sha;
-use crate::testing::fake::reviewer_output;
-use crate::testing::harness::{integration_pull_request, start_harness};
+use crate::testing::fake::{count_notes, reviewer_output};
+use crate::testing::harness::{HEAD_PREFIX_CHARS, integration_pull_request, start_harness};
 
 /// Output of a reviewer session that has not finished: Go's nil output.
 fn unfinished(_: &SessionRequest) -> String {
@@ -302,5 +302,107 @@ async fn readded_label_reviews_the_same_head_again() {
         h.publications() == 1
     })
     .await;
+    h.stop_engine().await;
+}
+
+#[tokio::test]
+async fn failed_publication_after_approval_is_reported_and_retried() {
+    let mut h = start_harness(|_| {}).await;
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
+    })
+    .await;
+    h.fake.lock().publish_fail = Some("github_request_rejected".to_owned());
+    h.approve_when_awaiting(&pr)
+        .await
+        .expect("the approval is recorded");
+    let report = format!(
+        "Review for {} at {} stopped after your approval: it was not published \
+         (github_request_rejected)",
+        pr.key(),
+        &pr.head_sha[..HEAD_PREFIX_CHARS]
+    );
+    h.wait_for("the failure report", || {
+        h.fake.has_note(Level::Action, &report)
+    })
+    .await;
+    h.fake.lock().publish_fail = None;
+    h.wait_for_async("an accepted retry", async || match h.retry(&pr).await {
+        Ok(_) => true,
+        Err(err) => {
+            eprintln!("retry: {err}");
+            false
+        }
+    })
+    .await;
+    h.poll_until("the approval request of the retried review", || {
+        let (_, notes, _, _) = h.fake.snapshot();
+        count_notes(&notes, Level::Action, APPROVAL_REQUESTED_TITLE) == 2
+    })
+    .await;
+    h.stop_engine().await;
+}
+
+// A pull request author re-requests the review after every push. A renewed request of an
+// unchanged head must not start another sample of the review.
+#[tokio::test]
+async fn renewed_request_of_a_published_head_starts_no_review() {
+    let mut h = start_harness(|_| {}).await;
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the first publication", || h.publications() == 1)
+        .await;
+    let mut renewed = pr.clone();
+    renewed.review_request_id = 99;
+    h.fake.open(renewed, h.rule(&pr.repository));
+    h.settle().await;
+    assert!(
+        h.started_count() == 2 && h.publications() == 1,
+        "a renewed request of the published head started {} sessions and {} publications",
+        h.started_count(),
+        h.publications()
+    );
+    h.stop_engine().await;
+}
+
+#[tokio::test]
+async fn renewed_request_keeps_a_running_review_and_a_waiting_approval() {
+    let mut h = start_harness(|_| {}).await;
+    let valid = reviewer_output(Vec::new());
+    let running = Arc::new(AtomicBool::new(true));
+    let waiting = Arc::clone(&running);
+    h.set_output(move |request: &SessionRequest| {
+        if waiting.load(Ordering::SeqCst) {
+            return String::new();
+        }
+        valid(request)
+    });
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the reviewer sessions", || h.started_count() == 2)
+        .await;
+    let mut renewed = pr.clone();
+    renewed.review_request_id = 99;
+    h.fake.open(renewed.clone(), h.rule(&pr.repository));
+    h.poll().await;
+    running.store(false, Ordering::SeqCst);
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
+    })
+    .await;
+    let mut again = renewed;
+    again.review_request_id = 100;
+    h.fake.open(again, h.rule(&pr.repository));
+    h.settle().await;
+    assert!(
+        !h.fake.has_note(Level::Log, "was superseded") && h.started_count() == 2,
+        "a renewed request superseded the review or started another one: {} sessions",
+        h.started_count()
+    );
+    if let Err(err) = h.resolve(&pr) {
+        panic!("the wait must survive a renewed request: {err}");
+    }
     h.stop_engine().await;
 }
