@@ -3,6 +3,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
@@ -54,7 +55,7 @@ pub const VERIFIER_REVIEWER_ID: &str = "verifier";
 pub const REPUBLISHED_PREFIX: &str = "P";
 
 /// Names the input and output contract of a reviewer agent profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Protocol {
     /// Sends a JSON request with an enforced schema and reads the claude-otel-noninteractive
     /// structured result wrapper.
@@ -68,21 +69,25 @@ pub enum Protocol {
     #[default]
     #[serde(rename = "")]
     Unset,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl Protocol {
     /// Returns the text Go writes for this value.
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::ClaudeStructured => "claude-structured",
             Self::CodexEnvelope => "codex-envelope",
             Self::Unset => "",
+            Self::Other(value) => value,
         }
     }
 }
 
 /// Selects the commit the reviewer worktree starts from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Checkout {
     /// Starts at the base branch tip, so repository instructions are read from trusted content
     /// before the reviewer fetches the head.
@@ -95,21 +100,25 @@ pub enum Checkout {
     #[default]
     #[serde(rename = "")]
     Unset,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl Checkout {
     /// Returns the text Go writes for this value.
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Base => "base",
             Self::Head => "head",
             Self::Unset => "",
+            Self::Other(value) => value,
         }
     }
 }
 
 /// Kind of event that starts a review.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TriggerKind {
     /// The author or a reviewer requested a review.
     #[serde(rename = "review-requested")]
@@ -121,21 +130,25 @@ pub enum TriggerKind {
     #[default]
     #[serde(rename = "")]
     Unset,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl TriggerKind {
     /// Returns the text Go writes for this kind.
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::ReviewRequested => "review-requested",
             Self::Label => "label",
             Self::Unset => "",
+            Self::Other(value) => value,
         }
     }
 }
 
 /// Decides the outcome of a review that has findings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OnFindings {
     /// Requests changes on the pull request.
     #[serde(rename = "request_changes")]
@@ -147,21 +160,25 @@ pub enum OnFindings {
     #[default]
     #[serde(rename = "")]
     Unset,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl OnFindings {
     /// Returns the text Go writes for this value.
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::RequestChanges => "request_changes",
             Self::Comment => "comment",
             Self::Unset => "",
+            Self::Other(value) => value,
         }
     }
 }
 
 /// Decides the outcome of a clean review, one without findings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OnClean {
     /// Approves the pull request automatically.
     #[serde(rename = "approve")]
@@ -176,22 +193,26 @@ pub enum OnClean {
     #[default]
     #[serde(rename = "")]
     Unset,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl OnClean {
     /// Returns the text Go writes for this value.
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Approve => "approve",
             Self::Await => "await",
             Self::Comment => "comment",
             Self::Unset => "",
+            Self::Other(value) => value,
         }
     }
 }
 
 /// Decides a review whose findings are all non-blocking. Unset follows the rule's clean outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OnNotes {
     /// Hands the notes to the author in a comment first; once the author requests the review again,
     /// the clean outcome follows.
@@ -201,20 +222,24 @@ pub enum OnNotes {
     #[default]
     #[serde(rename = "")]
     Unset,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl OnNotes {
     /// Returns the text Go writes for this value.
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Comment => "comment",
             Self::Unset => "",
+            Self::Other(value) => value,
         }
     }
 }
 
 /// Level of the Matrix room a notification goes to. Only action messages mention the user.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Level {
     /// The action room, which mentions the user.
     #[serde(rename = "action")]
@@ -225,22 +250,25 @@ pub enum Level {
     /// The log room.
     #[serde(rename = "log")]
     Log,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl Level {
     /// Returns the text Go writes for this value.
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Action => "action",
             Self::Digest => "digest",
             Self::Log => "log",
+            Self::Other(value) => value,
         }
     }
 }
 
-/// Notification event. The variants are declared in wire-name order, so the derived Ord sorts map
-/// keys as Go sorts them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+/// Notification event. Events order by their wire text, so map keys sort as Go sorts them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Event {
     /// Approval expired event.
     #[serde(rename = "approval_expired")]
@@ -281,11 +309,14 @@ pub enum Event {
     /// Superseded event.
     #[serde(rename = "superseded")]
     Superseded,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl Event {
     /// Returns the text Go writes for this value.
-    pub const fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::ApprovalExpired => "approval_expired",
             Self::ApprovalRequested => "approval_requested",
@@ -300,7 +331,21 @@ impl Event {
             Self::ReviewStopped => "review_stopped",
             Self::Started => "started",
             Self::Superseded => "superseded",
+            Self::Other(value) => value,
         }
+    }
+}
+
+impl Ord for Event {
+    /// Compares the wire texts, as Go compares the string keys of a map.
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for Event {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 

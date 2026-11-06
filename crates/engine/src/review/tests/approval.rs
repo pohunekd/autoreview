@@ -27,8 +27,10 @@ fn unfinished(_: &SessionRequest) -> String {
 
 /// The notification levels of the Go `notificationLevels` (`logic_test.go:23-36`).
 fn notification_levels() -> BTreeMap<Event, Level> {
-    let mut levels: BTreeMap<Event, Level> =
-        EVENTS.iter().map(|event| (*event, Level::Log)).collect();
+    let mut levels: BTreeMap<Event, Level> = EVENTS
+        .iter()
+        .map(|event| (event.clone(), Level::Log))
+        .collect();
     levels.insert(Event::ApprovalRequested, Level::Action);
     levels.insert(Event::FindingsOnOwnPr, Level::Action);
     levels.insert(Event::ReviewStopped, Level::Action);
@@ -202,9 +204,10 @@ async fn approval_expires_and_a_late_approval_is_rejected() {
     h.store
         .in_tx(|transaction| h.store.enqueue_review(transaction, &workflow_id, &input))
         .expect("the review is enqueued");
-    let level = input.notifications[&Event::ApprovalExpired];
+    let level = input.notifications[&Event::ApprovalExpired].clone();
     h.wait_for("the approval to expire", || {
-        h.fake.has_note(level, "expired after 1s without a reply")
+        h.fake
+            .has_note(level.clone(), "expired after 1s without a reply")
     })
     .await;
     let approval = h.approve(&workflow_id, &pr);

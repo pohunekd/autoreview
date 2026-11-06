@@ -297,7 +297,7 @@ mod tests {
             on_clean,
             pipeline: Pipeline {
                 name: "main".to_owned(),
-                protocol: reviewer.protocol,
+                protocol: reviewer.protocol.clone(),
                 reviewers: vec![reviewer.clone()],
                 incremental_reviewers: vec![reviewer],
                 prompt: "Review the pull request.".to_owned(),

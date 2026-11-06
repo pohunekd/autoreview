@@ -174,7 +174,7 @@ pub(crate) fn list_arguments(session: &SessionIdentity) -> Vec<String> {
 /// A Claude reviewer is complete once its output is one JSON value or ends with a newline.
 /// Invalid UTF-8 cannot change the verdict, because a replacement character is valid inside a
 /// string and invalid outside one, as the raw bytes are.
-pub(crate) fn output_complete(protocol: Protocol, output: &[u8]) -> bool {
+pub(crate) fn output_complete(protocol: &Protocol, output: &[u8]) -> bool {
     match protocol {
         Protocol::ClaudeStructured => {
             let text = String::from_utf8_lossy(output);
@@ -183,7 +183,7 @@ pub(crate) fn output_complete(protocol: Protocol, output: &[u8]) -> bool {
         Protocol::CodexEnvelope => output
             .windows(CODEX_EXIT_PREFIX.len())
             .any(|window| window == CODEX_EXIT_PREFIX),
-        Protocol::Unset => false,
+        Protocol::Unset | Protocol::Other(_) => false,
     }
 }
 
@@ -290,7 +290,7 @@ where
         let stdout = call(arguments).await?;
         let chunk = decode_output_chunk(session, after, limits.max_bytes, &stdout)?;
         collected.extend(chunk.data);
-        if output_complete(protocol, &collected) {
+        if output_complete(&protocol, &collected) {
             return Ok(Some(collected));
         }
         if chunk.timed_out {

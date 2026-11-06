@@ -46,7 +46,7 @@ pub(crate) fn render_review(
     let pull_request = &input.pull_request;
     let (blocking, notes) = input.split_findings(&artifact.findings);
     let open = artifact.open_prior();
-    let marker = review_marker(pull_request, plan.decision, &blocking, &open);
+    let marker = review_marker(pull_request, &plan.decision, &blocking, &open);
     let mut sections = vec![
         marker.clone(),
         "## Automated code review".to_owned(),
@@ -107,7 +107,7 @@ pub(crate) fn render_review(
         return Err(Error::workflow("github_review_too_large", true, None));
     }
     Ok(GitHubReview {
-        decision: plan.decision,
+        decision: plan.decision.clone(),
         body,
         comments,
         marker,

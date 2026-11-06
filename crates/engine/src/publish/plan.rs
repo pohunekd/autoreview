@@ -10,7 +10,7 @@ use crate::model::{Artifact, Decision, ReviewInput};
 use crate::verify::escalates;
 
 /// What the workflow does with a finished review.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
 pub struct PublicationPlan {
     /// GitHub review event of the publication.
@@ -83,7 +83,7 @@ pub(crate) fn plan_publication(
 }
 
 /// Names the notification of a published review; `blocking` is its number of blocking findings.
-pub(crate) fn publication_event(plan: PublicationPlan, blocking: usize) -> Event {
+pub(crate) fn publication_event(plan: &PublicationPlan, blocking: usize) -> Event {
     if plan.decision == Decision::Approve {
         Event::Approved
     } else if plan.decision == Decision::RequestChanges {
@@ -153,7 +153,7 @@ mod tests {
             on_clean,
             pipeline: Pipeline {
                 name: "main".to_owned(),
-                protocol: reviewer.protocol,
+                protocol: reviewer.protocol.clone(),
                 reviewers: vec![reviewer.clone()],
                 incremental_reviewers: vec![reviewer],
                 prompt: "Review the pull request.".to_owned(),
@@ -182,8 +182,10 @@ mod tests {
     }
 
     fn notification_levels() -> BTreeMap<Event, Level> {
-        let mut levels: BTreeMap<Event, Level> =
-            EVENTS.iter().map(|event| (*event, Level::Log)).collect();
+        let mut levels: BTreeMap<Event, Level> = EVENTS
+            .iter()
+            .map(|event| (event.clone(), Level::Log))
+            .collect();
         levels.insert(Event::ApprovalRequested, Level::Action);
         levels.insert(Event::FindingsOnOwnPr, Level::Action);
         levels.insert(Event::ReviewStopped, Level::Action);
@@ -562,7 +564,7 @@ mod tests {
             ..PublicationPlan::default()
         };
         assert_eq!(
-            publication_event(own_comment, 2),
+            publication_event(&own_comment, 2),
             Event::FindingsOnOwnPr,
             "findings on an own pull request need the user"
         );
@@ -570,6 +572,6 @@ mod tests {
             decision: Decision::RequestChanges,
             ..PublicationPlan::default()
         };
-        assert_eq!(publication_event(changes, 2), Event::ChangesRequested);
+        assert_eq!(publication_event(&changes, 2), Event::ChangesRequested);
     }
 }

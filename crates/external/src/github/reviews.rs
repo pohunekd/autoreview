@@ -92,11 +92,11 @@ fn check_review_marker(review: &GitHubReview) -> Result<(), Error> {
 
 /// Returns the state that GitHub reports for a published review of `decision`
 /// (`github.go:762-768`).
-fn expected_state(decision: Decision) -> &'static str {
+fn expected_state(decision: &Decision) -> &'static str {
     match decision {
         Decision::Approve => "APPROVED",
         Decision::RequestChanges => "CHANGES_REQUESTED",
-        Decision::Comment | Decision::Unset => "COMMENTED",
+        Decision::Comment | Decision::Unset | Decision::Other(_) => "COMMENTED",
     }
 }
 
@@ -147,11 +147,11 @@ fn review_page_step(
         let commit_matches = record.commit_id == head_sha;
         let author_matches = login_matches(login, &record.user.login);
         if marker_found && has_id && has_url && commit_matches && author_matches {
-            if record.state != expected_state(review.decision) && record.state != "DISMISSED" {
+            if record.state != expected_state(&review.decision) && record.state != "DISMISSED" {
                 return Err(Error::workflow("github_review_state_conflict", true, None));
             }
             return Ok(PageStep::Found(PublishResult {
-                decision: review.decision,
+                decision: review.decision.clone(),
                 github_review_id: record.id,
                 review_url: record.url.clone(),
                 reused: true,
@@ -221,7 +221,7 @@ impl GitHub {
             body: &review.body,
             comments,
             commit_id: &pr.head_sha,
-            event: review.decision,
+            event: review.decision.clone(),
         };
         let arguments = reviews_post_args(&pr.repository, pr.number);
         let output = match self.github(cancel, &arguments, Some(&payload)).await {
@@ -234,7 +234,7 @@ impl GitHub {
                 return Err(post_error);
             }
         };
-        posted_result(&output, review.decision)
+        posted_result(&output, review.decision.clone())
     }
 
     /// Returns the published review that carries the marker, reading every page

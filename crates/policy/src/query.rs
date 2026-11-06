@@ -95,7 +95,7 @@ impl Policy {
     /// Parsing sets every event, so a parsed policy never returns `None`.
     #[must_use]
     pub fn level(&self, event: Event) -> Option<Level> {
-        self.notifications.get(&event).copied()
+        self.notifications.get(&event).cloned()
     }
 
     /// Returns the level of every notification event.

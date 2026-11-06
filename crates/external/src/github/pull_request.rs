@@ -448,7 +448,7 @@ pub(crate) fn decode_pull_request(
                 return Err(Error::workflow("review_request_not_active", true, None));
             }
         }
-        TriggerKind::Unset => {
+        TriggerKind::Unset | TriggerKind::Other(_) => {
             return Err(Error::workflow("review_trigger_invalid", true, None));
         }
     }

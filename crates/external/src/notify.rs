@@ -174,6 +174,9 @@ pub(crate) fn matrix_request(
     message: &str,
     transaction: &str,
 ) -> Result<MatrixRequest, Error> {
+    let Some(room) = room_of(matrix, &level) else {
+        return Err(Error::workflow("matrix_level_invalid", true, None));
+    };
     if message.trim().is_empty() {
         return Err(Error::workflow("matrix_message_invalid", true, None));
     }
@@ -190,7 +193,7 @@ pub(crate) fn matrix_request(
         mentions,
         msgtype: TEXT_MESSAGE_TYPE,
     };
-    build_request(room_of(matrix, level), transaction, &content)
+    build_request(room, transaction, &content)
 }
 
 /// Builds the request that posts the review queue digest, as Go's `SendQueueDigest` builds it.
@@ -212,12 +215,13 @@ pub(crate) fn queue_digest_request(
     build_request(&matrix.queue_room, transaction, &content)
 }
 
-/// Returns the room of `level`.
-fn room_of(matrix: &Matrix, level: Level) -> &str {
+/// Returns the room of `level`, or `None` for a level without a room (`notify.go:43-45`).
+fn room_of<'a>(matrix: &'a Matrix, level: &Level) -> Option<&'a str> {
     match level {
-        Level::Action => &matrix.rooms.action,
-        Level::Digest => &matrix.rooms.digest,
-        Level::Log => &matrix.rooms.log,
+        Level::Action => Some(&matrix.rooms.action),
+        Level::Digest => Some(&matrix.rooms.digest),
+        Level::Log => Some(&matrix.rooms.log),
+        Level::Other(_) => None,
     }
 }
 
@@ -383,7 +387,7 @@ pub(crate) async fn notify(
     level: Level,
     message: &str,
 ) -> Result<(), Error> {
-    match send_matrix(client, matrix, cancel, level, message).await {
+    match send_matrix(client, matrix, cancel, level.clone(), message).await {
         Ok(()) => Ok(()),
         Err(error) => drop_if_muted(level, error),
     }
@@ -399,7 +403,7 @@ fn drop_if_muted(level: Level, error: Error) -> Result<(), Error> {
         return Err(error);
     }
     tracing::warn!(
-        level = level_name(level),
+        level = level_name(&level),
         error_code = code,
         "matrix notification dropped"
     );
@@ -420,11 +424,12 @@ pub(crate) async fn send_queue_digest(
 }
 
 /// Returns the name of `level` as the log line carries it.
-fn level_name(level: Level) -> &'static str {
+fn level_name(level: &Level) -> &str {
     match level {
         Level::Action => "action",
         Level::Digest => "digest",
         Level::Log => "log",
+        Level::Other(text) => text,
     }
 }
 
