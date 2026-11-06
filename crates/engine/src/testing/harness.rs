@@ -19,10 +19,12 @@ use crate::config::Config;
 use crate::engine::{Clock, Engine, SystemClock};
 use crate::error::Error;
 use crate::integrations::SessionRequest;
-use crate::model::{PollResult, PullRequest};
+use crate::model::{
+    ApprovalResult, ApproveRequest, PollResult, PullRequest, ResolveRequest, ResolveResult,
+};
 use crate::protocol::fixtures::sha;
 use crate::protocol::validate::tests::test_config;
-use crate::store::Store;
+use crate::store::{REVIEW_AWAITING, Store};
 
 /// A clock that moves only when a wait ends, so retry tests never sleep.
 pub(crate) struct FakeClock {
@@ -78,6 +80,9 @@ const WAIT_PAUSE: Duration = Duration::from_millis(100);
 
 /// Pause between two polls of [`Harness::poll_until`].
 const POLL_PAUSE: Duration = Duration::from_millis(150);
+
+/// Length of the head prefix that the harness resolves and retries reviews by.
+pub(crate) const HEAD_PREFIX_CHARS: usize = 12;
 
 /// The engine of a harness: the fake integration and the process clock.
 pub(crate) type HarnessEngine = Engine<FakeIntegration, SystemClock>;
@@ -291,6 +296,52 @@ impl Harness {
     /// Returns the number of started reviewer sessions.
     pub(crate) fn started_count(&self) -> usize {
         self.fake.snapshot().2.len()
+    }
+
+    /// Resolves the waiting review of `pr` by the prefix of its head.
+    pub(crate) fn resolve(&self, pr: &PullRequest) -> Result<ResolveResult, Error> {
+        let request = ResolveRequest {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            head_prefix: pr.head_sha[..HEAD_PREFIX_CHARS].to_owned(),
+        };
+        self.engine.resolve(&CancellationToken::new(), &request)
+    }
+
+    /// Approves the review `workflow_id` of `pr` at its full head.
+    pub(crate) fn approve(
+        &self,
+        workflow_id: &str,
+        pr: &PullRequest,
+    ) -> Result<ApprovalResult, Error> {
+        let request = ApproveRequest {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            head_sha: pr.head_sha.clone(),
+        };
+        self.engine
+            .approve(&CancellationToken::new(), workflow_id, &request)
+    }
+
+    /// Approves the review of `pr` once it is stored as awaiting.
+    ///
+    /// The approval request is sent before that status is stored, and `approve` refuses a
+    /// review that is not awaiting yet.
+    pub(crate) async fn approve_when_awaiting(
+        &self,
+        pr: &PullRequest,
+    ) -> Result<ApprovalResult, Error> {
+        let resolved = self
+            .resolve(pr)
+            .expect("the review of the pull request resolves");
+        self.wait_for("the stored approval wait", || {
+            matches!(
+                self.store.get_review(&resolved.workflow_id),
+                Ok(Some(stored)) if stored.status == REVIEW_AWAITING
+            )
+        })
+        .await;
+        self.approve(&resolved.workflow_id, pr)
     }
 
     /// Reports whether the review of the first started session has stored the step `name`.

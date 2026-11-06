@@ -160,7 +160,6 @@ impl FakeIntegration {
     }
 
     /// Marks a pull request as lapsed with an error code.
-    #[expect(dead_code, reason = "called by S31")]
     pub(crate) fn lapse(&self, pr: PullRequest, code: &str) {
         let mut state = self.lock();
         let key = pr.key();
