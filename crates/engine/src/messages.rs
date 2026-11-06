@@ -368,7 +368,6 @@ fn split_fraction(value: u64, precision: u32) -> (u64, String) {
 }
 
 /// The message that reports a review superseded by a newer one.
-#[expect(dead_code, reason = "called by S25")]
 pub(crate) fn superseded_message(input: &ReviewInput, code: &str) -> String {
     format!(
         "Review {} was superseded ({}). Nothing was posted to GitHub.",
@@ -392,7 +391,6 @@ pub(crate) fn approval_expired_message(input: &ReviewInput) -> String {
 }
 
 /// The message that reports a review stopped after the owner approved it.
-#[expect(dead_code, reason = "called by S25")]
 pub(crate) fn approved_review_failed_message(input: &ReviewInput, code: &str) -> String {
     format!(
         concat!(
@@ -407,7 +405,6 @@ pub(crate) fn approved_review_failed_message(input: &ReviewInput, code: &str) ->
 }
 
 /// The message that asks the owner to remove a possibly started session.
-#[expect(dead_code, reason = "called by S25")]
 pub(crate) fn orphaned_session_message(request: &SessionRequest, code: &str) -> String {
     format!(
         concat!(
@@ -425,7 +422,6 @@ pub(crate) fn orphaned_session_message(request: &SessionRequest, code: &str) -> 
 }
 
 /// One session that could not be removed, with its allowlisted failure code.
-#[expect(dead_code, reason = "called by S25")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionCleanupFailure {
     /// The session that stays on the host.
@@ -437,7 +433,6 @@ pub(crate) struct SessionCleanupFailure {
 /// The message that lists reviewer sessions which could not be removed.
 ///
 /// It names only identifiers and allowlisted codes, never raw CLI output.
-#[expect(dead_code, reason = "called by S25")]
 pub(crate) fn session_cleanup_failed_message(
     pr: &PullRequest,
     failures: &[SessionCleanupFailure],

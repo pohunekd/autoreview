@@ -47,7 +47,6 @@ pub fn prior_key(head: &str, id: &str) -> String {
 /// Returns a duration of `value` milliseconds.
 ///
 /// The product wraps on overflow, as Go's `int64` multiplication does.
-#[expect(dead_code, reason = "called by S25")]
 pub(crate) fn milliseconds(value: i64) -> Duration {
     Duration::nanoseconds(value.wrapping_mul(1_000_000))
 }
@@ -171,7 +170,6 @@ impl RunLimits {
 
 impl ReviewInput {
     /// Returns the notification level of an event, or `None` when the policy names none.
-    #[expect(dead_code, reason = "called by S28")]
     pub(crate) fn level(&self, event: Event) -> Option<Level> {
         self.notifications.get(&event).copied()
     }

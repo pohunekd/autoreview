@@ -10,6 +10,8 @@ use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use time::OffsetDateTime;
+
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -41,6 +43,9 @@ pub(crate) trait Clock: Send + Sync {
 
     /// Waits for `delay` on this clock.
     fn sleep(&self, delay: Duration) -> impl Future<Output = ()> + Send;
+
+    /// Returns the current wall-clock time, which persisted deadlines are compared with.
+    fn wall_now(&self) -> OffsetDateTime;
 }
 
 /// The clock of the running process: the monotonic clock and the Tokio timer.
@@ -55,6 +60,10 @@ impl Clock for SystemClock {
 
     fn sleep(&self, delay: Duration) -> impl Future<Output = ()> + Send {
         tokio::time::sleep(delay)
+    }
+
+    fn wall_now(&self) -> OffsetDateTime {
+        OffsetDateTime::now_utc()
     }
 }
 

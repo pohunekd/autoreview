@@ -6,6 +6,9 @@ use std::future::{Future, ready};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use time::OffsetDateTime;
+use time::macros::datetime;
+
 use crate::engine::Clock;
 
 /// A clock that moves only when a wait ends, so retry tests never sleep.
@@ -42,5 +45,11 @@ impl Clock for FakeClock {
         let mut elapsed = self.elapsed.lock().unwrap_or_else(PoisonError::into_inner);
         *elapsed = elapsed.saturating_add(delay);
         ready(())
+    }
+
+    fn wall_now(&self) -> OffsetDateTime {
+        let elapsed = time::Duration::try_from(self.elapsed())
+            .expect("the fake clock stays within the time::Duration range");
+        datetime!(2026-01-01 0:00 UTC) + elapsed
     }
 }
