@@ -14,7 +14,8 @@ variable is mapped to its config.yaml key, and CONFIG_OUT is written with mode 0
 existing file is never overwritten.
 
 Secrets stay in the environment files. The script checks only that GH_TOKEN and
-MATRIX_ACCESS_TOKEN are assigned; it never reads, prints or writes a secret value.
+MATRIX_ACCESS_TOKEN are assigned and that each value ends on its line; it never decodes,
+prints or writes a secret value.
 config.yaml names AUTOREVIEW_GH_TOKEN and AUTOREVIEW_MATRIX_TOKEN, because the Rust loader
 accepts only `*_env` names that start with AUTOREVIEW_; the service sets them at start or the
 files hold them. One Matrix backend is written per distinct room.
@@ -207,6 +208,9 @@ def read_environment(files):
         seen = set()
         for number, line in enumerate(data.split(b"\n"), start=1):
             where = f"{path}: line {number}"
+            # systemd also ends a line at a lone CR, so a CR would split the line differently.
+            if b"\r" in line:
+                raise Finding(f"{where}: carriage return")
             match = LINE.fullmatch(line)
             if match:
                 name = match.group(1).decode("ascii")
@@ -221,7 +225,9 @@ def read_environment(files):
                     raise Finding(f"{name}: assigned twice in {path}")
                 seen.add(name)
                 if name in SECRETS:
-                    # The rest of a secret line is never decoded or inspected.
+                    # A secret value is never decoded or kept; only where it ends is checked.
+                    if not ends_on_its_line(match.group(2)):
+                        raise Finding(f"{where}: a value that continues on the next line")
                     secrets.add(name)
                     continue
             try:
@@ -250,7 +256,11 @@ def atoi(name, value):
     """Parses the way Go's strconv.Atoi does."""
     if not INTEGER.fullmatch(value):
         raise Finding(f"{name}: must be an integer")
-    number = int(value)
+    try:
+        number = int(value)
+    except ValueError:
+        # Python refuses more than sys.get_int_max_str_digits() digits; Go's range is far less.
+        raise Finding(f"{name}: must be an integer") from None
     if not -INT64_MAX - 1 <= number <= INT64_MAX:
         raise Finding(f"{name}: must be an integer")
     return number
@@ -293,7 +303,7 @@ def json_value(name, value):
     try:
         parsed = json.loads(value, parse_constant=refuse_constant, object_pairs_hook=pairs)
         check_text(parsed)
-    except (ValueError, UnicodeEncodeError):
+    except (ValueError, UnicodeEncodeError, RecursionError):
         raise Finding(f"{name}: unsupported JSON") from None
     return parsed
 

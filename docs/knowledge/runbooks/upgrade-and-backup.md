@@ -135,80 +135,139 @@ The steps below use these names; replace them with yours:
 
 - `<go-unit>`: the systemd unit of the Go engine.
 - `<go-timer>`: the timer that runs the Go engine's `review-queue`, if there is one;
-  leave it out of the commands otherwise.
-- `<go-binary>`: the Go engine's binary. If it is `/usr/local/bin/autoreview`,
-  copy it to `/usr/local/bin/autoreview.previous` first and use that path.
+  leave it out of the commands otherwise. `<go-queue-service>` is the service it starts.
+- `<go-binary>`: the binary the Go units run. If it is `/usr/local/bin/autoreview`,
+  step 1 of the preparation copies it to `/usr/local/bin/autoreview.previous`, and
+  `<go-binary>` means that copy.
 - `<env-file>`: an `EnvironmentFile=` of `<go-unit>` that holds
   `HERMES_PR_REVIEW_*` variables.
 - `<secrets-file>`: an `EnvironmentFile=` of `<go-unit>` that also holds
   variables of other services, such as a secrets file the host shares. If the
   unit has none, leave it out.
+- `<user>` and `<group>`: the user and group of `<go-unit>`.
+- `<store>`: the store, the Go engine's `HERMES_PR_REVIEW_STATE_DB_PATH`, and
+  `<store-dir>` its directory.
+- `<pohunek-state>` and `<pohunek-runtime>`: the Go engine's
+  `HERMES_PR_REVIEW_POHUNEK_STATE_HOME` and `HERMES_PR_REVIEW_POHUNEK_RUNTIME_DIR`.
 
-When the unit has more files, name each of them, in the unit's order, wherever
-these steps name `<env-file>` and `<secrets-file>`: once per file in the
-drop-in, and as `-p EnvironmentFile=` in every `systemd-run` command.
-- `<user>`: the user of `<go-unit>`.
+When the unit has more environment files, name each of them, in the unit's
+order, wherever these steps name `<env-file>` and `<secrets-file>`: once per
+file in the drop-in, and as `-p EnvironmentFile=` in every `systemd-run`
+command. A file left out changes what the engines read: the Go engine stops
+at a missing variable, and an override in a later file, such as another
+`HERMES_PR_REVIEW_STATE_DB_PATH`, would point a command at another store.
 
-Every command loads the environment the way the service does, through
-`systemd-run`, so that both engines see the same values. Run them as root.
+Run every command as root. The `systemd-run` commands pass the unit's user and
+environment files, so that each engine reads the values its service reads.
+They do not apply the sandbox of a unit; step 5 of the preparation checks
+autoreview inside it.
 
 ### Prepare while the Go engine runs
 
-1. Install the autoreview binary as `/usr/local/bin/autoreview` and the unit
-   files from the [install page](../../install.md#b-systemd-units). Do not
-   start them. Set `User=`, `Group=` and `ReadWritePaths=` of both services to
-   the user and the paths of `<go-unit>`, so that autoreview can write the store.
-2. Give autoreview its two secret variables. It reads tokens only from
-   `AUTOREVIEW_*` variables, and the Go engine ignores those, so a rollback
-   still works on the same files. Map them at start, so that no secret is
-   copied: with `systemctl edit autoreview.service`, add
+1. Never install autoreview over a path a Go unit runs. If `<go-unit>` or
+   `<go-queue-service>` runs `/usr/local/bin/autoreview`, copy that binary and
+   point both units at the copy first:
+
+   ```sh
+   install -o root -g root -m 0755 /usr/local/bin/autoreview /usr/local/bin/autoreview.previous
+   systemctl edit <go-unit>
+   systemctl edit <go-queue-service>
+   ```
+
+   In each drop-in, repeat the unit's `ExecStart=` with only the binary
+   changed, for example:
 
    ```ini
    [Service]
+   ExecStart=
+   ExecStart=/usr/local/bin/autoreview.previous serve
+   ```
+
+   Then run `systemctl daemon-reload` and check with `systemctl cat <go-unit>
+   <go-queue-service>` that both run `/usr/local/bin/autoreview.previous`. Every
+   later start of the Go engine, a restart during the preparation and the
+   rollback included, now runs the copy. Keep the drop-ins until the Go engine
+   is retired.
+2. Install the autoreview binary as `/usr/local/bin/autoreview` and the unit
+   files from the [install page](../../install.md#b-systemd-units). Do not
+   start them. The units run in a sandbox: `ProtectSystem=strict` makes every
+   path outside `ReadWritePaths=` read-only, `ProtectHome=yes` hides `/home`,
+   `/root` and `/run/user`, and `PrivateTmp=yes` gives the service its own
+   `/tmp`. So none of `<store>`, `config.yaml`, the policy file, its prompts,
+   `<pohunek-state>` and `<pohunek-runtime>` may be under those directories,
+   and the service must be able to write `<store-dir>` (SQLite writes
+   `<store>-wal` and `<store>-shm` next to the store) and the pohunek
+   directories.
+3. Give both services the Go engine's user, paths and environment, and its two
+   secret variables. autoreview reads tokens only from `AUTOREVIEW_*`
+   variables, and the Go engine ignores those, so a rollback still works on the
+   same files. Map them at start, so that no secret is copied: with
+   `systemctl edit autoreview.service`, add
+
+   ```ini
+   [Service]
+   User=<user>
+   Group=<group>
+   ReadWritePaths=<store-dir> <pohunek-state> <pohunek-runtime>
    EnvironmentFile=
    EnvironmentFile=<env-file>
    EnvironmentFile=<secrets-file>
    ExecStart=
-   ExecStart=/bin/sh -c 'AUTOREVIEW_GH_TOKEN="$$GH_TOKEN" AUTOREVIEW_MATRIX_TOKEN="$$MATRIX_ACCESS_TOKEN" exec /usr/local/bin/autoreview --config /etc/autoreview/config.yaml serve'
+   ExecStart=/bin/sh -c 'export AUTOREVIEW_GH_TOKEN="$$GH_TOKEN" \
+     AUTOREVIEW_MATRIX_TOKEN="$$MATRIX_ACCESS_TOKEN"; \
+     exec /usr/local/bin/autoreview --config /etc/autoreview/config.yaml serve'
    ```
 
    and the same for `autoreview-queue.service`, with `review-queue` in place of
    `serve`. systemd turns `$$` into `$`, so the shell reads the tokens and they
    never appear on a command line. Alternatively, add the lines
-   `AUTOREVIEW_GH_TOKEN=` and `AUTOREVIEW_MATRIX_TOKEN=` with the token values to
-   `<env-file>` in an editor; then a token change edits both lines.
-3. Write `config.yaml` with the conversion script from the autoreview source
+   `AUTOREVIEW_GH_TOKEN=` and `AUTOREVIEW_MATRIX_TOKEN=` with the token values in
+   an editor to the file that already holds `GH_TOKEN`, and only when that file
+   is owned by root with mode `0600`, or `0640` with group `<group>`. Never add
+   them to a settings file that others may read. A token change then edits both
+   lines.
+4. Write `config.yaml` with the conversion script from the autoreview source
    tree of the release. Name every file of `<go-unit>` in the unit's order, a
    settings file with `--settings-env` and a shared file with `--secrets-env`:
 
    ```sh
    python3 -I scripts/env-to-config /etc/autoreview/config.yaml \
      --settings-env <env-file> --secrets-env <secrets-file>
-   chgrp <user> /etc/autoreview/config.yaml
+   chgrp <group> /etc/autoreview/config.yaml
    chmod 0640 /etc/autoreview/config.yaml
    ```
 
    The script maps every `HERMES_PR_REVIEW_*` variable to its key, writes one
    Matrix backend per distinct room, and creates the file with mode `0600`. It
-   never overwrites a file and never reads, prints or writes a secret value:
+   never overwrites a file and never decodes, prints or writes a secret value:
    `config.yaml` names `AUTOREVIEW_GH_TOKEN` and `AUTOREVIEW_MATRIX_TOKEN`
    only. It stops at the first variable it cannot convert and names it, or the
-   file and line. It accepts plain `NAME=value` lines and comments; quote a
-   value whole in `"..."` or `'...'` and do not use backslashes. It stops at a
-   variable it does not know in a settings file. In a `--secrets-env` file it
-   reads only the tokens, `MATRIX_HOMESERVER` and `HERMES_PR_REVIEW_*`. Of every
-   other assignment it checks only that the value ends on its line, because an
-   open quote or a final backslash would carry it into the next line; it never
-   reads the value itself. A later file wins, as in systemd.
-4. Validate with autoreview while the Go engine still runs:
+   file and line. It accepts plain `NAME=value` lines and comments with LF line
+   ends; quote a value whole in `"..."` or `'...'` and do not use backslashes.
+   It stops at a variable it does not know in a settings file. In a
+   `--secrets-env` file it reads only the tokens, `MATRIX_HOMESERVER` and
+   `HERMES_PR_REVIEW_*`. Of the tokens and of every other assignment it checks
+   only that the value ends on its line, because an open quote or a final
+   backslash would carry it into the next line; it never decodes the value
+   itself. A later file wins, as in systemd.
+5. Check autoreview in the sandbox of its unit while the Go engine still runs.
+   The properties repeat the sandbox of `autoreview.service` and the drop-in of
+   step 3; keep them equal when you change the unit. The command checks that
+   the service can write the store and its directory, then runs `validate`:
 
    ```sh
-   systemd-run --pipe --wait --quiet -p EnvironmentFile=<env-file> -p User=<user> \
-     /bin/sh -c 'AUTOREVIEW_GH_TOKEN="$$GH_TOKEN" AUTOREVIEW_MATRIX_TOKEN="$$MATRIX_ACCESS_TOKEN" exec /usr/local/bin/autoreview --config /etc/autoreview/config.yaml validate'
+   systemd-run --pipe --wait --quiet -p User=<user> -p Group=<group> \
+     -p EnvironmentFile=<env-file> -p EnvironmentFile=<secrets-file> \
+     -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \
+     -p 'ReadWritePaths=<store-dir> <pohunek-state> <pohunek-runtime>' \
+     /bin/sh -c 'test -w <store> && test -w <store-dir> || exit 1
+       export AUTOREVIEW_GH_TOKEN="$$GH_TOKEN" AUTOREVIEW_MATRIX_TOKEN="$$MATRIX_ACCESS_TOKEN"
+       exec /usr/local/bin/autoreview --config /etc/autoreview/config.yaml validate'
    ```
 
-   The output names the policy digest and the agent profiles. Fix any named
-   error before you go on.
+   The output names the policy digest and the agent profiles. An exit status
+   of 1 with no output means the store or its directory is not writable in the
+   sandbox. Fix any error before you go on.
 
 ### Switch
 
@@ -217,9 +276,11 @@ Every command loads the environment the way the service does, through
    command prints nothing and the second prints `[]` when the store is drained:
 
    ```sh
-   systemd-run --pipe --wait --quiet -p EnvironmentFile=<env-file> -p User=<user> \
+   systemd-run --pipe --wait --quiet -p User=<user> \
+     -p EnvironmentFile=<env-file> -p EnvironmentFile=<secrets-file> \
      <go-binary> reviews | grep -E '"status":"(queued|running|awaiting)"'
-   systemd-run --pipe --wait --quiet -p EnvironmentFile=<env-file> -p User=<user> \
+   systemd-run --pipe --wait --quiet -p User=<user> \
+     -p EnvironmentFile=<env-file> -p EnvironmentFile=<secrets-file> \
      <go-binary> awaiting
    ```
 
@@ -235,12 +296,12 @@ Every command loads the environment the way the service does, through
    prints `{"ok":true,...}` when the copy is complete.
 
    ```sh
-   systemd-run --pipe --wait --quiet -p EnvironmentFile=<env-file> -p User=<user> \
+   systemd-run --pipe --wait --quiet -p User=<user> \
+     -p EnvironmentFile=<env-file> -p EnvironmentFile=<secrets-file> \
      <go-binary> backup-db /var/backups/autoreview/before-switch.db
    ```
 
-4. Start autoreview on the same store (`store.path` is the Go engine's
-   `HERMES_PR_REVIEW_STATE_DB_PATH`):
+4. Start autoreview on the same store (`store.path` is `<store>`):
 
    ```sh
    systemctl enable --now autoreview.service autoreview-queue.timer
@@ -252,13 +313,22 @@ Every command loads the environment the way the service does, through
 ### Roll back to the Go engine
 
 1. Stop autoreview: `systemctl disable --now autoreview.service autoreview-queue.timer`.
-2. Start the Go engine on the same store and environment files:
-   `systemctl enable --now <go-unit> <go-timer>`.
+2. When the release notes name a newer store schema than the Go engine reads,
+   restore the backup. Move the store and its SQLite side files aside, then
+   install the backup with the Go engine's owner:
 
-This works while the autoreview release writes the store schema the Go engine
-reads. When the release notes name a newer store schema, stop both engines,
-restore the backup over `store.path` instead, and check on GitHub the reviews
-published after the backup.
+   ```sh
+   for file in <store> <store>-wal <store>-shm; do
+     if [ -e "$file" ]; then mv "$file" "$file.after-switch"; fi
+   done
+   install -o <user> -g <group> -m 0600 /var/backups/autoreview/before-switch.db <store>
+   ```
+
+   Reviews published after the backup are not in the restored store; check
+   them on GitHub before you retry them. Otherwise keep the store as it is.
+3. Start the Go engine on the same environment files:
+   `systemctl enable --now <go-unit> <go-timer>`. With the drop-ins of step 1
+   of the preparation, both units run `<go-binary>`, not autoreview.
 
 ### Known differences
 
@@ -270,7 +340,7 @@ Configuration:
 - A Matrix homeserver URL with an empty port or a port above 65535, and a
   store path of `/`, are refused; the Go engine accepted both.
 - The tokens are read from `AUTOREVIEW_GH_TOKEN` and `AUTOREVIEW_MATRIX_TOKEN`
-  (step 2 of the preparation).
+  (step 3 of the preparation).
 - The conversion script refuses a timeout or retention that does not fit in
   the Go engine's duration type (above 9223372036 seconds); the Go engine
   wrapped such values.
