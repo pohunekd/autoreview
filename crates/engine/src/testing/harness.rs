@@ -21,6 +21,7 @@ use crate::error::Error;
 use crate::integrations::SessionRequest;
 use crate::model::{
     ApprovalResult, ApproveRequest, PollResult, PullRequest, ResolveRequest, ResolveResult,
+    RetryRequest, RetryResult,
 };
 use crate::protocol::fixtures::sha;
 use crate::protocol::validate::tests::test_config;
@@ -354,6 +355,16 @@ impl Harness {
             self.store.load_step::<bool>(&first.workflow_id, name),
             Ok(Some(_))
         )
+    }
+
+    /// Retries the stopped review of `pr` by the prefix of its head.
+    pub(crate) async fn retry(&self, pr: &PullRequest) -> Result<RetryResult, Error> {
+        let request = RetryRequest {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            head_sha: pr.head_sha[..HEAD_PREFIX_CHARS].to_owned(),
+        };
+        self.engine.retry(&CancellationToken::new(), &request).await
     }
 
     /// Returns the rule of the integration policy for `repository`.

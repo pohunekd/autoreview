@@ -60,7 +60,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// Returns `review_identity_invalid` for an invalid request, the error of the lock, of the
     /// poll or of the store, and `review_retry_not_dispatched` when no attempt is running.
-    #[expect(dead_code, reason = "called by C01")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
     pub(crate) async fn retry(
         &self,
         cancel: &CancellationToken,
