@@ -1,23 +1,31 @@
 //! The engine core: its state, the clock it reads, the retry of one workflow step and the claims
 //! that keep one review on one engine.
 //!
-//! Mirrors `cmd/autoreview/engine.go:1-69, 168-184`.
+//! Mirrors `cmd/autoreview/engine.go:1-205`.
 
 // Rust guideline compliant 2026-06-26
 
 use std::collections::BTreeSet;
+use std::fs::OpenOptions;
 use std::future::Future;
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use autoreview_go_compat::go_time::parse_rfc3339;
+use rustix::fs::{FlockOperation, flock};
 use time::OffsetDateTime;
-
+use tokio::task::JoinSet;
+use tokio::time::{Interval, MissedTickBehavior, interval_at};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::error::Error;
+use crate::discovery::poll::live;
+use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
-use crate::store::Store;
+use crate::model::review::APPROVAL_KIND_EXPIRED;
+use crate::review::sessions::is_shutdown;
+use crate::store::{REVIEW_RUNNING, ReviewFilter, Store};
 
 /// Retry policy of one workflow step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +37,9 @@ pub(crate) struct StepRetryPolicy {
     /// Largest delay between two attempts.
     pub(crate) max_interval: Duration,
 }
+
+/// Mode of the engine lock file, as Go's `os.OpenFile` mode (`engine.go:72`).
+const ENGINE_LOCK_MODE: u32 = 0o600;
 
 /// Step that stores the combined review of a workflow (`review.go:18`).
 pub(crate) const STEP_ARTIFACT: &str = "artifact";
@@ -50,7 +61,7 @@ pub(crate) trait Clock: Send + Sync {
 
 /// The clock of the running process: the monotonic clock and the Tokio timer.
 #[derive(Debug, Clone, Copy, Default)]
-#[expect(dead_code, reason = "called by C01")]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
 pub(crate) struct SystemClock;
 
 impl Clock for SystemClock {
@@ -69,7 +80,7 @@ impl Clock for SystemClock {
 
 /// The review engine. It holds the configuration, the store, the side effects and the set of
 /// reviews this engine has claimed.
-#[expect(dead_code, reason = "called by C01")]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
 pub(crate) struct Engine<I, C> {
     /// Validated configuration; every timing and limit is read from here.
     pub(crate) config: Config,
@@ -85,7 +96,7 @@ pub(crate) struct Engine<I, C> {
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Creates an engine from the configuration, the store, the integrations and the clock.
-    #[expect(dead_code, reason = "called by C01")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
     pub(crate) fn new(config: Config, store: Arc<Store>, integration: Arc<I>, clock: C) -> Self {
         Self {
             config,
@@ -108,7 +119,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Claims a review for this engine if it is free and under the limit.
     ///
     /// A review that is already claimed, or a full engine, is refused.
-    #[expect(dead_code, reason = "called by S30")]
     pub(crate) fn claim(&self, workflow_id: &str) -> bool {
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
         if active.contains(workflow_id) {
@@ -123,10 +133,235 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     }
 
     /// Releases the claim of a review so that a later pass can run it again.
-    #[expect(dead_code, reason = "called by S30")]
     pub(crate) fn release(&self, workflow_id: &str) {
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
         active.remove(workflow_id);
+    }
+}
+
+impl<I, C> Engine<I, C>
+where
+    I: Integrations + Send + Sync + 'static,
+    C: Clock + 'static,
+{
+    /// Runs discovery and reviews until `cancel` is cancelled.
+    ///
+    /// A second engine on the same database is refused. Reviews still running at shutdown
+    /// keep their status and resume on the next start.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_unavailable` when the engine lock file cannot be opened,
+    /// `engine_already_running` when it is locked, and `configuration_invalid` without a policy.
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
+    pub(crate) async fn serve(self: &Arc<Self>, cancel: &CancellationToken) -> Result<(), Error> {
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .mode(ENGINE_LOCK_MODE)
+            .open(self.store.engine_lock_path())
+            .map_err(|err| Error::workflow("store_unavailable", true, Some(Box::new(err))))?;
+        flock(&lock, FlockOperation::NonBlockingLockExclusive)
+            .map_err(|err| Error::workflow("engine_already_running", true, Some(Box::new(err))))?;
+        let review_cancel = cancel.child_token();
+        let mut tasks = JoinSet::new();
+        let result = self.serve_locked(cancel, &review_cancel, &mut tasks).await;
+        review_cancel.cancel();
+        while let Some(joined) = tasks.join_next().await {
+            resume_panic(joined);
+        }
+        // The flock is released only after every review stopped, as Go's deferred close.
+        drop(lock);
+        result
+    }
+
+    /// Runs the poll and worker tickers of [`Engine::serve`] while the engine lock is held.
+    async fn serve_locked(
+        self: &Arc<Self>,
+        cancel: &CancellationToken,
+        review_cancel: &CancellationToken,
+        tasks: &mut JoinSet<()>,
+    ) -> Result<(), Error> {
+        let mut poll_ticker = ticker(self.config.poll_interval);
+        let mut work_ticker = ticker(self.config.worker_tick);
+        let policy_digest = self.policy()?.digest();
+        tracing::info!(
+            policy_digest,
+            max_concurrent_reviews = self.config.max_concurrent_reviews,
+            "pull request review engine starting"
+        );
+        self.poll_and_log(cancel).await;
+        self.work(review_cancel, tasks);
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => {
+                    tracing::info!("pull request review engine stopping");
+                    return Ok(());
+                }
+                _ = poll_ticker.tick() => {
+                    self.poll_and_log(cancel).await;
+                    self.prune(cancel);
+                }
+                _ = work_ticker.tick() => {
+                    while let Some(joined) = tasks.try_join_next() {
+                        resume_panic(joined);
+                    }
+                    self.work(review_cancel, tasks);
+                }
+            }
+        }
+    }
+
+    /// Runs one discovery poll and logs its failure or its dispatches.
+    ///
+    /// A failure after `cancel` is cancelled is not logged.
+    async fn poll_and_log(&self, cancel: &CancellationToken) {
+        match self.poll(cancel).await {
+            Err(err) => {
+                if !cancel.is_cancelled() {
+                    tracing::error!(
+                        error_code = error_code(&err),
+                        error = %err,
+                        "discovery poll failed"
+                    );
+                }
+            }
+            Ok(result) => {
+                if result.dispatched > 0 || result.superseded > 0 {
+                    tracing::info!(
+                        open = result.open,
+                        dispatched = result.dispatched,
+                        superseded = result.superseded,
+                        "discovery poll"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Deletes the completed reviews last updated before the retention and logs the count.
+    fn prune(&self, cancel: &CancellationToken) {
+        // A retention beyond the range of `time::Duration` keeps every review.
+        let retention =
+            time::Duration::try_from(self.config.review_retention).unwrap_or(time::Duration::MAX);
+        let cutoff = self.clock.wall_now().saturating_sub(retention);
+        match live(cancel).and_then(|()| self.store.prune_reviews(cutoff)) {
+            Err(err) => {
+                tracing::error!(error_code = error_code(&err), "review pruning failed");
+            }
+            Ok(removed) => {
+                if removed > 0 {
+                    tracing::info!(reviews = removed, "completed reviews pruned");
+                }
+            }
+        }
+    }
+
+    /// Expires overdue approval waits and starts every review that can make progress.
+    ///
+    /// Reviews start up to the concurrency limit; each runs in its own task in `tasks`.
+    fn work(self: &Arc<Self>, cancel: &CancellationToken, tasks: &mut JoinSet<()>) {
+        if cancel.is_cancelled() {
+            return;
+        }
+        if let Err(err) = self.expire_approvals(cancel) {
+            tracing::error!(error_code = error_code(&err), "approval expiry failed");
+        }
+        let ready = match live(cancel).and_then(|()| self.store.ready_reviews()) {
+            Ok(ready) => ready,
+            Err(err) => {
+                tracing::error!(error_code = error_code(&err), "review queue unreadable");
+                return;
+            }
+        };
+        for mut stored in ready {
+            if !self.claim(&stored.workflow_id) {
+                continue;
+            }
+            if stored.status != REVIEW_RUNNING {
+                let moved = live(cancel).and_then(|()| {
+                    self.store.set_review_status(
+                        &stored.workflow_id,
+                        &stored.status,
+                        REVIEW_RUNNING,
+                    )
+                });
+                if !matches!(moved, Ok(true)) {
+                    self.release(&stored.workflow_id);
+                    continue;
+                }
+                REVIEW_RUNNING.clone_into(&mut stored.status);
+            }
+            let engine = Arc::clone(self);
+            let cancel = cancel.clone();
+            tasks.spawn(async move {
+                let workflow_id = stored.workflow_id.clone();
+                let review_id = stored.input.pull_request.review_id();
+                let result = engine.run_review(&cancel, stored).await;
+                match result {
+                    Ok(()) => {}
+                    Err(err) if is_shutdown(&err) || cancel.is_cancelled() => {}
+                    Err(err) => {
+                        // The review keeps its status, so the next tick resumes it.
+                        tracing::error!(
+                            review_id,
+                            workflow_id,
+                            error_code = error_code(&err),
+                            error = %err,
+                            "review interrupted"
+                        );
+                    }
+                }
+                engine.release(&workflow_id);
+            });
+        }
+    }
+
+    /// Records the expiry of every awaiting review whose approval deadline has passed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_state_invalid` for a deadline that does not parse, or the first error of
+    /// the store.
+    fn expire_approvals(&self, cancel: &CancellationToken) -> Result<(), Error> {
+        live(cancel)?;
+        let waiting = self.store.list_reviews(
+            &ReviewFilter::AwaitingUndecided,
+            self.config.state_entry_limit,
+        )?;
+        let now = self.clock.wall_now();
+        for review in waiting {
+            let deadline = parse_rfc3339(&review.approval_deadline).map_err(|err| {
+                let cause = format!("review {} deadline: {err}", review.workflow_id);
+                Error::workflow("store_state_invalid", true, Some(cause.into()))
+            })?;
+            if now < deadline {
+                continue;
+            }
+            live(cancel)?;
+            self.store
+                .decide_approval(&review.workflow_id, APPROVAL_KIND_EXPIRED)?;
+        }
+        Ok(())
+    }
+}
+
+/// Returns a ticker whose first tick comes one `period` from now, as Go's `time.NewTicker`.
+///
+/// A late tick is skipped instead of firing in a burst, as Go's ticker drops ticks.
+fn ticker(period: Duration) -> Interval {
+    let mut ticker = interval_at(tokio::time::Instant::now() + period, period);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    ticker
+}
+
+/// Re-raises the panic of a review task, as a panicking Go goroutine stops the process.
+fn resume_panic(joined: Result<(), tokio::task::JoinError>) {
+    if let Err(err) = joined
+        && err.is_panic()
+    {
+        std::panic::resume_unwind(err.into_panic());
     }
 }
 

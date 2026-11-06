@@ -47,6 +47,9 @@ const LOCK_FILE_MODE: u32 = 0o600;
 /// Suffix appended to the database path to name the discovery lock file.
 const DISCOVERY_LOCK_SUFFIX: &str = ".discovery.lock";
 
+/// Suffix of the engine lock file after the discovery lock path (`engine.go:72`).
+const ENGINE_LOCK_SUFFIX: &str = ".engine";
+
 /// Message of the cause of a `discovery_busy` failure.
 const DISCOVERY_LOCK_TIMEOUT_CAUSE: &str = "discovery lock not acquired in time";
 
@@ -222,6 +225,13 @@ impl Store {
     /// Returns the current time as RFC 3339 text with nanoseconds, in UTC, as Go writes it.
     pub fn timestamp(&self) -> String {
         format_rfc3339_nano((self.now)())
+    }
+
+    /// Returns the engine lock path: the discovery lock path with `.engine` appended.
+    pub(crate) fn engine_lock_path(&self) -> PathBuf {
+        let mut os_string = self.lock_path.as_os_str().to_owned();
+        os_string.push(ENGINE_LOCK_SUFFIX);
+        PathBuf::from(os_string)
     }
 
     /// Runs `run` while this process and every other process holds the discovery lock.
