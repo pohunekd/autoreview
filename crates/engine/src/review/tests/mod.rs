@@ -5,3 +5,4 @@
 mod approval;
 mod core;
 mod memory;
+mod verify;

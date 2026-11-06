@@ -857,8 +857,7 @@ fn verifier_output(
 /// Returns a session output that answers verifier requests by the claim verdicts.
 ///
 /// Every other request goes to `reviewers`.
-#[expect(dead_code, reason = "called by S33")]
-fn verifying(
+pub(crate) fn verifying(
     reviewers: impl Fn(&SessionRequest) -> String + Send + Sync + 'static,
     finding: impl Fn(&ClaimFinding) -> &'static str + Send + Sync + 'static,
     prior: impl Fn(&ClaimPrior) -> &'static str + Send + Sync + 'static,
