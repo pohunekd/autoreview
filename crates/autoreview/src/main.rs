@@ -8,20 +8,29 @@ mod config_file;
 mod error_response;
 mod logging;
 
+use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use autoreview_engine::config::Config;
+use autoreview_engine::integrations::Integrations;
 use autoreview_engine::{BoxError, Error, WORKFLOW_FAILED, error_code, go_json};
+use autoreview_external::External;
 use clap::error::ErrorKind;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use serde::Serialize;
+use tokio::signal::unix::{SignalKind, signal};
+use tokio_util::sync::CancellationToken;
 
 use crate::error_response::{COMMAND_INVALID, error_response};
 
 /// Environment variable that names the config file when `--config` is absent.
 const CONFIG_ENV: &str = "AUTOREVIEW_CONFIG";
+
+/// The end-of-options marker of clap, which Go's argument reading does not know.
+const ESCAPE: &str = "--";
 
 /// Configuration key named when the configuration holds no policy.
 const POLICY_KEY: &str = "policy_file";
@@ -46,6 +55,8 @@ struct Cli {
 enum Command {
     /// Validates the configuration and the policy and prints the policy digest.
     Validate,
+    /// Prints the pull requests that the next discovery pass would consider.
+    Candidates,
 }
 
 /// What `validate` prints: what the policy requires of the review hosts.
@@ -60,7 +71,7 @@ struct ValidationResult {
 #[tokio::main]
 async fn main() -> ExitCode {
     let result = match logging::init() {
-        Ok(()) => match Cli::try_parse() {
+        Ok(()) => match parse(std::env::args_os().collect()) {
             Ok(cli) => run(cli).await,
             Err(error) if is_display(error.kind()) => print_display(&error),
             Err(error) => Err(command_invalid(Some(Box::new(error)))),
@@ -74,6 +85,21 @@ async fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Parses the command line and refuses the `--` escape, which Go reads as an argument.
+///
+/// # Errors
+///
+/// Returns the clap error; a `--` argument is an `UnknownArgument` error.
+fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
+    if arguments.iter().skip(1).any(|argument| argument == ESCAPE) {
+        return Err(Cli::command().error(
+            ErrorKind::UnknownArgument,
+            format!("{ESCAPE} is not an argument of any command"),
+        ));
+    }
+    Cli::try_parse_from(arguments)
 }
 
 /// Reports whether clap stopped for the help or the version text.
@@ -107,8 +133,12 @@ async fn run(cli: Cli) -> Result<(), Error> {
     let environment = std::env::var_os(CONFIG_ENV);
     let path = config_file::resolve_path(cli.config.as_deref(), environment.as_deref())?;
     let config = config_file::load(&path)?;
+    let external = Arc::new(External::new(config.clone())?);
+    let cancel = CancellationToken::new();
+    cancel_on_signal(cancel.clone())?;
     match cli.command {
         Command::Validate => validate(&config),
+        Command::Candidates => print_json(&external.list_candidates(&cancel).await?),
     }
 }
 
@@ -121,6 +151,24 @@ fn validate(config: &Config) -> Result<(), Error> {
         policy_digest: policy.digest().to_owned(),
         agent_profiles: policy.agent_profiles(),
     })
+}
+
+/// Cancels `cancel` on the first SIGINT or SIGTERM, as Go's `signal.NotifyContext` does.
+///
+/// # Errors
+///
+/// Returns `workflow_failed` when a signal handler cannot be installed.
+fn cancel_on_signal(cancel: CancellationToken) -> Result<(), Error> {
+    let mut interrupt = signal(SignalKind::interrupt()).map_err(failed)?;
+    let mut terminate = signal(SignalKind::terminate()).map_err(failed)?;
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = interrupt.recv() => {}
+            _ = terminate.recv() => {}
+        }
+        cancel.cancel();
+    });
+    Ok(())
 }
 
 /// Prints `value` as Go's `json.Encoder` does: escaped as `json.Marshal`, then a newline.
