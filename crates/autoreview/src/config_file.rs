@@ -950,6 +950,8 @@ enum Backend {
         name: String,
         /// Homeserver base URL.
         homeserver_url: String,
+        /// Environment variable that holds the access token.
+        access_token_env: String,
         /// The access token, read from the environment variable named by the key.
         access_token: String,
         /// Room identifier.
@@ -971,6 +973,19 @@ impl Backend {
             Backend::None { name } => name,
             Backend::Matrix { name, .. } => name,
             Backend::Webhook { name } => name,
+        }
+    }
+
+    /// Returns the homeserver, token variable and mentioned user of a Matrix backend.
+    fn matrix_identity(&self) -> Option<(&str, &str, &str)> {
+        match self {
+            Backend::Matrix {
+                homeserver_url,
+                access_token_env,
+                mention_user,
+                ..
+            } => Some((homeserver_url, access_token_env, mention_user)),
+            Backend::None { .. } | Backend::Webhook { .. } => None,
         }
     }
 }
@@ -1029,6 +1044,7 @@ fn notify_backends(
                 out.push(Backend::Matrix {
                     name,
                     homeserver_url,
+                    access_token_env: variable,
                     access_token,
                     room,
                     mention_user,
