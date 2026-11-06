@@ -55,7 +55,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// Returns the shutdown error when the engine stops the review midway, or the error of
     /// the store. A failed review is completed as a failure and returns `Ok`.
-    #[expect(dead_code, reason = "called by S30")]
     pub(crate) async fn run_review(
         &self,
         cancel: &CancellationToken,
