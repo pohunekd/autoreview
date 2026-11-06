@@ -140,11 +140,23 @@ async fn demoted_critical_finding_on_an_approving_rule_waits_for_the_user() {
 #[tokio::test]
 async fn confirmed_findings_still_request_changes() {
     let mut h = start_harness(|_| {}).await;
-    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
-    h.set_output(reviewer_output(vec![json!({
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3, 4])].into();
+    // Distinct lines keep the two reviewers' findings apart as O001 and S001.
+    let opus = reviewer_output(vec![json!({
         "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
         "line": 3, "title": "Broken", "body": "It breaks.",
-    })]));
+    })]);
+    let sonnet = reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 4, "title": "Also broken", "body": "It breaks too.",
+    })]);
+    h.set_output(move |request: &SessionRequest| {
+        if request.reviewer.id == "sonnet" {
+            sonnet(request)
+        } else {
+            opus(request)
+        }
+    });
     let pr = integration_pull_request("checked/manual", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the request for changes", || h.publications() == 1)
@@ -152,8 +164,8 @@ async fn confirmed_findings_still_request_changes() {
     let (published, _, started, _) = h.fake.snapshot();
     assert!(
         published[0].decision == Decision::RequestChanges
-            && published[0].comments.len() == 1
-            && published[0].body.contains("blocking findings 1 confirmed"),
+            && published[0].comments.len() == 2
+            && published[0].body.contains("blocking findings 2 confirmed"),
         "decision={:?} comments={} body={}",
         published[0].decision,
         published[0].comments.len(),
@@ -172,7 +184,7 @@ async fn confirmed_findings_still_request_changes() {
         .collect();
     assert_eq!(
         ids.join(","),
-        "O001",
+        "O001,S001",
         "the verifier must check every blocking finding, got {ids:?}"
     );
     h.stop_engine().await;

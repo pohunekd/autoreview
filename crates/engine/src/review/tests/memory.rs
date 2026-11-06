@@ -8,6 +8,7 @@
 use autoreview_policy::Level;
 use serde_json::json;
 
+use crate::integrations::SessionRequest;
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_OPEN, prior_key};
@@ -324,20 +325,39 @@ async fn missing_previous_review_falls_back_to_a_full_review() {
 #[tokio::test]
 async fn open_prior_finding_without_an_open_thread_is_published_again() {
     let mut h = start_harness(|_| {}).await;
-    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
-    h.set_output(reviewer_output(vec![json!({
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3, 4])].into();
+    // Distinct lines keep the two reviewers' findings apart as O001 and S001.
+    let opus = reviewer_output(vec![json!({
         "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
         "line": 3, "title": "Broken", "body": "It breaks.",
-    })]));
+    })]);
+    let sonnet = reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 4, "title": "Also broken", "body": "It breaks too.",
+    })]);
+    h.set_output(move |request: &SessionRequest| {
+        if request.reviewer.id == "sonnet" {
+            sonnet(request)
+        } else {
+            opus(request)
+        }
+    });
     let pr = integration_pull_request("acme/manual", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the request for changes", || h.publications() == 1)
         .await;
-    h.fake.lock().discussion.threads = vec![DiscussionThread {
-        key: prior_key(&pr.head_sha, "O001"),
-        resolved: true,
-        replies: Vec::new(),
-    }];
+    h.fake.lock().discussion.threads = vec![
+        DiscussionThread {
+            key: prior_key(&pr.head_sha, "O001"),
+            resolved: true,
+            replies: Vec::new(),
+        },
+        DiscussionThread {
+            key: prior_key(&pr.head_sha, "S001"),
+            replies: Vec::new(),
+            ..DiscussionThread::default()
+        },
+    ];
     h.set_output(settling_output(Vec::new(), |_| PRIOR_OPEN));
     let mut next = pr.clone();
     next.head_sha = sha("c");
@@ -350,7 +370,7 @@ async fn open_prior_finding_without_an_open_thread_is_published_again() {
         review.decision == Decision::RequestChanges
             && review.comments.len() == 1
             && review.comments[0].body.contains("Still open from O001")
-            && review.marker.contains(":findings=1:"),
+            && review.marker.contains(":findings=2:"),
         "decision={:?} comments={:?} marker={}",
         review.decision,
         review.comments,
