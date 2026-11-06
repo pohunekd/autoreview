@@ -60,7 +60,8 @@ request context.
   the other location in the body.
 - Keep the summary substantive and bounded. `limits.min_summary_characters` and
   `limits.max_summary_characters` apply. A result outside a limit is rejected,
-  and the reviewer gets a fresh session.
+  and the reviewer gets a fresh session. The engine states the summary, title
+  and body limits in every reviewer request, so the prompt need not repeat them.
 
 ## What a prompt must not do
 

@@ -2325,7 +2325,7 @@ mod tests {
                 "configuration_invalid: limits.min_summary_characters: must be at most 500",
             ),
             (
-                "  max_summary_characters: 20000",
+                "  max_summary_characters: 1500",
                 "  max_summary_characters: 10",
                 concat!(
                     "configuration_invalid: limits.min_summary_characters: must not ",
