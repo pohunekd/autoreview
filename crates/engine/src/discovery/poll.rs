@@ -483,7 +483,7 @@ fn skippable_candidate_error(err: &Error) -> bool {
 /// Fails as Go's store does on a cancelled context, so a cancelled pass writes nothing.
 ///
 /// The Rust store ignores `cancel`; Go's `database/sql` refuses every call once the context ends.
-fn live(cancel: &CancellationToken) -> Result<(), Error> {
+pub(super) fn live(cancel: &CancellationToken) -> Result<(), Error> {
     if cancel.is_cancelled() {
         return Err(Error::workflow(
             STORE_UNAVAILABLE,
