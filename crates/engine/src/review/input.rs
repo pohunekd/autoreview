@@ -60,11 +60,9 @@ pub(crate) const STATE_DEADLINE: &str = "collect_deadline";
 pub(crate) const STATE_VERIFIER_DEADLINE: &str = "verify_deadline";
 
 /// Prefix of the state that holds the progress of one slot.
-#[expect(dead_code, reason = "called by S25b")]
 pub(crate) const SLOT_STATE_PREFIX: &str = "slot/";
 
 /// Prefix of the steps that record a sent notification.
-#[expect(dead_code, reason = "called by S25b")]
 pub(crate) const NOTIFY_STEP_PREFIX: &str = "notify/";
 
 /// Checks that a stored review input is complete and consistent.
@@ -177,7 +175,6 @@ fn validate_prior(input: &ReviewInput) -> Result<(), BoxError> {
 /// Fails with `head_changed` when the reviewed head is no longer the pull request head.
 ///
 /// A renewed review request of the same head keeps the running review.
-#[expect(dead_code, reason = "called by S25b")]
 pub(crate) fn still_wanted(expected: &PullRequest, current: &PullRequest) -> Result<(), Error> {
     if current.head_sha != expected.head_sha {
         return Err(Error::workflow("head_changed", true, None));
