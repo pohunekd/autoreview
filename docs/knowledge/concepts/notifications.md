@@ -88,13 +88,14 @@ review waits:
 | Level | Delivery fails | What happens |
 |---|---|---|
 | `digest` or `log` | The message cannot be delivered | Dropped with a warning in the log. The review continues. |
-| `action` | The message cannot be delivered | The step fails. |
+| `action` | The message cannot be delivered | The step fails, except for `approval_requested`. |
 
-A failed `action` message fails the step that sent it. For `approval_requested`
-the wait is cleared and the review fails, so the scheduler reports it instead,
-and nobody is left waiting for an approval that no one knows about. The
-scheduler's own retry rules then apply (see
-[state and recovery](state-and-recovery.md#retry-layers)).
+A failed `action` message fails the step that sent it. The scheduler's own retry
+rules then apply (see [state and recovery](state-and-recovery.md#retry-layers)).
+`approval_requested` is the exception: the review is stored as waiting before the
+request is sent, so a failed request is logged as `approval request failed` and
+the review keeps waiting. `autoreview awaiting` lists the wait until it is
+approved or its deadline passes.
 
 A digest or log message is never retried. A backend that is down during a
 digest loses that digest, and the state of the review is still visible with

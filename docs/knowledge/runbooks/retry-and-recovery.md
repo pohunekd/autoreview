@@ -87,8 +87,9 @@ you rely on the request alone.
 ## A review published, but a notification failed
 
 Publishing the review on GitHub and sending the notice are two operations. A
-failed `action` notice fails the step, so the step is retried. A failed `digest`
-or `log` notice is dropped with a warning and nothing is retried.
+failed `action` notice fails the step, so the step is retried. A failed
+approval request is the exception: it is logged and the review keeps waiting. A
+failed `digest` or `log` notice is dropped with a warning and nothing is retried.
 
 When you see a notification failure after a publication:
 
