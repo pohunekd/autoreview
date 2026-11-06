@@ -126,12 +126,18 @@ A reviewer run ends in one of these codes:
 - `review_output_timeout`: the session ran longer than `session.timeout_seconds`
   (default in the recommended config: 7200). Check the diff size and the model
   on the review host before you raise the timeout.
-- `review_output_invalid`: the output could not be read as a reviewer result.
-  Common cause: an output larger than `session.output_max_bytes`. Codex keeps
-  its transcript in the output, so raise that bound for Codex.
-- `review_result_invalid`: the output parsed but broke a bound in `limits`
-  (`result_max_bytes`, `max_findings`, summary or title length). Tighten the
-  prompt so the reviewer stays within the bound, or raise the bound with care.
+- `review_output_invalid`: the output could not be read as a reviewer result,
+  or it broke an engine check: another pull request or head, the summary
+  length, the count of findings or tests (`max_findings`, `max_tests`), or a
+  finding's id, line, path, title, body, confidence or severity. The error and
+  the warning "retrying reviewer after unusable output" name the failed check.
+  Common cause of an unreadable output: an output larger than
+  `session.output_max_bytes`. Codex keeps its transcript in the output, so
+  raise that bound for Codex. For a broken limit, tighten the prompt so the
+  reviewer stays within it, or raise the bound in `limits` with care.
+- `review_result_invalid`: a Codex result could not be read, is larger than
+  `result_max_bytes`, or reports another head or a status other than
+  `completed`.
 
 Each unusable run gets a fresh session, up to `session.reviewer_run_max_attempts`.
 If the same reviewer keeps failing, compare its agent profile and its prompt
