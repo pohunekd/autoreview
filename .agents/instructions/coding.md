@@ -166,7 +166,11 @@ What is not compatible, by decision:
   environment into `config.yaml` by hand.
 - **Logs:** JSON lines from `tracing-subscriber` (`timestamp`, `level`,
   `fields`, `target`) instead of `log/slog` (`time`, `level`, `msg`); log shape
-  is not a documented contract.
+  is not a documented contract. When the Claude wrapper, the Claude outer
+  message or the Codex result fails to decode (`review_wrapper_invalid`,
+  `claude_result_invalid`, `review_result_invalid`), Go's `error` field holds
+  the JSON or base64 decoder text; Rust logs only the code, so no decoder text
+  quotes untrusted output.
 - **CLI wording and usage text** (`main.go:16`); the JSON error object keeps its
   keys and codes (`command.go:22-47`).
 - **In-flight Go reviews** (statuses `queued`, `running`, `awaiting` at
@@ -197,8 +201,9 @@ with the expected Rust error code):
   read as the zero value, as in Go, through `null_default` and `null_entries`. A
   lone surrogate escape such as `\ud800` and `-0` in an integer field are errors
   everywhere. Go reads the zero value for the `null`, U+FFFD for the lone
-  surrogate and `0` for `-0`. For a search result this fails the whole search,
-  where Go rejects only that pull request.
+  surrogate and `0` for `-0`. In a search result either one fails the whole
+  search. For a `-0` pull request number Go rejects only that pull request; for
+  a lone surrogate Go keeps the pull request with U+FFFD in place of the escape.
 - A persisted review input whose policy string enum holds an unknown value
   (protocol, checkout, trigger kind, on_findings, on_clean, on_notes,
   notification level or event) is refused when the row is read, with the code
