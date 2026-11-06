@@ -1,26 +1,54 @@
 //! The approval wait of a clean review: it is recorded, released and then decided.
 //!
-//! Mirrors `cmd/autoreview/review.go:777-856`.
+//! Mirrors `cmd/autoreview/review.go:777-856, 893-948`.
 
 // Rust guideline compliant 2026-06-26
 
 use autoreview_policy::Event;
+use tokio_util::sync::CancellationToken;
 
+use super::input::STEP_PLAN;
 use super::sessions::{Review, is_shutdown};
 use crate::discovery::poll::live;
-use crate::engine::Clock;
+use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
 use crate::error::Error;
 use crate::integrations::Integrations;
 use crate::messages::{approval_expired_message, approval_requested_message, superseded_message};
 use crate::model::review::{
     APPROVAL_KIND_APPROVE, APPROVAL_KIND_EXPIRED, APPROVAL_KIND_SUPERSEDED,
 };
-use crate::model::{Artifact, AwaitRecord, Outcome, ReviewOutcome};
+use crate::model::{
+    ApprovalResult, ApproveRequest, Artifact, AwaitRecord, Outcome, PublishResult, ReviewOutcome,
+};
 use crate::publish::plan::PublicationPlan;
-use crate::store::RESULT_SUCCESS;
+use crate::store::{RESULT_SUCCESS, REVIEW_AWAITING};
 
 /// Nanoseconds in one second, as Go's `time.Second`.
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
+
+/// Error code of an approval whose review, artifact or plan is not stored.
+const REVIEW_INCOMPLETE: &str = "review_incomplete";
+
+/// Error code of an approval whose identity differs from the stored artifact.
+const REVIEW_IDENTITY_INVALID: &str = "review_identity_invalid";
+
+/// Error code of an approval whose plan does not wait for one.
+const APPROVAL_NOT_REQUIRED: &str = "approval_not_required";
+
+/// Error code of an approval of a review that does not wait yet.
+const REVIEW_NOT_AWAITING_APPROVAL: &str = "review_not_awaiting_approval";
+
+/// Error code of an approval that came after the deadline.
+const APPROVAL_EXPIRED: &str = "approval_expired";
+
+/// Error code of an approval of a review that a newer review replaced.
+const REVIEW_SUPERSEDED: &str = "review_superseded";
+
+/// Publication status of an approved review the engine has not published yet.
+const PUBLICATION_PENDING: &str = "pending";
+
+/// Publication status of an approved review that is already on GitHub.
+const PUBLICATION_PUBLISHED: &str = "published";
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Records the wait, releases the pull request and asks the user for an approval.
@@ -169,5 +197,80 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 publication: None,
             }),
         )
+    }
+}
+
+impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Records the user's approval of a clean review that waits for it.
+    ///
+    /// The engine publishes the review on its next tick.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store, `review_incomplete` for a review without its artifact or
+    /// plan, `review_identity_invalid`, `approval_not_required`, `review_not_awaiting_approval`,
+    /// `approval_expired` or `review_superseded`.
+    #[expect(dead_code, reason = "called by C01")]
+    pub(crate) fn approve(
+        &self,
+        cancel: &CancellationToken,
+        workflow_id: &str,
+        request: &ApproveRequest,
+    ) -> Result<ApprovalResult, Error> {
+        live(cancel)?;
+        let stored = self.store.get_review(workflow_id)?;
+        let Some(stored) = stored else {
+            return Err(Error::workflow(REVIEW_INCOMPLETE, true, None));
+        };
+        let artifact = live(cancel)
+            .and_then(|()| self.store.load_step::<Artifact>(workflow_id, STEP_ARTIFACT))?;
+        let plan = live(cancel).and_then(|()| {
+            self.store
+                .load_step::<PublicationPlan>(workflow_id, STEP_PLAN)
+        })?;
+        let (Some(artifact), Some(plan)) = (artifact, plan) else {
+            return Err(Error::workflow(REVIEW_INCOMPLETE, true, None));
+        };
+        if request.repository != artifact.repository
+            || request.number != artifact.number
+            || request.head_sha != artifact.head_sha
+        {
+            return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
+        }
+        if !plan.await_approval {
+            return Err(Error::workflow(APPROVAL_NOT_REQUIRED, true, None));
+        }
+        let mut result = ApprovalResult {
+            ok: true,
+            review_id: workflow_id.to_owned(),
+            publication_status: PUBLICATION_PENDING.to_owned(),
+            github_review_id: 0,
+            review_url: String::new(),
+        };
+        let publication = live(cancel).and_then(|()| {
+            self.store
+                .load_step::<PublishResult>(workflow_id, STEP_PUBLICATION)
+        })?;
+        if let Some(published) = publication {
+            result.publication_status = PUBLICATION_PUBLISHED.to_owned();
+            result.github_review_id = published.github_review_id;
+            result.review_url = published.review_url;
+            return Ok(result);
+        }
+        let mut decision = stored.approval;
+        if decision.is_empty() {
+            if stored.status != REVIEW_AWAITING {
+                return Err(Error::workflow(REVIEW_NOT_AWAITING_APPROVAL, true, None));
+            }
+            live(cancel)?;
+            decision = self
+                .store
+                .decide_approval(workflow_id, APPROVAL_KIND_APPROVE)?;
+        }
+        match decision.as_str() {
+            APPROVAL_KIND_APPROVE => Ok(result),
+            APPROVAL_KIND_EXPIRED => Err(Error::workflow(APPROVAL_EXPIRED, true, None)),
+            _ => Err(Error::workflow(REVIEW_SUPERSEDED, true, None)),
+        }
     }
 }
