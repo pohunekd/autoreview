@@ -11,10 +11,12 @@ mod files;
 mod pull_request;
 mod reviews;
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fmt;
 use std::time::Duration;
 
+use autoreview_engine::config::Config;
 use autoreview_engine::error::{BoxError, Error};
 use serde::Deserialize;
 use serde::Serialize;
@@ -82,6 +84,8 @@ pub(crate) struct GitHub {
     poll_limit: i64,
     /// Number of pages a paged read may fetch before it fails.
     search_page_limit: i64,
+    /// Variables of the engine's secrets, which the `gh` child does not inherit.
+    secret_variables: BTreeSet<String>,
 }
 
 impl fmt::Debug for GitHub {
@@ -100,23 +104,16 @@ impl fmt::Debug for GitHub {
 
 impl GitHub {
     /// Creates the client from the `gh` settings of the configuration.
-    pub(crate) fn new(
-        binary: String,
-        token: String,
-        host: String,
-        login: String,
-        timeout: Duration,
-        poll_limit: i64,
-        search_page_limit: i64,
-    ) -> Self {
+    pub(crate) fn new(config: &Config) -> Self {
         Self {
-            binary,
-            token,
-            host,
-            login,
-            timeout,
-            poll_limit,
-            search_page_limit,
+            binary: config.gh_bin.clone(),
+            token: config.github_token.clone(),
+            host: config.github_host.clone(),
+            login: config.github_login.clone(),
+            timeout: config.gh_timeout,
+            poll_limit: config.poll_limit,
+            search_page_limit: config.search_page_limit,
+            secret_variables: config.secret_variables.clone(),
         }
     }
 
@@ -145,7 +142,7 @@ impl GitHub {
                 .iter()
                 .map(|(name, value)| (OsString::from(*name), OsString::from(*value))),
         );
-        let environment = child_environment(std::env::vars_os(), extra);
+        let environment = child_environment(std::env::vars_os(), &self.secret_variables, extra);
         let output = run(
             cancel,
             &self.binary,

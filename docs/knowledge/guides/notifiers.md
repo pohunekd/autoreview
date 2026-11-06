@@ -65,7 +65,9 @@ review_queue:
 ```
 
 Nothing leaves the host, and the structured log is the only record. Use this
-while you evaluate autoreview. A clean review that waits for a human is then
+while you evaluate autoreview. Until M3 the review queue needs a `matrix`
+backend: a `review_queue.backends` list of `none` backends only is refused at
+load, see [configuration](../../configuration.md). A clean review that waits for a human is then
 visible only through `autoreview awaiting`, so pair `human-approval` setups
 with a real backend.
 

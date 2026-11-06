@@ -25,12 +25,17 @@ that hold them.
 | Backend secret | A name in an `*_env` key, for example `access_token_env` | That notifier backend | GitHub calls, reviewer sessions, other backends |
 
 Each `gh` child gets only the token of its credential, as `GH_TOKEN` in its own
-environment, and no other child process receives a GitHub token.
+environment, and no other process that autoreview starts receives a GitHub token.
 
 Every name in an `*_env` key, including `token_env`, must start with `AUTOREVIEW_`.
-Child processes never inherit a GitHub token or pohunek session identity
-variables. The reviewer's environment is cleaned before its session starts
-(`cleanEnvironment`).
+The `gh` and `pohunek` processes that autoreview starts inherit no variable that
+starts with `AUTOREVIEW_` or that an `*_env` key names, no `GH_TOKEN` or
+`MATRIX_ACCESS_TOKEN`, and no pohunek session identity variables. The `gh` child
+gets the token of its credential set explicitly as `GH_TOKEN`.
+
+The review agents are started by the pohunek daemon, not by autoreview, and run
+with the daemon's environment, which autoreview does not control. Keep secrets
+out of the daemon's environment and out of the pohunek profile.
 
 ## Blast radius of a token
 

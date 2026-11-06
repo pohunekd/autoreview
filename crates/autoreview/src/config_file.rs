@@ -4,6 +4,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use autoreview_engine::Error;
-use autoreview_engine::config::{Config, MatrixRooms, RouteOverride};
+use autoreview_engine::config::{Config, MatrixRooms, RouteOverride, SECRET_ENV_PREFIX};
 use autoreview_policy::Policy;
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -29,8 +30,6 @@ const CONFIG_FLAG: &str = "--config";
 const CONFIG_ENV: &str = "AUTOREVIEW_CONFIG";
 /// The only `version` this loader reads.
 const CONFIG_VERSION: i64 = 1;
-/// Prefix that every `*_env` variable name must start with.
-const SECRET_ENV_PREFIX: &str = "AUTOREVIEW_";
 /// Longest debounce the scheduler accepts, in seconds.
 const DEBOUNCE_SECONDS_MAX: i64 = 600;
 /// Most retry delays the scheduler accepts.
@@ -489,17 +488,25 @@ fn environment_secret(name: &str) -> Option<String> {
 ///
 /// Returns `configuration_missing` for an absent key, `configuration_invalid` for a key whose
 /// value
-/// is out of range or of the wrong kind, and the engine's validation error for a mapped value that
-/// the engine rejects.
+/// is out of range or of the wrong kind or for a review queue without a Matrix backend, and the
+/// engine's validation error for a mapped value that the engine rejects.
 pub(crate) fn parse(
     text: &str,
     secret: impl Fn(&str) -> Option<String>,
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Result<Config, Error> {
     let file = parse_file(text)?;
-    let config = to_config(&file, &secret, load_policy)?;
-    config.validate()?;
-    Ok(config)
+    let mapped = map_file(&file, &secret, load_policy)?;
+    // The queue posts only to Matrix until M3. The check follows the mapping, so the tests can
+    // still map the shipped example, whose backends are all `none`.
+    if !mapped.queue_on_matrix {
+        return Err(invalid(
+            "notify.review_queue.backends",
+            "none is not supported for the review queue",
+        ));
+    }
+    mapped.config.validate()?;
+    Ok(mapped.config)
 }
 
 /// Reads the text of `config.yaml` into the file structs. Serde errors, such as an unknown key,
@@ -522,14 +529,39 @@ pub(crate) fn parse_file(text: &str) -> Result<FileConfig, Error> {
 
 /// Maps the file into the engine configuration without the engine's final validation.
 ///
+/// A review queue without a Matrix backend maps to an empty `queue_matrix_room`. The tests use
+/// it to map the shipped example, which [`parse`] refuses.
+///
 /// # Errors
 ///
-/// Returns the errors of [`parse`] except the engine's validation error.
+/// Returns the errors of [`parse`] except the queue check and the engine's validation error.
+#[cfg(test)]
 pub(crate) fn to_config(
     file: &FileConfig,
     secret: &impl Fn(&str) -> Option<String>,
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Result<Config, Error> {
+    map_file(file, secret, load_policy).map(|mapped| mapped.config)
+}
+
+/// The engine configuration and the loader facts that [`parse`] checks after the mapping.
+struct Mapped {
+    /// The engine configuration.
+    config: Config,
+    /// Whether `notify.review_queue.backends` names a Matrix backend.
+    queue_on_matrix: bool,
+}
+
+/// Maps the file into the engine configuration with the loader facts, without the checks.
+///
+/// # Errors
+///
+/// Returns the errors of [`parse`] except the queue check and the engine's validation error.
+fn map_file(
+    file: &FileConfig,
+    secret: &impl Fn(&str) -> Option<String>,
+    load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
+) -> Result<Mapped, Error> {
     let version = integer(present(&file.version, "version")?, "version")?;
     if version != CONFIG_VERSION {
         return Err(invalid("version", "must be 1"));
@@ -540,6 +572,12 @@ pub(crate) fn to_config(
     }
     let policy = load_policy(Path::new(policy_path.as_str()))
         .map_err(|error| Error::config(CONFIGURATION_INVALID, "policy_file", Some(error)))?;
+    // Every `*_env` value is read through `recorded`, so the names cover each configured secret.
+    let secret_variables = RefCell::new(BTreeSet::new());
+    let recorded = |name: &str| {
+        secret_variables.borrow_mut().insert(name.to_owned());
+        secret(name)
+    };
     let schedule_file = section(&file.schedule, "schedule")?;
     let schedule = scheduler_policy(
         &schedule_file.debounce_seconds,
@@ -554,7 +592,7 @@ pub(crate) fn to_config(
         "github.credential_check_hours",
     )?;
     let _ = positive(&github.expiry_warning_days, "github.expiry_warning_days")?;
-    let credentials = github_credentials(&github.credentials, secret)?;
+    let credentials = github_credentials(&github.credentials, &recorded)?;
     let (github_login, github_token) = single_credential(&credentials)?;
     let pohunek = section(&file.pohunek, "pohunek")?;
     let pohunek_bin = text(&pohunek.bin, "pohunek.bin")?;
@@ -689,12 +727,13 @@ pub(crate) fn to_config(
     let notify = section(&file.notify, "notify")?;
     let matrix_timeout = seconds(&notify.timeout_seconds, "notify.timeout_seconds")?;
     let matrix_max_characters = positive(&notify.max_characters, "notify.max_characters")?;
-    let backends = notify_backends(&notify.backends, secret)?;
+    let backends = notify_backends(&notify.backends, &recorded)?;
     let routes = section(&notify.routes, "notify.routes")?;
     let review_queue = section(&notify.review_queue, "notify.review_queue")?;
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
     let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
     let shape = matrix_shape(&backends, routes, &queue_backends)?;
+    let queue_on_matrix = shape.queue_room.is_some();
     let config = Config {
         policy: Some(policy),
         schedule,
@@ -709,9 +748,10 @@ pub(crate) fn to_config(
         route_overrides,
         matrix_homeserver_url: shape.homeserver_url,
         matrix_access_token: shape.access_token,
+        secret_variables: secret_variables.take(),
         matrix_mention_user: shape.mention_user,
         matrix_rooms: shape.rooms,
-        queue_matrix_room: shape.queue_room,
+        queue_matrix_room: shape.queue_room.unwrap_or_default(),
         queue_max_items,
         state_db_path,
         gh_timeout,
@@ -762,7 +802,10 @@ pub(crate) fn to_config(
         session_group,
     };
     cross_key_rules(file, &config)?;
-    Ok(config)
+    Ok(Mapped {
+        config,
+        queue_on_matrix,
+    })
 }
 
 /// A validated entry of `github.credentials`.
@@ -1147,8 +1190,8 @@ struct MatrixShape {
     mention_user: String,
     /// The room of each level; empty for a `none` backend.
     rooms: MatrixRooms,
-    /// The review queue room; empty when the queue does not reach Matrix.
-    queue_room: String,
+    /// The review queue room; `None` when the queue names no Matrix backend.
+    queue_room: Option<String>,
 }
 
 /// Maps the routes and the review queue onto Matrix backends that share one identity.
@@ -1230,18 +1273,21 @@ fn level_room<'a>(
     }
 }
 
-/// Resolves the review queue to its Matrix room, or to no room.
+/// Resolves the review queue to its Matrix room, or to `None` without a Matrix backend.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming `notify.review_queue.backends` for a webhook, a
-/// second Matrix backend, or a Matrix backend whose identity differs from the routes.
+/// Returns `configuration_invalid` naming `notify.review_queue.backends` for an empty list, a
+/// webhook, a second Matrix backend, or a Matrix backend whose identity differs from the routes.
 fn queue_room<'a>(
     backends: &'a [Backend],
     names: &[String],
     matrix: &mut Option<&'a Backend>,
-) -> Result<String, Error> {
+) -> Result<Option<String>, Error> {
     let key = "notify.review_queue.backends";
+    if names.is_empty() {
+        return Err(invalid(key, "must name at least one backend"));
+    }
     let mut queue: Option<&Backend> = None;
     for name in names {
         let backend = find_backend(backends, name, key)?;
@@ -1263,8 +1309,8 @@ fn queue_room<'a>(
         }
     }
     match queue {
-        Some(Backend::Matrix { room, .. }) => Ok(room.clone()),
-        _ => Ok(String::new()),
+        Some(Backend::Matrix { room, .. }) => Ok(Some(room.clone())),
+        _ => Ok(None),
     }
 }
 
@@ -1619,6 +1665,7 @@ mod tests {
             "AUTOREVIEW_MATRIX_TOKEN" | "AUTOREVIEW_MATRIX_TOKEN_OTHER" => {
                 Some("synthetic-matrix-token".to_owned())
             }
+            "AUTOREVIEW_WEBHOOK_URL" => Some("https://hooks.example.org/synthetic".to_owned()),
             _ => None,
         }
     }
@@ -1718,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    fn example_stops_at_the_engine_matrix_check() {
+    fn example_is_refused_by_the_queue_and_the_engine_matrix_checks() {
         let config = mapped(EXAMPLE).expect("the example maps");
         assert_eq!(
             config
@@ -1726,6 +1773,13 @@ mod tests {
                 .expect_err("none-only routes leave Matrix empty")
                 .to_string(),
             "configuration_invalid: config: invalid Matrix URL"
+        );
+        assert_eq!(
+            error_text(parse(EXAMPLE, secret, example_policy)),
+            concat!(
+                "configuration_invalid: notify.review_queue.backends: ",
+                "none is not supported for the review queue"
+            )
         );
     }
 
@@ -1824,6 +1878,60 @@ mod tests {
         assert_eq!(config.matrix_homeserver_url, "https://matrix.example.org");
         assert_eq!(config.matrix_access_token, "synthetic-matrix-token");
         assert_eq!(config.matrix_mention_user, "@you:example.org");
+    }
+
+    #[test]
+    fn secret_variables_name_every_env_key() {
+        let mut entries = shared_backends();
+        entries[3].push_str(concat!(
+            "    - name: hook\n",
+            "      type: webhook\n",
+            "      url_env: AUTOREVIEW_WEBHOOK_URL\n",
+            "      format: json\n",
+        ));
+        let text = four_backends(entries, "[queue]");
+        let config = parse(&text, secret, example_policy).expect("a webhook config loads");
+        let names: Vec<&str> = config.secret_variables.iter().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "AUTOREVIEW_GH_TOKEN",
+                "AUTOREVIEW_MATRIX_TOKEN",
+                "AUTOREVIEW_WEBHOOK_URL"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_queue_routed_only_to_none_is_refused() {
+        let mut entries = shared_backends();
+        entries[3].push_str("    - name: quiet\n      type: none\n");
+        let text = four_backends(entries.clone(), "[quiet]");
+        assert_eq!(
+            error_text(parse(&text, secret, example_policy)),
+            concat!(
+                "configuration_invalid: notify.review_queue.backends: ",
+                "none is not supported for the review queue"
+            )
+        );
+        let text = four_backends(entries, "[quiet, queue]");
+        let config = parse(&text, secret, example_policy).expect("none next to Matrix loads");
+        assert_eq!(config.queue_matrix_room, "!queue:example.org");
+        let text = four_backends(shared_backends(), "[queue]")
+            .replace("room: \"!queue:example.org\"", "room: \"\"");
+        assert_eq!(
+            error_text(parse(&text, secret, example_policy)),
+            "configuration_missing: notify.backends.room"
+        );
+    }
+
+    #[test]
+    fn a_queue_without_backends_is_refused() {
+        let text = four_backends(shared_backends(), "[]");
+        assert_eq!(
+            error_text(parse(&text, secret, example_policy)),
+            "configuration_invalid: notify.review_queue.backends: must name at least one backend"
+        );
     }
 
     #[test]

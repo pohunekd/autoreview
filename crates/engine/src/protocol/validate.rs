@@ -289,6 +289,7 @@ pub(crate) mod tests {
             route_overrides: std::collections::BTreeMap::new(),
             matrix_homeserver_url: "https://matrix.example.org".to_owned(),
             matrix_access_token: "placeholder-token".to_owned(),
+            secret_variables: std::collections::BTreeSet::new(),
             matrix_mention_user: "@example-user:example.org".to_owned(),
             matrix_rooms: MatrixRooms {
                 action: "!action:example.org".to_owned(),

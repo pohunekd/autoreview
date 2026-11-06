@@ -118,22 +118,22 @@ struct FailureDetail {
 autoreview_go_compat::object_only_serde!(FailureDetail);
 
 /// Returns the environment of a pohunek child: the engine's variables without the pohunek session
-/// identity and the GitHub token, then the state, runtime and pager settings.
+/// identity and the secrets, then the state, runtime and pager settings.
 pub(crate) fn pohunek_environment(
-    state_home: &str,
-    runtime_dir: &str,
+    config: &Config,
     parent: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Vec<(OsString, OsString)> {
     child_environment(
         parent,
+        &config.secret_variables,
         [
             (
                 OsString::from(STATE_HOME_VARIABLE),
-                OsString::from(state_home),
+                OsString::from(&config.pohunek_state),
             ),
             (
                 OsString::from(RUNTIME_DIR_VARIABLE),
-                OsString::from(runtime_dir),
+                OsString::from(&config.pohunek_runtime),
             ),
             (OsString::from(PAGER_VARIABLE), OsString::from(PAGER_VALUE)),
         ],
@@ -164,11 +164,7 @@ pub(crate) async fn pohunek_call(
     cancel: &CancellationToken,
     args: &[String],
 ) -> Result<String, Error> {
-    let environment = pohunek_environment(
-        &config.pohunek_state,
-        &config.pohunek_runtime,
-        std::env::vars_os(),
-    );
+    let environment = pohunek_environment(config, std::env::vars_os());
     match run(
         cancel,
         &config.pohunek_bin,

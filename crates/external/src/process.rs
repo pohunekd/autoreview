@@ -5,20 +5,28 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
+use autoreview_engine::config::SECRET_ENV_PREFIX;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio_util::sync::CancellationToken;
 
-/// Variables a child must not inherit from the engine.
+/// Variables a child must not inherit from the engine, besides the configured secrets.
 ///
-/// The pohunek identity would bind a call to a foreign session; only the `gh`
-/// child receives a GitHub token, and it receives it through `extra`.
-const DROPPED_VARIABLES: [&str; 3] = ["POHUNEK_SESSION_ID", "POHUNEK_DAEMON_ID", "GH_TOKEN"];
+/// The pohunek identity would bind a call to a foreign session. `GH_TOKEN` and
+/// `MATRIX_ACCESS_TOKEN` are the Go engine's token variables; only the `gh` child receives a
+/// GitHub token, and it receives it through `extra`.
+const DROPPED_VARIABLES: [&str; 4] = [
+    "POHUNEK_SESSION_ID",
+    "POHUNEK_DAEMON_ID",
+    "GH_TOKEN",
+    "MATRIX_ACCESS_TOKEN",
+];
 
 /// Errors of a child process run.
 ///
@@ -80,17 +88,26 @@ impl ProcessError {
 
 /// Returns the environment of a child process.
 ///
-/// It is `parent` without the [`DROPPED_VARIABLES`], followed by `extra`.
+/// It is `parent` without the [`DROPPED_VARIABLES`], the `secret_variables` and every variable
+/// whose name starts with [`SECRET_ENV_PREFIX`], followed by `extra`. A secret reaches a child
+/// only when the caller passes it in `extra`.
 pub(crate) fn child_environment(
     parent: impl IntoIterator<Item = (OsString, OsString)>,
+    secret_variables: &BTreeSet<String>,
     extra: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Vec<(OsString, OsString)> {
     parent
         .into_iter()
         .filter(|(name, _)| {
-            !DROPPED_VARIABLES
-                .iter()
-                .any(|dropped| name.as_os_str() == OsStr::new(dropped))
+            let name = name.as_os_str();
+            let prefixed = name
+                .as_encoded_bytes()
+                .starts_with(SECRET_ENV_PREFIX.as_bytes());
+            !prefixed
+                && !DROPPED_VARIABLES
+                    .into_iter()
+                    .chain(secret_variables.iter().map(String::as_str))
+                    .any(|dropped| name == OsStr::new(dropped))
         })
         .chain(extra)
         .collect()
@@ -214,6 +231,7 @@ fn status_text(status: ExitStatus) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::ffi::OsString;
 
     use super::child_environment;
@@ -223,6 +241,10 @@ mod tests {
             .iter()
             .map(|(name, value)| (OsString::from(name), OsString::from(value)))
             .collect()
+    }
+
+    fn names(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|name| (*name).to_owned()).collect()
     }
 
     #[test]
@@ -239,7 +261,7 @@ mod tests {
         let extra = pairs(&[("GH_TOKEN", "child-token"), ("GH_PAGER", "cat")]);
 
         assert_eq!(
-            child_environment(parent, extra),
+            child_environment(parent, &BTreeSet::new(), extra),
             pairs(&[
                 ("PATH", "/usr/bin"),
                 ("GH_TOKEN_FILE", "/run/token"),
@@ -247,6 +269,38 @@ mod tests {
                 ("HOME", "/home/engine"),
                 ("GH_TOKEN", "child-token"),
                 ("GH_PAGER", "cat"),
+            ])
+        );
+    }
+
+    #[test]
+    fn child_environment_drops_every_configured_secret() {
+        let parent = pairs(&[
+            ("PATH", "/usr/bin"),
+            ("AUTOREVIEW_GH_TOKEN", "synthetic-gh"),
+            ("AUTOREVIEW_MATRIX_TOKEN", "synthetic-matrix"),
+            ("AUTOREVIEW_STALE_TOKEN", "synthetic-unnamed"),
+            ("AUTOREVIEW_CONFIG", "/etc/autoreview/config.yaml"),
+            ("MATRIX_ACCESS_TOKEN", "synthetic-go-matrix"),
+            ("EXAMPLE_SECRET", "synthetic-named"),
+            ("EXAMPLE_AUTOREVIEW_TOKEN", "kept"),
+            ("autoreview_gh_token", "kept"),
+        ]);
+        let secrets = names(&[
+            "AUTOREVIEW_GH_TOKEN",
+            "AUTOREVIEW_MATRIX_TOKEN",
+            "EXAMPLE_SECRET",
+        ]);
+        let extra = pairs(&[("GH_TOKEN", "synthetic-child"), ("PAGER", "cat")]);
+
+        assert_eq!(
+            child_environment(parent, &secrets, extra),
+            pairs(&[
+                ("PATH", "/usr/bin"),
+                ("EXAMPLE_AUTOREVIEW_TOKEN", "kept"),
+                ("autoreview_gh_token", "kept"),
+                ("GH_TOKEN", "synthetic-child"),
+                ("PAGER", "cat"),
             ])
         );
     }

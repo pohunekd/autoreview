@@ -65,15 +65,7 @@ impl External {
             .timeout(config.matrix_timeout)
             .build()
             .map_err(|error| Error::workflow("matrix_unavailable", false, Some(Box::new(error))))?;
-        let github = GitHub::new(
-            config.gh_bin.clone(),
-            config.github_token.clone(),
-            config.github_host.clone(),
-            config.github_login.clone(),
-            config.gh_timeout,
-            config.poll_limit,
-            config.search_page_limit,
-        );
+        let github = GitHub::new(&config);
         let matrix = Matrix::new(
             config.matrix_homeserver_url.clone(),
             config.matrix_access_token.clone(),

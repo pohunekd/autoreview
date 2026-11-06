@@ -296,11 +296,7 @@ where
         config.terminal_cols,
         config.terminal_rows,
     )?;
-    let environment = pohunek_environment(
-        &config.pohunek_state,
-        &config.pohunek_runtime,
-        std::env::vars_os(),
-    );
+    let environment = pohunek_environment(config, std::env::vars_os());
     let started = run(
         cancel,
         &config.pohunek_bin,
