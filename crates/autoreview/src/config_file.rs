@@ -695,7 +695,7 @@ pub(crate) fn to_config(
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
     let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
     let shape = matrix_shape(&backends, routes, &queue_backends)?;
-    Ok(Config {
+    let config = Config {
         policy: Some(policy),
         schedule,
         github_host,
@@ -760,7 +760,9 @@ pub(crate) fn to_config(
         terminal_cols,
         terminal_rows,
         session_group,
-    })
+    };
+    cross_key_rules(file, &config)?;
+    Ok(config)
 }
 
 /// A validated entry of `github.credentials`.
@@ -1419,6 +1421,126 @@ fn text_list(value: &Option<Value>, key: &str) -> Result<Vec<String>, Error> {
         _ => Err(invalid(key, "must be a list")),
     }
 }
+
+/// Returns `configuration_invalid` naming the key whose value breaks a rule.
+fn cross_key_rules(file: &FileConfig, config: &Config) -> Result<(), Error> {
+    if !clean_absolute(config.state_db_path.as_str()) {
+        return Err(invalid("store.path", "must be a clean absolute path"));
+    }
+    if config.review_retention < Duration::from_secs(SECONDS_PER_DAY) {
+        return Err(invalid(
+            "store.review_retention_seconds",
+            "must be at least one day",
+        ));
+    }
+    if let Some(policy) = config.policy.as_ref() {
+        let retention = time::Duration::try_from(config.published_retention)
+            .map_err(|_| invalid("store.published_retention_seconds", "is out of range"))?;
+        if retention <= policy.handoff_reminder() {
+            return Err(invalid(
+                "store.published_retention_seconds",
+                "must exceed notes_handoff.reminder_hours of the policy",
+            ));
+        }
+    }
+    if config.discovery_lock_timeout > Duration::from_secs(DISCOVERY_LOCK_TIMEOUT_MAX_SECONDS) {
+        return Err(invalid(
+            "schedule.discovery_lock_timeout_seconds",
+            "must be at most one hour",
+        ));
+    }
+    if config.output_max_bytes > OUTPUT_MAX_BYTES_LIMIT {
+        return Err(invalid(
+            "session.output_max_bytes",
+            "must be at most 16 MiB",
+        ));
+    }
+    if config.output_chunk_bytes > config.output_max_bytes {
+        return Err(invalid(
+            "session.output_chunk_bytes",
+            "must not exceed session.output_max_bytes",
+        ));
+    }
+    if config.result_max_bytes > config.output_max_bytes {
+        return Err(invalid(
+            "limits.result_max_bytes",
+            "must not exceed session.output_max_bytes",
+        ));
+    }
+    if config.output_wait_ms > OUTPUT_WAIT_MS_MAX {
+        return Err(invalid("session.output_wait_ms", "must be at most 8000"));
+    }
+    if config.min_summary_characters > MIN_SUMMARY_CHARACTERS_MAX {
+        return Err(invalid(
+            "limits.min_summary_characters",
+            "must be at most 500",
+        ));
+    }
+    if config.min_summary_characters > config.max_summary_characters {
+        return Err(invalid(
+            "limits.min_summary_characters",
+            "must not exceed limits.max_summary_characters",
+        ));
+    }
+    if config.excerpt_characters > config.matrix_max_characters / EXCERPT_DIVISOR {
+        return Err(invalid(
+            "limits.excerpt_characters",
+            "must be at most a quarter of notify.max_characters",
+        ));
+    }
+    if config.github_body_max_bytes > GITHUB_BODY_MAX_BYTES_LIMIT {
+        return Err(invalid(
+            "publish.github_body_max_bytes",
+            "must be at most 65536",
+        ));
+    }
+    let publish = section(&file.publish, "publish")?;
+    let signature = text(&publish.signature, "publish.signature")?;
+    let pattern = text(&publish.ai_signed_pattern, "publish.ai_signed_pattern")?;
+    if !signature_valid(signature.as_str(), pattern.as_str()) {
+        return Err(invalid(
+            "publish.signature",
+            "must be one line that starts with publish.ai_signed_pattern and mentions no one",
+        ));
+    }
+    Ok(())
+}
+
+/// Reports whether `path` is absolute, has no empty, `.` or `..` part, and has no query or
+/// fragment.
+fn clean_absolute(path: &str) -> bool {
+    if path.contains('?') || path.contains('#') {
+        return false;
+    }
+    let Some(rest) = path.strip_prefix('/') else {
+        return false;
+    };
+    if rest.is_empty() {
+        return false;
+    }
+    for part in rest.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return false;
+        }
+    }
+    true
+}
+
+/// Reports whether a signature is one line that starts with `pattern` and mentions no one or
+/// embeds
+/// no HTML.
+fn signature_valid(signature: &str, pattern: &str) -> bool {
+    if !signature.starts_with(pattern) {
+        return false;
+    }
+    for cell in signature.chars() {
+        if cell.is_control() || cell == '@' || cell == '<' || cell == '>' {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1790,5 +1912,114 @@ mod tests {
     /// Returns the text of a failed path resolution.
     fn error_text_path(result: Result<PathBuf, Error>) -> String {
         result.expect_err("the path is refused").to_string()
+    }
+
+    #[test]
+    fn cross_key_rules_name_both_keys() {
+        let cases = [
+            (
+                "  path: /var/lib/autoreview/autoreview.db",
+                "  path: /var/lib/../autoreview.db",
+                "configuration_invalid: store.path: must be a clean absolute path",
+            ),
+            (
+                "review_retention_seconds: 2592000",
+                "review_retention_seconds: 3600",
+                "configuration_invalid: store.review_retention_seconds: must be at least one day",
+            ),
+            (
+                "  discovery_lock_timeout_seconds: 300",
+                "  discovery_lock_timeout_seconds: 3601",
+                concat!(
+                    "configuration_invalid: schedule.discovery_lock_timeout_seconds: ",
+                    "must be at most one hour"
+                ),
+            ),
+            (
+                "  output_max_bytes: 8388608",
+                "  output_max_bytes: 16777217",
+                "configuration_invalid: session.output_max_bytes: must be at most 16 MiB",
+            ),
+            (
+                "  output_chunk_bytes: 65536",
+                "  output_chunk_bytes: 9000000",
+                concat!(
+                    "configuration_invalid: session.output_chunk_bytes: must not ",
+                    "exceed session.output_max_bytes"
+                ),
+            ),
+            (
+                "  result_max_bytes: 1048576",
+                "  result_max_bytes: 9000000",
+                concat!(
+                    "configuration_invalid: limits.result_max_bytes: must not exceed ",
+                    "session.output_max_bytes"
+                ),
+            ),
+            (
+                "  output_wait_ms: 8000",
+                "  output_wait_ms: 8001",
+                "configuration_invalid: session.output_wait_ms: must be at most 8000",
+            ),
+            (
+                "  min_summary_characters: 40",
+                "  min_summary_characters: 501",
+                "configuration_invalid: limits.min_summary_characters: must be at most 500",
+            ),
+            (
+                "  max_summary_characters: 20000",
+                "  max_summary_characters: 10",
+                concat!(
+                    "configuration_invalid: limits.min_summary_characters: must not ",
+                    "exceed limits.max_summary_characters"
+                ),
+            ),
+            (
+                "  excerpt_characters: 360",
+                "  excerpt_characters: 2001",
+                concat!(
+                    "configuration_invalid: limits.excerpt_characters: must be at most a ",
+                    "quarter of notify.max_characters"
+                ),
+            ),
+            (
+                "  github_body_max_bytes: 60000",
+                "  github_body_max_bytes: 70000",
+                "configuration_invalid: publish.github_body_max_bytes: must be at most 65536",
+            ),
+            (
+                "  ai_signed_pattern: \"Written by AI:\"",
+                "  ai_signed_pattern: \"Generated:\"",
+                concat!(
+                    "configuration_invalid: publish.signature: must be one line that starts with ",
+                    "publish.ai_signed_pattern and mentions no one"
+                ),
+            ),
+        ];
+        for (old, new, expected) in cases {
+            let result = error_text(mapped(&mutated(old, new)));
+            assert_eq!(result, expected, "rule for {old:?}");
+        }
+    }
+    #[test]
+    fn published_retention_must_exceed_the_handoff_reminder() {
+        let text = mutated(
+            "published_retention_seconds: 7776000",
+            "published_retention_seconds: 3600",
+        );
+        let file = parse_file(&text).expect("valid YAML");
+        let document = include_str!("../../../testdata/review-policy.yaml").replacen(
+            "    on_clean: approve\n",
+            "    on_clean: await\n    on_notes: comment\n",
+            1,
+        ) + "notes_handoff:\n  reminder_hours: 24\n";
+        let result = to_config(&file, &secret, |_| policy_from(&document));
+        assert_eq!(
+            error_text(result),
+            concat!(
+                "configuration_invalid: store.published_retention_seconds: must exceed ",
+                "notes_handoff.reminder_hours of the policy"
+            )
+        );
     }
 }
