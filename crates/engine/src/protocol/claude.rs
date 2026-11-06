@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
+use crate::protocol::validate::reviewer_output_invalid;
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
 /// Protocol name of the wrapper around a finished structured Claude session.
@@ -115,24 +116,32 @@ impl ClaudeFinding {
 ///
 /// Returns `review_output_incomplete` for empty output, `review_wrapper_invalid`,
 /// `claude_result_invalid` and `claude_result_mismatch` for a wrapper, outer message or prose
-/// result that the engine refuses, and `artifact_invalid` for an artifact that does not match
-/// the pull request or that has a finding the engine refuses.
+/// result that the engine refuses, and `review_output_invalid` with a reason for an artifact that
+/// names another pull request or head, has no findings list or has a finding the engine refuses.
 pub(crate) fn parse_claude_output(pr: &PullRequest, raw: &str) -> Result<ReviewerResult, Error> {
     let artifact: ClaudeArtifact = decode_structured(raw)?;
-    if artifact.repository != pr.repository
-        || artifact.number != pr.number
-        || artifact.head_sha != pr.head_sha
-        || artifact.findings.is_none()
-    {
-        return Err(artifact_invalid());
+    if artifact.repository != pr.repository || artifact.number != pr.number {
+        return Err(reviewer_output_invalid(
+            "the output names another pull request".to_owned(),
+        ));
+    }
+    if artifact.head_sha != pr.head_sha {
+        return Err(reviewer_output_invalid(
+            "the output names another head commit".to_owned(),
+        ));
     }
     let Some(findings) = artifact.findings else {
-        return Err(artifact_invalid());
+        return Err(reviewer_output_invalid(
+            "the output has no findings list".to_owned(),
+        ));
     };
     let mut result_findings = Vec::new();
-    for finding in findings {
+    for (index, finding) in findings.into_iter().enumerate() {
         if finding.side != "RIGHT" || !is_source_id(&finding.id) || finding.severity == "blocker" {
-            return Err(artifact_invalid());
+            return Err(reviewer_output_invalid(format!(
+                "finding {} has an invalid id, side or severity",
+                index + 1
+            )));
         }
         let non_blocking = finding.non_blocking();
         result_findings.push(Finding {
@@ -239,11 +248,6 @@ fn wrapper_invalid() -> Error {
 /// The outer message of a Claude session that the engine refuses.
 fn result_invalid() -> Error {
     Error::workflow("claude_result_invalid", true, None)
-}
-
-/// The artifact of a Claude session that the engine refuses.
-fn artifact_invalid() -> Error {
-    Error::workflow("artifact_invalid", true, None)
 }
 
 /// The prose of a Claude session that does not match its structured output.
