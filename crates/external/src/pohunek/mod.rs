@@ -73,12 +73,16 @@ const KNOWN_KEYS: [&str; 28] = [
 #[serde(default, remote = "Self")]
 pub(crate) struct PohunekProject {
     /// Identifier of the project.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     pub(crate) id: String,
     /// Source the project was registered from.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     pub(crate) source: String,
     /// Absolute path of the repository root of the project.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     pub(crate) repo_root: String,
     /// Origin URL of the repository of the project.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     pub(crate) origin_url: String,
 }
 
@@ -96,6 +100,7 @@ struct OkEnvelope<T> {
 #[serde(default, remote = "Self")]
 struct FailureEnvelope {
     /// The error of the call.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     err: FailureDetail,
 }
 
@@ -106,6 +111,7 @@ autoreview_go_compat::object_only_serde!(FailureEnvelope);
 #[serde(default, remote = "Self")]
 struct FailureDetail {
     /// The allowlisted error code, or empty when the CLI reported none.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     code: String,
 }
 
@@ -285,7 +291,8 @@ pub(crate) fn route_candidates(
     sources: &[String],
     output: &str,
 ) -> Result<Vec<ProjectRoute>, Error> {
-    let projects: Vec<PohunekProject> = decode_ok(output).ok_or_else(response_invalid)?;
+    let entries: Vec<Option<PohunekProject>> = decode_ok(output).ok_or_else(response_invalid)?;
+    let projects = autoreview_go_compat::null_entries::zero_entries(entries);
     let mut routes = Vec::new();
     for project in projects {
         if !sources.contains(&project.source) {

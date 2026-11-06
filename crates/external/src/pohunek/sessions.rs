@@ -15,7 +15,7 @@ use autoreview_engine::config::Config;
 use autoreview_engine::error::BoxError;
 use autoreview_engine::integrations::SessionRequest;
 use autoreview_engine::model::SessionIdentity;
-use autoreview_go_compat::null_default;
+use autoreview_go_compat::{null_default, null_entries};
 use autoreview_schedule::diagnostic::fetch_failure;
 use autoreview_schedule::metadata::{WorkSession, metadata_args};
 use serde::{Deserialize, Serialize};
@@ -35,23 +35,31 @@ const POHUNEK_TIMEOUT_KEY: &str = "pohunek_timeout";
 #[serde(default, remote = "Self")]
 pub(crate) struct PohunekSession {
     /// Identifier of the session.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) id: String,
     /// Name of the session, which finds the session of a request.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) name: String,
     /// Agent profile the session runs.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) agent: String,
     /// Identifier of the project the session belongs to.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) project_id: String,
     /// Branch the session works on.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) branch: String,
     /// Lifecycle state of the session; `running` for a live session.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) state: String,
     /// Whether the session runs in a linked worktree.
-    pub(crate) is_linked_worktree: bool,
-    /// Warnings the session reported; a `null` list is empty.
     #[serde(deserialize_with = "null_default::deserialize")]
+    pub(crate) is_linked_worktree: bool,
+    /// Warnings the session reported; a `null` list is empty and a `null` entry is empty.
+    #[serde(deserialize_with = "null_entries::deserialize")]
     pub(crate) warnings: Vec<PohunekWarning>,
     /// Runtime of the worker that runs the session.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) runtime: PohunekRuntime,
 }
 
@@ -62,10 +70,13 @@ autoreview_go_compat::object_only_serde!(PohunekSession);
 #[serde(default, remote = "Self")]
 pub(crate) struct PohunekWarning {
     /// Kind of the warning; only `fetch` is a known kind.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) kind: String,
     /// Text of the warning.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) message: String,
     /// Detail that classifies the failure of a fetch.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) detail: String,
 }
 
@@ -76,10 +87,13 @@ autoreview_go_compat::object_only_serde!(PohunekWarning);
 #[serde(default, remote = "Self")]
 pub(crate) struct PohunekRuntime {
     /// Lifecycle state of the runtime; `live` for a live runtime.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) state: String,
     /// Identifier of the worker instance.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) worker_instance_id: String,
     /// Generation of the runtime, as decimal text.
+    #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) runtime_generation: String,
 }
 
@@ -162,7 +176,8 @@ pub(crate) fn start_arguments(
 ///
 /// The output must hold a session list; a second session of the same name is ambiguous.
 pub(crate) fn lookup_from_output(output: &str, request: &SessionRequest) -> Result<Lookup, Error> {
-    let sessions: Vec<PohunekSession> = decode_ok(output).ok_or_else(response_invalid)?;
+    let entries: Vec<Option<PohunekSession>> = decode_ok(output).ok_or_else(response_invalid)?;
+    let sessions = null_entries::zero_entries(entries);
     let name = request.name();
     let mut matches: Vec<PohunekSession> = Vec::new();
     for session in sessions {
