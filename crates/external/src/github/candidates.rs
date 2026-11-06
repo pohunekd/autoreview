@@ -15,7 +15,7 @@ use autoreview_engine::integrations::{ReadiedDraft, ReviewRequest, ReviewRequest
 use autoreview_engine::model::{
     Candidate, CandidateList, PullRequest, RejectedCandidate, repository_valid,
 };
-use autoreview_go_compat::null_default;
+use autoreview_go_compat::{null_default, null_entries};
 use autoreview_policy::{Policy, Rule, TriggerKind};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -35,6 +35,7 @@ const GRAPHQL_MARK_READY: &str = concat!(
 #[serde(default, remote = "Self")]
 struct SearchIdentity {
     /// Pull request number.
+    #[serde(deserialize_with = "null_default::deserialize")]
     number: i64,
     /// Repository, an object with `nameWithOwner` or a plain string as the search prints it.
     repository: serde_json::Value,
@@ -47,12 +48,15 @@ autoreview_go_compat::object_only_serde!(SearchIdentity);
 #[serde(default, remote = "Self")]
 struct ReviewRequestItem {
     /// Pull request number.
+    #[serde(deserialize_with = "null_default::deserialize")]
     number: i64,
     /// Repository, as in [`SearchIdentity`].
     repository: serde_json::Value,
     /// Pull request title, kept as GitHub returns it.
+    #[serde(deserialize_with = "null_default::deserialize")]
     title: String,
     /// Pull request URL, which must name the repository and the number.
+    #[serde(deserialize_with = "null_default::deserialize")]
     url: String,
     /// Author of the pull request, `null` for a deleted account.
     author: Option<SearchAuthor>,
@@ -65,6 +69,7 @@ autoreview_go_compat::object_only_serde!(ReviewRequestItem);
 #[serde(default, remote = "Self")]
 struct SearchAuthor {
     /// Login of the author.
+    #[serde(deserialize_with = "null_default::deserialize")]
     login: String,
 }
 
@@ -75,6 +80,7 @@ autoreview_go_compat::object_only_serde!(SearchAuthor);
 #[serde(default, remote = "Self")]
 struct SearchResponse {
     /// The data of the response.
+    #[serde(deserialize_with = "null_default::deserialize")]
     data: SearchData,
     /// The errors of the response; any entry makes the response invalid.
     #[serde(deserialize_with = "null_default::deserialize")]
@@ -88,6 +94,7 @@ autoreview_go_compat::object_only_serde!(SearchResponse);
 #[serde(default, remote = "Self")]
 struct SearchData {
     /// The search of the query.
+    #[serde(deserialize_with = "null_default::deserialize")]
     search: SearchResult,
 }
 
@@ -98,10 +105,12 @@ autoreview_go_compat::object_only_serde!(SearchData);
 #[serde(default, remote = "Self")]
 struct SearchResult {
     /// Paging of the search.
-    #[serde(rename = "pageInfo")]
+    #[serde(rename = "pageInfo", deserialize_with = "null_default::deserialize")]
     page_info: PageInfo,
     /// The pull requests of the page; a `null` list is refused, as Go refuses a nil list.
-    nodes: Option<Vec<GitHubPullRequest>>,
+    ///
+    /// A `null` entry is an empty pull request, which no rule covers.
+    nodes: Option<Vec<Option<GitHubPullRequest>>>,
 }
 
 autoreview_go_compat::object_only_serde!(SearchResult);
@@ -111,10 +120,10 @@ autoreview_go_compat::object_only_serde!(SearchResult);
 #[serde(default, remote = "Self")]
 struct PageInfo {
     /// Whether another page follows.
-    #[serde(rename = "hasNextPage")]
+    #[serde(rename = "hasNextPage", deserialize_with = "null_default::deserialize")]
     has_next_page: bool,
-    /// Cursor of the next page, empty when there is none.
-    #[serde(rename = "endCursor")]
+    /// Cursor of the next page, empty when there is none; `null` reads as empty.
+    #[serde(rename = "endCursor", deserialize_with = "null_default::deserialize")]
     end_cursor: String,
 }
 
@@ -125,6 +134,7 @@ autoreview_go_compat::object_only_serde!(PageInfo);
 #[serde(default, remote = "Self")]
 struct MarkReadyResponse {
     /// The data of the response.
+    #[serde(deserialize_with = "null_default::deserialize")]
     data: MarkReadyData,
     /// The errors of the response; any entry makes the response invalid.
     #[serde(deserialize_with = "null_default::deserialize")]
@@ -149,7 +159,7 @@ autoreview_go_compat::object_only_serde!(MarkReadyData);
 #[serde(default, remote = "Self")]
 struct MarkReadyPayload {
     /// The pull request after the mutation.
-    #[serde(rename = "pullRequest")]
+    #[serde(rename = "pullRequest", deserialize_with = "null_default::deserialize")]
     pull_request: MarkedPullRequest,
 }
 
@@ -160,7 +170,7 @@ autoreview_go_compat::object_only_serde!(MarkReadyPayload);
 #[serde(default, remote = "Self")]
 struct MarkedPullRequest {
     /// Whether the pull request is still a draft.
-    #[serde(rename = "isDraft")]
+    #[serde(rename = "isDraft", deserialize_with = "null_default::deserialize")]
     is_draft: bool,
 }
 
@@ -266,8 +276,9 @@ fn collect(
 /// Decodes the identities of a review request search and refuses a result at the poll limit
 /// (`searchRequested`).
 fn decode_search_identities(output: &str, poll_limit: i64) -> Result<Vec<SearchIdentity>, Error> {
-    let identities: Vec<SearchIdentity> =
+    let entries: Vec<Option<SearchIdentity>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let identities = null_entries::zero_entries(entries);
     // A truncated search would silently drop requested reviews.
     let count = i64::try_from(identities.len()).unwrap_or(i64::MAX);
     if count >= poll_limit {
@@ -333,8 +344,9 @@ fn decode_review_request_search(
     max: i64,
     host: &str,
 ) -> Result<ReviewRequestList, Error> {
-    let items: Vec<ReviewRequestItem> =
+    let entries: Vec<Option<ReviewRequestItem>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let items = null_entries::zero_entries(entries);
     let count = i64::try_from(items.len()).unwrap_or(i64::MAX);
     let mut requests = Vec::new();
     for item in &items {
@@ -421,7 +433,7 @@ fn decode_label_search_page(output: &str) -> Result<LabelSearchPage, Error> {
         None => return Err(response_invalid(None)),
     };
     Ok(LabelSearchPage {
-        nodes,
+        nodes: null_entries::zero_entries(nodes),
         has_next_page: response.data.search.page_info.has_next_page,
         end_cursor: response.data.search.page_info.end_cursor.clone(),
     })
@@ -645,8 +657,8 @@ mod tests {
         decode_pull_request, decode_pull_request_response, ready_draft_id,
     };
     use super::{
-        classify, decode_mark_ready_response, decode_review_request_search,
-        list_review_requests_args, search_requested_args,
+        classify, decode_label_search_page, decode_mark_ready_response,
+        decode_review_request_search, list_review_requests_args, search_requested_args,
     };
 
     /// Login of the reviewing account in the captured responses.
@@ -735,6 +747,21 @@ mod tests {
     /// Captured response of a mark-ready mutation that left the pull request a draft.
     const MARK_STILL_DRAFT_RESPONSE: &str =
         r#"{"data":{"markPullRequestReadyForReview":{"pullRequest":{"isDraft":true}}}}"#;
+
+    /// Label search page with no result, as GitHub sends it: `endCursor` is `null`.
+    const EMPTY_LABEL_SEARCH_RESPONSE: &str =
+        r#"{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}"#;
+
+    /// Label search page with a `null` node before a labelled pull request on `github.com`.
+    const NULL_NODE_LABEL_SEARCH_RESPONSE: &str = concat!(
+        r#"{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":["#,
+        r#"null,{"id":"PR_3","number":3,"title":"Add widget","url":"https://github.com/ac"#,
+        r#"me/widget/pull/3","state":"OPEN","isDraft":false,"headRefOid":"aaaaaaaaaaaaaaa"#,
+        r#"aaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","baseRefOid":"bbbbbbbbbbbbb"#,
+        r#"bbbbbbbbbbbbbbbbbbbbbbbbbbb","baseRefName":"main","author":{"__typename":"User"#,
+        r#"","login":"colleague"},"labels":{"nodes":[null,{"name":"ai:review"}]},"reviewR"#,
+        r#"equests":{"nodes":[null]},"repository":{"nameWithOwner":"acme/widget"}}]}}}"#,
+    );
 
     /// Review-requested trigger, the kind of the rule that covers `acme/*`.
     fn review_requested() -> Trigger {
@@ -829,5 +856,33 @@ mod tests {
             decode_review_request_search(SEARCH_RESPONSE, 1, HOST).expect("search decodes");
         assert!(result.truncated, "a skipped result hid the truncation");
         assert_eq!(result.requests.len(), 1);
+    }
+
+    #[test]
+    fn empty_label_search_with_a_null_end_cursor_is_the_last_page() {
+        let page = decode_label_search_page(EMPTY_LABEL_SEARCH_RESPONSE)
+            .expect("an empty label search page decodes");
+        assert!(page.nodes.is_empty());
+        assert!(!page.has_next_page, "discovery must stop paging and go on");
+        assert_eq!(page.end_cursor, "");
+    }
+
+    #[test]
+    fn null_node_of_a_label_search_is_an_empty_pull_request_that_no_rule_covers() {
+        let page = decode_label_search_page(NULL_NODE_LABEL_SEARCH_RESPONSE)
+            .expect("a label search page with a null node decodes");
+        assert_eq!(page.nodes.len(), 2);
+        assert_eq!(page.nodes[0].repository_and_number(), (String::new(), 0));
+        let trigger = Trigger {
+            kind: TriggerKind::Label,
+            label: "ai:review".to_owned(),
+        };
+        let pull_request = decode_pull_request(&page.nodes[1], "github.com", LOGIN, &trigger)
+            .expect("the labelled pull request is a candidate");
+        assert_eq!(pull_request.number, 3);
+        assert_eq!(
+            pull_request.labels,
+            vec![String::new(), "ai:review".to_owned()]
+        );
     }
 }

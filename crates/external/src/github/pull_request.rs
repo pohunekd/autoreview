@@ -8,7 +8,7 @@
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::PullRequestState;
 use autoreview_engine::model::{PullRequest, repository_valid, sha_valid};
-use autoreview_go_compat::{go_time, null_default};
+use autoreview_go_compat::{go_time, null_default, null_entries};
 use autoreview_policy::{Trigger, TriggerKind};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -67,6 +67,7 @@ autoreview_go_compat::object_only_serde!(RepositoryNode);
 #[serde(default, remote = "Self")]
 struct GraphQlResponse {
     /// The data of the response.
+    #[serde(deserialize_with = "null_default::deserialize")]
     data: GraphQlData,
     /// The errors of the response; any entry makes the response invalid.
     #[serde(deserialize_with = "null_default::deserialize")]
@@ -80,38 +81,48 @@ autoreview_go_compat::object_only_serde!(GraphQlResponse);
 #[serde(default, remote = "Self")]
 pub(crate) struct GitHubPullRequest {
     /// Node identifier, decoded so that a value of another type is refused as Go refuses it.
+    #[serde(deserialize_with = "null_default::deserialize")]
     id: String,
     /// Pull request number.
+    #[serde(deserialize_with = "null_default::deserialize")]
     number: i64,
     /// Pull request title, before trimming.
+    #[serde(deserialize_with = "null_default::deserialize")]
     title: String,
     /// Pull request URL.
+    #[serde(deserialize_with = "null_default::deserialize")]
     url: String,
     /// Pull request state, `OPEN`, `CLOSED` or `MERGED`.
+    #[serde(deserialize_with = "null_default::deserialize")]
     state: String,
     /// Whether the pull request is a draft.
-    #[serde(rename = "isDraft")]
+    #[serde(rename = "isDraft", deserialize_with = "null_default::deserialize")]
     is_draft: bool,
     /// Head commit SHA.
-    #[serde(rename = "headRefOid")]
+    #[serde(rename = "headRefOid", deserialize_with = "null_default::deserialize")]
     head_sha: String,
     /// Head branch name.
-    #[serde(rename = "headRefName")]
+    #[serde(rename = "headRefName", deserialize_with = "null_default::deserialize")]
     head_branch: String,
     /// Base commit SHA.
-    #[serde(rename = "baseRefOid")]
+    #[serde(rename = "baseRefOid", deserialize_with = "null_default::deserialize")]
     base_sha: String,
     /// Base branch name.
-    #[serde(rename = "baseRefName")]
+    #[serde(rename = "baseRefName", deserialize_with = "null_default::deserialize")]
     base_branch: String,
     /// The author, `null` for a deleted account.
     author: Option<Author>,
     /// The labels of the pull request.
+    #[serde(deserialize_with = "null_default::deserialize")]
     labels: Labels,
     /// The review requests of the pull request.
-    #[serde(rename = "reviewRequests")]
+    #[serde(
+        rename = "reviewRequests",
+        deserialize_with = "null_default::deserialize"
+    )]
     review_requests: ReviewRequests,
     /// The repository of the pull request.
+    #[serde(deserialize_with = "null_default::deserialize")]
     repository: RepositoryName,
 }
 
@@ -133,9 +144,10 @@ impl GitHubPullRequest {
 #[serde(default, remote = "Self")]
 struct Author {
     /// GraphQL type name, `User` or `Bot`.
-    #[serde(rename = "__typename")]
+    #[serde(rename = "__typename", deserialize_with = "null_default::deserialize")]
     typename: String,
     /// Login of the author.
+    #[serde(deserialize_with = "null_default::deserialize")]
     login: String,
 }
 
@@ -145,8 +157,8 @@ autoreview_go_compat::object_only_serde!(Author);
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 struct Labels {
-    /// The label nodes; `null` reads as none.
-    #[serde(deserialize_with = "null_default::deserialize")]
+    /// The label nodes; `null` reads as none and a `null` entry as an empty label.
+    #[serde(deserialize_with = "null_entries::deserialize")]
     nodes: Vec<LabelNode>,
 }
 
@@ -157,6 +169,7 @@ autoreview_go_compat::object_only_serde!(Labels);
 #[serde(default, remote = "Self")]
 struct LabelNode {
     /// Name of the label.
+    #[serde(deserialize_with = "null_default::deserialize")]
     name: String,
 }
 
@@ -166,8 +179,8 @@ autoreview_go_compat::object_only_serde!(LabelNode);
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 struct ReviewRequests {
-    /// The request nodes; `null` reads as none.
-    #[serde(deserialize_with = "null_default::deserialize")]
+    /// The request nodes; `null` reads as none and a `null` entry as an empty request.
+    #[serde(deserialize_with = "null_entries::deserialize")]
     nodes: Vec<ReviewRequestNode>,
 }
 
@@ -189,6 +202,7 @@ autoreview_go_compat::object_only_serde!(ReviewRequestNode);
 #[serde(default, remote = "Self")]
 struct Reviewer {
     /// Login of the reviewer.
+    #[serde(deserialize_with = "null_default::deserialize")]
     login: String,
 }
 
@@ -199,7 +213,10 @@ autoreview_go_compat::object_only_serde!(Reviewer);
 #[serde(default, remote = "Self")]
 struct RepositoryName {
     /// Repository as `owner/name`, in the case GitHub returns.
-    #[serde(rename = "nameWithOwner")]
+    #[serde(
+        rename = "nameWithOwner",
+        deserialize_with = "null_default::deserialize"
+    )]
     name_with_owner: String,
 }
 
@@ -210,8 +227,10 @@ autoreview_go_compat::object_only_serde!(RepositoryName);
 #[serde(default, remote = "Self")]
 struct ReviewEvent {
     /// Event identifier.
+    #[serde(deserialize_with = "null_default::deserialize")]
     id: i64,
     /// Kind of the event, such as `review_requested`.
+    #[serde(deserialize_with = "null_default::deserialize")]
     event: String,
     /// Creation time as RFC 3339 text; `null` reads as the zero time.
     created_at: Option<String>,
@@ -508,8 +527,9 @@ pub(crate) fn decode_review_request_page(
     output: &str,
     login: &str,
 ) -> Result<ReviewRequestPage, Error> {
-    let events: Vec<ReviewEvent> =
+    let entries: Vec<Option<ReviewEvent>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let events = null_entries::zero_entries(entries);
     let count = events.len();
     let mut requested = Vec::new();
     for event in events {

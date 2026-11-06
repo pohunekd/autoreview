@@ -54,24 +54,34 @@ pub(crate) struct OutputChunk {
 #[serde(default, remote = "Self")]
 struct OutputPayload {
     /// Identifier of the session the chunk belongs to.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     session_id: String,
     /// Identifier of the worker instance the chunk belongs to.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     worker_instance_id: String,
     /// Runtime generation the chunk belongs to, as decimal text.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     runtime_generation: String,
     /// Offset of the first byte of history, which must read `0`.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     history_start_offset: String,
     /// Offset the chunk starts at, as decimal text.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     start_offset: String,
     /// Offset after the chunk, as decimal text.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     next_offset: String,
     /// Offset of the end of the runtime history, as decimal text.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     runtime_end_offset: String,
     /// Bytes of the chunk, in standard base64.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     data_base64: String,
     /// Whether history follows the chunk.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     has_more: bool,
     /// Whether the call ended at its wait without new output.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     timed_out: bool,
 }
 
@@ -97,6 +107,7 @@ struct PresentOk {
 #[serde(default, remote = "Self")]
 struct ListedSession {
     /// Identifier of the session.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     id: String,
 }
 
@@ -345,7 +356,8 @@ where
 
 /// Fails while the session list in `output` still holds `session_id`.
 pub(crate) fn cleanup_pending(output: &str, session_id: &str) -> Result<(), Error> {
-    let listed: Vec<ListedSession> = decode_ok(output).ok_or_else(response_invalid)?;
+    let entries: Vec<Option<ListedSession>> = decode_ok(output).ok_or_else(response_invalid)?;
+    let listed = autoreview_go_compat::null_entries::zero_entries(entries);
     if listed.iter().any(|session| session.id == session_id) {
         return Err(Error::workflow(
             "pohunek_session_cleanup_pending",
