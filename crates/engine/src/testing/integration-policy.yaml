@@ -1,0 +1,46 @@
+version: 1
+reviewers:
+  opus: {protocol: claude-structured, agent_profile: claude-profile, label: Opus, finding_prefix: O}
+  sonnet: {protocol: claude-structured, agent_profile: claude-profile-sonnet, label: Sonnet, finding_prefix: S}
+  codex: {protocol: codex-envelope, agent_profile: codex-profile, label: Codex, finding_prefix: X}
+pipelines:
+  manual: {reviewers: [opus, sonnet], incremental_reviewers: [sonnet], prompt: prompt.md, checkout: base, project_sources: [manual]}
+  dual: {reviewers: [opus, sonnet], incremental_reviewers: [opus, sonnet], prompt: prompt.md, checkout: base, project_sources: [manual]}
+  solo: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompt.md, checkout: head, project_sources: [manual]}
+  checked:
+    reviewers: [opus, sonnet]
+    incremental_reviewers: [opus, sonnet]
+    prompt: prompt.md
+    checkout: base
+    project_sources: [manual]
+    verifier: {reviewer: opus, prompt: verifier.md, escalate_severities: [critical], escalate_count: 2}
+repositories:
+  - {match: acme/manual, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await}
+  - {match: acme/notes, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await, on_notes: comment}
+  - {match: acme/*, trigger: review-requested, pipeline: dual, on_findings: request_changes, on_clean: approve}
+  - match: risky/*
+    trigger: review-requested
+    pipeline: dual
+    on_findings: request_changes
+    on_clean: approve
+    human_review: {labels: [needs-human], deleted_tests: ["tests/**", "**/tests/**"]}
+  - {match: solo/*, trigger: "label:ai:review", pipeline: solo, on_findings: comment, on_clean: comment}
+  - {match: checked/manual, trigger: review-requested, pipeline: checked, on_findings: request_changes, on_clean: await}
+  - {match: checked/*, trigger: review-requested, pipeline: checked, on_findings: request_changes, on_clean: approve}
+unmatched: skip
+approval: {timeout_hours: 1}
+notes_handoff: {reminder_hours: 24}
+notifications:
+  approval_requested: action
+  findings_on_own_pr: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log
+  handoff_reminder: action
