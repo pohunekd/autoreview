@@ -37,7 +37,7 @@ pub(crate) const VERDICT_REFUTED: &str = "refuted";
 pub(crate) const VERDICT_UPHELD: &str = "upheld";
 
 /// Verdict on an answered prior finding: neither the code nor a reviewer comment shows it.
-const VERDICT_REOPENED: &str = "reopened";
+pub(crate) const VERDICT_REOPENED: &str = "reopened";
 
 /// Trusted part of the verifier request. The claims and the discussion that follow it are not.
 #[expect(dead_code, reason = "called by S27")]
