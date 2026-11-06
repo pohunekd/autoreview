@@ -103,7 +103,7 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
 6. **GitHub shows one review.** The author sees a single review with the
    decision COMMENT. The body has a summary, the findings as inline comments,
    and the signature as its last line, for example
-   `Written by AI: autoreview (posted from review-bot's GitHub account, not by a human)`.
+   `Written by AI: autoreview (posted from a GitHub account, not by a human)`.
    The review does not block the merge.
 7. **Notifications.** The start is a `started` event (level `log`). The
    published result is a `commented` event (level `digest`). With the default

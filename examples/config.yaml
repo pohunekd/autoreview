@@ -26,8 +26,10 @@ pohunek:
 
 session:
   group: autoreview
-  branch_prefix: autoreview/
-  name_prefix: autoreview-
+  # Change a prefix only while no review runs: a running review finds its
+  # session by name.
+  branch_prefix: autoreview/review/
+  name_prefix: github-review-
   timeout_seconds: 7200
   output_poll_seconds: 15
   start_max_attempts: 3
@@ -84,7 +86,7 @@ cli:
 
 publish:
   # Last line of every review body and inline comment.
-  signature: "Written by AI: autoreview (posted from {login}'s GitHub account, not by a human)"
+  signature: "Written by AI: autoreview (posted from a GitHub account, not by a human)"
   # Comments matching this are treated as machine-written in the discussion
   # of earlier findings.
   ai_signed_pattern: "Written by AI:"

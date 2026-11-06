@@ -91,7 +91,7 @@ The login of the serving credential is used in these places, and nowhere else:
 | `review-requested` trigger | The search finds pull requests that request a review from the login. Searches run per credential and only within its `match` |
 | Drafts of `ready_draft_authors` | A draft that requests a review from the login is marked ready |
 | Own pull request | A pull request authored by the login gets a comment, whatever the rule says. See [the own pull request rule](#the-own-pull-request-rule) |
-| Signature | `{login}` in `publish.signature` is replaced by the login |
+| Signature | `publish.signature` is published as written; it does not name the login |
 | Answered findings on auto-approve rules | Only a comment by the login, which is not AI-signed, closes a finding. A comment by another account, including the owner's own account under a machine-user credential, does not. See [incremental reviews](incremental-reviews.md#answered-on-auto-approve-rules) |
 | Review queue | Grouped by account when the credentials have different logins. See [notifications](notifications.md#review-queue) |
 

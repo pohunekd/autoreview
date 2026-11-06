@@ -215,8 +215,7 @@ The review submitted to GitHub contains:
 - The verdict on every prior finding, when the review has prior findings.
 - The unanchored findings, listed in the body.
 - The signature as the last line of the body and of every inline comment. The
-  text comes from `publish.signature`, with `{login}` replaced by
-  the login of the credential that serves the repository.
+  text is `publish.signature` as written.
 - A hidden marker, `<!-- autoreview:v1:<repo>#<n>@<head>:decision=...:findings=N:digest=... -->`,
   that names the publication, its decision and its number of blocking findings.
   The marker is also how a retry finds a review that was posted before its
