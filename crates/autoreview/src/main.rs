@@ -16,13 +16,14 @@ use std::sync::Arc;
 
 use autoreview_engine::config::Config;
 use autoreview_engine::integrations::Integrations;
+use autoreview_engine::model::repository_valid;
 use autoreview_engine::store::{ReviewFilter, Store};
 use autoreview_engine::{
     BoxError, Engine, Error, SystemClock, WORKFLOW_FAILED, error_code, go_json,
 };
 use autoreview_external::External;
 use clap::error::ErrorKind;
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
 use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::signal::unix::{SignalKind, signal};
@@ -33,6 +34,12 @@ use crate::error_response::{COMMAND_INVALID, error_response};
 /// Environment variable that names the config file when `--config` is absent.
 const CONFIG_ENV: &str = "AUTOREVIEW_CONFIG";
 
+/// The global option that names the config file.
+const CONFIG_FLAG: &str = "--config";
+
+/// Prefix of the global option written with its value, as `--config=PATH`.
+const CONFIG_FLAG_WITH_VALUE: &str = "--config=";
+
 /// The end-of-options marker of clap, which Go's argument reading does not know.
 const ESCAPE: &str = "--";
 
@@ -41,6 +48,12 @@ const POLICY_KEY: &str = "policy_file";
 
 /// Configuration key named when the token belongs to another login than the credential.
 const LOGIN_KEY: &str = "github.credentials.login";
+
+/// Error code of malformed repository names.
+const REPOSITORY_NOT_ALLOWED: &str = "repository_not_allowed";
+
+/// Error code of a malformed pull request number or head.
+const REVIEW_IDENTITY_INVALID: &str = "review_identity_invalid";
 
 /// Error code of a configuration value that the command refuses.
 const CONFIGURATION_INVALID: &str = "configuration_invalid";
@@ -85,12 +98,22 @@ enum EngineCommand {
         /// Most reviews printed, from 1 to `cli.review_list_limit`.
         limit: Option<String>,
     },
+    /// Prints everything the engine knows about one pull request.
+    Review(ReviewArguments),
     /// Writes a consistent copy of the store to a new absolute path.
     BackupDb {
         /// Absolute path of the copy; nothing may exist there yet.
         #[arg(allow_hyphen_values = true)]
         path: PathBuf,
     },
+}
+
+/// `--repository OWNER/REPO` and the positional arguments, read as Go reads them.
+#[derive(Debug, Args)]
+struct ReviewArguments {
+    /// The arguments in their order; `--repository` takes the next one as its value.
+    #[arg(allow_hyphen_values = true, value_name = "ARGUMENTS", value_parser = raw_argument)]
+    arguments: Vec<String>,
 }
 
 /// What `validate` prints: what the policy requires of the review hosts.
@@ -214,6 +237,10 @@ async fn run_engine(
             let limit = review_limit(limit.as_deref(), review_list_limit)?;
             print_json(&store.list_reviews(&ReviewFilter::All, limit)?)
         }
+        EngineCommand::Review(arguments) => {
+            let (repository, number) = pull_request_arguments(&arguments.arguments)?;
+            print_json(&engine.pull_request_status(cancel, &repository, number)?)
+        }
         EngineCommand::BackupDb { path } => {
             store.backup_to(&path)?;
             print_json(&BackupResult {
@@ -271,6 +298,65 @@ fn cancel_on_signal(cancel: CancellationToken) -> Result<(), Error> {
         cancel.cancel();
     });
     Ok(())
+}
+
+/// Reads `--repository OWNER/REPO NUMBER`, as `main.go:200-213` does.
+///
+/// # Errors
+///
+/// Returns `repository_not_allowed`, `command_invalid` when not exactly one positional
+/// argument remains, and `review_identity_invalid` for a bad number.
+fn pull_request_arguments(arguments: &[String]) -> Result<(String, i64), Error> {
+    let (repository, positional) = split_repository(arguments);
+    if !repository_valid(&repository) {
+        return Err(Error::workflow(REPOSITORY_NOT_ALLOWED, true, None));
+    }
+    let [number] = positional.as_slice() else {
+        return Err(command_invalid(None));
+    };
+    match parse_number(number) {
+        Some(number) => Ok((repository, number)),
+        None => Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None)),
+    }
+}
+
+/// Refuses `--config` among the raw arguments, where clap reads it as an argument.
+///
+/// # Errors
+///
+/// Returns the reason that clap reports as a `command_invalid` parse error.
+fn raw_argument(value: &str) -> Result<String, String> {
+    if value == CONFIG_FLAG || value.starts_with(CONFIG_FLAG_WITH_VALUE) {
+        return Err(format!(
+            "{CONFIG_FLAG} must come before the arguments of the command"
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+/// Splits the value of the last `--repository` from the positional arguments (`main.go:215`).
+///
+/// A trailing `--repository` without a value stays a positional argument.
+fn split_repository(arguments: &[String]) -> (String, Vec<&str>) {
+    let mut repository = String::new();
+    let mut positional = Vec::new();
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        if argument == "--repository"
+            && let Some(value) = rest.as_slice().first()
+        {
+            repository.clone_from(value);
+            rest.next();
+            continue;
+        }
+        positional.push(argument.as_str());
+    }
+    (repository, positional)
+}
+
+/// Parses a positive pull request number as Go's `strconv.Atoi` followed by `> 0`.
+fn parse_number(text: &str) -> Option<i64> {
+    text.parse::<i64>().ok().filter(|number| *number > 0)
 }
 
 /// Returns the `reviews` limit: `limit` when given, otherwise `cli.review_list_limit`.
