@@ -13,6 +13,7 @@ pub mod model;
 pub(crate) mod prior;
 pub(crate) mod protocol;
 pub mod publish;
+pub(crate) mod review;
 pub(crate) mod review_queue;
 pub mod store;
 pub(crate) mod verify;

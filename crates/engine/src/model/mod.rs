@@ -38,6 +38,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::integrations::{CommentableLines, GitHubReview, SessionRequest};
+    use crate::review::input::SlotState;
 
     use super::{
         Artifact, AwaitRecord, Discussion, Finding, PriorFinding, PriorResult, PublishedRecord,
@@ -48,10 +49,7 @@ mod tests {
     const GOLDEN: &str = include_str!("../../../../testdata/parity/persisted.json");
 
     /// Golden cases of types that later slices port, so this test skips them.
-    const LATER_CASES: &[&str] = &[
-        "slot_state_zero",                    // #91
-        "slot_state_with_session_and_result", // #91
-    ];
+    const LATER_CASES: &[&str] = &[];
 
     /// Keys whose golden JSON null is the nil slice of a Go list field.
     const LIST_KEYS: &[&str] = &[
@@ -181,6 +179,9 @@ mod tests {
                     round_trip_commentable_lines(case)
                 }
                 "github_review_zero" => round_trip::<GitHubReview>(case),
+                "slot_state_zero" | "slot_state_with_session_and_result" => {
+                    round_trip::<SlotState>(case)
+                }
                 name => {
                     assert!(
                         LATER_CASES.contains(&name),
@@ -193,8 +194,8 @@ mod tests {
             checked += 1;
         }
         assert_eq!(
-            checked, 32,
-            "golden has the 32 persisted cases of this module"
+            checked, 34,
+            "golden has the 34 persisted cases of this module"
         );
     }
 }

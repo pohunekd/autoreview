@@ -153,7 +153,6 @@ autoreview_go_compat::object_only_serde!(SessionIdentity);
 
 impl RunLimits {
     /// Reports whether every bound is positive and the poll interval fits the session timeout.
-    #[expect(dead_code, reason = "called by S25")]
     pub(crate) fn valid(&self) -> bool {
         self.session_timeout_ms > 0
             && self.output_poll_ms > 0

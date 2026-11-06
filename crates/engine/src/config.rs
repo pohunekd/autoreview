@@ -543,7 +543,7 @@ fn invalid(message: impl Into<String>) -> Error {
 }
 
 /// Reports whether `login` is a valid GitHub login.
-fn github_login_valid(login: &str) -> bool {
+pub(crate) fn github_login_valid(login: &str) -> bool {
     let bytes = login.as_bytes();
     if bytes.is_empty() || bytes.len() > GITHUB_LOGIN_MAX_LEN {
         return false;
@@ -561,7 +561,7 @@ fn github_login_valid(login: &str) -> bool {
 }
 
 /// Reports whether `value` is a valid identifier.
-fn identifier_valid(value: &str) -> bool {
+pub(crate) fn identifier_valid(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.is_empty() {
         return false;

@@ -119,13 +119,18 @@ pub(crate) struct VerificationClaims {
 
 /// Verdicts of the verifier that the engine keeps after the output is checked.
 #[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
 pub(crate) struct VerifierResult {
     /// Verdicts on the blocking findings.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     pub(crate) findings: Vec<FindingCheck>,
     /// Verdicts on the answered prior findings.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     pub(crate) prior: Vec<PriorCheck>,
 }
+
+autoreview_go_compat::object_only_serde!(VerifierResult);
 
 /// Structured output of the verifier session, as the Claude wrapper carries it.
 #[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]

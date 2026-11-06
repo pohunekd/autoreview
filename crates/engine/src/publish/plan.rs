@@ -102,14 +102,19 @@ mod tests {
     use std::collections::BTreeMap;
 
     use autoreview_policy::{
-        Checkout, Event, OnClean, OnFindings, OnNotes, Pipeline, Protocol, Reviewer, Rule, Trigger,
-        TriggerKind,
+        Checkout, EVENTS, Event, Level, OnClean, OnFindings, OnNotes, Pipeline, Protocol, Reviewer,
+        Rule, Trigger, TriggerKind,
     };
 
     use super::{PublicationPlan, plan_publication, publication_event};
     use crate::model::ids::INPUT_VERSION;
-    use crate::model::{Artifact, Decision, Finding, NotesHandoff, PullRequest, ReviewInput};
+    use crate::model::pull_request::SCOPE_FULL;
+    use crate::model::{
+        Artifact, Decision, Finding, NotesHandoff, ProjectRoute, PullRequest, ReviewInput,
+        ReviewScope, RunLimits,
+    };
     use crate::publish::anchor::anchor_findings;
+    use crate::review::input::validate_input;
 
     fn sha(character: char) -> String {
         character.to_string().repeat(40)
@@ -178,12 +183,50 @@ mod tests {
         }
     }
 
+    fn notification_levels() -> BTreeMap<Event, Level> {
+        let mut levels: BTreeMap<Event, Level> =
+            EVENTS.iter().map(|event| (*event, Level::Log)).collect();
+        levels.insert(Event::ApprovalRequested, Level::Action);
+        levels.insert(Event::FindingsOnOwnPr, Level::Action);
+        levels.insert(Event::ReviewStopped, Level::Action);
+        levels.insert(Event::CleanupManual, Level::Action);
+        levels.insert(Event::Approved, Level::Digest);
+        levels.insert(Event::ChangesRequested, Level::Digest);
+        levels.insert(Event::Commented, Level::Digest);
+        levels
+    }
+
     fn test_input(rule: Rule, pull_request: PullRequest) -> ReviewInput {
         ReviewInput {
             version: INPUT_VERSION,
-            reviewers: rule.pipeline.reviewers.clone(),
             pull_request,
+            reviewers: rule.pipeline.reviewers.clone(),
             rule,
+            scope: ReviewScope {
+                mode: SCOPE_FULL.to_owned(),
+                previous_head_sha: String::new(),
+            },
+            route: ProjectRoute {
+                host: "review-host".to_owned(),
+                project_id: "project".to_owned(),
+            },
+            notifications: notification_levels(),
+            approval_timeout_seconds: 3600,
+            policy_digest: "d".repeat(64),
+            publisher_login: "reviewer".to_owned(),
+            limits: RunLimits {
+                session_timeout_ms: 60000,
+                output_poll_ms: 1000,
+                session_start_attempts: 2,
+                session_start_retry_ms: 1000,
+                session_cleanup_attempts: 2,
+                session_cleanup_retry_ms: 1000,
+                reviewer_run_attempts: 2,
+                reviewer_run_retry_ms: 1000,
+                step_retry_ms: 60000,
+                step_retry_initial_ms: 10,
+                step_retry_max_interval_ms: 1000,
+            },
             ..ReviewInput::default()
         }
     }
@@ -254,6 +297,9 @@ mod tests {
                 test_pull_request(1),
             );
             input.version = version;
+            if let Err(err) = validate_input(&input) {
+                panic!("{name}: input version {version} must stay valid: {err}");
+            }
             let artifact = Artifact {
                 findings,
                 ..Artifact::default()
