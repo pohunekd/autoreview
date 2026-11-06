@@ -692,8 +692,8 @@ pub(crate) fn to_config(
     let backends = notify_backends(&notify.backends, secret)?;
     let routes = section(&notify.routes, "notify.routes")?;
     let review_queue = section(&notify.review_queue, "notify.review_queue")?;
-    let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
+    let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
     let shape = matrix_shape(&backends, routes, &queue_backends)?;
     Ok(Config {
         policy: Some(policy),
@@ -862,8 +862,10 @@ fn credential_name_valid(name: &str) -> bool {
     if bytes.is_empty() || bytes.len() > CREDENTIAL_NAME_MAX {
         return false;
     }
-    let first = bytes[0];
-    if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
+    if !bytes
+        .first()
+        .is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
+    {
         return false;
     }
     bytes.iter().all(|byte| {
@@ -883,9 +885,7 @@ fn github_login_valid(login: &str) -> bool {
     {
         return false;
     }
-    let first = bytes[0];
-    let last = bytes[bytes.len() - 1];
-    first != b'-' && last != b'-'
+    !bytes.starts_with(b"-") && !bytes.ends_with(b"-")
 }
 
 /// Reports whether a match entry is `*`, `owner/*` or `owner/repository` in lowercase.
@@ -1076,14 +1076,14 @@ fn homeserver_url(value: &Option<Value>) -> Result<String, Error> {
         Some((authority, _)) => authority,
         None => after_scheme,
     };
-    let without_userinfo = match authority.split_once('@') {
+    let without_userinfo = match authority.rsplit_once('@') {
         Some((_, host)) => host,
         None => authority,
     };
     let port = if without_userinfo.starts_with('[') {
         without_userinfo.split_once("]:").map(|(_, port)| port)
     } else {
-        without_userinfo.split_once(':').map(|(_, port)| port)
+        without_userinfo.rsplit_once(':').map(|(_, port)| port)
     };
     if let Some(port) = port {
         let valid = !port.is_empty()
@@ -1221,10 +1221,10 @@ fn level_room<'a>(
     matrix: &mut Option<&'a Backend>,
 ) -> Result<String, Error> {
     let names = text_list(names, key)?;
-    if names.len() != 1 {
+    let [name] = names.as_slice() else {
         return Err(invalid(key, "must name exactly one backend until M3"));
-    }
-    let backend = find_backend(backends, names[0].as_str(), key)?;
+    };
+    let backend = find_backend(backends, name, key)?;
     match backend {
         Backend::None { .. } => Ok(String::new()),
         Backend::Matrix { room, .. } => {
@@ -1257,11 +1257,6 @@ fn find_backend<'a>(backends: &'a [Backend], name: &str, key: &str) -> Result<&'
     Err(invalid(key, "names no configured backend"))
 }
 
-/// Checks the cross-key rules of the configuration reference. Each error names both keys it
-/// relates.
-///
-/// # Errors
-///
 /// Ports Go's `schedule.LoadPolicy`: the debounce is checked before the retry delays.
 ///
 /// # Errors
@@ -1273,17 +1268,11 @@ pub(crate) fn scheduler_policy(
     debounce: &Option<Value>,
     retry_delays: &Option<Value>,
 ) -> Result<scheduler::Policy, Error> {
-    let debounce_value = match debounce {
-        Some(value) => value,
-        None => return Err(missing(DEBOUNCE_KEY)),
-    };
-    let retry_value = match retry_delays {
-        Some(value) => value,
-        None => return Err(missing(RETRY_DELAYS_KEY)),
-    };
+    let debounce = debounce_seconds(present(debounce, DEBOUNCE_KEY)?)?;
+    let retry_delays = retry_delay_seconds(present(retry_delays, RETRY_DELAYS_KEY)?)?;
     Ok(scheduler::Policy {
-        debounce: debounce_seconds(debounce_value)?,
-        retry_delays: retry_delay_seconds(retry_value)?,
+        debounce,
+        retry_delays,
     })
 }
 
