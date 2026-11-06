@@ -15,7 +15,7 @@ use autoreview_engine::integrations::{ReadiedDraft, ReviewRequest, ReviewRequest
 use autoreview_engine::model::{
     Candidate, CandidateList, PullRequest, RejectedCandidate, repository_valid,
 };
-use autoreview_go_compat::null_default;
+use autoreview_go_compat::{null_default, null_entries};
 use autoreview_policy::{Policy, Rule, TriggerKind};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -108,7 +108,9 @@ struct SearchResult {
     #[serde(rename = "pageInfo", deserialize_with = "null_default::deserialize")]
     page_info: PageInfo,
     /// The pull requests of the page; a `null` list is refused, as Go refuses a nil list.
-    nodes: Option<Vec<GitHubPullRequest>>,
+    ///
+    /// A `null` entry is an empty pull request, which no rule covers.
+    nodes: Option<Vec<Option<GitHubPullRequest>>>,
 }
 
 autoreview_go_compat::object_only_serde!(SearchResult);
@@ -274,8 +276,9 @@ fn collect(
 /// Decodes the identities of a review request search and refuses a result at the poll limit
 /// (`searchRequested`).
 fn decode_search_identities(output: &str, poll_limit: i64) -> Result<Vec<SearchIdentity>, Error> {
-    let identities: Vec<SearchIdentity> =
+    let entries: Vec<Option<SearchIdentity>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let identities = null_entries::zero_entries(entries);
     // A truncated search would silently drop requested reviews.
     let count = i64::try_from(identities.len()).unwrap_or(i64::MAX);
     if count >= poll_limit {
@@ -341,8 +344,9 @@ fn decode_review_request_search(
     max: i64,
     host: &str,
 ) -> Result<ReviewRequestList, Error> {
-    let items: Vec<ReviewRequestItem> =
+    let entries: Vec<Option<ReviewRequestItem>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let items = null_entries::zero_entries(entries);
     let count = i64::try_from(items.len()).unwrap_or(i64::MAX);
     let mut requests = Vec::new();
     for item in &items {
@@ -429,7 +433,7 @@ fn decode_label_search_page(output: &str) -> Result<LabelSearchPage, Error> {
         None => return Err(response_invalid(None)),
     };
     Ok(LabelSearchPage {
-        nodes,
+        nodes: null_entries::zero_entries(nodes),
         has_next_page: response.data.search.page_info.has_next_page,
         end_cursor: response.data.search.page_info.end_cursor.clone(),
     })
@@ -748,6 +752,17 @@ mod tests {
     const EMPTY_LABEL_SEARCH_RESPONSE: &str =
         r#"{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}"#;
 
+    /// Label search page with a `null` node before a labelled pull request on `github.com`.
+    const NULL_NODE_LABEL_SEARCH_RESPONSE: &str = concat!(
+        r#"{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":["#,
+        r#"null,{"id":"PR_3","number":3,"title":"Add widget","url":"https://github.com/ac"#,
+        r#"me/widget/pull/3","state":"OPEN","isDraft":false,"headRefOid":"aaaaaaaaaaaaaaa"#,
+        r#"aaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","baseRefOid":"bbbbbbbbbbbbb"#,
+        r#"bbbbbbbbbbbbbbbbbbbbbbbbbbb","baseRefName":"main","author":{"__typename":"User"#,
+        r#"","login":"colleague"},"labels":{"nodes":[null,{"name":"ai:review"}]},"reviewR"#,
+        r#"equests":{"nodes":[null]},"repository":{"nameWithOwner":"acme/widget"}}]}}}"#,
+    );
+
     /// Review-requested trigger, the kind of the rule that covers `acme/*`.
     fn review_requested() -> Trigger {
         Trigger {
@@ -850,5 +865,24 @@ mod tests {
         assert!(page.nodes.is_empty());
         assert!(!page.has_next_page, "discovery must stop paging and go on");
         assert_eq!(page.end_cursor, "");
+    }
+
+    #[test]
+    fn null_node_of_a_label_search_is_an_empty_pull_request_that_no_rule_covers() {
+        let page = decode_label_search_page(NULL_NODE_LABEL_SEARCH_RESPONSE)
+            .expect("a label search page with a null node decodes");
+        assert_eq!(page.nodes.len(), 2);
+        assert_eq!(page.nodes[0].repository_and_number(), (String::new(), 0));
+        let trigger = Trigger {
+            kind: TriggerKind::Label,
+            label: "ai:review".to_owned(),
+        };
+        let pull_request = decode_pull_request(&page.nodes[1], "github.com", LOGIN, &trigger)
+            .expect("the labelled pull request is a candidate");
+        assert_eq!(pull_request.number, 3);
+        assert_eq!(
+            pull_request.labels,
+            vec![String::new(), "ai:review".to_owned()]
+        );
     }
 }
