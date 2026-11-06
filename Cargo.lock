@@ -64,6 +64,7 @@ dependencies = [
  "autoreview-policy",
  "autoreview-schedule",
  "base64 0.22.1",
+ "getrandom 0.3.4",
  "hex",
  "rusqlite",
  "rustix",

@@ -1,19 +1,44 @@
-//! The pure part of the review queue: the engine state of each request, its order and the digest.
+//! The review queue: the waiting requests and notes, posted as one digest.
+//!
+//! Mirrors `cmd/autoreview/review_queue.go`.
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_policy::{Policy, TriggerKind};
 use autoreview_schedule::scheduler::Record;
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
-use crate::integrations::ReviewRequest;
+use crate::discovery::poll::live;
+use crate::engine::{Clock, Engine, retry_step};
+use crate::error::{Error, error_code};
+use crate::integrations::{Integrations, ReviewRequest};
+use crate::messages::handoff_age;
 use crate::model::{AwaitRecord, PublishedRecord};
 use crate::publish::decision_text;
 
 /// Note that closes a digest whose list does not show every request.
 const TRUNCATED_TEXT: &str = "The list is truncated: more requests wait for you than are shown.";
+
+/// Prefix of the transaction ID of one queue run (`review_queue.go:135`).
+const TRANSACTION_PREFIX: &str = "queue-";
+
+/// Random bytes of the transaction ID of one queue run (`review_queue.go:131`).
+const TRANSACTION_RANDOM_BYTES: usize = 16;
+
+/// Error code of a digest that has no room for a single entry.
+const REVIEW_QUEUE_TOO_LONG: &str = "review_queue_too_long";
+
+/// Error code of a transaction ID that cannot be drawn.
+const MATRIX_REQUEST_INVALID: &str = "matrix_request_invalid";
+
+/// Error code of a queue limit that the configuration loader refuses.
+const CONFIGURATION_INVALID: &str = "configuration_invalid";
+
+/// Configuration key of the queue limit.
+const QUEUE_MAX_ITEMS_KEY: &str = "notify.review_queue.max_items";
 
 /// Position of a queue entry. The derived order puts the requests that need the owner's action
 /// first, and the notes that wait for their author after the requests.
@@ -32,7 +57,6 @@ pub(crate) enum QueuePriority {
 }
 
 /// The result the review-queue command prints.
-#[expect(dead_code, reason = "called by S34")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct QueueResult {
     /// Requests listed in the digest.
@@ -44,7 +68,6 @@ pub struct QueueResult {
 }
 
 /// One request of the queue with the engine state that explains it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QueueEntry {
     /// The request as GitHub reported it.
@@ -56,7 +79,6 @@ pub(crate) struct QueueEntry {
 }
 
 /// The engine state the queue reads, each map keyed by `repository#number`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct QueueState {
     /// Review schedule records.
@@ -68,7 +90,6 @@ pub(crate) struct QueueState {
 }
 
 /// The digest bodies and the count of requests they show.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RenderedQueue {
     /// The plain-text body.
@@ -81,9 +102,156 @@ pub(crate) struct RenderedQueue {
     pub(crate) dropped: bool,
 }
 
+impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Posts the review requests and the notes that wait, as one queue digest.
+    ///
+    /// Nothing is posted when nothing waits. Every retry of the post reuses one transaction ID,
+    /// so the homeserver keeps one copy, while a later run posts its own digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the search, the store or the post, `review_queue_too_long` when no
+    /// entry fits, `matrix_request_invalid` without a transaction ID, and `configuration_invalid`
+    /// without a policy or with a negative limit.
+    #[expect(dead_code, reason = "called by C01")]
+    pub(crate) async fn review_queue(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<QueueResult, Error> {
+        let limit = self.config.queue_max_items;
+        let list = retry_step(self.step_policy(), &self.clock, cancel, || {
+            self.integration.list_review_requests(cancel, limit)
+        })
+        .await?;
+        live(cancel)?;
+        let discovery = self.store.load_discovery()?;
+        let state = QueueState {
+            schedule: discovery.schedule,
+            published: discovery.published,
+            awaiting: discovery.awaiting,
+        };
+        let mut entries = queue_entries(self.policy()?, &state, &list.requests);
+        entries.extend(self.waiting_on_author(cancel, &state, &list.requests).await);
+        if entries.is_empty() {
+            return Ok(QueueResult::default());
+        }
+        // The entries are cut after the sort. So a request that needs the user's action is never
+        // dropped for one that only waits for the engine.
+        let over = i64::try_from(entries.len()).map_or(true, |len| len > limit);
+        let truncated = list.truncated || over;
+        if over {
+            let Ok(kept) = usize::try_from(limit) else {
+                return Err(Error::config(
+                    CONFIGURATION_INVALID,
+                    QUEUE_MAX_ITEMS_KEY,
+                    None,
+                ));
+            };
+            entries.truncate(kept);
+        }
+        let rendered = render_queue(
+            &entries,
+            truncated,
+            self.config.matrix_max_characters,
+            self.config.max_title_characters,
+        );
+        if rendered.shown == 0 {
+            return Err(Error::workflow(REVIEW_QUEUE_TOO_LONG, true, None));
+        }
+        let transaction = queue_transaction_id()?;
+        retry_step(self.step_policy(), &self.clock, cancel, || {
+            self.integration.send_queue_digest(
+                cancel,
+                &transaction,
+                &rendered.plain,
+                &rendered.formatted,
+            )
+        })
+        .await?;
+        Ok(QueueResult {
+            count: i64::try_from(rendered.shown).unwrap_or(i64::MAX),
+            sent: true,
+            truncated: rendered.dropped,
+        })
+    }
+
+    /// Returns the open pull requests whose notes wait for their author.
+    ///
+    /// The author has not requested the review again. A pull request that cannot be read is
+    /// left out of this digest with a warning, also after a cancel, as Go leaves it out.
+    async fn waiting_on_author(
+        &self,
+        cancel: &CancellationToken,
+        state: &QueueState,
+        requests: &[ReviewRequest],
+    ) -> Vec<QueueEntry> {
+        let requested: BTreeSet<String> = requests
+            .iter()
+            .map(|request| format!("{}#{}", request.repository, request.number))
+            .collect();
+        let now = self.clock.wall_now();
+        let mut entries = Vec::new();
+        for (key, record) in &state.published {
+            if !record.awaits_author || requested.contains(key) {
+                continue;
+            }
+            let read = retry_step(self.step_policy(), &self.clock, cancel, || {
+                self.integration
+                    .read_pull_request_state(cancel, &record.repository, record.number)
+            })
+            .await;
+            let current = match read {
+                Ok(current) => current,
+                Err(err) => {
+                    tracing::warn!(
+                        repository = %record.repository,
+                        pull_request = record.number,
+                        error_code = error_code(&err),
+                        "notes hand-off unreadable"
+                    );
+                    continue;
+                }
+            };
+            if !current.open || current.requested {
+                continue;
+            }
+            let mut status = format!(
+                "notes handed to the author {} ago",
+                handoff_age(record, now)
+            );
+            if record.reminded {
+                status.push_str(", reminded");
+            }
+            entries.push(QueueEntry {
+                request: ReviewRequest {
+                    repository: record.repository.clone(),
+                    number: record.number,
+                    title: current.title,
+                    author: current.author,
+                    url: current.url,
+                },
+                status,
+                priority: QueuePriority::WaitingAuthor,
+            });
+        }
+        entries
+    }
+}
+
+/// Returns a fresh transaction ID: `queue-` and 16 random bytes in lowercase hex.
+///
+/// # Errors
+///
+/// Returns `matrix_request_invalid`, permanent, when the system has no random bytes.
+fn queue_transaction_id() -> Result<String, Error> {
+    let mut random = [0_u8; TRANSACTION_RANDOM_BYTES];
+    getrandom::fill(&mut random)
+        .map_err(|err| Error::workflow(MATRIX_REQUEST_INVALID, true, Some(Box::new(err))))?;
+    Ok(format!("{TRANSACTION_PREFIX}{}", hex::encode(random)))
+}
+
 /// Annotates each request with its engine state and sorts the entries.
 /// The order is priority, then repository and number.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 pub(crate) fn queue_entries(
     policy: &Policy,
     state: &QueueState,
@@ -172,7 +340,6 @@ fn schedule_status(record: &Record) -> (String, QueuePriority) {
 
 /// Builds the plain-text and HTML digests with as many entries as fit.
 /// Each body holds at most `limit` characters and never cuts an entry in half.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 pub(crate) fn render_queue(
     entries: &[QueueEntry],
     truncated: bool,
