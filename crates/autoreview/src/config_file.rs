@@ -1827,6 +1827,65 @@ mod tests {
     }
 
     #[test]
+    fn a_matrix_backend_with_another_identity_names_its_route_key() {
+        let shared = concat!(
+            "Matrix backends must share homeserver_url, access_token_env and ",
+            "mention_user until M3"
+        );
+        let cases = [
+            (
+                1,
+                "https://other.example.org",
+                "AUTOREVIEW_MATRIX_TOKEN",
+                "@you:example.org",
+                "notify.routes.digest",
+            ),
+            (
+                2,
+                "https://matrix.example.org",
+                "AUTOREVIEW_MATRIX_TOKEN_OTHER",
+                "@you:example.org",
+                "notify.routes.log",
+            ),
+            (
+                1,
+                "https://matrix.example.org",
+                "AUTOREVIEW_MATRIX_TOKEN",
+                "@other:example.org",
+                "notify.routes.digest",
+            ),
+            (
+                3,
+                "https://other.example.org",
+                "AUTOREVIEW_MATRIX_TOKEN",
+                "@you:example.org",
+                "notify.review_queue.backends",
+            ),
+        ];
+        for (index, homeserver, token_env, mention, key) in cases {
+            let mut entries = shared_backends();
+            let names = ["action", "digest", "log", "queue"];
+            if let (Some(entry), Some(name)) = (entries.get_mut(index), names.get(index)) {
+                *entry = matrix_backend(name, homeserver, token_env, mention);
+            }
+            let text = four_backends(entries, "[queue]");
+            assert_eq!(
+                error_text(mapped(&text)),
+                format!("configuration_invalid: {key}: {shared}"),
+                "{key} with {homeserver}, {token_env}, {mention}"
+            );
+        }
+        let text = four_backends(shared_backends(), "[queue, log]");
+        assert_eq!(
+            error_text(mapped(&text)),
+            concat!(
+                "configuration_invalid: notify.review_queue.backends: ",
+                "must name at most one Matrix backend until M3"
+            )
+        );
+    }
+
+    #[test]
     fn removing_any_key_of_the_example_names_it() {
         let paths = example_key_paths();
         assert!(!paths.is_empty());
