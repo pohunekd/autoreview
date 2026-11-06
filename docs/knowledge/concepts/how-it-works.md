@@ -155,6 +155,12 @@ Finding ids combine the reviewer's `finding_prefix` with a three-digit sequence
 number (for example `O001` for the first finding of the reviewer with prefix
 `O`). Ids never collide across reviewers because the prefixes are unique.
 
+When two reviewers report a finding on the same path, line and severity, the
+engine merges them into one finding. It keeps the id of the first reviewer in the
+pipeline, the higher confidence and the longer body with its title, and it names
+every reviewer that reported it. Findings of one reviewer are never merged with
+each other.
+
 ## 6. Anchoring findings to changed lines
 
 GitHub accepts an inline comment only on a line that the pull request changes on
@@ -201,7 +207,7 @@ anything. That makes a resumed review publish the same content.
 
 The review submitted to GitHub contains:
 
-- The summary of each reviewer, with its label.
+- One summary, that of the first reviewer in the pipeline, with its label.
 - The verification line, when a verifier ran.
 - One inline comment per anchored finding.
 - The notes, in a collapsed section. They get no inline comment, so they open
