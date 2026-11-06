@@ -147,6 +147,10 @@ it with a fixed schema and checks it before anything is combined:
 - Paths must be relative and must not climb out of the repository.
 - The result as a whole stays within `limits.result_max_bytes`.
 
+Every reviewer request states the summary, title and body limits, and a Claude
+request also the limit of each prior-finding note, so the reviewer knows them
+before it writes.
+
 Output that is incomplete, unusable or invalid gets a fresh session for that
 reviewer, up to `session.reviewer_run_max_attempts`. Once the attempts are
 spent, the review fails and the scheduler decides what happens next.
@@ -170,7 +174,7 @@ handles each finding:
 | Where the finding points | Result |
 |---|---|
 | A changed line of the pull request | Anchored. Posted as an inline comment. |
-| An unchanged line of a changed file | Moved to the closest changed line of that file. The body says where it was reported. Still blocking if it was blocking. |
+| An unchanged line of a changed file | A blocking finding moves to the closest changed line of that file, and its body says where it was reported. A note keeps the line the reviewer reported. |
 | A file the pull request does not change | Not anchored and marked non-blocking. Listed in the review body, never holds the merge back. |
 
 Anchoring runs before verification, so a finding in an unchanged file is a note
@@ -210,10 +214,12 @@ The review submitted to GitHub contains:
 - One summary, that of the first reviewer in the pipeline, with its label.
 - The verification line, when a verifier ran.
 - One inline comment per anchored finding.
-- The notes, in a collapsed section. They get no inline comment, so they open
-  no thread to resolve.
+- The notes, in a collapsed section, each with its heading and `path:line`. A
+  note the verifier demoted also keeps its body, which carries the reason. Notes
+  get no inline comment, so they open no thread to resolve.
 - The verdict on every prior finding, when the review has prior findings.
 - The unanchored findings, listed in the body.
+- The validation the reviewers performed, in a collapsed section.
 - The signature as the last line of the body and of every inline comment. The
   text is `publish.signature` as written.
 - A hidden marker, `<!-- autoreview:v1:<repo>#<n>@<head>:decision=...:findings=N:digest=... -->`,

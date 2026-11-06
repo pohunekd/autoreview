@@ -12,7 +12,7 @@ use crate::integrations::{GitHubReview, InlineComment};
 use crate::messages::excerpt;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Artifact, Finding, PriorResult, ReviewInput};
-use crate::verify::verification_line;
+use crate::verify::{demoted, verification_line};
 
 /// Configured values that shape the rendered review.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,13 +191,17 @@ fn own_pull_request_notice(
         || (total == 0 && input.rule.approves_clean())
 }
 
-/// Lists the validation the reviewers performed, each test neutralized.
+/// Lists the validation the reviewers performed in a collapsed section, each test neutralized.
 fn validation_section(tests: &[String]) -> String {
     let lines: Vec<String> = tests
         .iter()
         .map(|test| format!("- {}", neutralize(test)))
         .collect();
-    format!("### Validation performed\n{}", lines.join("\n"))
+    format!(
+        "<details>\n<summary>Validation performed: {} check(s)</summary>\n\n{}\n\n</details>",
+        tests.len(),
+        lines.join("\n")
+    )
 }
 
 /// Reports whether a text exceeds a GitHub limit. A length that does not fit `i64` is too large.
@@ -218,17 +222,24 @@ fn finding_heading(finding: &Finding) -> String {
 }
 
 /// Lists the non-blocking notes in a collapsed section that opens no inline thread.
+///
+/// A note shows its heading and location. Only a note the verifier demoted keeps its body,
+/// which carries the reason.
 fn render_notes(notes: &[Finding]) -> String {
     let items: Vec<String> = notes
         .iter()
         .map(|note| {
-            format!(
-                "{}\n`{}:{}`\n\n{}",
+            let location = format!(
+                "{}\n`{}:{}`",
                 finding_heading(note),
                 neutralize(&note.path),
-                note.line,
-                model_text(&note.body)
-            )
+                note.line
+            );
+            if demoted(note) {
+                format!("{location}\n\n{}", model_text(&note.body))
+            } else {
+                location
+            }
         })
         .collect();
     format!(
@@ -404,9 +415,18 @@ mod tests {
         ReviewInput, ReviewScope,
     };
     use crate::publish::plan::{PublicationPlan, plan_publication};
+    use crate::verify::VERDICT_REFUTED;
 
     /// Go-written render cases: the input and the GitHub review or the error code.
     const GOLDEN: &str = include_str!("../../../../testdata/parity/render.json");
+
+    /// Golden case whose note body the Rust review leaves out (#175).
+    const NOTE_BODY_CASE: &str = "notes_handed_to_author";
+
+    /// Note body of `NOTE_BODY_CASE` in the Go review.
+    ///
+    /// The Rust review leaves it out and renders the rest of the case unchanged.
+    const GO_NOTE_BODY: &str = "\n\nRename it:\n```go\nfunc better() {\n```";
 
     /// One golden case: a named input, and either the Go review or the Go error code.
     #[derive(Debug, Deserialize)]
@@ -819,9 +839,13 @@ mod tests {
                 && notes.contains("O002"),
             "notes section = {notes}"
         );
+        let location_only = concat!(
+            "**O002 LOW — Naming** (confidence: high, Opus)\n",
+            "`src/a.go:4`\n\n</details>"
+        );
         assert!(
-            notes.contains("```\n\n</details>"),
-            "an unclosed fence of a note must be closed before the section ends:\n{notes}"
+            notes.contains(location_only) && !notes.contains("Rename it"),
+            "a note must show its heading and location only:\n{notes}"
         );
         let message = approval_requested_message(
             200,
@@ -840,6 +864,111 @@ mod tests {
                 && reply.is_some()
                 && reply <= notes_at,
             "approval request = {message}"
+        );
+    }
+
+    /// Golden body of a review with a blocking finding, three notes and two validations.
+    const NOTES_AND_VALIDATIONS_BODY: &str = concat!(
+        "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ":decision=REQUEST_CHANGES:findings=1",
+        ":digest=dbbc1688fe7e375abe23494336f8d6d50a22fa8863ecb124165e865a59e0b09f -->\n\n",
+        "## Automated code review\n\n",
+        "Reviewed by Opus, full review of `aaaaaaaaaaaa`.\n\n",
+        "**Opus:** Reviewed the change.\n\n",
+        "1 blocking finding(s) are posted as inline comments.\n\n",
+        "<details>\n",
+        "<summary>3 non-blocking note(s): no action required in this pull request</summary>\n\n",
+        "**O002 LOW — Naming** (confidence: medium, Opus)\n",
+        "`src/a.go:4`\n\n",
+        "**O003 LOW — Ask @\u{200b}octocat** (confidence: medium, Opus)\n",
+        "`src/b.go:9`\n\n",
+        "**O004 HIGH — Refuted** (confidence: medium, Opus)\n",
+        "`src/c.go:2`\n\n",
+        "Refuted by the verification by Opus: Guarded.\n\nBreaks.\n\n",
+        "</details>\n\n",
+        "<details>\n",
+        "<summary>Validation performed: 2 check(s)</summary>\n\n",
+        "- cargo test -p engine\n",
+        "- Pinged @\u{200b}octocat &lt;!-- hidden --&gt;\n\n",
+        "</details>\n\n",
+        "🤖 Written by AI: test reviewer",
+    );
+
+    #[test]
+    fn review_with_notes_and_validations_renders_the_golden_body() {
+        let input = test_input(
+            test_rule(OnFindings::RequestChanges, OnClean::Await),
+            test_pull_request(5),
+        );
+        let note = |id: &str, path: &str, line: i64, title: &str| Finding {
+            id: id.to_owned(),
+            reviewer_label: "Opus".to_owned(),
+            severity: "low".to_owned(),
+            confidence: "medium".to_owned(),
+            path: path.to_owned(),
+            line,
+            title: title.to_owned(),
+            body: "A long explanation:\n```go\nfunc better() {".to_owned(),
+            anchored: true,
+            non_blocking: true,
+            ..Finding::default()
+        };
+        let artifact = Artifact {
+            repository: "acme/widget".to_owned(),
+            number: 5,
+            head_sha: sha('a'),
+            scope: full_scope(),
+            summaries: vec![crate::model::ReviewerSummary {
+                reviewer_id: "opus".to_owned(),
+                label: "Opus".to_owned(),
+                summary: "Reviewed the change.".to_owned(),
+            }],
+            findings: vec![
+                Finding {
+                    id: "O001".to_owned(),
+                    reviewer_label: "Opus".to_owned(),
+                    severity: "high".to_owned(),
+                    confidence: "high".to_owned(),
+                    path: "src/a.go".to_owned(),
+                    line: 3,
+                    title: "Bug".to_owned(),
+                    body: "Breaks on an empty input.".to_owned(),
+                    anchored: true,
+                    ..Finding::default()
+                },
+                note("O002", "src/a.go", 4, "Naming"),
+                note("O003", "src/b.go", 9, "Ask @octocat"),
+                Finding {
+                    id: "O004".to_owned(),
+                    severity: "high".to_owned(),
+                    title: "Refuted".to_owned(),
+                    body: "Refuted by the verification by Opus: Guarded.\n\nBreaks.".to_owned(),
+                    verdict: VERDICT_REFUTED.to_owned(),
+                    ..note("O004", "src/c.go", 2, "Refuted")
+                },
+            ],
+            tests: vec![
+                "cargo test -p engine".to_owned(),
+                "Pinged @octocat <!-- hidden -->".to_owned(),
+            ],
+            ..Artifact::default()
+        };
+        let plan = PublicationPlan {
+            decision: Decision::RequestChanges,
+            ..PublicationPlan::default()
+        };
+        let settings = test_settings();
+        let review = render_review(&settings, &input, &artifact, &plan).expect("review renders");
+        assert_eq!(review.body, NOTES_AND_VALIDATIONS_BODY);
+        assert_eq!(
+            review.comments.len(),
+            1,
+            "only the blocking finding is an inline comment"
+        );
+        assert_eq!(
+            review.comments[0].body,
+            "**O001 HIGH — Bug** (confidence: high, Opus)\n\nBreaks on an empty input.\n\n\
+             🤖 Written by AI: test reviewer"
         );
     }
 
@@ -1068,7 +1197,12 @@ mod tests {
                 (None, Some(want)) => {
                     let review = result.expect("golden case renders");
                     assert_eq!(review.decision, want.decision, "case {}", case.name);
-                    assert_eq!(review.body, want.body, "case {}", case.name);
+                    let mut body = want.body.clone();
+                    if case.name == NOTE_BODY_CASE {
+                        assert!(body.contains(GO_NOTE_BODY), "case {}", case.name);
+                        body = body.replacen(GO_NOTE_BODY, "", 1);
+                    }
+                    assert_eq!(review.body, body, "case {}", case.name);
                     assert_eq!(review.marker, want.marker, "case {}", case.name);
                     let comments: Vec<GoComment> = review
                         .comments

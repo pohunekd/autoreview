@@ -94,8 +94,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
         }
         for reviewer in review.input.reviewers.clone() {
-            let prompt = match build_reviewer_request(&review.input, &reviewer, &review.discussion)
-            {
+            let prompt = match build_reviewer_request(
+                &self.config,
+                &review.input,
+                &reviewer,
+                &review.discussion,
+            ) {
                 Ok(prompt) => prompt,
                 Err(err) => return review.fail(err).await,
             };
@@ -254,7 +258,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         };
         // An unanchored finding becomes a note first, so the verifier never checks it.
         // A reopened prior finding is published again, so the verifier runs first.
-        let mut artifact = anchor_findings(artifact, &commentable);
+        let mut artifact = anchor_findings(&self.input, artifact, &commentable);
         let claims = claims_of(&self.input, &artifact);
         if self.input.verifies() && !claims.is_empty() {
             let verification = match self.verify(&claims).await {
@@ -264,7 +268,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             artifact = apply_verification(artifact, verification);
         }
         let settled = settle_prior(&self.input, &self.discussion, artifact);
-        let artifact = anchor_findings(settled, &commentable);
+        let artifact = anchor_findings(&self.input, settled, &commentable);
         self.plan(&current, artifact).await
     }
 

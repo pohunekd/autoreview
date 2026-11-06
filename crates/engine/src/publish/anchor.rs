@@ -4,14 +4,16 @@
 
 use std::collections::BTreeMap;
 
-use crate::model::{Artifact, Finding};
+use crate::model::{Artifact, Finding, ReviewInput};
 
 /// Marks every finding on a changed RIGHT-side line as anchored.
 ///
-/// A finding elsewhere in a changed file moves to the closest changed line and says where it
-/// was reported. A finding in a file the pull request does not change stays unanchored, is
-/// listed in the review body and never blocks.
+/// A blocking finding elsewhere in a changed file moves to the closest changed line and says
+/// where it was reported. A note there keeps the reported line, because a published note shows
+/// only its heading and location. A finding in a file the pull request does not change stays
+/// unanchored, is listed in the review body and never blocks.
 pub(crate) fn anchor_findings(
+    input: &ReviewInput,
     mut artifact: Artifact,
     commentable: &BTreeMap<String, Vec<i64>>,
 ) -> Artifact {
@@ -28,6 +30,9 @@ pub(crate) fn anchor_findings(
         if line == 0 {
             finding.anchored = false;
             finding.non_blocking = true;
+            continue;
+        }
+        if !input.blocks(finding) {
             continue;
         }
         anchor_to(finding, line);
@@ -89,7 +94,16 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::anchor_findings;
-    use crate::model::{Artifact, Finding};
+    use crate::model::ids::INPUT_VERSION;
+    use crate::model::{Artifact, Finding, ReviewInput};
+
+    /// Review input whose findings may be notes.
+    fn current_input() -> ReviewInput {
+        ReviewInput {
+            version: INPUT_VERSION,
+            ..ReviewInput::default()
+        }
+    }
 
     #[test]
     fn anchor_findings_moves_within_the_file_and_keeps_other_files_in_the_body() {
@@ -120,7 +134,7 @@ mod tests {
             ..Artifact::default()
         };
         let commentable = BTreeMap::from([("src/a.go".to_owned(), vec![10, 12, 20])]);
-        let anchored = anchor_findings(artifact, &commentable);
+        let anchored = anchor_findings(&current_input(), artifact, &commentable);
         assert!(
             anchored.findings[0].anchored
                 && anchored.findings[0].line == 10
@@ -141,6 +155,29 @@ mod tests {
             !anchored.findings[2].anchored && anchored.findings[2].line == 3,
             "finding outside the diff must stay in the body: {:?}",
             anchored.findings[2]
+        );
+    }
+
+    #[test]
+    fn a_note_on_an_unchanged_line_keeps_the_reported_line() {
+        let input = current_input();
+        let artifact = Artifact {
+            findings: vec![Finding {
+                id: "O001".to_owned(),
+                path: "src/a.go".to_owned(),
+                line: 14,
+                body: "near".to_owned(),
+                non_blocking: true,
+                ..Finding::default()
+            }],
+            ..Artifact::default()
+        };
+        let commentable = BTreeMap::from([("src/a.go".to_owned(), vec![10, 12, 20])]);
+        let anchored = anchor_findings(&input, artifact, &commentable);
+        let note = &anchored.findings[0];
+        assert!(
+            note.line == 14 && note.body == "near" && !note.anchored && !input.blocks(note),
+            "a note must keep the line the reviewer reported: {note:?}"
         );
     }
 }

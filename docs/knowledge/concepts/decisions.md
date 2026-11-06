@@ -78,8 +78,10 @@ After these rules, a pull request authored by the reviewing account is forced to
 ## Blocking versus note in the body
 
 Blocking findings are inline comments where they can be anchored, and they are
-listed in the body. Notes are listed in a collapsed section of the body with a
-line that states the pull request needs no change for them. The hidden marker in
+listed in the body. Notes are listed in a collapsed section of the body, each by
+its heading and location, with a line that states the pull request needs no
+change for them. A note the verifier demoted also keeps its body, which carries
+the reason. The hidden marker in
 the body carries the decision and the number of blocking findings, so a reader
 or a merge gate can tell a clean review from one with blocking findings without
 parsing the text.

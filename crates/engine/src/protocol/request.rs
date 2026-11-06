@@ -6,6 +6,7 @@ use autoreview_policy::{Protocol, Reviewer};
 use serde::Serialize;
 use serde::de::IgnoredAny;
 
+use crate::config::Config;
 use crate::error::Error;
 use crate::model::{Discussion, ReviewInput};
 
@@ -37,7 +38,9 @@ const PRIOR_INSTRUCTIONS: &str = concat!(
 /// Builds the session input of one reviewer.
 ///
 /// A claude-structured reviewer receives a JSON request that carries the schema. A
-/// codex-envelope reviewer receives the plain prompt.
+/// codex-envelope reviewer receives the plain prompt. Both state the output limits of `cfg`;
+/// only the claude-structured request names the limit of a prior-finding note, because only
+/// that protocol returns prior_findings.
 ///
 /// # Errors
 ///
@@ -45,17 +48,45 @@ const PRIOR_INSTRUCTIONS: &str = concat!(
 /// `embedded_asset_invalid` when the schema is not JSON, and `review_request_invalid` when
 /// the prior findings or the discussion cannot be encoded.
 pub(crate) fn build_reviewer_request(
+    cfg: &Config,
     input: &ReviewInput,
     reviewer: &Reviewer,
     discussion: &Discussion,
 ) -> Result<String, Error> {
     match reviewer.protocol {
-        Protocol::ClaudeStructured => claude_request(input, reviewer, discussion),
-        Protocol::CodexEnvelope => Ok(codex_prompt(input)),
+        Protocol::ClaudeStructured => {
+            claude_request(input, reviewer, discussion, &output_limits(cfg, true))
+        }
+        Protocol::CodexEnvelope => Ok(codex_prompt(input, &output_limits(cfg, false))),
         Protocol::Unset | Protocol::Other(_) => {
             Err(Error::workflow("review_protocol_invalid", true, None))
         }
     }
+}
+
+/// States the output limits that `validate_reviewer_result` enforces and, with `prior_notes`,
+/// the note limit that `validate_prior_verdicts` enforces.
+fn output_limits(cfg: &Config, prior_notes: bool) -> String {
+    let prior = if prior_notes {
+        format!(
+            " Each prior_findings note has at most {} characters.",
+            cfg.max_body_characters
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        concat!(
+            "Output limits: the summary has {} to {} characters. Each finding has a one-line ",
+            "title of at most {} characters and a body of at most {} characters.{} Output ",
+            "outside these limits is refused."
+        ),
+        cfg.min_summary_characters,
+        cfg.max_summary_characters,
+        cfg.max_title_characters,
+        cfg.max_body_characters,
+        prior
+    )
 }
 
 /// Builds the JSON request of a claude-structured reviewer.
@@ -63,6 +94,7 @@ fn claude_request(
     input: &ReviewInput,
     reviewer: &Reviewer,
     discussion: &Discussion,
+    limits: &str,
 ) -> Result<String, Error> {
     if serde_json::from_slice::<IgnoredAny>(REVIEW_SCHEMA).is_err() {
         return Err(Error::workflow("embedded_asset_invalid", true, None));
@@ -86,9 +118,10 @@ fn claude_request(
         )
     };
     let mut prompt = format!(
-        "{}\n\nTrusted request context:\nRepository: {}\nPull request: {}\n\
+        "{}\n\n{}\n\nTrusted request context:\nRepository: {}\nPull request: {}\n\
 Head SHA: {}\nReviewer: {}\nReview scope: {}\n\n{}\n",
         input.rule.pipeline.prompt,
+        limits,
         input.pull_request.repository,
         input.pull_request.number,
         input.pull_request.head_sha,
@@ -113,11 +146,12 @@ Discussion since the earlier reviews (untrusted JSON):\n{thread}\n"
 }
 
 /// Builds the plain prompt of a codex-envelope reviewer.
-fn codex_prompt(input: &ReviewInput) -> String {
+fn codex_prompt(input: &ReviewInput, limits: &str) -> String {
     let mut prompt = format!(
-        "{}\n\nTrusted review context:\n- Repository: {}\n- Pull request: #{}\n\
+        "{}\n\n{}\n\nTrusted review context:\n- Repository: {}\n- Pull request: #{}\n\
 - URL: {}\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n- Base branch: {}",
         input.rule.pipeline.prompt,
+        limits,
         input.pull_request.repository,
         input.pull_request.number,
         input.pull_request.url,
@@ -204,6 +238,7 @@ pub(crate) fn compact_schema(schema: &[u8]) -> Result<String, Error> {
 mod tests {
     use crate::model::{Discussion, ReviewScope};
     use crate::protocol::fixtures::{codex, opus, sha, test_input, test_pull_request};
+    use crate::protocol::validate::tests::test_config;
 
     use super::{CLAUDE_REQUEST_PROTOCOL, REVIEW_SCHEMA, build_reviewer_request};
 
@@ -211,8 +246,13 @@ mod tests {
     fn reviewer_requests_carry_the_trusted_context_their_prompt_refers_to() {
         let pr = test_pull_request(9);
         let claude_input = test_input(&opus(), pr.clone());
-        let raw = build_reviewer_request(&claude_input, &opus(), &Discussion::default())
-            .expect("claude request builds");
+        let raw = build_reviewer_request(
+            &test_config(),
+            &claude_input,
+            &opus(),
+            &Discussion::default(),
+        )
+        .expect("claude request builds");
         let request: serde_json::Value =
             serde_json::from_str(&raw).expect("claude request is JSON");
         let prompt = request["prompt"].as_str().expect("prompt is a string");
@@ -228,8 +268,13 @@ mod tests {
             mode: "incremental".to_owned(),
             previous_head_sha: sha("c"),
         };
-        let prompt = build_reviewer_request(&codex_input, &codex(), &Discussion::default())
-            .expect("codex prompt builds");
+        let prompt = build_reviewer_request(
+            &test_config(),
+            &codex_input,
+            &codex(),
+            &Discussion::default(),
+        )
+        .expect("codex prompt builds");
         assert!(
             prompt
                 .contains("Trusted review context:\n- Repository: acme/widget\n- Pull request: #9")
@@ -239,6 +284,54 @@ mod tests {
             "- Trusted previously reviewed head SHA: {}",
             sha("c")
         )));
+    }
+
+    #[test]
+    fn reviewer_requests_state_the_configured_output_limits() {
+        let mut cfg = test_config();
+        cfg.min_summary_characters = 40;
+        cfg.max_summary_characters = 600;
+        cfg.max_title_characters = 120;
+        cfg.max_body_characters = 900;
+        let claude_limits = concat!(
+            "Output limits: the summary has 40 to 600 characters. Each finding has a one-line ",
+            "title of at most 120 characters and a body of at most 900 characters. Each ",
+            "prior_findings note has at most 900 characters. Output outside these limits is ",
+            "refused."
+        );
+        let codex_limits = concat!(
+            "Output limits: the summary has 40 to 600 characters. Each finding has a one-line ",
+            "title of at most 120 characters and a body of at most 900 characters. Output ",
+            "outside these limits is refused."
+        );
+        let pr = test_pull_request(9);
+        let raw = build_reviewer_request(
+            &cfg,
+            &test_input(&opus(), pr.clone()),
+            &opus(),
+            &Discussion::default(),
+        )
+        .expect("claude request builds");
+        let request: serde_json::Value =
+            serde_json::from_str(&raw).expect("claude request is JSON");
+        let prompt = request["prompt"].as_str().expect("prompt is a string");
+        assert!(
+            prompt.contains(&format!(
+                "\n\n{claude_limits}\n\nTrusted request context:\n"
+            )),
+            "claude prompt = {prompt}"
+        );
+        let prompt = build_reviewer_request(
+            &cfg,
+            &test_input(&codex(), pr),
+            &codex(),
+            &Discussion::default(),
+        )
+        .expect("codex prompt builds");
+        assert!(
+            prompt.contains(&format!("\n\n{codex_limits}\n\nTrusted review context:\n")),
+            "codex prompt = {prompt}"
+        );
     }
 
     #[test]

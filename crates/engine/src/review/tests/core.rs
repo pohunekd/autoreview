@@ -300,6 +300,65 @@ async fn reviewer_output_over_the_limits_gets_a_fresh_run() {
     h.stop_engine().await;
 }
 
+/// The most findings with the longest bodies still give a short review body.
+///
+/// Every finding is a note at the body limit, and every reviewer request states the limits.
+#[tokio::test]
+async fn review_with_the_most_findings_keeps_a_short_body() {
+    let mut h = start_harness(|_| {}).await;
+    let cfg = h.config();
+    assert!(
+        cfg.max_findings * cfg.max_body_characters > cfg.github_body_max_bytes,
+        "the note bodies alone must exceed the GitHub body limit"
+    );
+    let count = usize::try_from(cfg.max_findings).expect("the finding limit is positive");
+    let longest = usize::try_from(cfg.max_body_characters).expect("the body limit is positive");
+    let notes: Vec<_> = (1..=count)
+        .map(|line| {
+            json!({
+                "severity": "low", "confidence": "high", "blocking": false, "path": "src/a.go",
+                "line": line, "title": format!("Note {line}"), "body": "n".repeat(longest),
+            })
+        })
+        .collect();
+    let opus = reviewer_output(notes);
+    let sonnet = reviewer_output(Vec::new());
+    h.set_output(move |request: &SessionRequest| {
+        if request.reviewer.id == "sonnet" {
+            sonnet(request)
+        } else {
+            opus(request)
+        }
+    });
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the review with the most findings", || {
+        h.publications() == 1
+    })
+    .await;
+    let (published, _, started, _) = h.fake.snapshot();
+    let body = &published[0].body;
+    assert!(
+        published[0].decision == Decision::Approve
+            && body.contains(&format!("{count} non-blocking note(s)"))
+            && body.contains(&format!("**O{count:03} LOW — Note "))
+            && !body.contains("nnnn")
+            && body.chars().count() < longest,
+        "decision={:?} length={} body={body}",
+        published[0].decision,
+        body.chars().count()
+    );
+    let limits = format!("a body of at most {} characters", cfg.max_body_characters);
+    assert!(
+        started.len() == 2
+            && started
+                .iter()
+                .all(|request| request.prompt.contains(&limits)),
+        "every reviewer request must state the limits: {started:?}"
+    );
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn base_fetch_locked_by_a_concurrent_review_is_retried_on_a_fresh_branch() {
     let mut h = start_harness(|_| {}).await;
