@@ -40,7 +40,11 @@ pub(crate) struct Shutdown;
 /// The session did not start, could not be read, or gave no usable output in time.
 #[derive(Debug, thiserror::Error)]
 #[error("reviewer session failed")]
-pub(crate) struct SessionFault;
+pub(crate) struct SessionFault {
+    /// The error of the failed session read, kept as the diagnostic of the fault.
+    #[source]
+    source: Option<Error>,
+}
 
 /// Returns the error of a review interrupted by an engine shutdown.
 ///
@@ -56,7 +60,19 @@ pub(crate) fn is_shutdown(err: &Error) -> bool {
 
 /// Returns a permanent session failure with `code`, marked as a [`SessionFault`].
 pub(crate) fn session_fault(code: &str) -> Error {
-    Error::workflow(code, true, Some(Box::new(SessionFault)))
+    Error::workflow(code, true, Some(Box::new(SessionFault { source: None })))
+}
+
+/// Returns a permanent session failure with the code of `err`, keeping `err` as its source.
+///
+/// Only the source differs from [`session_fault`]: the code and the permanent flag are the same.
+pub(crate) fn session_fault_from(err: Error) -> Error {
+    let code = error_code(&err).to_owned();
+    Error::workflow(
+        code,
+        true,
+        Some(Box::new(SessionFault { source: Some(err) })),
+    )
 }
 
 /// Reports whether `err` or an error in its chain is a [`SessionFault`].
@@ -95,7 +111,7 @@ fn first_workflow(err: &Error) -> Option<(&str, bool, Option<&BoxError>)> {
 }
 
 /// Converts a Go duration to a wait; a negative one, which Go waits zero for, is zero.
-fn wait_of(value: time::Duration) -> Duration {
+pub(super) fn wait_of(value: time::Duration) -> Duration {
     Duration::try_from(value).unwrap_or(Duration::ZERO)
 }
 
