@@ -370,17 +370,27 @@ fn encode_go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::sync::Arc;
 
     use autoreview_schedule::scheduler::Run;
     use rusqlite::types::Value as SqlValue;
     use serde::Serialize;
     use serde_json::{Value, json};
     use time::OffsetDateTime;
+    use tokio_util::sync::CancellationToken;
 
-    use super::{ReviewFilter, Store};
+    use super::{ReviewFilter, Store, encode_go_json};
+    use crate::engine::{Engine, SystemClock};
+    use crate::model::{PublishResult, ReviewInput};
+    use crate::publish::plan::PublicationPlan;
+    use crate::testing::fake::FakeIntegration;
+    use crate::testing::harness::integration_config;
 
     /// Store golden written by the Go reference, shared with the Go reference tests.
     const STORE_GOLDEN: &str = include_str!("../../../../testdata/parity/store-v1.json");
+
+    /// Go golden of stored values that the current policy does not define.
+    const LENIENT_GOLDEN: &str = include_str!("../../../../testdata/parity/store-lenient.json");
 
     /// Page size of the list reads in `go_store_golden_opens`; the golden holds fewer reviews.
     const GOLDEN_LIST_LIMIT: i64 = 100;
@@ -601,6 +611,81 @@ mod tests {
                 serde_json::from_str::<Value>(state_row["value"].as_str().expect("value"))
                     .expect("golden value is JSON")
             );
+        }
+    }
+
+    /// Reads stored values that the current policy does not define, as Go reads them.
+    ///
+    /// The `reviews` and `review` outputs equal Go's, and every value writes back byte-equal.
+    #[test]
+    fn go_lenient_store_golden_reads_and_writes_back() {
+        let golden: Value = serde_json::from_str(LENIENT_GOLDEN).expect("golden is JSON");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let cfg = integration_config(dir.path());
+        let store = Arc::new(open_store(Path::new(&cfg.state_db_path)));
+        store
+            .in_tx(|transaction| {
+                for table in ["discovery", "reviews", "review_steps"] {
+                    let rows = golden[table].as_array().expect("golden table is an array");
+                    insert_golden_rows(transaction, table, rows);
+                }
+                Ok(())
+            })
+            .expect("golden rows insert");
+        let engine = Engine::new(
+            cfg,
+            Arc::clone(&store),
+            Arc::new(FakeIntegration::new()),
+            SystemClock,
+        );
+
+        let reviews = store
+            .list_reviews(&ReviewFilter::All, GOLDEN_LIST_LIMIT)
+            .expect("reviews read");
+        assert_eq!(to_value(&reviews), golden["api"]["list_reviews"]);
+        let cancel = CancellationToken::new();
+        let status = engine
+            .pull_request_status(&cancel, "acme/legacy", 7)
+            .expect("review status reads");
+        assert_eq!(to_value(&status), golden["api"]["review"]);
+        let waiting = engine
+            .pull_request_status(&cancel, "acme/waiting", 8)
+            .expect("waiting status reads");
+        assert_eq!(to_value(&waiting), golden["api"]["review_waiting"]);
+
+        for row in golden["reviews"].as_array().expect("golden reviews") {
+            let text = row["input"].as_str().expect("input");
+            let input: ReviewInput = serde_json::from_str(text).expect("input reads");
+            assert_eq!(encode_go_json(&input).expect("input encodes"), text);
+        }
+        for row in golden["review_steps"].as_array().expect("golden steps") {
+            let text = row["output"].as_str().expect("output");
+            let encoded = match row["name"].as_str().expect("step name") {
+                "plan" => encode_go_json(
+                    &serde_json::from_str::<PublicationPlan>(text).expect("plan reads"),
+                ),
+                "publication" => encode_go_json(
+                    &serde_json::from_str::<PublishResult>(text).expect("publication reads"),
+                ),
+                other => panic!("golden step {other} has no type here"),
+            };
+            assert_eq!(encoded.expect("step encodes"), text);
+        }
+
+        store
+            .update_discovery(|_, _| Ok(()))
+            .expect("discovery writes back");
+        let connection = store.lock_connection().expect("connection locks");
+        for row in golden["discovery"].as_array().expect("golden discovery") {
+            let name = row["name"].as_str().expect("entry name");
+            let value: String = connection
+                .query_row(
+                    "SELECT value FROM discovery WHERE name = ?1",
+                    [name],
+                    |stored| stored.get(0),
+                )
+                .expect("entry reads");
+            assert_eq!(value, row["value"].as_str().expect("entry value"), "{name}");
         }
     }
 }
