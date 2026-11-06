@@ -227,9 +227,9 @@ struct RouteOverrideFile {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SessionFile {
-    /// Prefix of the review branches. Parsed, not mapped.
+    /// Prefix of the review branches.
     branch_prefix: Option<Value>,
-    /// Prefix of the pohunek session names. Parsed, not mapped.
+    /// Prefix of the pohunek session names.
     name_prefix: Option<Value>,
     /// pohunek-companion group every review session is placed in.
     group: Option<Value>,
@@ -608,8 +608,8 @@ fn map_file(
         None => return Err(missing("pohunek.route_overrides")),
     };
     let session = section(&file.session, "session")?;
-    let _ = text(&session.branch_prefix, "session.branch_prefix")?;
-    let _ = text(&session.name_prefix, "session.name_prefix")?;
+    let session_branch_prefix = text(&session.branch_prefix, "session.branch_prefix")?;
+    let session_name_prefix = text(&session.name_prefix, "session.name_prefix")?;
     let session_group = text(&session.group, "session.group")?;
     let session_timeout = seconds(&session.timeout_seconds, "session.timeout_seconds")?;
     let output_poll_interval =
@@ -800,6 +800,8 @@ fn map_file(
         terminal_cols,
         terminal_rows,
         session_group,
+        session_name_prefix,
+        session_branch_prefix,
     };
     cross_key_rules(file, &config)?;
     Ok(Mapped {
@@ -1182,11 +1184,11 @@ fn secret_value(
 
 /// The Matrix values of the engine configuration.
 struct MatrixShape {
-    /// Homeserver base URL, empty when no level routes to Matrix.
+    /// Homeserver base URL, empty when neither a level nor the queue routes to Matrix.
     homeserver_url: String,
-    /// Access token, empty when no level routes to Matrix.
+    /// Access token, empty when neither a level nor the queue routes to Matrix.
     access_token: String,
-    /// Mentioned user, empty when no level routes to Matrix.
+    /// Mentioned user, empty when neither a level nor the queue routes to Matrix.
     mention_user: String,
     /// The room of each level; empty for a `none` backend.
     rooms: MatrixRooms,
@@ -1759,6 +1761,8 @@ mod tests {
     fn example_maps_to_the_engine_configuration() {
         let config = mapped(EXAMPLE).expect("the example maps");
         assert_eq!(config.session_group, "autoreview");
+        assert_eq!(config.session_name_prefix, "github-review-");
+        assert_eq!(config.session_branch_prefix, "autoreview/review/");
         assert_eq!(config.github_login, "review-bot");
         assert_eq!(config.github_token, "synthetic-token");
         assert_eq!(config.state_db_path, "/var/lib/autoreview/autoreview.db");
@@ -1941,6 +1945,13 @@ mod tests {
             "mention_user until M3"
         );
         let cases = [
+            (
+                0,
+                "https://other.example.org",
+                "AUTOREVIEW_MATRIX_TOKEN",
+                "@you:example.org",
+                "notify.routes.digest",
+            ),
             (
                 1,
                 "https://other.example.org",
