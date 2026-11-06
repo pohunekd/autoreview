@@ -19,6 +19,7 @@ use autoreview_engine::error::{BoxError, Error};
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::IgnoredAny;
+use tokio_util::sync::CancellationToken;
 
 use crate::process::{child_environment, run};
 
@@ -124,6 +125,7 @@ impl GitHub {
     /// `input` is serialized to the child's stdin; `None` gives an empty stdin.
     pub(crate) async fn github<T: Serialize + ?Sized>(
         &self,
+        cancel: &CancellationToken,
         args: &[String],
         input: Option<&T>,
     ) -> Result<String, Error> {
@@ -144,12 +146,19 @@ impl GitHub {
                 .map(|(name, value)| (OsString::from(*name), OsString::from(*value))),
         );
         let environment = child_environment(std::env::vars_os(), extra);
-        let output = run(&self.binary, args, &payload, &environment, self.timeout)
-            .await
-            .map_err(|error| {
-                let (code, permanent) = gh_failure(&error.to_string());
-                Error::workflow(code, permanent, Some(Box::new(error)))
-            })?;
+        let output = run(
+            cancel,
+            &self.binary,
+            args,
+            &payload,
+            &environment,
+            self.timeout,
+        )
+        .await
+        .map_err(|error| {
+            let (code, permanent) = gh_failure(&error.to_string());
+            Error::workflow(code, permanent, Some(Box::new(error)))
+        })?;
         if serde_json::from_str::<IgnoredAny>(&output).is_err() {
             return Err(response_invalid(None));
         }
@@ -158,9 +167,9 @@ impl GitHub {
 
     /// Returns the login of the account behind the GitHub token, in lower case.
     #[expect(dead_code, reason = "called by C01")]
-    pub(crate) async fn viewer_login(&self) -> Result<String, Error> {
+    pub(crate) async fn viewer_login(&self, cancel: &CancellationToken) -> Result<String, Error> {
         let output = self
-            .github::<()>(&["api".to_owned(), "user".to_owned()], None)
+            .github::<()>(cancel, &["api".to_owned(), "user".to_owned()], None)
             .await?;
         decode_viewer_login(&output)
     }

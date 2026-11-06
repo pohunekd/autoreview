@@ -10,6 +10,7 @@ use std::future::Future;
 
 use autoreview_policy::{Checkout, Level, Protocol, Reviewer, Trigger};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use crate::error::Error;
 use crate::model::{
@@ -107,17 +108,25 @@ pub struct ReviewRequestList {
 
 /// The side effects of the review engine: GitHub, pohunek and Matrix.
 ///
-/// Each method returns a `Send` future, so any executor can await it.
+/// Each method returns a `Send` future, so any executor can await it. Each method takes the
+/// caller's cancellation token, as each Go method takes the caller's context.
 pub trait Integrations {
     /// Returns the pull requests the policy covers and the ones whose data was refused.
-    fn list_candidates(&self) -> impl Future<Output = Result<CandidateList, Error>> + Send;
+    fn list_candidates(
+        &self,
+        cancel: &CancellationToken,
+    ) -> impl Future<Output = Result<CandidateList, Error>> + Send;
 
     /// Marks the requesting coding agents' drafts ready for review and returns them.
-    fn ready_drafts(&self) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send;
+    fn ready_drafts(
+        &self,
+        cancel: &CancellationToken,
+    ) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send;
 
     /// Reads a pull request and checks it against the trigger of its rule.
     fn get_pull_request(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         number: i64,
         trigger: &Trigger,
@@ -126,6 +135,7 @@ pub trait Integrations {
     /// Reads a pull request with no trigger check, for notes waiting on their author.
     fn read_pull_request_state(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         number: i64,
     ) -> impl Future<Output = Result<PullRequestState, Error>> + Send;
@@ -133,6 +143,7 @@ pub trait Integrations {
     /// Returns the pohunek host and project that run the reviews of a repository.
     fn resolve_project(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         sources: &[String],
     ) -> impl Future<Output = Result<ProjectRoute, Error>> + Send;
@@ -140,12 +151,14 @@ pub trait Integrations {
     /// Starts the reviewer session, or returns the live session with the same name.
     fn ensure_session(
         &self,
+        cancel: &CancellationToken,
         request: &SessionRequest,
     ) -> impl Future<Output = Result<SessionIdentity, Error>> + Send;
 
     /// Returns the live session of the same name, or `None` when there is none.
     fn find_session(
         &self,
+        cancel: &CancellationToken,
         request: &SessionRequest,
     ) -> impl Future<Output = Result<Option<SessionIdentity>, Error>> + Send;
 
@@ -154,6 +167,7 @@ pub trait Integrations {
     /// `None` means that the reviewer still runs, as Go's `nil` does. The bytes are unconverted.
     fn session_output(
         &self,
+        cancel: &CancellationToken,
         session: &SessionIdentity,
         protocol: Protocol,
     ) -> impl Future<Output = Result<Option<Vec<u8>>, Error>> + Send;
@@ -161,24 +175,28 @@ pub trait Integrations {
     /// Removes a reviewer session and confirms that it is gone.
     fn remove_session_confirmed(
         &self,
+        cancel: &CancellationToken,
         session: &SessionIdentity,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// Returns the lines of the pull request that accept an inline comment.
     fn list_commentable_lines(
         &self,
+        cancel: &CancellationToken,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<CommentableLines, Error>> + Send;
 
     /// Returns the paths of the files the pull request deletes.
     fn list_deleted_files(
         &self,
+        cancel: &CancellationToken,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<Vec<String>, Error>> + Send;
 
     /// Reads the reply threads of the prior findings and the conversation, bounded in size.
     fn list_discussion(
         &self,
+        cancel: &CancellationToken,
         pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> impl Future<Output = Result<Discussion, Error>> + Send;
@@ -186,6 +204,7 @@ pub trait Integrations {
     /// Reports whether `head` extends `previous` by commits that each have one parent.
     fn linear_history(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         previous: &str,
         head: &str,
@@ -194,23 +213,30 @@ pub trait Integrations {
     /// Publishes one review of the pull request and returns what GitHub recorded.
     fn publish_review(
         &self,
+        cancel: &CancellationToken,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send;
 
     /// Sends a notification to the room of `level`.
-    fn notify(&self, level: Level, message: &str)
-    -> impl Future<Output = Result<(), Error>> + Send;
+    fn notify(
+        &self,
+        cancel: &CancellationToken,
+        level: Level,
+        message: &str,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// Returns the open review requests of the configured login, at most `max` of them.
     fn list_review_requests(
         &self,
+        cancel: &CancellationToken,
         max: i64,
     ) -> impl Future<Output = Result<ReviewRequestList, Error>> + Send;
 
     /// Posts a digest of the queue under the transaction ID.
     fn send_queue_digest(
         &self,
+        cancel: &CancellationToken,
         transaction: &str,
         plain: &str,
         formatted: &str,

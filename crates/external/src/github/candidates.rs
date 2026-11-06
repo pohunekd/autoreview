@@ -18,6 +18,7 @@ use autoreview_engine::model::{
 use autoreview_go_compat::null_default;
 use autoreview_policy::{Policy, Rule, TriggerKind};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::pull_request::{GitHubPullRequest, decode_pull_request, ready_draft_id, url_matches};
 use super::{GitHub, graphql_search, response_invalid};
@@ -443,16 +444,22 @@ fn decode_mark_ready_response(output: &str) -> Result<(), Error> {
 impl GitHub {
     /// Returns the pull requests that the policy covers and the ones whose data was refused
     /// (`ListCandidates`).
-    pub(crate) async fn list_candidates(&self, policy: &Policy) -> Result<CandidateList, Error> {
+    pub(crate) async fn list_candidates(
+        &self,
+        cancel: &CancellationToken,
+        policy: &Policy,
+    ) -> Result<CandidateList, Error> {
         let mut found: BTreeMap<String, Candidate> = BTreeMap::new();
         let mut rejected: BTreeMap<String, RejectedCandidate> = BTreeMap::new();
         let scopes = policy.review_request_scopes();
         if !scopes.is_empty() {
-            let requested = self.review_requested_candidates(policy, &scopes).await?;
+            let requested = self
+                .review_requested_candidates(cancel, policy, &scopes)
+                .await?;
             collect(&mut found, &mut rejected, requested);
         }
         for label in policy.labels() {
-            let labelled = self.label_candidates(policy, &label).await?;
+            let labelled = self.label_candidates(cancel, policy, &label).await?;
             collect(&mut found, &mut rejected, labelled);
         }
         let candidates = found.values().cloned().collect();
@@ -474,7 +481,11 @@ impl GitHub {
 
     /// Marks the drafts of the policy's ready-draft authors that ask the login for a review as
     /// ready for review (`ReadyDrafts`).
-    pub(crate) async fn ready_drafts(&self, policy: &Policy) -> Result<Vec<ReadiedDraft>, Error> {
+    pub(crate) async fn ready_drafts(
+        &self,
+        cancel: &CancellationToken,
+        policy: &Policy,
+    ) -> Result<Vec<ReadiedDraft>, Error> {
         let scopes = policy.review_request_scopes();
         let mut readied: Vec<ReadiedDraft> = Vec::new();
         if scopes.is_empty() {
@@ -486,7 +497,7 @@ impl GitHub {
                 "--author".to_owned(),
                 format!("app/{author}"),
             ];
-            let identities = self.search_requested(&scopes, &extra).await?;
+            let identities = self.search_requested(cancel, &scopes, &extra).await?;
             for identity in &identities {
                 let repository = repository_name(&identity.repository).to_ascii_lowercase();
                 let number = identity.number;
@@ -496,12 +507,14 @@ impl GitHub {
                 if rule.trigger.kind != TriggerKind::ReviewRequested {
                     continue;
                 }
-                let raw = self.fetch_pull_request(&repository, number).await?;
+                let raw = self.fetch_pull_request(cancel, &repository, number).await?;
                 let Some(id) = ready_draft_id(&raw, author, &repository, number, &self.login)
                 else {
                     continue;
                 };
-                let output = self.github::<()>(&mark_ready_args(&id), None).await?;
+                let output = self
+                    .github::<()>(cancel, &mark_ready_args(&id), None)
+                    .await?;
                 decode_mark_ready_response(&output)?;
                 tracing::info!(
                     repository = %repository,
@@ -520,20 +533,25 @@ impl GitHub {
     }
 
     /// Searches every repository for requested reviews (`ListReviewRequests`).
-    pub(crate) async fn list_review_requests(&self, max: i64) -> Result<ReviewRequestList, Error> {
+    pub(crate) async fn list_review_requests(
+        &self,
+        cancel: &CancellationToken,
+        max: i64,
+    ) -> Result<ReviewRequestList, Error> {
         let args = list_review_requests_args(max);
-        let output = self.github::<()>(&args, None).await?;
+        let output = self.github::<()>(cancel, &args, None).await?;
         decode_review_request_search(&output, max, &self.host)
     }
 
     /// Runs the review request search of `scopes` with the `extra` flags (`searchRequested`).
     async fn search_requested(
         &self,
+        cancel: &CancellationToken,
         scopes: &[String],
         extra: &[String],
     ) -> Result<Vec<SearchIdentity>, Error> {
         let args = search_requested_args(self.poll_limit, scopes, extra);
-        let output = self.github::<()>(&args, None).await?;
+        let output = self.github::<()>(cancel, &args, None).await?;
         decode_search_identities(&output, self.poll_limit)
     }
 
@@ -541,11 +559,12 @@ impl GitHub {
     /// (`reviewRequestedCandidates`).
     async fn review_requested_candidates(
         &self,
+        cancel: &CancellationToken,
         policy: &Policy,
         scopes: &[String],
     ) -> Result<CandidateList, Error> {
         let identities = self
-            .search_requested(scopes, &["--draft=false".to_owned()])
+            .search_requested(cancel, scopes, &["--draft=false".to_owned()])
             .await?;
         let mut list = CandidateList::default();
         for identity in &identities {
@@ -571,7 +590,7 @@ impl GitHub {
                 continue;
             }
             let outcome = self
-                .get_pull_request(&repository, number, &rule.trigger)
+                .get_pull_request(cancel, &repository, number, &rule.trigger)
                 .await;
             classify(&mut list, &repository, number, rule, outcome)?;
         }
@@ -580,13 +599,18 @@ impl GitHub {
 
     /// Returns the candidates of one label trigger, reading the label search page by page
     /// (`labelCandidates`).
-    async fn label_candidates(&self, policy: &Policy, name: &str) -> Result<CandidateList, Error> {
+    async fn label_candidates(
+        &self,
+        cancel: &CancellationToken,
+        policy: &Policy,
+        name: &str,
+    ) -> Result<CandidateList, Error> {
         let query = label_search_query(policy, name);
         let mut after = String::new();
         let mut list = CandidateList::default();
         for _ in 0..self.search_page_limit {
             let args = label_search_args(&query, &after);
-            let output = self.github::<()>(&args, None).await?;
+            let output = self.github::<()>(cancel, &args, None).await?;
             let page = decode_label_search_page(&output)?;
             for node in &page.nodes {
                 let (repository, number) = node.repository_and_number();

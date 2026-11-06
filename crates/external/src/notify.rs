@@ -16,6 +16,7 @@ use autoreview_policy::Level;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode, Url};
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
 /// Prefix of the transaction IDs that the engine generates for its messages.
 const TRANSACTION_PREFIX: &str = "notify-";
@@ -310,21 +311,24 @@ fn encode<T: Serialize + ?Sized>(content: &T) -> Result<Vec<u8>, Error> {
 async fn send_matrix(
     client: &Client,
     matrix: &Matrix,
+    cancel: &CancellationToken,
     level: Level,
     message: &str,
 ) -> Result<(), Error> {
     let transaction = matrix_transaction_id()?;
     let request = matrix_request(matrix, level, message, &transaction)?;
-    put_matrix_message(client, matrix, request).await
+    put_matrix_message(client, matrix, cancel, request).await
 }
 
 /// Sends one event with a PUT and maps the answer to Go's error codes.
 ///
 /// The response body is not read. A transport failure keeps only the fixed cause, because the
-/// transport's error text can carry the request URL.
+/// transport's error text can carry the request URL. A cancelled `cancel` is such a failure:
+/// the request is not sent, or it is dropped in flight, as Go's request context does.
 async fn put_matrix_message(
     client: &Client,
     matrix: &Matrix,
+    cancel: &CancellationToken,
     request: MatrixRequest,
 ) -> Result<(), Error> {
     let endpoint = format!(
@@ -334,15 +338,18 @@ async fn put_matrix_message(
     );
     let url = Url::parse(&endpoint)
         .map_err(|error| Error::workflow("matrix_request_invalid", true, Some(Box::new(error))))?;
-    let response = client
+    let sent = client
         .put(url)
         .timeout(matrix.timeout)
         .header(CONTENT_TYPE, "application/json")
         .header(AUTHORIZATION, format!("Bearer {}", matrix.access_token))
         .body(request.content)
-        .send()
+        .send();
+    let response = cancel
+        .run_until_cancelled(sent)
         .await
-        .map_err(|_| {
+        .and_then(Result::ok)
+        .ok_or_else(|| {
             Error::workflow(
                 "matrix_unavailable",
                 false,
@@ -372,10 +379,11 @@ fn response_result(status: StatusCode) -> Result<(), Error> {
 pub(crate) async fn notify(
     client: &Client,
     matrix: &Matrix,
+    cancel: &CancellationToken,
     level: Level,
     message: &str,
 ) -> Result<(), Error> {
-    match send_matrix(client, matrix, level, message).await {
+    match send_matrix(client, matrix, cancel, level, message).await {
         Ok(()) => Ok(()),
         Err(error) => drop_if_muted(level, error),
     }
@@ -402,12 +410,13 @@ fn drop_if_muted(level: Level, error: Error) -> Result<(), Error> {
 pub(crate) async fn send_queue_digest(
     client: &Client,
     matrix: &Matrix,
+    cancel: &CancellationToken,
     transaction: &str,
     plain: &str,
     formatted: &str,
 ) -> Result<(), Error> {
     let request = queue_digest_request(matrix, transaction, plain, formatted)?;
-    put_matrix_message(client, matrix, request).await
+    put_matrix_message(client, matrix, cancel, request).await
 }
 
 /// Returns the name of `level` as the log line carries it.

@@ -17,6 +17,7 @@ use autoreview_engine::model::{
 };
 use autoreview_policy::{Level, Policy, Protocol, Trigger};
 use reqwest::Client;
+use tokio_util::sync::CancellationToken;
 
 use crate::github::GitHub;
 use crate::notify::{self, Matrix};
@@ -27,7 +28,10 @@ const POLICY_KEY: &str = "policy_file";
 
 /// The [`Integrations`] of the engine: GitHub, pohunek and Matrix.
 ///
-/// The tokens of the configuration are left out of the `Debug` output.
+/// The tokens of the configuration are left out of the `Debug` output. Once the token of a call
+/// is cancelled, the call starts no child process or request, and one in flight is stopped.
+/// `ensure_session` still reads the session list after a start and removes a rejected session,
+/// as Go does with `context.WithoutCancel`.
 #[derive(Debug)]
 pub struct External {
     /// The engine configuration without its policy; the pohunek calls read their settings here.
@@ -90,48 +94,57 @@ impl External {
 }
 
 impl Integrations for External {
-    async fn list_candidates(&self) -> Result<CandidateList, Error> {
-        self.github.list_candidates(&self.policy).await
+    async fn list_candidates(&self, cancel: &CancellationToken) -> Result<CandidateList, Error> {
+        self.github.list_candidates(cancel, &self.policy).await
     }
 
-    async fn ready_drafts(&self) -> Result<Vec<ReadiedDraft>, Error> {
-        self.github.ready_drafts(&self.policy).await
+    async fn ready_drafts(&self, cancel: &CancellationToken) -> Result<Vec<ReadiedDraft>, Error> {
+        self.github.ready_drafts(cancel, &self.policy).await
     }
 
     async fn get_pull_request(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         number: i64,
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
         self.github
-            .get_pull_request(repository, number, trigger)
+            .get_pull_request(cancel, repository, number, trigger)
             .await
     }
 
     async fn read_pull_request_state(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         number: i64,
     ) -> Result<PullRequestState, Error> {
         self.github
-            .read_pull_request_state(repository, number)
+            .read_pull_request_state(cancel, repository, number)
             .await
     }
 
     async fn resolve_project(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         sources: &[String],
     ) -> Result<ProjectRoute, Error> {
-        pohunek::resolve_project(&self.config, repository, sources).await
+        pohunek::resolve_project(&self.config, cancel, repository, sources).await
     }
 
-    async fn ensure_session(&self, request: &SessionRequest) -> Result<SessionIdentity, Error> {
+    async fn ensure_session(
+        &self,
+        cancel: &CancellationToken,
+        request: &SessionRequest,
+    ) -> Result<SessionIdentity, Error> {
+        // Go removes a rejected session with `context.WithoutCancel` (`pohunek.go:208`).
         let remove = |session: SessionIdentity| async move {
-            output::remove_session_confirmed(&self.config, &session).await
+            output::remove_session_confirmed(&self.config, &CancellationToken::new(), &session)
+                .await
         };
-        sessions::ensure_session(&self.config, request, &remove).await
+        sessions::ensure_session(&self.config, cancel, request, &remove).await
     }
 
     /// Returns the session of the request's name, or `None` when there is none.
@@ -140,9 +153,10 @@ impl Integrations for External {
     /// it finds and drops the error of the lookup (`cmd/autoreview/review.go:366-369`).
     async fn find_session(
         &self,
+        cancel: &CancellationToken,
         request: &SessionRequest,
     ) -> Result<Option<SessionIdentity>, Error> {
-        match sessions::find_session(&self.config, request).await? {
+        match sessions::find_session(&self.config, cancel, request).await? {
             sessions::Lookup::Absent => Ok(None),
             sessions::Lookup::Owned(identity) | sessions::Lookup::Unhealthy(identity, _) => {
                 Ok(Some(identity))
@@ -152,68 +166,108 @@ impl Integrations for External {
 
     async fn session_output(
         &self,
+        cancel: &CancellationToken,
         session: &SessionIdentity,
         protocol: Protocol,
     ) -> Result<Option<Vec<u8>>, Error> {
-        output::session_output(&self.config, session, protocol).await
+        output::session_output(&self.config, cancel, session, protocol).await
     }
 
-    async fn remove_session_confirmed(&self, session: &SessionIdentity) -> Result<(), Error> {
-        output::remove_session_confirmed(&self.config, session).await
+    async fn remove_session_confirmed(
+        &self,
+        cancel: &CancellationToken,
+        session: &SessionIdentity,
+    ) -> Result<(), Error> {
+        output::remove_session_confirmed(&self.config, cancel, session).await
     }
 
     async fn list_commentable_lines(
         &self,
+        cancel: &CancellationToken,
         pull_request: &PullRequest,
     ) -> Result<CommentableLines, Error> {
-        self.github.commentable_lines(pull_request).await
+        self.github.commentable_lines(cancel, pull_request).await
     }
 
-    async fn list_deleted_files(&self, pull_request: &PullRequest) -> Result<Vec<String>, Error> {
-        self.github.deleted_files(pull_request).await
+    async fn list_deleted_files(
+        &self,
+        cancel: &CancellationToken,
+        pull_request: &PullRequest,
+    ) -> Result<Vec<String>, Error> {
+        self.github.deleted_files(cancel, pull_request).await
     }
 
     async fn list_discussion(
         &self,
+        cancel: &CancellationToken,
         pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> Result<Discussion, Error> {
         self.github
-            .list_discussion(pull_request, prior, self.config.max_discussion_characters)
+            .list_discussion(
+                cancel,
+                pull_request,
+                prior,
+                self.config.max_discussion_characters,
+            )
             .await
     }
 
     async fn linear_history(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         previous: &str,
         head: &str,
     ) -> Result<bool, Error> {
-        self.github.linear_history(repository, previous, head).await
+        self.github
+            .linear_history(cancel, repository, previous, head)
+            .await
     }
 
     async fn publish_review(
         &self,
+        cancel: &CancellationToken,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> Result<PublishResult, Error> {
-        self.github.publish_review(pull_request, review).await
+        self.github
+            .publish_review(cancel, pull_request, review)
+            .await
     }
 
-    async fn notify(&self, level: Level, message: &str) -> Result<(), Error> {
-        notify::notify(&self.http, &self.matrix, level, message).await
+    async fn notify(
+        &self,
+        cancel: &CancellationToken,
+        level: Level,
+        message: &str,
+    ) -> Result<(), Error> {
+        notify::notify(&self.http, &self.matrix, cancel, level, message).await
     }
 
-    async fn list_review_requests(&self, max: i64) -> Result<ReviewRequestList, Error> {
-        self.github.list_review_requests(max).await
+    async fn list_review_requests(
+        &self,
+        cancel: &CancellationToken,
+        max: i64,
+    ) -> Result<ReviewRequestList, Error> {
+        self.github.list_review_requests(cancel, max).await
     }
 
     async fn send_queue_digest(
         &self,
+        cancel: &CancellationToken,
         transaction: &str,
         plain: &str,
         formatted: &str,
     ) -> Result<(), Error> {
-        notify::send_queue_digest(&self.http, &self.matrix, transaction, plain, formatted).await
+        notify::send_queue_digest(
+            &self.http,
+            &self.matrix,
+            cancel,
+            transaction,
+            plain,
+            formatted,
+        )
+        .await
     }
 }

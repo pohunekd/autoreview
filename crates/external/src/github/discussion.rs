@@ -19,6 +19,7 @@ use autoreview_engine::model::{
 };
 use autoreview_go_compat::null_default;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::{GitHub, response_invalid};
 
@@ -530,12 +531,13 @@ impl GitHub {
     /// Comment bodies share `max_characters` characters, and the threads take them first.
     pub(crate) async fn list_discussion(
         &self,
+        cancel: &CancellationToken,
         pull_request: &PullRequest,
         prior: &[PriorFinding],
         max_characters: i64,
     ) -> Result<Discussion, Error> {
         read_discussion(
-            |args: Vec<String>| async move { self.github::<()>(&args, None).await },
+            |args: Vec<String>| async move { self.github::<()>(cancel, &args, None).await },
             pull_request,
             prior,
             max_characters,
@@ -551,12 +553,13 @@ impl GitHub {
     /// heads something other than the author's own change.
     pub(crate) async fn linear_history(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         previous: &str,
         head: &str,
     ) -> Result<bool, Error> {
         read_linear_history(
-            |args: Vec<String>| async move { self.github::<()>(&args, None).await },
+            |args: Vec<String>| async move { self.github::<()>(cancel, &args, None).await },
             repository,
             previous,
             head,

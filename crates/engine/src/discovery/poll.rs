@@ -102,7 +102,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         force: Option<&RetryRequest>,
     ) -> Result<PollResult, Error> {
         // A failure here leaves the drafts for the next pass and holds up no other review.
-        if let Err(err) = self.integration.ready_drafts().await
+        if let Err(err) = self.integration.ready_drafts(cancel).await
             && !cancel.is_cancelled()
         {
             tracing::warn!(
@@ -111,7 +111,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             );
         }
         let listed = retry_step(self.step_policy(), &self.clock, cancel, || {
-            self.integration.list_candidates()
+            self.integration.list_candidates(cancel)
         })
         .await?;
         live(cancel)?;
@@ -185,7 +185,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 let sources = &candidate.rule.pipeline.project_sources;
                 match self
                     .integration
-                    .resolve_project(&pr.repository, sources)
+                    .resolve_project(cancel, &pr.repository, sources)
                     .await
                 {
                     Err(err) if cancel.is_cancelled() => return Err(err),
@@ -282,6 +282,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             } else {
                 let read = retry_step(self.step_policy(), &self.clock, cancel, || {
                     self.integration.get_pull_request(
+                        cancel,
                         &record.repository,
                         record.number,
                         &record.trigger,
@@ -339,7 +340,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             };
             let read = retry_step(self.step_policy(), &self.clock, cancel, || {
                 self.integration
-                    .read_pull_request_state(&record.repository, record.number)
+                    .read_pull_request_state(cancel, &record.repository, record.number)
             })
             .await;
             match read {

@@ -15,8 +15,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
-use crate::error::Error;
+use crate::error::{Error, WORKFLOW_FAILED};
 use crate::integrations::{
     CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft, ReviewRequest,
     ReviewRequestList, SessionRequest,
@@ -219,7 +220,10 @@ impl FakeState {
 }
 
 impl Integrations for FakeIntegration {
-    fn list_candidates(&self) -> impl Future<Output = Result<CandidateList, Error>> + Send {
+    fn list_candidates(
+        &self,
+        _cancel: &CancellationToken,
+    ) -> impl Future<Output = Result<CandidateList, Error>> + Send {
         let result = {
             let mut state = self.lock();
             state.listings += 1;
@@ -237,12 +241,16 @@ impl Integrations for FakeIntegration {
         ready(result)
     }
 
-    fn ready_drafts(&self) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send {
+    fn ready_drafts(
+        &self,
+        _cancel: &CancellationToken,
+    ) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send {
         ready(Ok(Vec::new()))
     }
 
     fn get_pull_request(
         &self,
+        _cancel: &CancellationToken,
         repository: &str,
         number: i64,
         _trigger: &Trigger,
@@ -265,6 +273,7 @@ impl Integrations for FakeIntegration {
 
     fn read_pull_request_state(
         &self,
+        _cancel: &CancellationToken,
         repository: &str,
         number: i64,
     ) -> impl Future<Output = Result<PullRequestState, Error>> + Send {
@@ -289,6 +298,7 @@ impl Integrations for FakeIntegration {
 
     fn resolve_project(
         &self,
+        _cancel: &CancellationToken,
         _repository: &str,
         _sources: &[String],
     ) -> impl Future<Output = Result<ProjectRoute, Error>> + Send {
@@ -300,6 +310,7 @@ impl Integrations for FakeIntegration {
 
     fn ensure_session(
         &self,
+        _cancel: &CancellationToken,
         request: &SessionRequest,
     ) -> impl Future<Output = Result<SessionIdentity, Error>> + Send {
         let result = {
@@ -362,6 +373,7 @@ impl Integrations for FakeIntegration {
 
     fn find_session(
         &self,
+        _cancel: &CancellationToken,
         _request: &SessionRequest,
     ) -> impl Future<Output = Result<Option<SessionIdentity>, Error>> + Send {
         ready(Ok(None))
@@ -369,6 +381,7 @@ impl Integrations for FakeIntegration {
 
     fn session_output(
         &self,
+        _cancel: &CancellationToken,
         session: &SessionIdentity,
         _protocol: Protocol,
     ) -> impl Future<Output = Result<Option<Vec<u8>>, Error>> + Send {
@@ -395,8 +408,18 @@ impl Integrations for FakeIntegration {
 
     fn remove_session_confirmed(
         &self,
+        cancel: &CancellationToken,
         session: &SessionIdentity,
     ) -> impl Future<Output = Result<(), Error>> + Send {
+        // Like the host, it fails once the token is cancelled, so a stopping engine keeps its
+        // reviewer sessions.
+        if cancel.is_cancelled() {
+            return ready(Err(Error::workflow(
+                WORKFLOW_FAILED,
+                false,
+                Some("context canceled".into()),
+            )));
+        }
         let result = {
             let mut state = self.lock();
             if state.remove_failing.contains(&session.session_id) {
@@ -416,6 +439,7 @@ impl Integrations for FakeIntegration {
 
     fn list_commentable_lines(
         &self,
+        _cancel: &CancellationToken,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<CommentableLines, Error>> + Send {
         let result = {
@@ -427,6 +451,7 @@ impl Integrations for FakeIntegration {
 
     fn list_deleted_files(
         &self,
+        _cancel: &CancellationToken,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<Vec<String>, Error>> + Send {
         let result = {
@@ -439,6 +464,7 @@ impl Integrations for FakeIntegration {
 
     fn list_discussion(
         &self,
+        _cancel: &CancellationToken,
         _pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> impl Future<Output = Result<Discussion, Error>> + Send {
@@ -452,6 +478,7 @@ impl Integrations for FakeIntegration {
 
     fn linear_history(
         &self,
+        _cancel: &CancellationToken,
         _repository: &str,
         _previous: &str,
         head: &str,
@@ -465,6 +492,7 @@ impl Integrations for FakeIntegration {
 
     fn publish_review(
         &self,
+        _cancel: &CancellationToken,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send {
@@ -498,6 +526,7 @@ impl Integrations for FakeIntegration {
 
     fn list_review_requests(
         &self,
+        _cancel: &CancellationToken,
         max: i64,
     ) -> impl Future<Output = Result<ReviewRequestList, Error>> + Send {
         let result = {
@@ -519,6 +548,7 @@ impl Integrations for FakeIntegration {
 
     fn send_queue_digest(
         &self,
+        _cancel: &CancellationToken,
         transaction: &str,
         plain: &str,
         formatted: &str,
@@ -543,6 +573,7 @@ impl Integrations for FakeIntegration {
 
     fn notify(
         &self,
+        _cancel: &CancellationToken,
         level: Level,
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {

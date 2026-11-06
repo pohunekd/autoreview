@@ -120,8 +120,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 let output = self
                     .fresh(|| {
                         let integration = &*self.engine.integration;
+                        let cancel = &self.cancel;
                         let session = session.clone();
-                        async move { integration.session_output(&session, protocol).await }
+                        async move { integration.session_output(cancel, &session, protocol).await }
                     })
                     .await;
                 let output = match output {
