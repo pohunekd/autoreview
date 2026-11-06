@@ -14,9 +14,11 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use autoreview_engine::config::Config;
+use autoreview_engine::config::{Config, identifier_valid};
 use autoreview_engine::integrations::Integrations;
-use autoreview_engine::model::repository_valid;
+use autoreview_engine::model::{
+    ApproveRequest, ResolveRequest, RetryRequest, head_prefix_valid, repository_valid, sha_valid,
+};
 use autoreview_engine::store::{ReviewFilter, Store};
 use autoreview_engine::{
     BoxError, Engine, Error, SystemClock, WORKFLOW_FAILED, error_code, go_json,
@@ -89,6 +91,12 @@ enum EngineCommand {
     Serve,
     /// Runs one discovery pass and prints what it queued.
     Poll,
+    /// Starts a new attempt of a stopped review.
+    Retry(ReviewArguments),
+    /// Prints the full head of the review awaiting approval at a head prefix.
+    Resolve(ReviewArguments),
+    /// Approves a clean review that waits for a human.
+    Approve(ReviewArguments),
     /// Prints the reviews that wait for a human approval.
     Awaiting,
     /// Sends the review queue digest and prints it.
@@ -231,6 +239,42 @@ async fn run_engine(
     match command {
         EngineCommand::Serve => serve(&engine, &external, &github_login, cancel).await,
         EngineCommand::Poll => print_json(&engine.poll(cancel).await?),
+        EngineCommand::Retry(arguments) => {
+            let (repository, number, head_sha) = review_arguments(&arguments.arguments, true)?;
+            let request = RetryRequest {
+                repository,
+                number,
+                head_sha,
+            };
+            print_json(&engine.retry(cancel, &request).await?)
+        }
+        EngineCommand::Resolve(arguments) => {
+            let (repository, number, head_prefix) = review_arguments(&arguments.arguments, true)?;
+            let request = ResolveRequest {
+                repository,
+                number,
+                head_prefix,
+            };
+            print_json(&engine.resolve(cancel, &request)?)
+        }
+        EngineCommand::Approve(arguments) => {
+            let (repository, number, head_sha) = review_arguments(&arguments.arguments, false)?;
+            let resolve = ResolveRequest {
+                repository: repository.clone(),
+                number,
+                head_prefix: head_sha.clone(),
+            };
+            let resolved = engine.resolve(cancel, &resolve)?;
+            if resolved.head_sha != head_sha || !identifier_valid(&resolved.workflow_id) {
+                return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
+            }
+            let request = ApproveRequest {
+                repository,
+                number,
+                head_sha,
+            };
+            print_json(&engine.approve(cancel, &resolved.workflow_id, &request)?)
+        }
         EngineCommand::Awaiting => print_json(&engine.list_awaiting(cancel)?),
         EngineCommand::ReviewQueue => print_json(&engine.review_queue(cancel).await?),
         EngineCommand::Reviews { limit } => {
@@ -298,6 +342,34 @@ fn cancel_on_signal(cancel: CancellationToken) -> Result<(), Error> {
         cancel.cancel();
     });
     Ok(())
+}
+
+/// Reads `--repository OWNER/REPO NUMBER HEAD`, as `main.go:178-198` does.
+///
+/// With `prefix`, HEAD may be an abbreviated head of at least 12 characters.
+///
+/// # Errors
+///
+/// Returns `repository_not_allowed`, `command_invalid` when not exactly two positional
+/// arguments remain, and `review_identity_invalid` for a bad number or head.
+fn review_arguments(arguments: &[String], prefix: bool) -> Result<(String, i64, String), Error> {
+    let (repository, positional) = split_repository(arguments);
+    if !repository_valid(&repository) {
+        return Err(Error::workflow(REPOSITORY_NOT_ALLOWED, true, None));
+    }
+    let [number, head] = positional.as_slice() else {
+        return Err(command_invalid(None));
+    };
+    let number = parse_number(number);
+    let head_valid = if prefix {
+        head_prefix_valid(head)
+    } else {
+        sha_valid(head)
+    };
+    match number {
+        Some(number) if head_valid => Ok((repository, number, (*head).to_owned())),
+        _ => Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None)),
+    }
 }
 
 /// Reads `--repository OWNER/REPO NUMBER`, as `main.go:200-213` does.
