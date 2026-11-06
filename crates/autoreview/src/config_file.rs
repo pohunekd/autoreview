@@ -4,6 +4,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use autoreview_engine::Error;
-use autoreview_engine::config::{Config, MatrixRooms, RouteOverride};
+use autoreview_engine::config::{Config, MatrixRooms, RouteOverride, SECRET_ENV_PREFIX};
 use autoreview_policy::Policy;
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -29,8 +30,6 @@ const CONFIG_FLAG: &str = "--config";
 const CONFIG_ENV: &str = "AUTOREVIEW_CONFIG";
 /// The only `version` this loader reads.
 const CONFIG_VERSION: i64 = 1;
-/// Prefix that every `*_env` variable name must start with.
-const SECRET_ENV_PREFIX: &str = "AUTOREVIEW_";
 /// Longest debounce the scheduler accepts, in seconds.
 const DEBOUNCE_SECONDS_MAX: i64 = 600;
 /// Most retry delays the scheduler accepts.
@@ -489,8 +488,8 @@ fn environment_secret(name: &str) -> Option<String> {
 ///
 /// Returns `configuration_missing` for an absent key, `configuration_invalid` for a key whose
 /// value
-/// is out of range or of the wrong kind, and the engine's validation error for a mapped value that
-/// the engine rejects.
+/// is out of range or of the wrong kind or for a review queue without a Matrix backend, and the
+/// engine's validation error for a mapped value that the engine rejects.
 pub(crate) fn parse(
     text: &str,
     secret: impl Fn(&str) -> Option<String>,
@@ -498,6 +497,14 @@ pub(crate) fn parse(
 ) -> Result<Config, Error> {
     let file = parse_file(text)?;
     let config = to_config(&file, &secret, load_policy)?;
+    // The queue posts only to Matrix until M3. `to_config` maps a `none` queue to an empty room,
+    // so the shipped example, whose backends are all `none`, still maps.
+    if config.queue_matrix_room.is_empty() {
+        return Err(invalid(
+            "notify.review_queue.backends",
+            "none is not supported for the review queue",
+        ));
+    }
     config.validate()?;
     Ok(config)
 }
@@ -540,6 +547,12 @@ pub(crate) fn to_config(
     }
     let policy = load_policy(Path::new(policy_path.as_str()))
         .map_err(|error| Error::config(CONFIGURATION_INVALID, "policy_file", Some(error)))?;
+    // Every `*_env` value is read through `recorded`, so the names cover each configured secret.
+    let secret_variables = RefCell::new(BTreeSet::new());
+    let recorded = |name: &str| {
+        secret_variables.borrow_mut().insert(name.to_owned());
+        secret(name)
+    };
     let schedule_file = section(&file.schedule, "schedule")?;
     let schedule = scheduler_policy(
         &schedule_file.debounce_seconds,
@@ -554,7 +567,7 @@ pub(crate) fn to_config(
         "github.credential_check_hours",
     )?;
     let _ = positive(&github.expiry_warning_days, "github.expiry_warning_days")?;
-    let credentials = github_credentials(&github.credentials, secret)?;
+    let credentials = github_credentials(&github.credentials, &recorded)?;
     let (github_login, github_token) = single_credential(&credentials)?;
     let pohunek = section(&file.pohunek, "pohunek")?;
     let pohunek_bin = text(&pohunek.bin, "pohunek.bin")?;
@@ -689,7 +702,7 @@ pub(crate) fn to_config(
     let notify = section(&file.notify, "notify")?;
     let matrix_timeout = seconds(&notify.timeout_seconds, "notify.timeout_seconds")?;
     let matrix_max_characters = positive(&notify.max_characters, "notify.max_characters")?;
-    let backends = notify_backends(&notify.backends, secret)?;
+    let backends = notify_backends(&notify.backends, &recorded)?;
     let routes = section(&notify.routes, "notify.routes")?;
     let review_queue = section(&notify.review_queue, "notify.review_queue")?;
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
@@ -709,6 +722,7 @@ pub(crate) fn to_config(
         route_overrides,
         matrix_homeserver_url: shape.homeserver_url,
         matrix_access_token: shape.access_token,
+        secret_variables: secret_variables.take(),
         matrix_mention_user: shape.mention_user,
         matrix_rooms: shape.rooms,
         queue_matrix_room: shape.queue_room,
@@ -1234,14 +1248,17 @@ fn level_room<'a>(
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming `notify.review_queue.backends` for a webhook, a
-/// second Matrix backend, or a Matrix backend whose identity differs from the routes.
+/// Returns `configuration_invalid` naming `notify.review_queue.backends` for an empty list, a
+/// webhook, a second Matrix backend, or a Matrix backend whose identity differs from the routes.
 fn queue_room<'a>(
     backends: &'a [Backend],
     names: &[String],
     matrix: &mut Option<&'a Backend>,
 ) -> Result<String, Error> {
     let key = "notify.review_queue.backends";
+    if names.is_empty() {
+        return Err(invalid(key, "must name at least one backend"));
+    }
     let mut queue: Option<&Backend> = None;
     for name in names {
         let backend = find_backend(backends, name, key)?;
