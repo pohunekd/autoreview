@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+"""Converts the environment file of the Go engine into config.yaml for the Rust binary.
+
+Run as `python3 -I scripts/env-to-config CONFIG_OUT --settings-env FILE [--settings-env FILE |
+--secrets-env FILE]...`, naming the `EnvironmentFile=` lines of the Go engine's unit in the
+unit's order; a later file wins, as in systemd. A settings file holds the
+`HERMES_PR_REVIEW_*` variables, and an unknown variable there stops the script. A secrets
+file, such as one shared by several services, is read only for GH_TOKEN,
+MATRIX_ACCESS_TOKEN, MATRIX_HOMESERVER, the AUTOREVIEW_ copies and `HERMES_PR_REVIEW_*`; for
+any other assignment only the end of its value is checked, so that a quote or a backslash
+cannot carry it into the next line, and the value is never decoded or kept. Every other line
+of every file must be in a strict subset of the systemd syntax. Every `HERMES_PR_REVIEW_*`
+variable is mapped to its config.yaml key, and CONFIG_OUT is written with mode 0600. An
+existing file is never overwritten.
+
+Secrets stay in the environment files. The script checks only that GH_TOKEN and
+MATRIX_ACCESS_TOKEN are assigned and that each value ends on its line; it never decodes,
+prints or writes a secret value.
+config.yaml names AUTOREVIEW_GH_TOKEN and AUTOREVIEW_MATRIX_TOKEN, because the Rust loader
+accepts only `*_env` names that start with AUTOREVIEW_; the service sets them at start or the
+files hold them. One Matrix backend is written per distinct room.
+
+Every finding names the variable, or the file and line number when the line has no name,
+and never shows a value. The script exits 1 on the first finding and 2 on a usage error.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+
+PREFIX = "HERMES_PR_REVIEW_"
+LINE = re.compile(rb"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
+INTEGER = re.compile(r"[+-]?[0-9]+")
+# Go's strconv.Atoi parses into a 64-bit int.
+INT64_MAX = (1 << 63) - 1
+# Go multiplies by time.Second or time.Millisecond into a 64-bit Duration, which wraps.
+SECONDS_MAX = INT64_MAX // 1_000_000_000
+MILLISECONDS_MAX = INT64_MAX // 1_000_000
+# Go's strings.TrimSpace removes unicode.IsSpace runes.
+GO_SPACE = frozenset("\t\n\v\f\r \x85\xa0     　") | frozenset(
+    chr(code) for code in range(0x2000, 0x200B)
+)
+# Go's validateSignature (cmd/autoreview/config.go:346) requires this text.
+AI_SIGNED_TEXT = "Written by AI:"
+
+GH_TOKEN = "GH_TOKEN"
+MATRIX_HOMESERVER = "MATRIX_HOMESERVER"
+MATRIX_ACCESS_TOKEN = "MATRIX_ACCESS_TOKEN"
+GH_TOKEN_COPY = "AUTOREVIEW_GH_TOKEN"
+MATRIX_TOKEN_COPY = "AUTOREVIEW_MATRIX_TOKEN"
+SECRETS = (GH_TOKEN, MATRIX_ACCESS_TOKEN, GH_TOKEN_COPY, MATRIX_TOKEN_COPY)
+# Notification levels and their room variables; one Matrix backend is written per distinct
+# room, named after the first level that uses it.
+LEVELS = (
+    ("action", PREFIX + "MATRIX_ACTION_ROOM"),
+    ("digest", PREFIX + "MATRIX_DIGEST_ROOM"),
+    ("log", PREFIX + "MATRIX_LOG_ROOM"),
+    ("queue", PREFIX + "QUEUE_MATRIX_ROOM"),
+)
+
+# Variables in the order of Go's loadConfig (cmd/autoreview/config.go:188-279), with the kind
+# of value and the config.yaml key; None is a value placed by hand in render().
+VARIABLES = (
+    ("POLICY_FILE", "text", "policy_file"),
+    ("DEBOUNCE_SECONDS", "integer", "schedule.debounce_seconds"),
+    ("RETRY_DELAYS_SECONDS_JSON", "delays", "schedule.retry_delays_seconds"),
+    ("GITHUB_HOST", "text", "github.host"),
+    ("GITHUB_LOGIN", "text", None),
+    (GH_TOKEN, "secret", None),
+    ("GH_BIN", "text", "github.gh_bin"),
+    ("POHUNEK_BIN", "text", "pohunek.bin"),
+    ("POHUNEK_STATE_HOME", "text", "pohunek.state_home"),
+    ("POHUNEK_RUNTIME_DIR", "text", "pohunek.runtime_dir"),
+    (MATRIX_HOMESERVER, "text", None),
+    (MATRIX_ACCESS_TOKEN, "secret", None),
+    ("MATRIX_MENTION_USER", "text", None),
+    ("STATE_DB_PATH", "text", "store.path"),
+    ("AI_SIGNATURE", "text", "publish.signature"),
+    ("QUEUE_MATRIX_ROOM", "text", None),
+    ("SESSION_GROUP", "text", "session.group"),
+    ("POHUNEK_HOSTS_JSON", "hosts", "pohunek.hosts"),
+    ("ROUTE_OVERRIDES_JSON", "routes", "pohunek.route_overrides"),
+    ("MATRIX_ACTION_ROOM", "text", None),
+    ("MATRIX_DIGEST_ROOM", "text", None),
+    ("MATRIX_LOG_ROOM", "text", None),
+    ("GH_TIMEOUT_SECONDS", "seconds", "github.timeout_seconds"),
+    ("POHUNEK_TIMEOUT_SECONDS", "seconds", "pohunek.timeout_seconds"),
+    ("MATRIX_TIMEOUT_SECONDS", "seconds", "notify.timeout_seconds"),
+    ("SESSION_TIMEOUT_SECONDS", "seconds", "session.timeout_seconds"),
+    ("OUTPUT_POLL_SECONDS", "seconds", "session.output_poll_seconds"),
+    ("SESSION_START_RETRY_SECONDS", "seconds", "session.start_retry_seconds"),
+    ("SESSION_CLEANUP_RETRY_SECONDS", "seconds", "session.cleanup_retry_seconds"),
+    ("REVIEWER_RUN_RETRY_SECONDS", "seconds", "session.reviewer_run_retry_seconds"),
+    ("PUBLISHED_RETENTION_SECONDS", "seconds", "store.published_retention_seconds"),
+    ("STEP_RETRY_SECONDS", "seconds", "schedule.step_retry_seconds"),
+    ("STEP_RETRY_INITIAL_SECONDS", "seconds", "schedule.step_retry_initial_seconds"),
+    ("STEP_RETRY_MAX_INTERVAL_SECONDS", "seconds", "schedule.step_retry_max_interval_seconds"),
+    ("POLL_INTERVAL_SECONDS", "seconds", "schedule.poll_interval_seconds"),
+    ("WORKER_TICK_SECONDS", "seconds", "schedule.worker_tick_seconds"),
+    ("DISCOVERY_LOCK_TIMEOUT_SECONDS", "seconds", "schedule.discovery_lock_timeout_seconds"),
+    ("REVIEW_RETENTION_SECONDS", "seconds", "store.review_retention_seconds"),
+    ("SESSION_START_MAX_ATTEMPTS", "positive", "session.start_max_attempts"),
+    ("SESSION_CLEANUP_MAX_ATTEMPTS", "positive", "session.cleanup_max_attempts"),
+    ("REVIEWER_RUN_MAX_ATTEMPTS", "positive", "session.reviewer_run_max_attempts"),
+    ("MAX_CONCURRENT_REVIEWS", "positive", "schedule.max_concurrent_reviews"),
+    ("REVIEW_LIST_LIMIT", "positive", "cli.review_list_limit"),
+    ("QUEUE_MAX_ITEMS", "positive", "notify.review_queue.max_items"),
+    ("POLL_LIMIT", "positive", "schedule.poll_limit"),
+    ("SEARCH_PAGE_LIMIT", "positive", "schedule.search_page_limit"),
+    ("STATE_ENTRY_LIMIT", "positive", "schedule.state_entry_limit"),
+    ("SCHEDULER_MAX_BYTES", "positive", "schedule.scheduler_max_bytes"),
+    ("OUTPUT_MAX_BYTES", "positive", "session.output_max_bytes"),
+    ("OUTPUT_CHUNK_BYTES", "positive", "session.output_chunk_bytes"),
+    ("OUTPUT_WAIT_MS", "positive", "session.output_wait_ms"),
+    ("RESULT_MAX_BYTES", "positive", "limits.result_max_bytes"),
+    ("MAX_FINDINGS", "positive", "limits.max_findings"),
+    ("MAX_TESTS", "positive", "limits.max_tests"),
+    ("MIN_SUMMARY_CHARACTERS", "positive", "limits.min_summary_characters"),
+    ("MAX_SUMMARY_CHARACTERS", "positive", "limits.max_summary_characters"),
+    ("MAX_TITLE_CHARACTERS", "positive", "limits.max_title_characters"),
+    ("MAX_BODY_CHARACTERS", "positive", "limits.max_body_characters"),
+    ("MAX_DISCUSSION_CHARACTERS", "positive", "limits.max_discussion_characters"),
+    ("MAX_PATH_CHARACTERS", "positive", "limits.max_path_characters"),
+    ("MAX_TEST_CHARACTERS", "positive", "limits.max_test_characters"),
+    ("GITHUB_BODY_MAX_BYTES", "positive", "publish.github_body_max_bytes"),
+    ("MATRIX_MAX_CHARACTERS", "positive", "notify.max_characters"),
+    ("EXCERPT_CHARACTERS", "positive", "limits.excerpt_characters"),
+    ("TERMINAL_COLS", "positive", "session.terminal_cols"),
+    ("TERMINAL_ROWS", "positive", "session.terminal_rows"),
+    ("DISCOVERY_LOCK_POLL_MS", "milliseconds", "schedule.discovery_lock_poll_ms"),
+)
+
+
+class Finding(Exception):
+    """A reason to stop; the text names a variable or a line, never a value."""
+
+
+def variable_name(suffix):
+    """The environment variable of a VARIABLES entry; the unprefixed names are Go's own."""
+    if suffix in (GH_TOKEN, MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN):
+        return suffix
+    return PREFIX + suffix
+
+
+KNOWN = frozenset(variable_name(suffix) for suffix, _, _ in VARIABLES) | frozenset(SECRETS)
+
+
+def character_allowed(char):
+    """Tab and printable text; systemd drops noncharacters, BOM and NUL with the line."""
+    code = ord(char)
+    if char == "\t":
+        return True
+    if code < 0x20 or 0x7F <= code < 0xA0 or code == 0xFEFF:
+        return False
+    if 0xFDD0 <= code <= 0xFDEF or (code & 0xFFFE) == 0xFFFE:
+        return False
+    return True
+
+
+def unquote(raw, where):
+    """The value of one line, in the subset where systemd and this script agree."""
+    if raw.startswith('"'):
+        if len(raw) < 2 or not raw.endswith('"') or '"' in raw[1:-1] or "\\" in raw:
+            raise Finding(f"{where}: unsupported double-quoted value")
+        return raw[1:-1]
+    if raw.startswith("'"):
+        if len(raw) < 2 or not raw.endswith("'") or "'" in raw[1:-1]:
+            raise Finding(f"{where}: unsupported single-quoted value")
+        return raw[1:-1]
+    if "\\" in raw or raw[:1] in (" ", "\t") or raw[-1:] in (" ", "\t"):
+        raise Finding(f"{where}: unsupported unquoted value")
+    return raw
+
+
+def ends_on_its_line(raw):
+    """Whether systemd ends this value on its own line; the bytes are not decoded or kept.
+
+    A quote that opens a value spans lines until it closes, and an unquoted value that ends
+    with an odd number of backslashes continues on the next line.
+    """
+    rest = raw.lstrip(b" \t")
+    if rest[:1] == b"'":
+        close = rest.find(b"'", 1)
+    elif rest[:1] == b'"':
+        close = 1
+        while close < len(rest) and rest[close : close + 1] != b'"':
+            close += 2 if rest[close : close + 1] == b"\\" else 1
+        close = close if close < len(rest) else -1
+    else:
+        trailing = len(rest) - len(rest.rstrip(b"\\"))
+        return trailing % 2 == 0
+    return close > 0 and rest[close + 1 :].strip(b" \t\r") == b""
+
+
+def read_environment(files):
+    """Returns the non-secret values by name and the set of assigned secret names.
+
+    `files` lists (kind, path) in the unit's order, kind "settings" or "secrets". A known name
+    assigned twice in one file is refused, and a later file wins, as in systemd.
+    """
+    values = {}
+    secrets = set()
+    for kind, path in files:
+        with open(path, "rb") as handle:
+            data = handle.read()
+        seen = set()
+        for number, line in enumerate(data.split(b"\n"), start=1):
+            where = f"{path}: line {number}"
+            # systemd also ends a line at a lone CR, so a CR would split the line differently.
+            if b"\r" in line:
+                raise Finding(f"{where}: carriage return")
+            match = LINE.fullmatch(line)
+            if match:
+                name = match.group(1).decode("ascii")
+                if kind == "secrets" and name not in KNOWN and not name.startswith(PREFIX):
+                    # A variable of another service: only where its value ends is checked.
+                    if not ends_on_its_line(match.group(2)):
+                        raise Finding(f"{where}: a value that continues on the next line")
+                    continue
+                if name not in KNOWN:
+                    raise Finding(f"{name}: unknown variable")
+                if name in seen:
+                    raise Finding(f"{name}: assigned twice in {path}")
+                seen.add(name)
+                if name in SECRETS:
+                    # A secret value is never decoded or kept; only where it ends is checked.
+                    if not ends_on_its_line(match.group(2)):
+                        raise Finding(f"{where}: a value that continues on the next line")
+                    secrets.add(name)
+                    continue
+            try:
+                text = line.decode("utf-8")
+            except UnicodeDecodeError:
+                raise Finding(f"{where}: not UTF-8") from None
+            if not all(character_allowed(char) for char in text):
+                raise Finding(f"{where}: control character or noncharacter")
+            stripped = text.strip(" \t")
+            if not match:
+                if stripped and not stripped.startswith("#"):
+                    raise Finding(f"{where}: not a NAME=value assignment or a comment")
+                if stripped.endswith("\\"):
+                    raise Finding(f"{where}: a comment that ends with a backslash")
+                continue
+            values[name] = unquote(text[len(name) + 1 :], where)
+    return values, secrets
+
+
+def go_blank(value):
+    """Go's `required` treats a value that strings.TrimSpace empties as missing."""
+    return all(char in GO_SPACE for char in value)
+
+
+def atoi(name, value):
+    """Parses the way Go's strconv.Atoi does."""
+    if not INTEGER.fullmatch(value):
+        raise Finding(f"{name}: must be an integer")
+    try:
+        number = int(value)
+    except ValueError:
+        # Python refuses more than sys.get_int_max_str_digits() digits; Go's range is far less.
+        raise Finding(f"{name}: must be an integer") from None
+    if not -INT64_MAX - 1 <= number <= INT64_MAX:
+        raise Finding(f"{name}: must be an integer")
+    return number
+
+
+def positive(name, value, largest):
+    """Parses Go's `positive` (config.go:164-174), bounded so Go's Duration does not wrap."""
+    number = atoi(name, value)
+    if number <= 0:
+        raise Finding(f"{name}: must be a positive integer")
+    if number > largest:
+        raise Finding(f"{name}: is larger than Go's time.Duration holds")
+    return number
+
+
+def json_value(name, value):
+    """Parses JSON as Go's encoding/json does, refusing what Python would read differently."""
+
+    def refuse_constant(_):
+        raise ValueError("NaN and Infinity are not JSON")
+
+    def pairs(items):
+        keys = [key for key, _ in items]
+        if len(keys) != len(set(keys)):
+            raise ValueError("duplicate key")
+        return dict(items)
+
+    def check_text(item):
+        # Go replaces a lone surrogate escape with U+FFFD; such text is refused here.
+        if isinstance(item, str):
+            item.encode("utf-8")
+        elif isinstance(item, list):
+            for element in item:
+                check_text(element)
+        elif isinstance(item, dict):
+            for key, element in item.items():
+                check_text(key)
+                check_text(element)
+
+    try:
+        parsed = json.loads(value, parse_constant=refuse_constant, object_pairs_hook=pairs)
+        check_text(parsed)
+    except (ValueError, UnicodeEncodeError, RecursionError):
+        raise Finding(f"{name}: unsupported JSON") from None
+    return parsed
+
+
+def text_list(name, value):
+    """A JSON list of strings, for Go's []string."""
+    parsed = json_value(name, value)
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise Finding(f"{name}: must be a JSON list of strings")
+    return parsed
+
+
+def delays(name, value):
+    """A JSON list of integers, for Go's []int in schedule.LoadPolicy."""
+    parsed = json_value(name, value)
+    if not isinstance(parsed, list):
+        raise Finding(f"{name}: must be a JSON list of integers")
+    for item in parsed:
+        if type(item) is not int or not -INT64_MAX - 1 <= item <= INT64_MAX:
+            raise Finding(f"{name}: must be a JSON list of integers")
+    return parsed
+
+
+def routes(name, value):
+    """A JSON object of repository to {host, project_id}, both strings; null is no overrides."""
+    parsed = json_value(name, value)
+    if parsed is None:
+        return {}
+    if not isinstance(parsed, dict):
+        raise Finding(f"{name}: must be a JSON object")
+    for entry in parsed.values():
+        if not isinstance(entry, dict) or sorted(entry) != ["host", "project_id"]:
+            raise Finding(f"{name}: every entry must have exactly host and project_id")
+        if not all(isinstance(item, str) for item in entry.values()):
+            raise Finding(f"{name}: host and project_id must be strings")
+    return parsed
+
+
+def convert(values, secrets):
+    """Maps the environment values to config.yaml keys, in Go's order of checks."""
+    out = {}
+    for suffix, kind, key in VARIABLES:
+        name = variable_name(suffix)
+        if kind == "secret":
+            if name not in secrets:
+                raise Finding(f"{name}: missing")
+            continue
+        value = values.get(name)
+        if value is None or go_blank(value):
+            raise Finding(f"{name}: missing")
+        if kind == "text":
+            converted = value
+        elif kind == "integer":
+            converted = atoi(name, value)
+        elif kind == "seconds":
+            converted = positive(name, value, SECONDS_MAX)
+        elif kind == "milliseconds":
+            converted = positive(name, value, MILLISECONDS_MAX)
+        elif kind == "positive":
+            converted = positive(name, value, INT64_MAX)
+        elif kind == "hosts":
+            converted = text_list(name, value)
+        elif kind == "delays":
+            converted = delays(name, value)
+        else:
+            converted = routes(name, value)
+        out[key or name] = converted
+    signature = out["publish.signature"]
+    if AI_SIGNED_TEXT not in signature:
+        raise Finding(f"{PREFIX}AI_SIGNATURE: does not contain {AI_SIGNED_TEXT!r}")
+    end = signature.index(AI_SIGNED_TEXT) + len(AI_SIGNED_TEXT)
+    out["publish.ai_signed_pattern"] = signature[:end]
+    return out
+
+
+def matrix_backends(out):
+    """The backend name of each level and the (name, room) of each distinct room."""
+    names = {}
+    backends = []
+    for level, variable in LEVELS:
+        room = out[variable]
+        if room not in names:
+            names[room] = level
+            backends.append((names[room], room))
+    return {level: names[out[variable]] for level, variable in LEVELS}, backends
+
+
+def quoted(text):
+    """A YAML double-quoted scalar; escapes every character YAML may not take verbatim."""
+    out = ['"']
+    for char in text:
+        code = ord(char)
+        if char in ('"', "\\"):
+            out.append("\\" + char)
+        elif code < 0x20 or 0x7F <= code < 0xA0 or code in (0x2028, 0x2029, 0xFEFF):
+            out.append(f"\\u{code:04x}")
+        else:
+            out.append(char)
+    out.append('"')
+    return "".join(out)
+
+
+def flow(items):
+    """A YAML flow sequence of scalars."""
+    texts = (quoted(item) if isinstance(item, str) else str(item) for item in items)
+    return "[" + ", ".join(texts) + "]"
+
+
+def render(out):
+    """The config.yaml text, in the layout of examples/config.yaml."""
+    routes, backends = matrix_backends(out)
+    backend_lines = []
+    for name, room in backends:
+        backend_lines += [
+            f"    - name: {name}",
+            "      type: matrix",
+            f"      homeserver_url: {quoted(out[MATRIX_HOMESERVER])}",
+            f"      access_token_env: {MATRIX_TOKEN_COPY}",
+            f"      room: {quoted(room)}",
+            f"      mention_user: {quoted(out[PREFIX + 'MATRIX_MENTION_USER'])}",
+        ]
+
+    def scalar(key):
+        value = out[key]
+        return quoted(value) if isinstance(value, str) else str(value)
+
+    def keys(section, names):
+        return [f"  {name}: {scalar(section + '.' + name)}" for name in names]
+
+    route_lines = [
+        f"    {quoted(repository)}: {{host: {quoted(entry['host'])}, "
+        f"project_id: {quoted(entry['project_id'])}}}"
+        for repository, entry in sorted(out["pohunek.route_overrides"].items())
+    ]
+    lines = [
+        "# Written by scripts/env-to-config from the environment file of the Go engine.",
+        "# Secrets stay in the environment file; the *_env keys name the variables.",
+        "version: 1",
+        f"policy_file: {scalar('policy_file')}",
+        "",
+        "github:",
+        *keys("github", ("host", "gh_bin", "timeout_seconds")),
+        # Parsed by the Rust loader, not used by the engine; Go has no such setting.
+        "  credential_check_hours: 24",
+        "  expiry_warning_days: 14",
+        "  credentials:",
+        "    - name: default",
+        f"      login: {quoted(out[PREFIX + 'GITHUB_LOGIN'])}",
+        f"      token_env: {GH_TOKEN_COPY}",
+        '      match: ["*"]',
+        "",
+        "pohunek:",
+        *keys("pohunek", ("bin", "state_home", "runtime_dir", "timeout_seconds")),
+        f"  hosts: {flow(out['pohunek.hosts'])}",
+        "  route_overrides: {}" if not route_lines else "  route_overrides:",
+        *route_lines,
+        "",
+        "session:",
+        f"  group: {scalar('session.group')}",
+        # Go's branch and session name prefixes (cmd/autoreview/integrations.go:78-80).
+        '  branch_prefix: "autoreview/review/"',
+        '  name_prefix: "github-review-"',
+        *keys(
+            "session",
+            (
+                "timeout_seconds",
+                "output_poll_seconds",
+                "start_max_attempts",
+                "start_retry_seconds",
+                "cleanup_max_attempts",
+                "cleanup_retry_seconds",
+                "reviewer_run_max_attempts",
+                "reviewer_run_retry_seconds",
+                "terminal_cols",
+                "terminal_rows",
+                "output_max_bytes",
+                "output_chunk_bytes",
+                "output_wait_ms",
+            ),
+        ),
+        "",
+        "schedule:",
+        *keys(
+            "schedule",
+            (
+                "poll_interval_seconds",
+                "worker_tick_seconds",
+                "max_concurrent_reviews",
+                "debounce_seconds",
+            ),
+        ),
+        f"  retry_delays_seconds: {flow(out['schedule.retry_delays_seconds'])}",
+        *keys(
+            "schedule",
+            (
+                "step_retry_seconds",
+                "step_retry_initial_seconds",
+                "step_retry_max_interval_seconds",
+                "discovery_lock_timeout_seconds",
+                "discovery_lock_poll_ms",
+                "poll_limit",
+                "search_page_limit",
+                "scheduler_max_bytes",
+                "state_entry_limit",
+            ),
+        ),
+        "",
+        "limits:",
+        *keys(
+            "limits",
+            (
+                "result_max_bytes",
+                "max_findings",
+                "max_tests",
+                "min_summary_characters",
+                "max_summary_characters",
+                "max_title_characters",
+                "max_body_characters",
+                "max_discussion_characters",
+                "max_path_characters",
+                "max_test_characters",
+                "excerpt_characters",
+            ),
+        ),
+        "",
+        "store:",
+        *keys("store", ("path", "review_retention_seconds", "published_retention_seconds")),
+        "",
+        "cli:",
+        *keys("cli", ("review_list_limit",)),
+        "",
+        "publish:",
+        *keys("publish", ("signature", "ai_signed_pattern", "github_body_max_bytes")),
+        "",
+        "notify:",
+        *keys("notify", ("timeout_seconds", "max_characters")),
+        "  backends:",
+        *backend_lines,
+        "  routes:",
+        f"    action: [{routes['action']}]",
+        f"    digest: [{routes['digest']}]",
+        f"    log: [{routes['log']}]",
+        "  review_queue:",
+        f"    backends: [{routes['queue']}]",
+        f"    max_items: {scalar('notify.review_queue.max_items')}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_new(path, text):
+    """Creates `path` with mode 0600; an existing file or symlink is never replaced."""
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise Finding(f"{path}: already exists") from None
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except BaseException:
+        os.unlink(path)
+        raise
+
+
+class EnvironmentFile(argparse.Action):
+    """Appends (kind, path), so that the files keep the order of the command line."""
+
+    def __call__(self, parser, namespace, value, option_string=None):
+        files = list(getattr(namespace, self.dest) or [])
+        files.append((self.const, value))
+        setattr(namespace, self.dest, files)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="env-to-config", allow_abbrev=False)
+    parser.add_argument("config_out", help="config.yaml to create")
+    parser.add_argument(
+        "--settings-env",
+        dest="files",
+        action=EnvironmentFile,
+        const="settings",
+        metavar="FILE",
+        help="environment file with HERMES_PR_REVIEW_*; an unknown variable stops",
+    )
+    parser.add_argument(
+        "--secrets-env",
+        dest="files",
+        action=EnvironmentFile,
+        const="secrets",
+        metavar="FILE",
+        help="environment file of which only the variables of the engine are read",
+    )
+    arguments = parser.parse_args()
+    files = arguments.files or []
+    if not any(kind == "settings" for kind, _ in files):
+        parser.error("at least one --settings-env FILE is required")
+    try:
+        values, secrets = read_environment(files)
+        write_new(arguments.config_out, render(convert(values, secrets)))
+    except Finding as finding:
+        print(f"env-to-config: {finding}", file=sys.stderr)
+        return 1
+    except OSError as error:
+        print(f"env-to-config: {error.filename}: {error.strerror}", file=sys.stderr)
+        return 1
+    print(f"env-to-config: wrote {arguments.config_out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
