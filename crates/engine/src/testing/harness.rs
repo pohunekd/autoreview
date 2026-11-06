@@ -354,8 +354,7 @@ impl Harness {
 
     /// Approves the review of `pr` once it is stored as awaiting.
     ///
-    /// The approval request is sent before that status is stored, and `approve` refuses a
-    /// review that is not awaiting yet.
+    /// `approve` refuses a review that is not awaiting yet.
     pub(crate) async fn approve_when_awaiting(
         &self,
         pr: &PullRequest,

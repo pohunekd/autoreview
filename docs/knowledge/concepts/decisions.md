@@ -108,10 +108,13 @@ A rule with `on_clean: await` ends a clean review in a wait. A rule with
 `on_clean: approve` ends in a wait only when the verifier escalated it. The
 wait works like this:
 
-1. The review is recorded as waiting. The `approval_requested` event is sent as
-   an `action` message, and the engine releases the pull request from
-   scheduling. The record is written before the release, so discovery never sees
-   the head without a review it keeps.
+1. The review is recorded as waiting, and the engine releases the pull request
+   from scheduling. The record is written before the release, so discovery never
+   sees the head without a review it keeps. Then the `approval_requested` event
+   is sent as an `action` message, so an approval is accepted as soon as the
+   message arrives. If the message cannot be delivered, the error is logged and
+   the review still waits: `autoreview awaiting` lists it, and the deadline ends
+   it.
 2. A person runs `autoreview approve --repository OWNER/REPO NUMBER HEAD_SHA`.
    The head SHA must be the full head commit of the pull request. The approval
    applies only if that commit is still the head.

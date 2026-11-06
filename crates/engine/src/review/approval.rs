@@ -11,7 +11,7 @@ use super::input::STEP_PLAN;
 use super::sessions::{Review, is_shutdown};
 use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
-use crate::error::Error;
+use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::messages::{approval_expired_message, approval_requested_message, superseded_message};
 use crate::model::review::{
@@ -54,12 +54,14 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Records the wait, releases the pull request and asks the user for an approval.
     ///
     /// The wait is recorded before the release, so discovery never sees the head without a
-    /// review it keeps.
+    /// review it keeps. The review is stored as awaiting before the request is sent, so an
+    /// approval that follows the request at once is accepted.
     ///
     /// # Errors
     ///
     /// Returns the shutdown error, or the error of the store or of the discovery record. A
-    /// failed approval request completes the review as a failure and returns `Ok`.
+    /// failed approval request is logged and leaves the review waiting; the function then
+    /// returns `Ok`.
     pub(crate) async fn await_approval(&mut self, artifact: &Artifact) -> Result<(), Error> {
         let record = self.await_record();
         if let Err(err) = self.engine.mark_awaiting(&self.cancel, &record).await {
@@ -67,26 +69,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         }
         live(&self.cancel)?;
         self.set_released(true)?;
-        let message = approval_requested_message(
-            self.engine.config.excerpt_characters,
-            &self.input,
-            artifact,
-        );
-        if let Err(err) = self
-            .notify("approval_requested", Event::ApprovalRequested, &message)
-            .await
-        {
-            if is_shutdown(&err) {
-                return Err(err);
-            }
-            // Nobody would learn of the wait, so the review fails and is reported.
-            live(&self.cancel)?;
-            self.set_released(false)?;
-            if let Err(clear) = self.engine.clear_awaiting(&self.cancel, &record).await {
-                return Err(self.interrupted(clear));
-            }
-            return self.fail(err).await;
-        }
         let nanos = self
             .input
             .approval_timeout_seconds
@@ -99,7 +81,27 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         live(&self.cancel)?;
         self.engine
             .store
-            .start_awaiting(&self.workflow_id, deadline)
+            .start_awaiting(&self.workflow_id, deadline)?;
+        let message = approval_requested_message(
+            self.engine.config.excerpt_characters,
+            &self.input,
+            artifact,
+        );
+        if let Err(err) = self
+            .notify("approval_requested", Event::ApprovalRequested, &message)
+            .await
+        {
+            if is_shutdown(&err) {
+                return Err(err);
+            }
+            // The review waits anyway: `autoreview awaiting` lists it, and the deadline ends it.
+            tracing::error!(
+                review_id = %self.input.pull_request.review_id(),
+                error_code = %error_code(&err),
+                "approval request failed"
+            );
+        }
+        Ok(())
     }
 
     /// Continues a waiting review by the decision `approval` stored for it.

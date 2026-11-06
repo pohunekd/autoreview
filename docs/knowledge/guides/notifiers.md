@@ -192,6 +192,12 @@ Failure handling depends on the level of the event:
 | `digest` | Dropped with a warning in the log | The review and its publication are unaffected |
 | `log` | Dropped with a warning in the log | Nothing else changes |
 
+The `approval_requested` message is the exception: the review is already
+waiting when it is sent, so a failed delivery is logged as
+`approval request failed`. `autoreview awaiting` lists the wait, and the review
+queue shows it while the pull request requests the review, until it is
+approved or its deadline passes.
+
 Because a failed `action` delivery fails the step, a broken action backend
 blocks reviews that need a human. Watch for `matrix_unavailable`,
 `matrix_request_rejected`, `webhook_unavailable` and `webhook_request_rejected`

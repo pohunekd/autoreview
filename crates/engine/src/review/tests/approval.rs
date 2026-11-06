@@ -132,6 +132,30 @@ async fn awaited_approval_waits_for_the_user_and_publishes_once() {
     h.stop_engine().await;
 }
 
+// The review is stored as awaiting before the approval request is sent. An approval that
+// arrives while the request is still being delivered is accepted (#143).
+#[tokio::test]
+async fn approval_right_after_the_request_is_accepted() {
+    let mut h = start_harness(|_| {}).await;
+    let gate = h.fake.hold_notes(APPROVAL_REQUESTED_TITLE);
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
+    })
+    .await;
+    let result = h
+        .resolve(&pr)
+        .and_then(|resolved| h.approve(&resolved.workflow_id, &pr));
+    gate.add_permits(1);
+    assert!(
+        matches!(&result, Ok(result) if result.publication_status == "pending"),
+        "approve = {result:?}"
+    );
+    h.wait_for("the approval", || h.publications() == 1).await;
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn newer_head_supersedes_a_waiting_approval() {
     let mut h = start_harness(|_| {}).await;

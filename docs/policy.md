@@ -296,7 +296,9 @@ Every event gets one of three levels. Where each level goes is configured in
 
 A `digest` or `log` message the notifier cannot deliver is dropped with a
 warning. An `action` message that cannot be delivered fails the step, because
-nobody would learn that they have to act.
+nobody would learn that they have to act. The `approval_requested` message is
+the exception: the review is already waiting when it is sent, so a failed
+delivery is logged and `autoreview awaiting` lists the wait.
 
 ## Prompts
 
