@@ -473,7 +473,7 @@ pub(crate) fn handoff_age(record: &PublishedRecord, now: OffsetDateTime) -> Stri
 
 /// Nanoseconds from `earlier` to `later`, saturated to the range of `time.Duration` as Go's
 /// `Time.Sub` saturates it.
-fn go_elapsed_nanos(later: OffsetDateTime, earlier: OffsetDateTime) -> i64 {
+pub(crate) fn go_elapsed_nanos(later: OffsetDateTime, earlier: OffsetDateTime) -> i64 {
     let diff = later.unix_timestamp_nanos() - earlier.unix_timestamp_nanos();
     if diff > i64::MAX as i128 {
         i64::MAX
