@@ -10,16 +10,26 @@ use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
-use autoreview_policy::{Level, Protocol, Rule, Trigger};
+use autoreview_policy::{Level, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
 use crate::error::Error;
 use crate::integrations::{
     CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft, ReviewRequest,
     ReviewRequestList, SessionRequest,
 };
+use crate::model::review::PRIOR_FIXED;
 use crate::model::{
     Candidate, CandidateList, Discussion, PriorFinding, ProjectRoute, PublishResult, PullRequest,
     RejectedCandidate, SessionIdentity,
+};
+use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
+use crate::protocol::request::go_json;
+use crate::verify::{
+    ClaimFinding, ClaimPrior, VERDICT_CONFIRMED, VERDICT_UPHELD, VerificationClaims,
 };
 
 /// Produces the output of a reviewer session from its request.
@@ -546,3 +556,285 @@ impl Integrations for FakeIntegration {
         ready(Ok(()))
     }
 }
+
+/// Label of the prior findings in a reviewer prompt.
+const PRIOR_LABEL: &str = "Prior findings (JSON):\n";
+
+/// Label of the claims in a verifier prompt.
+const CLAIMS_LABEL: &str = "Claims (untrusted JSON):\n";
+
+/// Summary that the fake Claude reviewer reports with every structured output.
+const REVIEW_SUMMARY: &str = "Reviewed the change thoroughly and found the listed issues.";
+
+/// Returns the `prompt` field of a structured request, or the text itself.
+fn prompt_text(prompt: &str) -> String {
+    let parsed: Value = match serde_json::from_str(prompt) {
+        Ok(value) => value,
+        Err(_) => return prompt.to_owned(),
+    };
+    match parsed.get("prompt").and_then(Value::as_str) {
+        Some(field) if !field.is_empty() => field.to_owned(),
+        _ => prompt.to_owned(),
+    }
+}
+
+/// Reads the prior findings that a reviewer request hands over.
+fn request_prior(prompt: &str) -> Vec<PriorFinding> {
+    let text = prompt_text(prompt);
+    let Some(after) = text.split_once(PRIOR_LABEL).map(|(_, rest)| rest) else {
+        return Vec::new();
+    };
+    let line = after.split_once('\n').map_or(after, |(first, _)| first);
+    serde_json::from_str(line).expect("the fake reads the prior findings it wrote")
+}
+
+/// Claim of a blocking finding in a verifier prompt, with the fields of `ClaimFinding`.
+#[derive(Deserialize)]
+struct ClaimFindingLine {
+    id: String,
+    reviewer: String,
+    severity: String,
+    path: String,
+    line: i64,
+    title: String,
+    body: String,
+}
+
+/// Answered prior finding in a verifier prompt, with the fields of `ClaimPrior`.
+#[derive(Deserialize)]
+struct ClaimPriorLine {
+    key: String,
+    severity: String,
+    path: String,
+    line: i64,
+    title: String,
+    body: String,
+    #[serde(rename = "reviewers_verdict")]
+    verdict: String,
+    relies_on: String,
+}
+
+/// The claims of a verifier prompt, read back as the fake receives them.
+#[derive(Deserialize)]
+struct ClaimsLine {
+    findings: Vec<ClaimFindingLine>,
+    prior_findings: Vec<ClaimPriorLine>,
+}
+
+/// Reads the claims that a verifier request hands over.
+fn request_claims(prompt: &str) -> VerificationClaims {
+    let parsed: Value =
+        serde_json::from_str(prompt).expect("the fake reads the claims of a verifier request");
+    let field = parsed
+        .get("prompt")
+        .and_then(Value::as_str)
+        .expect("a verifier request carries a prompt field");
+    let (_, rest) = field
+        .split_once(CLAIMS_LABEL)
+        .expect("a verifier request carries the claims label");
+    let line = rest.split_once('\n').map_or(rest, |(first, _)| first);
+    let claims: ClaimsLine =
+        serde_json::from_str(line).expect("the fake reads the claims it wrote");
+    VerificationClaims {
+        findings: claims
+            .findings
+            .into_iter()
+            .map(|line| ClaimFinding {
+                id: line.id,
+                reviewer: line.reviewer,
+                severity: line.severity,
+                path: line.path,
+                line: line.line,
+                title: line.title,
+                body: line.body,
+            })
+            .collect(),
+        prior: claims
+            .prior_findings
+            .into_iter()
+            .map(|line| ClaimPrior {
+                key: line.key,
+                severity: line.severity,
+                path: line.path,
+                line: line.line,
+                title: line.title,
+                body: line.body,
+                verdict: line.verdict,
+                relies_on: line.relies_on,
+            })
+            .collect(),
+    }
+}
+
+/// Returns the output of a Codex reviewer run.
+fn codex_output(pull_request: &PullRequest, findings: &[Value], status: i64) -> String {
+    let report = go_json(&json!({
+        "findings": findings,
+        "summary": "Full review of the pull request diff; details follow.",
+        "tests": ["go test ./..."],
+        "status": "completed",
+        "reviewed_head_sha": pull_request.head_sha,
+    }))
+    .expect("the fake encodes the Codex report");
+    let encoded = STANDARD.encode(report);
+    let prefix = format!("[pohunek-codex-review-result-v1:{encoded}]\n");
+    let status_line = format!("[pohunek-codex-review exited with status {status}]\n");
+    format!("{prefix}{status_line}")
+}
+
+/// Returns the output of a finished Claude session with `structured` as its structured output.
+fn claude_structured_output(structured: Value) -> String {
+    let outer = go_json(&json!({
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "result": "Prose summary.",
+        "structured_output": structured,
+    }))
+    .expect("the fake encodes the Claude session output");
+    let wrapper = go_json(&json!({
+        "protocol": CLAUDE_RESULT_PROTOCOL,
+        "mode": "structured",
+        "exit_code": 0,
+        "stdout_base64": STANDARD.encode(outer),
+        "stderr_base64": "",
+    }))
+    .expect("the fake encodes the Claude wrapper");
+    format!("{wrapper}\n")
+}
+
+/// Returns the output of a finished Claude reviewer session.
+///
+/// The prior verdicts are included only when `prior` is `Some`.
+fn claude_output_with_prior(
+    pull_request: &PullRequest,
+    findings: Vec<Value>,
+    prior: Option<Vec<Value>>,
+) -> String {
+    let mut structured = json!({
+        "repository": pull_request.repository,
+        "number": pull_request.number,
+        "head_sha": pull_request.head_sha,
+        "summary": REVIEW_SUMMARY,
+        "findings": findings,
+    });
+    if let Some(prior) = prior {
+        structured
+            .as_object_mut()
+            .expect("the fake builds the reviewer artifact")
+            .insert("prior_findings".to_owned(), Value::Array(prior));
+    }
+    claude_structured_output(structured)
+}
+
+/// Returns a reviewer output that gives every prior finding the verdict `status` picks.
+///
+/// Verifier requests get confirmed claims and upheld prior findings.
+fn settling_output(
+    findings: Vec<Value>,
+    status: impl Fn(&PriorFinding) -> &'static str + Send + Sync + 'static,
+) -> impl Fn(&SessionRequest) -> String + Send + Sync + 'static {
+    move |request: &SessionRequest| {
+        if request.reviewer.id == VERIFIER_REVIEWER_ID {
+            return verifier_output(request, |_| VERDICT_CONFIRMED, |_| VERDICT_UPHELD);
+        }
+        if request.reviewer.protocol == Protocol::CodexEnvelope {
+            return codex_output(&request.pull_request, &findings, 0);
+        }
+        let verdicts: Vec<Value> = request_prior(&request.prompt)
+            .iter()
+            .map(|prior| {
+                json!({
+                    "key": prior.key,
+                    "status": status(prior),
+                    "note": "Checked against the current head.",
+                    "relies_on": "",
+                })
+            })
+            .collect();
+        let claude_findings: Vec<Value> = findings
+            .iter()
+            .enumerate()
+            .map(|(index, finding)| {
+                let mut merged = serde_json::Map::new();
+                merged.insert("id".to_owned(), Value::String(format!("C{:03}", index + 1)));
+                merged.insert("side".to_owned(), Value::String("RIGHT".to_owned()));
+                if let Some(object) = finding.as_object() {
+                    for (key, value) in object {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+                Value::Object(merged)
+            })
+            .collect();
+        claude_output_with_prior(&request.pull_request, claude_findings, Some(verdicts))
+    }
+}
+
+/// Returns a reviewer output that settles every prior finding as fixed.
+fn reviewer_output(
+    findings: Vec<Value>,
+) -> impl Fn(&SessionRequest) -> String + Send + Sync + 'static {
+    settling_output(findings, |_| PRIOR_FIXED)
+}
+
+/// Returns the output of a finished verifier session.
+///
+/// Every claim gets the verdict that `finding` or `prior` picks.
+fn verifier_output(
+    request: &SessionRequest,
+    finding: impl Fn(&ClaimFinding) -> &'static str,
+    prior: impl Fn(&ClaimPrior) -> &'static str,
+) -> String {
+    let claims = request_claims(&request.prompt);
+    let pr = &request.pull_request;
+    let findings: Vec<Value> = claims
+        .findings
+        .iter()
+        .map(|claim| {
+            json!({
+                "id": claim.id,
+                "verdict": finding(claim),
+                "note": "Traced the scenario at the head.",
+            })
+        })
+        .collect();
+    let priors: Vec<Value> = claims
+        .prior
+        .iter()
+        .map(|claim| {
+            json!({
+                "key": claim.key,
+                "verdict": prior(claim),
+                "note": "Read the code at the head.",
+            })
+        })
+        .collect();
+    claude_structured_output(json!({
+        "repository": pr.repository,
+        "number": pr.number,
+        "head_sha": pr.head_sha,
+        "findings": findings,
+        "prior_findings": priors,
+    }))
+}
+
+/// Returns a session output that answers verifier requests by the claim verdicts.
+///
+/// Every other request goes to `reviewers`.
+fn verifying(
+    reviewers: impl Fn(&SessionRequest) -> String + Send + Sync + 'static,
+    finding: impl Fn(&ClaimFinding) -> &'static str + Send + Sync + 'static,
+    prior: impl Fn(&ClaimPrior) -> &'static str + Send + Sync + 'static,
+) -> impl Fn(&SessionRequest) -> String + Send + Sync + 'static {
+    move |request: &SessionRequest| {
+        if request.reviewer.id == VERIFIER_REVIEWER_ID {
+            verifier_output(request, &finding, &prior)
+        } else {
+            reviewers(request)
+        }
+    }
+}
+
+/// Policy document of the integration tests: pipelines, repositories and notifications.
+const INTEGRATION_POLICY: &str = include_str!("integration-policy.yaml");

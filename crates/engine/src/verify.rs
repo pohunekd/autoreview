@@ -25,7 +25,7 @@ use crate::protocol::validate::bounded_text;
 const VERIFY_SCHEMA: &[u8] = include_bytes!("../schemas/verify-schema.json");
 
 /// Verdict on a blocking finding: the defect exists and meets the blocking definition.
-const VERDICT_CONFIRMED: &str = "confirmed";
+pub(crate) const VERDICT_CONFIRMED: &str = "confirmed";
 
 /// Verdict on a blocking finding: the defect exists, but the merge causes no blocking harm.
 pub(crate) const VERDICT_NOT_BLOCKING: &str = "not_blocking";
@@ -34,7 +34,7 @@ pub(crate) const VERDICT_NOT_BLOCKING: &str = "not_blocking";
 pub(crate) const VERDICT_REFUTED: &str = "refuted";
 
 /// Verdict on an answered prior finding: the code or a reviewer comment shows it needs no change.
-const VERDICT_UPHELD: &str = "upheld";
+pub(crate) const VERDICT_UPHELD: &str = "upheld";
 
 /// Verdict on an answered prior finding: neither the code nor a reviewer comment shows it.
 const VERDICT_REOPENED: &str = "reopened";
