@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use super::{GitHub, response_invalid};
 
 /// Files per page of the changed-files API; a short page ends the listing.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 const FILES_PER_PAGE: usize = 100;
 
 /// Prefix of the marker line that GitHub writes after a file without a final newline.
@@ -42,7 +41,6 @@ autoreview_go_compat::object_only_serde!(ChangedFileRecord);
 /// Returns Go's `path.Clean` of `path`, computed over bytes as Go computes it.
 ///
 /// The empty path cleans to `.`. A path that Go leaves unchanged cleans to itself.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn go_path_clean(path: &[u8]) -> Vec<u8> {
     if path.is_empty() {
         return vec![b'.'];
@@ -136,7 +134,6 @@ fn go_path_clean(path: &[u8]) -> Vec<u8> {
 ///
 /// The name must be unchanged by `path.Clean`, must not be absolute and must not start with `../`.
 /// The names `.` and `..` pass, as they do in Go.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn valid_changed_path(name: &str) -> bool {
     if name.starts_with('/') || name.starts_with("../") {
         return false;
@@ -167,7 +164,6 @@ fn take_digits(text: &str) -> Option<(&str, &str)> {
 /// The line must start with `@@ -<digits>[,<digits>] +<digits>[,<digits>] @@`; the text after
 /// the closing `@@` is not read. Returns the new-side start and count, where a missing count is 1.
 /// A number that does not fit in `i64` returns `None`, as Go's `strconv.Atoi` refuses it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn parse_hunk_header(line: &str) -> Option<(i64, i64)> {
     let after_at = line.strip_prefix("@@ -")?;
     let (_, after_old_start) = take_digits(after_at)?;
@@ -197,7 +193,6 @@ fn parse_hunk_header(line: &str) -> Option<(i64, i64)> {
 /// Lines before the first hunk, empty lines and the no-newline marker are skipped. Every other
 /// line must start with `+`, ` `, `-` or `@@`, or the patch is refused. The line number wraps at
 /// `i64` overflow, as Go's `int` does.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn commentable_lines_from_patch(patch: &str) -> Result<Vec<i64>, Error> {
     let mut result: Vec<i64> = Vec::new();
     let mut line_number: i64 = 0;
@@ -238,13 +233,11 @@ fn commentable_lines_from_patch(patch: &str) -> Result<Vec<i64>, Error> {
     Ok(result)
 }
 /// Decodes one page of the changed-files API; `null` is refused and an empty list is accepted.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn decode_files_page(output: &str) -> Result<Vec<ChangedFileRecord>, Error> {
     serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))
 }
 
 /// Returns the argv of one page of the changed-files API (`github.go:685-700`).
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn files_args(repository: &str, number: i64, page: i64) -> Vec<String> {
     vec![
         "api".to_owned(),
@@ -254,7 +247,6 @@ fn files_args(repository: &str, number: i64, page: i64) -> Vec<String> {
 
 impl GitHub {
     /// Returns the commentable lines of every changed file, keyed by path (`github.go:715-728`).
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn commentable_lines(
         &self,
         pr: &PullRequest,
@@ -270,7 +262,6 @@ impl GitHub {
     }
 
     /// Returns the paths of the files that the pull request removes (`github.go:731-747`).
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn deleted_files(&self, pr: &PullRequest) -> Result<Vec<String>, Error> {
         let mut removed: Vec<String> = Vec::new();
         self.visit_changed_files(pr, |file| {
@@ -288,7 +279,6 @@ impl GitHub {
     ///
     /// A page that is short ends the listing. A file whose name is invalid or repeated fails the
     /// read before `visit` sees it.
-    #[expect(dead_code, reason = "called by E09")]
     async fn visit_changed_files(
         &self,
         pr: &PullRequest,

@@ -323,7 +323,6 @@ pub(crate) fn choose_route(
 }
 
 /// Returns the pohunek host and project that run the reviews of `repository`.
-#[expect(dead_code, reason = "called by E09")]
 pub(crate) async fn resolve_project(
     config: &Config,
     repository: &str,

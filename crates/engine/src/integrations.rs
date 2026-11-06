@@ -150,11 +150,13 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<Option<SessionIdentity>, Error>> + Send;
 
     /// Returns the output of a finished reviewer session, read with `protocol`.
+    ///
+    /// `None` means that the reviewer still runs, as Go's `nil` does. The bytes are unconverted.
     fn session_output(
         &self,
         session: &SessionIdentity,
         protocol: Protocol,
-    ) -> impl Future<Output = Result<String, Error>> + Send;
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, Error>> + Send;
 
     /// Removes a reviewer session and confirms that it is gone.
     fn remove_session_confirmed(

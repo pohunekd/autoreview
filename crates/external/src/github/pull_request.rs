@@ -15,37 +15,29 @@ use serde::{Deserialize, Serialize};
 use super::{GitHub, graphql_pull_request, response_invalid};
 
 /// Largest title in bytes that a pull request may have.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 const MAX_TITLE_BYTES: usize = 1024;
 
 /// Largest branch name in bytes.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 const MAX_BRANCH_BYTES: usize = 255;
 
 /// Largest author login in bytes, before the `[bot]` suffix.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 const MAX_AUTHOR_BYTES: usize = 39;
 
 /// Page size of the review events API.
-#[expect(dead_code, reason = "called by E03")]
 const EVENTS_PER_PAGE: usize = 100;
 
 /// Unix nanoseconds of Go's zero `time.Time`, 0001-01-01T00:00:00Z.
 ///
 /// Go reads an absent time as this value, and a review request event with it is refused.
-#[expect(dead_code, reason = "called by E03")]
 const GO_ZERO_TIME_NANOS: i128 = -62_135_596_800_000_000_000;
 
 /// The author type that marks an app, such as a coding agent.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 const BOT_TYPENAME: &str = "Bot";
 
 /// The pull request state that the engine reviews.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 const OPEN_STATE: &str = "OPEN";
 
 /// The suffix that GitHub adds to the login of an app author.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 const BOT_SUFFIX: &str = "[bot]";
 
 /// The repository that the query names, `null` when there is none.
@@ -127,7 +119,6 @@ autoreview_go_compat::object_only_serde!(GitHubPullRequest);
 impl GitHubPullRequest {
     /// Returns the lower-case repository and the number of the pull request as the search
     /// names them.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
     pub(super) fn repository_and_number(&self) -> (String, i64) {
         (
             self.repository.name_with_owner.to_ascii_lowercase(),
@@ -230,7 +221,6 @@ struct ReviewEvent {
 autoreview_go_compat::object_only_serde!(ReviewEvent);
 
 /// A `review_requested` event of the configured login.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ReviewRequestEvent {
     /// Event identifier, which is positive.
@@ -240,7 +230,6 @@ pub(crate) struct ReviewRequestEvent {
 }
 
 /// The review request events of one page of the events API.
-#[expect(dead_code, reason = "called by E03")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReviewRequestPage {
     /// The events of the page that request a review from the configured login.
@@ -253,7 +242,6 @@ pub(crate) struct ReviewRequestPage {
 ///
 /// A response with a GraphQL error, or a missing repository or pull request, is refused as Go
 /// refuses it; a missing pull request is `pull_request_not_open`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 pub(crate) fn decode_pull_request_response(output: &str) -> Result<GitHubPullRequest, Error> {
     let response: GraphQlResponse =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
@@ -274,7 +262,6 @@ pub(crate) fn decode_pull_request_response(output: &str) -> Result<GitHubPullReq
 /// opened, or `None` when the pull request is not such a draft (the `ReadyDrafts` check).
 ///
 /// The check compares the author, repository and number as ASCII case-insensitive text.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 pub(super) fn ready_draft_id(
     raw: &GitHubPullRequest,
     author: &str,
@@ -301,7 +288,6 @@ pub(super) fn ready_draft_id(
 /// Builds the argv of the GraphQL pull request query for `repository` and `number`.
 ///
 /// The identity is checked before any call, as Go checks it at `github.go:284-286`.
-#[expect(dead_code, reason = "called by E03")]
 pub(crate) fn pull_request_args(repository: &str, number: i64) -> Result<Vec<String>, Error> {
     let Some((owner, name)) = repository.split_once('/') else {
         return Err(Error::workflow("review_identity_invalid", true, None));
@@ -324,7 +310,6 @@ pub(crate) fn pull_request_args(repository: &str, number: i64) -> Result<Vec<Str
 }
 
 /// Reports whether the pull request asks `login` for a review, ignoring ASCII case.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 pub(super) fn requests(raw: &GitHubPullRequest, login: &str) -> bool {
     for node in &raw.review_requests.nodes {
         if let Some(reviewer) = &node.requested_reviewer
@@ -337,7 +322,6 @@ pub(super) fn requests(raw: &GitHubPullRequest, login: &str) -> bool {
 }
 
 /// Reports whether the pull request carries `label`, ignoring ASCII case.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 fn has_label(raw: &GitHubPullRequest, label: &str) -> bool {
     for node in &raw.labels.nodes {
         if node.name.eq_ignore_ascii_case(label) {
@@ -348,7 +332,6 @@ fn has_label(raw: &GitHubPullRequest, label: &str) -> bool {
 }
 
 /// Reports whether `url` is the URL of the pull request `repository#number` on `host`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 pub(super) fn url_matches(url: &str, host: &str, repository: &str, number: i64) -> bool {
     url.eq_ignore_ascii_case(&format!("https://{host}/{repository}/pull/{number}"))
 }
@@ -357,7 +340,6 @@ pub(super) fn url_matches(url: &str, host: &str, repository: &str, number: i64) 
 ///
 /// An empty login is a deleted account and passes. Otherwise the login is one ASCII letter or
 /// digit, then up to 38 letters, digits or hyphens, with an optional `[bot]` suffix.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 fn author_valid(author: &str) -> bool {
     if author.is_empty() {
         return true;
@@ -382,7 +364,6 @@ fn author_valid(author: &str) -> bool {
 }
 
 /// Reports whether a branch name passes Go's `branchPattern`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 fn branch_valid(branch: &str) -> bool {
     if branch.is_empty() || branch.len() > MAX_BRANCH_BYTES {
         return false;
@@ -400,7 +381,6 @@ fn branch_valid(branch: &str) -> bool {
 ///
 /// The result has `review_request_id` 0 for a `review-requested` trigger; the caller reads the
 /// request id after this check, as Go does.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 pub(crate) fn decode_pull_request(
     raw: &GitHubPullRequest,
     host: &str,
@@ -477,7 +457,6 @@ pub(crate) fn decode_pull_request(
 /// Decodes the state of a pull request that is read without a trigger (`ReadPullRequestState`).
 ///
 /// A pull request that GitHub does not return as open gives the empty state with no error.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E03"))]
 pub(crate) fn decode_pull_request_state(
     repository: &str,
     number: i64,
@@ -524,7 +503,6 @@ pub(crate) fn decode_pull_request_state(
 ///
 /// Every element is decoded, and its time must parse, as Go decodes it. Only the events that
 /// request a review from `login` are checked for an id and a non-zero time.
-#[expect(dead_code, reason = "called by E03")]
 pub(crate) fn decode_review_request_page(
     output: &str,
     login: &str,
@@ -567,7 +545,6 @@ pub(crate) fn decode_review_request_page(
 ///
 /// The newest event has the latest time, and the larger id on a tie. An event at or before
 /// the zero time is never taken, as in Go's `After` and `Equal` test.
-#[expect(dead_code, reason = "called by E03")]
 pub(crate) fn newest_review_request(events: &[ReviewRequestEvent]) -> Option<i64> {
     let mut latest_at = GO_ZERO_TIME_NANOS;
     let mut latest_id = 0;
@@ -584,7 +561,6 @@ pub(crate) fn newest_review_request(events: &[ReviewRequestEvent]) -> Option<i64
 
 impl GitHub {
     /// Reads a pull request and checks it against the trigger of its rule (`GetPullRequest`).
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn get_pull_request(
         &self,
         repository: &str,
@@ -605,7 +581,6 @@ impl GitHub {
     }
 
     /// Reads a pull request without a trigger check (`ReadPullRequestState`).
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn read_pull_request_state(
         &self,
         repository: &str,

@@ -70,7 +70,6 @@ pub(crate) struct Matrix {
 
 impl Matrix {
     /// Creates the settings from the Matrix fields of the configuration.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
     pub(crate) fn new(
         homeserver_url: String,
         access_token: String,
@@ -370,7 +369,6 @@ fn response_result(status: StatusCode) -> Result<(), Error> {
 ///
 /// A level other than action drops a message the homeserver cannot take.
 /// The drop is logged, so a muted notification never fails a review.
-#[expect(dead_code, reason = "called by E09")]
 pub(crate) async fn notify(
     client: &Client,
     matrix: &Matrix,
@@ -401,7 +399,6 @@ fn drop_if_muted(level: Level, error: Error) -> Result<(), Error> {
 }
 
 /// Posts the review queue digest under `transaction`, as Go's `SendQueueDigest` does.
-#[expect(dead_code, reason = "called by E09")]
 pub(crate) async fn send_queue_digest(
     client: &Client,
     matrix: &Matrix,

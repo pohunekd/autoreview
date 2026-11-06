@@ -23,7 +23,6 @@ use serde::de::IgnoredAny;
 use crate::process::{child_environment, run};
 
 /// Fields of a pull request in the GraphQL selection, in Go's order.
-#[expect(dead_code, reason = "called by E03")]
 const PULL_REQUEST_FIELDS: &str = concat!(
     "id number title url state isDraft headRefOid headRefName baseRefOid baseRefName\n",
     "      author { __typename login }\n",
@@ -33,11 +32,9 @@ const PULL_REQUEST_FIELDS: &str = concat!(
 );
 
 /// Variables the `gh` child sets besides its token: plain output and no prompts.
-#[expect(dead_code, reason = "called by E03")]
 const GH_CHILD_ENVIRONMENT: [(&str, &str); 2] = [("GH_PAGER", "cat"), ("GH_PROMPT_DISABLED", "1")];
 
 /// Returns the GraphQL search that discovers pull requests (`graphQLSearch`).
-#[expect(dead_code, reason = "called by E03")]
 pub(crate) fn graphql_search() -> String {
     format!(
         concat!(
@@ -53,7 +50,6 @@ pub(crate) fn graphql_search() -> String {
 }
 
 /// Returns the GraphQL query that reads one pull request (`graphQLPullRequest`).
-#[expect(dead_code, reason = "called by E03")]
 fn graphql_pull_request() -> String {
     format!(
         concat!(
@@ -70,7 +66,6 @@ fn graphql_pull_request() -> String {
 /// The `gh` CLI of the engine and the GitHub identity that its calls use.
 ///
 /// The token is left out of the `Debug` output.
-#[expect(dead_code, reason = "called by E03")]
 pub(crate) struct GitHub {
     /// Path of the `gh` binary.
     binary: String,
@@ -104,7 +99,6 @@ impl fmt::Debug for GitHub {
 
 impl GitHub {
     /// Creates the client from the `gh` settings of the configuration.
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) fn new(
         binary: String,
         token: String,
@@ -128,7 +122,6 @@ impl GitHub {
     /// Runs `gh` with `args` and returns its stdout, which is valid JSON.
     ///
     /// `input` is serialized to the child's stdin; `None` gives an empty stdin.
-    #[expect(dead_code, reason = "called by E03")]
     pub(crate) async fn github<T: Serialize + ?Sized>(
         &self,
         args: &[String],
@@ -199,7 +192,6 @@ fn decode_viewer_login(output: &str) -> Result<String, Error> {
 /// Returns the code and the permanence of a failed `gh` call, read from its error message.
 ///
 /// A message that names `HTTP 422` is a request GitHub rejected, which a retry does not change.
-#[expect(dead_code, reason = "called by E03")]
 fn gh_failure(message: &str) -> (&'static str, bool) {
     if names_http_422(message) {
         ("github_request_rejected", true)
@@ -212,7 +204,6 @@ fn gh_failure(message: &str) -> (&'static str, bool) {
 ///
 /// Word boundaries and `\s` are ASCII in RE2, so only `\t`, `\n`, `\f`, `\r` and space separate
 /// the words, and `HTTP` matches in any ASCII case.
-#[expect(dead_code, reason = "called by E03")]
 fn names_http_422(message: &str) -> bool {
     let bytes = message.as_bytes();
     let length = bytes.len();
@@ -267,13 +258,11 @@ fn names_http_422(message: &str) -> bool {
 }
 
 /// Reports whether `byte` is an ASCII word character, as RE2's `\w` is.
-#[expect(dead_code, reason = "called by E03")]
 fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 /// Reports whether `byte` is one of the ASCII whitespace bytes that RE2's `\s` matches.
-#[expect(dead_code, reason = "called by E03")]
 fn is_space_byte(byte: u8) -> bool {
     matches!(byte, b'\t' | b'\n' | 0x0C | b'\r' | b' ')
 }

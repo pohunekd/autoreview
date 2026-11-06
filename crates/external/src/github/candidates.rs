@@ -443,7 +443,6 @@ fn decode_mark_ready_response(output: &str) -> Result<(), Error> {
 impl GitHub {
     /// Returns the pull requests that the policy covers and the ones whose data was refused
     /// (`ListCandidates`).
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn list_candidates(&self, policy: &Policy) -> Result<CandidateList, Error> {
         let mut found: BTreeMap<String, Candidate> = BTreeMap::new();
         let mut rejected: BTreeMap<String, RejectedCandidate> = BTreeMap::new();
@@ -475,7 +474,6 @@ impl GitHub {
 
     /// Marks the drafts of the policy's ready-draft authors that ask the login for a review as
     /// ready for review (`ReadyDrafts`).
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn ready_drafts(&self, policy: &Policy) -> Result<Vec<ReadiedDraft>, Error> {
         let scopes = policy.review_request_scopes();
         let mut readied: Vec<ReadiedDraft> = Vec::new();
@@ -522,7 +520,6 @@ impl GitHub {
     }
 
     /// Searches every repository for requested reviews (`ListReviewRequests`).
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn list_review_requests(&self, max: i64) -> Result<ReviewRequestList, Error> {
         let args = list_review_requests_args(max);
         let output = self.github::<()>(&args, None).await?;

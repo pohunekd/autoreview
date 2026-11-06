@@ -59,7 +59,6 @@ impl ProcessError {
     /// Returns the stdout the child wrote before the run failed.
     ///
     /// It is empty for a child that did not start or whose pipes failed.
-    #[expect(dead_code, reason = "called by E06")]
     pub(crate) fn stdout(&self) -> &str {
         match self {
             Self::Exit { stdout, .. } | Self::Timeout { stdout, .. } => stdout,
@@ -71,7 +70,6 @@ impl ProcessError {
 /// Returns the environment of a child process.
 ///
 /// It is `parent` without the [`DROPPED_VARIABLES`], followed by `extra`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E02"))]
 pub(crate) fn child_environment(
     parent: impl IntoIterator<Item = (OsString, OsString)>,
     extra: impl IntoIterator<Item = (OsString, OsString)>,
@@ -91,7 +89,6 @@ pub(crate) fn child_environment(
 ///
 /// The child reads `input` on stdin and gets exactly `environment`. It is killed
 /// when `timeout` elapses.
-#[expect(dead_code, reason = "called by E02")]
 pub(crate) async fn run(
     binary: &str,
     args: &[String],

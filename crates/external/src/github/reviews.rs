@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use super::{GitHub, response_invalid};
 
 /// Reviews per page of the reviews API; a short page ends the lookup.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 const REVIEWS_PER_PAGE: usize = 100;
 
 /// The author of a review; a deleted account has an empty login.
@@ -83,7 +82,6 @@ enum PageStep {
 
 /// Refuses a review whose body does not carry its marker, before any `gh` call
 /// (`github.go:795-797`).
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn check_review_marker(review: &GitHubReview) -> Result<(), Error> {
     if review.marker.is_empty() || !review.body.contains(&review.marker) {
         return Err(Error::workflow("github_review_invalid", true, None));
@@ -93,7 +91,6 @@ fn check_review_marker(review: &GitHubReview) -> Result<(), Error> {
 
 /// Returns the state that GitHub reports for a published review of `decision`
 /// (`github.go:762-768`).
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn expected_state(decision: Decision) -> &'static str {
     match decision {
         Decision::Approve => "APPROVED",
@@ -108,7 +105,6 @@ fn expected_state(decision: Decision) -> &'static str {
 /// so the author matches exactly when each of its characters folds to the login character. Of
 /// the non-ASCII characters, only U+212A KELVIN SIGN (folds to `k`) and U+017F LATIN SMALL LETTER
 /// LONG S (folds to `s`) fold to an ASCII letter. A missed match would post a second review.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn login_matches(login: &str, author: &str) -> bool {
     if login.chars().count() != author.chars().count() {
         return false;
@@ -123,7 +119,6 @@ fn login_matches(login: &str, author: &str) -> bool {
 
 /// Returns the character that `character` folds to: ASCII lower case, with the two non-ASCII
 /// characters that fold to ASCII letters mapped to them.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn fold_char(character: char) -> char {
     match character {
         '\u{212A}' => 'k',
@@ -136,7 +131,6 @@ fn fold_char(character: char) -> char {
 ///
 /// The first record, in listing order, that carries the marker on `head_sha` from `login` is the
 /// review. Its state must be the expected state or `DISMISSED`; a later record is never tried.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn review_page_step(
     output: &str,
     review: &GitHubReview,
@@ -172,7 +166,6 @@ fn review_page_step(
 
 /// Returns the result of a posted review, which needs a positive id and a URL
 /// (`github.go:812-815`).
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn posted_result(output: &str, decision: Decision) -> Result<PublishResult, Error> {
     let record: GitHubReviewRecord =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
@@ -188,7 +181,6 @@ fn posted_result(output: &str, decision: Decision) -> Result<PublishResult, Erro
 }
 
 /// Returns the argv of one page of the reviews lookup (`github.go:766-770`).
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn reviews_list_args(repository: &str, number: i64, page: i64) -> Vec<String> {
     vec![
         "api".to_owned(),
@@ -197,7 +189,6 @@ fn reviews_list_args(repository: &str, number: i64, page: i64) -> Vec<String> {
 }
 
 /// Returns the argv of the review POST, whose body is read from stdin (`github.go:803`).
-#[cfg_attr(not(test), expect(dead_code, reason = "called by E09"))]
 fn reviews_post_args(repository: &str, number: i64) -> Vec<String> {
     vec![
         "api".to_owned(),
@@ -210,7 +201,6 @@ fn reviews_post_args(repository: &str, number: i64) -> Vec<String> {
 }
 impl GitHub {
     /// Publishes `review` unless its marker is already on the head (`github.go:794-817`).
-    #[expect(dead_code, reason = "called by E09")]
     pub(crate) async fn publish_review(
         &self,
         pr: &PullRequest,
@@ -247,7 +237,6 @@ impl GitHub {
 
     /// Returns the published review that carries the marker, reading every page
     /// (`github.go:766-793`).
-    #[expect(dead_code, reason = "called by E09")]
     async fn find_published_review(
         &self,
         pr: &PullRequest,
