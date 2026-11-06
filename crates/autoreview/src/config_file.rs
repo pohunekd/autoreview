@@ -1612,12 +1612,13 @@ mod tests {
             .v
     }
 
-    /// Secret lookup for the examples: only the example's token variables are set, to synthetic
-    /// values.
+    /// Secret lookup for the tests; only the token variables they use are set.
     fn secret(name: &str) -> Option<String> {
         match name {
             "AUTOREVIEW_GH_TOKEN" => Some("synthetic-token".to_owned()),
-            "AUTOREVIEW_MATRIX_TOKEN" => Some("synthetic-matrix-token".to_owned()),
+            "AUTOREVIEW_MATRIX_TOKEN" | "AUTOREVIEW_MATRIX_TOKEN_OTHER" => {
+                Some("synthetic-matrix-token".to_owned())
+            }
             _ => None,
         }
     }
@@ -1744,6 +1745,85 @@ mod tests {
         let config = parse(&text, secret, example_policy)
             .expect("the example routed to one Matrix backend passes validation");
         assert_eq!(config.matrix_rooms.action, "!roomid:example.org");
+    }
+
+    /// The notify backends, routes and queue backends of the example.
+    const EXAMPLE_NOTIFY: &str = concat!(
+        "  backends:\n",
+        "    - name: log\n",
+        "      type: none\n",
+        "  routes:\n",
+        "    action: [log]\n",
+        "    digest: [log]\n",
+        "    log: [log]\n",
+        "  review_queue:\n",
+        "    backends: [log]\n",
+    );
+
+    /// Returns one `matrix` entry of `notify.backends`.
+    fn matrix_backend(name: &str, homeserver: &str, token_env: &str, mention: &str) -> String {
+        format!(
+            concat!(
+                "    - name: {name}\n",
+                "      type: matrix\n",
+                "      homeserver_url: {homeserver}\n",
+                "      access_token_env: {token_env}\n",
+                "      room: \"!{name}:example.org\"\n",
+                "      mention_user: \"{mention}\"\n",
+            ),
+            name = name,
+            homeserver = homeserver,
+            token_env = token_env,
+            mention = mention,
+        )
+    }
+
+    /// Returns the example routed to the backends `action`, `digest`, `log` and `queue`.
+    fn four_backends(entries: [String; 4], queue_names: &str) -> String {
+        let [action, digest, log, queue] = entries;
+        let notify = format!(
+            concat!(
+                "  backends:\n{action}{digest}{log}{queue}",
+                "  routes:\n",
+                "    action: [action]\n",
+                "    digest: [digest]\n",
+                "    log: [log]\n",
+                "  review_queue:\n",
+                "    backends: {queue_names}\n",
+            ),
+            action = action,
+            digest = digest,
+            log = log,
+            queue = queue,
+            queue_names = queue_names,
+        );
+        mutated(EXAMPLE_NOTIFY, &notify)
+    }
+
+    /// Returns the four backends that share one identity.
+    fn shared_backends() -> [String; 4] {
+        ["action", "digest", "log", "queue"].map(|name| {
+            matrix_backend(
+                name,
+                "https://matrix.example.org",
+                "AUTOREVIEW_MATRIX_TOKEN",
+                "@you:example.org",
+            )
+        })
+    }
+
+    #[test]
+    fn four_matrix_backends_route_each_level_to_its_room() {
+        let text = four_backends(shared_backends(), "[queue]");
+        let config = parse(&text, secret, example_policy)
+            .expect("four Matrix backends with one identity pass validation");
+        assert_eq!(config.matrix_rooms.action, "!action:example.org");
+        assert_eq!(config.matrix_rooms.digest, "!digest:example.org");
+        assert_eq!(config.matrix_rooms.log, "!log:example.org");
+        assert_eq!(config.queue_matrix_room, "!queue:example.org");
+        assert_eq!(config.matrix_homeserver_url, "https://matrix.example.org");
+        assert_eq!(config.matrix_access_token, "synthetic-matrix-token");
+        assert_eq!(config.matrix_mention_user, "@you:example.org");
     }
 
     #[test]
