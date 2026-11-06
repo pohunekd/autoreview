@@ -160,6 +160,7 @@ impl FakeIntegration {
     }
 
     /// Marks a pull request as lapsed with an error code.
+    #[expect(dead_code, reason = "called by S31")]
     pub(crate) fn lapse(&self, pr: PullRequest, code: &str) {
         let mut state = self.lock();
         let key = pr.key();
@@ -168,6 +169,7 @@ impl FakeIntegration {
     }
 
     /// Marks a pull request as closed.
+    #[expect(dead_code, reason = "called by S34")]
     pub(crate) fn close(&self, pr: PullRequest) {
         let mut state = self.lock();
         let key = pr.key();
@@ -401,7 +403,10 @@ impl Integrations for FakeIntegration {
         };
         let result = match outcome {
             Err(error) => Err(error),
-            Ok((request, output)) => Ok(Some(output(&request).into_bytes())),
+            // An empty output stands for Go's nil output: the session has not finished yet.
+            Ok((request, output)) => {
+                Ok(Some(output(&request).into_bytes()).filter(|bytes: &Vec<u8>| !bytes.is_empty()))
+            }
         };
         ready(result)
     }
@@ -803,7 +808,7 @@ fn settling_output(
 }
 
 /// Returns a reviewer output that settles every prior finding as fixed.
-fn reviewer_output(
+pub(crate) fn reviewer_output(
     findings: Vec<Value>,
 ) -> impl Fn(&SessionRequest) -> String + Send + Sync + 'static {
     settling_output(findings, |_| PRIOR_FIXED)
@@ -853,6 +858,7 @@ fn verifier_output(
 /// Returns a session output that answers verifier requests by the claim verdicts.
 ///
 /// Every other request goes to `reviewers`.
+#[expect(dead_code, reason = "called by S33")]
 fn verifying(
     reviewers: impl Fn(&SessionRequest) -> String + Send + Sync + 'static,
     finding: impl Fn(&ClaimFinding) -> &'static str + Send + Sync + 'static,
@@ -868,4 +874,4 @@ fn verifying(
 }
 
 /// Policy document of the integration tests: pipelines, repositories and notifications.
-const INTEGRATION_POLICY: &str = include_str!("integration-policy.yaml");
+pub(crate) const INTEGRATION_POLICY: &str = include_str!("integration-policy.yaml");

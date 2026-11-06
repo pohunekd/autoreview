@@ -61,7 +61,7 @@ pub(crate) trait Clock: Send + Sync {
 
 /// The clock of the running process: the monotonic clock and the Tokio timer.
 #[derive(Debug, Clone, Copy, Default)]
-#[expect(dead_code, reason = "called by C01")]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
 pub(crate) struct SystemClock;
 
 impl Clock for SystemClock {
@@ -80,7 +80,7 @@ impl Clock for SystemClock {
 
 /// The review engine. It holds the configuration, the store, the side effects and the set of
 /// reviews this engine has claimed.
-#[expect(dead_code, reason = "called by C01")]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
 pub(crate) struct Engine<I, C> {
     /// Validated configuration; every timing and limit is read from here.
     pub(crate) config: Config,
@@ -96,7 +96,7 @@ pub(crate) struct Engine<I, C> {
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Creates an engine from the configuration, the store, the integrations and the clock.
-    #[expect(dead_code, reason = "called by C01")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
     pub(crate) fn new(config: Config, store: Arc<Store>, integration: Arc<I>, clock: C) -> Self {
         Self {
             config,
@@ -153,7 +153,7 @@ where
     ///
     /// Returns `store_unavailable` when the engine lock file cannot be opened,
     /// `engine_already_running` when it is locked, and `configuration_invalid` without a policy.
-    #[expect(dead_code, reason = "called by C01")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
     pub(crate) async fn serve(self: &Arc<Self>, cancel: &CancellationToken) -> Result<(), Error> {
         let lock = OpenOptions::new()
             .create(true)
