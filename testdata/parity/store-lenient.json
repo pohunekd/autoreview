@@ -1,0 +1,107 @@
+{
+  "api": {
+    "list_reviews": [
+      {
+        "workflow_id": "prr-v2-b75241044c9323bc05f08ce1e4912a1bba387264a2ec99e54418cec5a05e369c",
+        "key": "acme/legacy#7",
+        "status": "completed",
+        "result": "success",
+        "released": false,
+        "cleanup_pending": false,
+        "outcome": "{\"outcome\":\"abandoned\",\"publication\":{\"decision\":\"DISMISS\",\"github_review_id\":0,\"review_url\":\"\",\"reused\":false}}",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "completed_at": "2026-01-01T00:00:00Z"
+      }
+    ],
+    "review": {
+      "key": "acme/legacy#7",
+      "published": {
+        "repository": "acme/legacy",
+        "number": 7,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 11,
+        "decision": "DISMISS",
+        "workflow_id": "prr-v2-b75241044c9323bc05f08ce1e4912a1bba387264a2ec99e54418cec5a05e369c",
+        "published_at": "2026-01-01T00:00:00Z"
+      },
+      "reviews": [
+        {
+          "workflow_id": "prr-v2-b75241044c9323bc05f08ce1e4912a1bba387264a2ec99e54418cec5a05e369c",
+          "key": "acme/legacy#7",
+          "status": "completed",
+          "result": "success",
+          "released": false,
+          "cleanup_pending": false,
+          "outcome": "{\"outcome\":\"abandoned\",\"publication\":{\"decision\":\"DISMISS\",\"github_review_id\":0,\"review_url\":\"\",\"reused\":false}}",
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z",
+          "completed_at": "2026-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "review_waiting": {
+      "key": "acme/waiting#8",
+      "awaiting": {
+        "repository": "acme/waiting",
+        "number": 8,
+        "head_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "review_request_id": 11,
+        "trigger": {
+          "kind": "kind<&>\u2028\u2029\"\\",
+          "label": "ai-review"
+        },
+        "workflow_id": "prr-v2-2d22eb96837c90f10d92a1d2c700913d16dcc97a38bbd2cf167e34ce3f3eb587"
+      },
+      "reviews": []
+    }
+  },
+  "discovery": [
+    {
+      "name": "awaiting",
+      "value": "{\"acme/waiting#8\":{\"repository\":\"acme/waiting\",\"number\":8,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"trigger\":{\"kind\":\"kind\\u003c\\u0026\\u003e\\u2028\\u2029\\\"\\\\\",\"label\":\"ai-review\"},\"workflow_id\":\"prr-v2-2d22eb96837c90f10d92a1d2c700913d16dcc97a38bbd2cf167e34ce3f3eb587\"}}"
+    },
+    {
+      "name": "published",
+      "value": "{\"acme/legacy#7\":{\"repository\":\"acme/legacy\",\"number\":7,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"decision\":\"DISMISS\",\"workflow_id\":\"prr-v2-b75241044c9323bc05f08ce1e4912a1bba387264a2ec99e54418cec5a05e369c\",\"published_at\":\"2026-01-01T00:00:00Z\"}}"
+    },
+    {
+      "name": "rejected",
+      "value": "{}"
+    },
+    {
+      "name": "schedule",
+      "value": "{}"
+    }
+  ],
+  "review_steps": [
+    {
+      "name": "plan",
+      "output": "{\"decision\":\"DISMISS\",\"await\":false,\"own_pull_request\":false}",
+      "workflow_id": "prr-v2-b75241044c9323bc05f08ce1e4912a1bba387264a2ec99e54418cec5a05e369c"
+    },
+    {
+      "name": "publication",
+      "output": "{\"decision\":\"kind\\u003c\\u0026\\u003e\\u2028\\u2029\\\"\\\\\",\"github_review_id\":3,\"review_url\":\"https://github.com/acme/legacy/pull/7#review\",\"reused\":false}",
+      "workflow_id": "prr-v2-b75241044c9323bc05f08ce1e4912a1bba387264a2ec99e54418cec5a05e369c"
+    }
+  ],
+  "reviews": [
+    {
+      "approval": null,
+      "approval_deadline": null,
+      "cleanup_pending": 0,
+      "completed_at": "2026-01-01T00:00:00Z",
+      "created_at": "2026-01-01T00:00:00Z",
+      "failure": null,
+      "input": "{\"version\":5,\"pull_request\":{\"repository\":\"acme/legacy\",\"number\":7,\"head_sha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"review_request_id\":11,\"title\":\"Change\",\"url\":\"https://github.com/acme/legacy/pull/7\",\"author\":\"colleague\",\"head_branch\":\"feature\",\"base_branch\":\"main\",\"base_sha\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"},\"attempt\":1,\"rule\":{\"match\":\"acme/*\",\"trigger\":{\"kind\":\"kind\\u003c\\u0026\\u003e\\u2028\\u2029\\\"\\\\\",\"label\":\"ai-review\"},\"pipeline\":{\"name\":\"main\",\"protocol\":\"legacy-protocol\",\"reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"legacy-protocol\",\"agent_profile\":\"claude-opus\",\"finding_prefix\":\"O\"}],\"incremental_reviewers\":null,\"prompt\":\"Review the pull request.\",\"checkout\":\"merge\",\"project_sources\":null},\"on_findings\":\"block\",\"on_clean\":\"hold\",\"on_notes\":\"digest\"},\"reviewers\":[{\"id\":\"opus\",\"label\":\"Opus\",\"protocol\":\"legacy-protocol\",\"agent_profile\":\"claude-opus\",\"finding_prefix\":\"O\"}],\"scope\":{\"mode\":\"full\"},\"route\":{\"host\":\"host\",\"project_id\":\"project\"},\"notifications\":{\"\":\"\",\"aaa_retired\":\"pager\",\"approval_expired\":\"log\",\"approval_requested\":\"log\",\"approved\":\"log\",\"changes_requested\":\"log\",\"cleanup_manual\":\"log\",\"command_failed\":\"log\",\"commented\":\"log\",\"findings_on_own_pr\":\"log\",\"invocation_paused\":\"action\",\"retry_scheduled\":\"log\",\"review_stopped\":\"log\",\"started\":\"log\",\"superseded\":\"log\",\"zzz_retired\":\"kind\\u003c\\u0026\\u003e\\u2028\\u2029\\\"\\\\\"},\"approval_timeout_seconds\":60,\"policy_digest\":\"digest\",\"publisher_login\":\"reviewer-bot\",\"limits\":{\"session_timeout_ms\":0,\"output_poll_ms\":0,\"session_start_attempts\":0,\"session_start_retry_ms\":0,\"session_cleanup_attempts\":0,\"session_cleanup_retry_ms\":0,\"reviewer_run_attempts\":0,\"reviewer_run_retry_ms\":0,\"step_retry_ms\":0,\"step_retry_initial_ms\":0,\"step_retry_max_interval_ms\":0}}",
+      "outcome": "{\"outcome\":\"abandoned\",\"publication\":{\"decision\":\"DISMISS\",\"github_review_id\":0,\"review_url\":\"\",\"reused\":false}}",
+      "released": 0,
+      "result": "success",
+      "review_key": "acme/legacy#7",
+      "status": "completed",
+      "updated_at": "2026-01-01T00:00:00Z",
+      "workflow_id": "prr-v2-b75241044c9323bc05f08ce1e4912a1bba387264a2ec99e54418cec5a05e369c"
+    }
+  ]
+}
