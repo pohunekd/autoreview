@@ -8,7 +8,6 @@ use autoreview_policy::{Event, Level, Reviewer, Rule};
 use serde::{Deserialize, Serialize, Serializer};
 
 /// Scope mode of a review that reads the whole pull request.
-#[expect(dead_code, reason = "called by S22")]
 pub(crate) const SCOPE_FULL: &str = "full";
 
 /// Scope mode of a review of the commits since the last published head.

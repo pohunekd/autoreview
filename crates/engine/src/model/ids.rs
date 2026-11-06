@@ -13,7 +13,6 @@ use super::pull_request::{PullRequest, RejectedCandidate};
 pub(crate) const WORKFLOW_ID_PREFIX: &str = "prr-v2-";
 
 /// Contract version of the review input that discovery writes.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S22"))]
 pub(crate) const INPUT_VERSION: i64 = 5;
 
 /// Oldest input version a review accepts, so a stored review resumes after an upgrade.
