@@ -14,8 +14,8 @@ use crate::model::{Discussion, Finding, PriorFinding, PriorVerdict, ReviewerResu
 /// Severities that a finding may carry, most severe first.
 const SEVERITIES: [&str; 5] = ["blocker", "critical", "high", "medium", "low"];
 
-/// Confidence levels that a finding may carry.
-const CONFIDENCE_LEVELS: [&str; 3] = ["high", "medium", "low"];
+/// Confidence levels that a finding may carry, most confident first.
+pub(crate) const CONFIDENCE_LEVELS: [&str; 3] = ["high", "medium", "low"];
 
 /// Codes of the output failures that a fresh reviewer run may fix.
 const RETRYABLE_CODES: [&str; 4] = [
