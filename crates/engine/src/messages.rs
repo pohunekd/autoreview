@@ -112,7 +112,6 @@ fn finding_lines(input: &ReviewInput, findings: &[Finding], limit: i64) -> Strin
 /// The approval request sent when a clean review waits for the owner.
 ///
 /// The reply instruction precedes the notes, so a cut at the limit keeps it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S29"))]
 pub(crate) fn approval_requested_message(
     excerpt_characters: i64,
     input: &ReviewInput,
@@ -206,7 +205,6 @@ fn answered_lines(artifact: &Artifact, limit: i64) -> String {
 }
 
 /// The message that reports a published review and its decision.
-#[expect(dead_code, reason = "called by S28")]
 pub(crate) fn published_message(
     excerpt_characters: i64,
     input: &ReviewInput,
@@ -377,7 +375,6 @@ pub(crate) fn superseded_message(input: &ReviewInput, code: &str) -> String {
 }
 
 /// The message that reports an approval that expired without a reply.
-#[expect(dead_code, reason = "called by S29")]
 pub(crate) fn approval_expired_message(input: &ReviewInput) -> String {
     format!(
         concat!(

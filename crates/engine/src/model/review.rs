@@ -25,14 +25,12 @@ pub(crate) const PRIOR_OPEN: &str = "still_open";
 pub(crate) const PRIOR_ANSWERED: &str = "answered";
 
 /// Kind of an approval decision that approves the review.
-#[expect(dead_code, reason = "called by S29")]
 pub(crate) const APPROVAL_KIND_APPROVE: &str = "approve";
 
 /// Kind of an approval decision that a newer review superseded.
 pub(crate) const APPROVAL_KIND_SUPERSEDED: &str = "superseded";
 
 /// Kind of an approval decision whose wait expired.
-#[expect(dead_code, reason = "called by S29")]
 pub(crate) const APPROVAL_KIND_EXPIRED: &str = "expired";
 
 /// Returns the key of a prior finding, the head cut to 12 characters, a colon and the ID.

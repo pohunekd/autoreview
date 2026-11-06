@@ -129,7 +129,6 @@ pub(crate) enum SlotId {
 }
 
 /// One reviewer or the verifier, with its session request and its stored progress.
-#[expect(dead_code, reason = "called by S28")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReviewerSlot {
     /// The reviewer the slot runs.
@@ -180,7 +179,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Turns an error into [`shutdown_error`] once the engine is shutting down.
     ///
     /// A shutdown is never recorded as a review failure.
-    fn interrupted(&self, err: Error) -> Error {
+    pub(crate) fn interrupted(&self, err: Error) -> Error {
         if self.cancel.is_cancelled() {
             shutdown_error()
         } else {
@@ -295,7 +294,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     }
 
     /// Stores whether the review released its claim on the pull request.
-    #[expect(dead_code, reason = "called by S29")]
     pub(crate) fn set_released(&self, released: bool) -> Result<(), Error> {
         self.engine
             .store
@@ -564,7 +562,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     }
 
     /// Reads the pull request again and fails with `head_changed` when its head moved.
-    #[expect(dead_code, reason = "called by S28")]
     pub(crate) async fn current_pull_request(&self) -> Result<PullRequest, Error> {
         let repository = self.input.pull_request.repository.clone();
         let number = self.input.pull_request.number;
@@ -589,7 +586,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ///
     /// A shutdown returns `cause` unchanged. A superseded review is reported quietly; any other
     /// cause is logged, and the scheduler retries or reports it.
-    #[expect(dead_code, reason = "called by S28")]
     pub(crate) async fn fail(&mut self, cause: Error) -> Result<(), Error> {
         if is_shutdown(&cause) {
             return Err(cause);

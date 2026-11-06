@@ -36,11 +36,9 @@ pub(crate) const STEP_COMMENTABLE: &str = "commentable";
 pub(crate) const STEP_PLAN: &str = "plan";
 
 /// Step that stores the rendered GitHub review.
-#[expect(dead_code, reason = "called by S28")]
 pub(crate) const STEP_RENDERED: &str = "rendered";
 
 /// Step that stores the time of the publication.
-#[expect(dead_code, reason = "called by S28")]
 pub(crate) const STEP_PUBLISHED_AT: &str = "published_at";
 
 /// Step that stores the verification of the blocking claims.
@@ -183,7 +181,6 @@ pub(crate) fn still_wanted(expected: &PullRequest, current: &PullRequest) -> Res
 }
 
 /// The persisted progress of one reviewer or of the verifier.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct SlotState {
@@ -224,7 +221,6 @@ autoreview_go_compat::object_only_serde!(ArtifactOutcome);
 /// Stored outcome of rendering the GitHub review.
 ///
 /// A render failure is stored as its code, so a resumed review fails the same way.
-#[expect(dead_code, reason = "called by S28")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct RenderOutcome {
@@ -238,7 +234,6 @@ pub(crate) struct RenderOutcome {
 autoreview_go_compat::object_only_serde!(RenderOutcome);
 
 /// Reports whether an integer is zero, which Go omits from the JSON.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 fn is_zero(value: &i64) -> bool {
     *value == 0
 }
