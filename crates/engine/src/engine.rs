@@ -195,7 +195,6 @@ where
         self.work(review_cancel, tasks);
         loop {
             tokio::select! {
-                biased;
                 () = cancel.cancelled() => {
                     tracing::info!("pull request review engine stopping");
                     return Ok(());
