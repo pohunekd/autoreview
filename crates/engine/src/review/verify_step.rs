@@ -6,6 +6,7 @@
 
 use super::input::{STATE_VERIFIER_DEADLINE, STEP_VERIFICATION};
 use super::sessions::{Review, ReviewerSlot, SlotId, is_session_fault};
+use crate::discovery::poll::live;
 use crate::engine::Clock;
 use crate::error::{Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::Integrations;
@@ -49,11 +50,12 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         &mut self,
         claims: &VerificationClaims,
     ) -> Result<Verification, Error> {
-        if let Some(stored) = self
-            .engine
-            .store
-            .load_step::<Verification>(&self.workflow_id, STEP_VERIFICATION)?
-        {
+        let loaded = live(&self.cancel).and_then(|()| {
+            self.engine
+                .store
+                .load_step::<Verification>(&self.workflow_id, STEP_VERIFICATION)
+        })?;
+        if let Some(stored) = loaded {
             return Ok(stored);
         }
         let prompt = build_verifier_request(&self.input, claims, &self.discussion)?;
@@ -115,6 +117,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
             Err(err) => return Err(err),
         }
+        live(&self.cancel)?;
         self.engine
             .store
             .save_step(&self.workflow_id, STEP_VERIFICATION, &verification)?;
