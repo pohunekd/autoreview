@@ -18,7 +18,7 @@ use crate::model::{Decision, Finding, PriorResult, PullRequest};
 /// only the blocking findings. An open prior finding is counted under its key.
 pub(crate) fn review_marker(
     pr: &PullRequest,
-    decision: Decision,
+    decision: &Decision,
     findings: &[Finding],
     open: &[PriorResult],
 ) -> String {
@@ -52,12 +52,13 @@ pub(crate) fn review_marker(
 }
 
 /// Text of a decision as the marker and the GitHub review carry it.
-pub(crate) fn decision_text(decision: Decision) -> &'static str {
+pub(crate) fn decision_text(decision: &Decision) -> &str {
     match decision {
         Decision::Approve => "APPROVE",
         Decision::RequestChanges => "REQUEST_CHANGES",
         Decision::Comment => "COMMENT",
         Decision::Unset => "",
+        Decision::Other(text) => text,
     }
 }
 
@@ -118,8 +119,8 @@ mod tests {
     #[test]
     fn review_marker_depends_on_decision_and_findings() {
         let pr = test_pull_request(5);
-        let approve = review_marker(&pr, Decision::Approve, &[], &[]);
-        let changes = review_marker(&pr, Decision::RequestChanges, &[finding("O001")], &[]);
+        let approve = review_marker(&pr, &Decision::Approve, &[], &[]);
+        let changes = review_marker(&pr, &Decision::RequestChanges, &[finding("O001")], &[]);
         assert!(
             approve != changes && approve.starts_with("<!-- hermes-pr-review:v1:acme/widget#5@"),
             "markers {approve:?} and {changes:?}"
@@ -129,10 +130,10 @@ mod tests {
                 && changes.contains(":decision=REQUEST_CHANGES:findings=1:digest="),
             "markers must carry the decision and the finding count: {approve:?} and {changes:?}"
         );
-        let clean_comment = review_marker(&pr, Decision::Comment, &[], &[]);
+        let clean_comment = review_marker(&pr, &Decision::Comment, &[], &[]);
         let comment_with_findings = review_marker(
             &pr,
-            Decision::Comment,
+            &Decision::Comment,
             &[finding("O001"), finding("S001")],
             &[],
         );
@@ -151,7 +152,7 @@ mod tests {
         for case in &cases {
             let marker = review_marker(
                 &case.input.pull_request,
-                case.input.decision,
+                &case.input.decision,
                 case.input.findings.as_deref().unwrap_or_default(),
                 case.input.open_prior.as_deref().unwrap_or_default(),
             );

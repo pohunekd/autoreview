@@ -168,7 +168,7 @@ impl RunLimits {
 impl ReviewInput {
     /// Returns the notification level of an event, or `None` when the policy names none.
     pub(crate) fn level(&self, event: Event) -> Option<Level> {
-        self.notifications.get(&event).copied()
+        self.notifications.get(&event).cloned()
     }
 
     /// Reports whether a finding holds the merge back.
@@ -296,7 +296,7 @@ pub struct PriorCheck {
 autoreview_go_compat::object_only_serde!(PriorCheck);
 
 /// GitHub review event decision.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Decision {
     /// Approve the pull request.
     #[serde(rename = "APPROVE")]
@@ -311,6 +311,9 @@ pub enum Decision {
     #[default]
     #[serde(rename = "")]
     Unset,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 /// Result of publishing a review to GitHub.
@@ -422,7 +425,7 @@ impl AwaitRecord {
 }
 
 /// Outcome of a review publication.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Outcome {
     /// Review was published.
     #[serde(rename = "published")]
@@ -437,6 +440,9 @@ pub enum Outcome {
     #[default]
     #[serde(rename = "")]
     Unset,
+    /// A value that an older engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 /// Result of the review publication step.

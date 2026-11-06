@@ -167,7 +167,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             pull_request: self.input.pull_request.clone(),
             route: self.input.route.clone(),
             reviewer: reviewer.clone(),
-            checkout: self.input.rule.pipeline.checkout,
+            checkout: self.input.rule.pipeline.checkout.clone(),
             workflow_id: self.workflow_id.clone(),
             run: 0,
             start: 0,
@@ -429,7 +429,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             number: current.number,
             head_sha: current.head_sha.clone(),
             review_request_id: current.review_request_id,
-            decision: plan.decision,
+            decision: plan.decision.clone(),
             workflow_id: self.workflow_id.clone(),
             published_at: published_at.0,
             awaits_author: plan.notes_to_author,
@@ -439,7 +439,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             return Err(self.interrupted(err));
         }
         let blocking = blocking_count(&self.input, artifact);
-        let event: Event = publication_event(*plan, blocking);
+        let event: Event = publication_event(plan, blocking);
         let message = published_message(
             self.engine.config.excerpt_characters,
             &self.input,
@@ -450,7 +450,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         self.notify("published", event, &message).await?;
         tracing::info!(
             review_id = %current.review_id(),
-            decision = %decision_text(plan.decision),
+            decision = %decision_text(&plan.decision),
             findings = artifact.findings.len(),
             blocking_findings = blocking,
             review_url = %result.review_url,

@@ -44,7 +44,7 @@ pub(crate) fn parse_reviewer_output(
             parsed
         }
         Protocol::CodexEnvelope => codex::parse_codex_output(cfg, &input.pull_request, raw)?,
-        Protocol::Unset => {
+        Protocol::Unset | Protocol::Other(_) => {
             return Err(Error::workflow("review_protocol_invalid", true, None));
         }
     };
@@ -176,7 +176,7 @@ pub(crate) mod fixtures {
             rule: Rule {
                 pipeline: Pipeline {
                     name: "main".to_owned(),
-                    protocol: reviewer.protocol,
+                    protocol: reviewer.protocol.clone(),
                     reviewers: vec![reviewer.clone()],
                     incremental_reviewers: vec![reviewer.clone()],
                     prompt: "Review the pull request.".to_owned(),

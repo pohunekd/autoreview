@@ -254,6 +254,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         self.once::<bool, _>(&step_name, || {
             let integration = &*self.engine.integration;
             let cancel = &self.cancel;
+            let event = event.clone();
             async move {
                 let Some(level) = self.input.level(event) else {
                     return Err(Error::workflow("review_input_invalid", true, None));

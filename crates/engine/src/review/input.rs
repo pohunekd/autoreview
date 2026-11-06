@@ -273,8 +273,10 @@ mod tests {
     }
 
     fn notification_levels() -> BTreeMap<Event, Level> {
-        let mut levels: BTreeMap<Event, Level> =
-            EVENTS.iter().map(|event| (*event, Level::Log)).collect();
+        let mut levels: BTreeMap<Event, Level> = EVENTS
+            .iter()
+            .map(|event| (event.clone(), Level::Log))
+            .collect();
         levels.insert(Event::ApprovalRequested, Level::Action);
         levels.insert(Event::FindingsOnOwnPr, Level::Action);
         levels.insert(Event::ReviewStopped, Level::Action);
@@ -306,7 +308,7 @@ mod tests {
             on_clean,
             pipeline: Pipeline {
                 name: "main".to_owned(),
-                protocol: reviewer.protocol,
+                protocol: reviewer.protocol.clone(),
                 reviewers: vec![reviewer.clone()],
                 incremental_reviewers: vec![reviewer],
                 prompt: "Review the pull request.".to_owned(),

@@ -52,7 +52,9 @@ pub(crate) fn build_reviewer_request(
     match reviewer.protocol {
         Protocol::ClaudeStructured => claude_request(input, reviewer, discussion),
         Protocol::CodexEnvelope => Ok(codex_prompt(input)),
-        Protocol::Unset => Err(Error::workflow("review_protocol_invalid", true, None)),
+        Protocol::Unset | Protocol::Other(_) => {
+            Err(Error::workflow("review_protocol_invalid", true, None))
+        }
     }
 }
 

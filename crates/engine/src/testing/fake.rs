@@ -509,7 +509,7 @@ impl Integrations for FakeIntegration {
                 .position(|existing| existing.marker == review.marker)
             {
                 Ok(PublishResult {
-                    decision: review.decision,
+                    decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,
                     review_url: format!("{}#review", pull_request.url),
                     reused: true,
@@ -517,7 +517,7 @@ impl Integrations for FakeIntegration {
             } else {
                 state.published.push(review.clone());
                 Ok(PublishResult {
-                    decision: review.decision,
+                    decision: review.decision.clone(),
                     github_review_id: state.published.len() as i64,
                     review_url: format!("{}#review", pull_request.url),
                     reused: false,

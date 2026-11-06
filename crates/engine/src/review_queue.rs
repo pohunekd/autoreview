@@ -294,7 +294,7 @@ pub(crate) fn queue_status(
     }
     if let Some(record) = state.published.get(key) {
         return (
-            format!("AI review published {}", decision_text(record.decision)),
+            format!("AI review published {}", decision_text(&record.decision)),
             QueuePriority::Other,
         );
     }
