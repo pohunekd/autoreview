@@ -337,7 +337,9 @@ fails and is retried for the backends that did not accept it, because the person
 channel. A `digest` or `log` message that a backend rejects is dropped for that
 backend with a warning. `autoreview review-queue` fails with the backend's
 error code when a queue backend rejects the message, so its timer shows the
-failure.
+failure. `review_queue.backends` must name one `matrix` backend; `none` is not
+supported for the review queue yet, so a list of `none` backends only, or an
+empty list, is refused at load.
 
 ### Backend `none`
 
@@ -409,6 +411,9 @@ Besides each key's own range, `validate` enforces:
 
 autoreview reads no other variable; `GH_TOKEN` in its own environment is
 ignored and is set only for each `gh` child, to the token of its credential.
+The `gh` and `pohunek` processes that autoreview starts inherit no variable
+named by an `*_env` key or starting with `AUTOREVIEW_`, nor the Go engine's
+`GH_TOKEN` and `MATRIX_ACCESS_TOKEN`.
 
 The same variables can come from a file given with `--env-file` (owner-only,
 mode `0600`), which the workflow plugin uses; see the [CLI reference](cli.md).

@@ -1636,6 +1636,7 @@ mod tests {
             "AUTOREVIEW_MATRIX_TOKEN" | "AUTOREVIEW_MATRIX_TOKEN_OTHER" => {
                 Some("synthetic-matrix-token".to_owned())
             }
+            "AUTOREVIEW_WEBHOOK_URL" => Some("https://hooks.example.org/synthetic".to_owned()),
             _ => None,
         }
     }
@@ -1841,6 +1842,54 @@ mod tests {
         assert_eq!(config.matrix_homeserver_url, "https://matrix.example.org");
         assert_eq!(config.matrix_access_token, "synthetic-matrix-token");
         assert_eq!(config.matrix_mention_user, "@you:example.org");
+    }
+
+    #[test]
+    fn secret_variables_name_every_env_key() {
+        let mut entries = shared_backends();
+        entries[3].push_str(concat!(
+            "    - name: hook\n",
+            "      type: webhook\n",
+            "      url_env: AUTOREVIEW_WEBHOOK_URL\n",
+            "      format: json\n",
+        ));
+        let text = four_backends(entries, "[queue]");
+        let config = parse(&text, secret, example_policy).expect("a webhook config loads");
+        let names: Vec<&str> = config.secret_variables.iter().map(String::as_str).collect();
+        assert_eq!(
+            names,
+            [
+                "AUTOREVIEW_GH_TOKEN",
+                "AUTOREVIEW_MATRIX_TOKEN",
+                "AUTOREVIEW_WEBHOOK_URL"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_queue_routed_only_to_none_is_refused() {
+        let mut entries = shared_backends();
+        entries[3].push_str("    - name: quiet\n      type: none\n");
+        let text = four_backends(entries.clone(), "[quiet]");
+        assert_eq!(
+            error_text(parse(&text, secret, example_policy)),
+            concat!(
+                "configuration_invalid: notify.review_queue.backends: ",
+                "none is not supported for the review queue"
+            )
+        );
+        let text = four_backends(entries, "[quiet, queue]");
+        let config = parse(&text, secret, example_policy).expect("none next to Matrix loads");
+        assert_eq!(config.queue_matrix_room, "!queue:example.org");
+    }
+
+    #[test]
+    fn a_queue_without_backends_is_refused() {
+        let text = four_backends(shared_backends(), "[]");
+        assert_eq!(
+            error_text(parse(&text, secret, example_policy)),
+            "configuration_invalid: notify.review_queue.backends: must name at least one backend"
+        );
     }
 
     #[test]
