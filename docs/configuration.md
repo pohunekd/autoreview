@@ -255,8 +255,8 @@ How reviewer sessions are named, started, read and cleaned up.
 | Key | Meaning |
 |---|---|
 | `group` | pohunek-companion group that every review session is placed in |
-| `branch_prefix` | Prefix of the review branches created on the review host. Change it only while no review runs |
-| `name_prefix` | Prefix of the pohunek session names. A running review finds its session by this name, so change it only while no review runs |
+| `branch_prefix` | Prefix of the review branches created on the review host; it must be usable in a git ref name (no whitespace, control character, `..`, `@{` or `~^:?*[\`, and no leading `-` or `/`). Change it only while no review runs |
+| `name_prefix` | Prefix of the pohunek session names, without control characters. A running review finds its session by this name, so change it only while no review runs |
 | `timeout_seconds` | Longest time one reviewer session may run |
 | `output_poll_seconds` | How often a running session's output is read |
 | `start_max_attempts`, `start_retry_seconds` | Session start attempts inside one review; each attempt gets its own branch |

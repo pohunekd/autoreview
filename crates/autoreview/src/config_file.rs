@@ -608,8 +608,8 @@ fn map_file(
         None => return Err(missing("pohunek.route_overrides")),
     };
     let session = section(&file.session, "session")?;
-    let session_branch_prefix = text(&session.branch_prefix, "session.branch_prefix")?;
-    let session_name_prefix = text(&session.name_prefix, "session.name_prefix")?;
+    let session_branch_prefix = branch_prefix(&session.branch_prefix)?;
+    let session_name_prefix = name_prefix(&session.name_prefix)?;
     let session_group = text(&session.group, "session.group")?;
     let session_timeout = seconds(&session.timeout_seconds, "session.timeout_seconds")?;
     let output_poll_interval =
@@ -1435,6 +1435,41 @@ fn retry_delay_seconds(value: &Value) -> Result<Vec<time::Duration>, Error> {
     Ok(out)
 }
 
+/// Reads `session.branch_prefix`, which starts every reviewer branch name.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` for text that cannot be part of a git ref name: whitespace,
+/// a control character, `..`, `@{`, one of `~^:?*[\`, or a leading `-` or `/`.
+fn branch_prefix(value: &Option<Value>) -> Result<String, Error> {
+    let key = "session.branch_prefix";
+    let prefix = text(value, key)?;
+    let refused = prefix.starts_with(['-', '/'])
+        || prefix.contains("..")
+        || prefix.contains("@{")
+        || prefix
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    if refused {
+        return Err(invalid(key, "must be usable in a git ref name"));
+    }
+    Ok(prefix)
+}
+
+/// Reads `session.name_prefix`, which starts every review session name.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` for text with a control character.
+fn name_prefix(value: &Option<Value>) -> Result<String, Error> {
+    let key = "session.name_prefix";
+    let prefix = text(value, key)?;
+    if prefix.chars().any(char::is_control) {
+        return Err(invalid(key, "must not contain a control character"));
+    }
+    Ok(prefix)
+}
+
 /// Builds a `configuration_invalid` error that names `key`.
 fn invalid(key: &str, message: &'static str) -> Error {
     Error::config(CONFIGURATION_INVALID, key, Some(Box::from(message)))
@@ -2121,6 +2156,22 @@ mod tests {
                 "  path: /var/lib/autoreview/autoreview.db",
                 "  path: /var/lib/autoreview/autoreview.db\n  extra: 1",
                 "unknown field `extra`",
+            ),
+            (
+                "  branch_prefix: autoreview/review/",
+                "  branch_prefix: autoreview/review..",
+                concat!(
+                    "configuration_invalid: session.branch_prefix: ",
+                    "must be usable in a git ref name"
+                ),
+            ),
+            (
+                "  name_prefix: github-review-",
+                "  name_prefix: \"github-review-\\t\"",
+                concat!(
+                    "configuration_invalid: session.name_prefix: ",
+                    "must not contain a control character"
+                ),
             ),
         ];
         for (old, new, expected) in cases {

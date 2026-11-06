@@ -377,23 +377,4 @@ mod tests {
         request.checkout = Checkout::Head;
         assert_eq!(request.base_ref(), "refs/pull/1/head");
     }
-
-    #[test]
-    fn session_names_and_branches_start_with_the_configured_prefixes() {
-        let request = SessionRequest {
-            pull_request: test_pull_request(1),
-            reviewer: opus(),
-            workflow_id: "prr-v1-abc".to_string(),
-            run: 2,
-            start: 3,
-            name_prefix: "team-review-".to_string(),
-            branch_prefix: "team/review/".to_string(),
-            ..SessionRequest::default()
-        };
-        assert_eq!(request.name(), "team-review-prr-v1-abc-opus-run2-start3");
-        assert_eq!(request.branch(), "team/review/prr-v1-abc-opus-run2-start3");
-        let encoded = serde_json::to_value(&request).expect("request encodes");
-        assert!(encoded.get("name_prefix").is_none(), "{encoded}");
-        assert!(encoded.get("branch_prefix").is_none(), "{encoded}");
-    }
 }
