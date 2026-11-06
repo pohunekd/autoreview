@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
+use tokio_util::sync::CancellationToken;
 
 /// Variables a child must not inherit from the engine.
 ///
@@ -43,6 +44,14 @@ pub(crate) enum ProcessError {
         /// The child's stdout read until the timeout.
         stdout: String,
     },
+    /// The caller's token was cancelled; a running child was killed.
+    #[error("{binary}: context canceled")]
+    Canceled {
+        /// The program that was run.
+        binary: String,
+        /// The child's stdout read until the cancel; empty when it never started.
+        stdout: String,
+    },
     /// The child exited unsuccessfully.
     #[error("{status}: {stderr}")]
     Exit {
@@ -61,7 +70,9 @@ impl ProcessError {
     /// It is empty for a child that did not start or whose pipes failed.
     pub(crate) fn stdout(&self) -> &str {
         match self {
-            Self::Exit { stdout, .. } | Self::Timeout { stdout, .. } => stdout,
+            Self::Exit { stdout, .. }
+            | Self::Timeout { stdout, .. }
+            | Self::Canceled { stdout, .. } => stdout,
             Self::Io { .. } => "",
         }
     }
@@ -88,8 +99,10 @@ pub(crate) fn child_environment(
 /// Runs `binary` with `args` and returns its stdout.
 ///
 /// The child reads `input` on stdin and gets exactly `environment`. It is killed
-/// when `timeout` elapses.
+/// when `timeout` elapses or `cancel` is cancelled, and never started once `cancel` is cancelled,
+/// as Go's `exec.CommandContext` does.
 pub(crate) async fn run(
+    cancel: &CancellationToken,
     binary: &str,
     args: &[String],
     input: &[u8],
@@ -101,6 +114,12 @@ pub(crate) async fn run(
         source,
     };
     let not_piped = |stream: &str| io_error(io::Error::other(format!("{stream} is not piped")));
+    if cancel.is_cancelled() {
+        return Err(ProcessError::Canceled {
+            binary: binary.to_string(),
+            stdout: String::new(),
+        });
+    }
     let mut child = Command::new(binary)
         .args(args)
         .env_clear()
@@ -122,22 +141,35 @@ pub(crate) async fn run(
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     // The buffers live outside the timed future, so a timeout keeps what was read.
-    let finished = tokio::time::timeout(timeout, async {
-        tokio::join!(
-            write_block,
-            stdout_pipe.read_to_end(&mut stdout),
-            stderr_pipe.read_to_end(&mut stderr),
-            child.wait()
-        )
-    })
+    let finished = tokio::time::timeout(
+        timeout,
+        cancel.run_until_cancelled(async {
+            tokio::join!(
+                write_block,
+                stdout_pipe.read_to_end(&mut stdout),
+                stderr_pipe.read_to_end(&mut stderr),
+                child.wait()
+            )
+        }),
+    )
     .await;
-    let Ok((written, stdout_read, stderr_read, status)) = finished else {
-        kill(&mut child).await.map_err(io_error)?;
-        return Err(ProcessError::Timeout {
-            binary: binary.to_string(),
-            timeout,
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-        });
+    let (written, stdout_read, stderr_read, status) = match finished {
+        Ok(Some(finished)) => finished,
+        Ok(None) => {
+            kill(&mut child).await.map_err(io_error)?;
+            return Err(ProcessError::Canceled {
+                binary: binary.to_string(),
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            });
+        }
+        Err(_) => {
+            kill(&mut child).await.map_err(io_error)?;
+            return Err(ProcessError::Timeout {
+                binary: binary.to_string(),
+                timeout,
+                stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            });
+        }
     };
     let status = status.map_err(io_error)?;
     stdout_read.map_err(io_error)?;
@@ -158,7 +190,7 @@ pub(crate) async fn run(
     Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
-/// Kills a child that ran past its timeout and reaps it.
+/// Kills a child that ran past its timeout or its token and reaps it.
 ///
 /// A child that already exited, with its pipes still held open, is not killed again.
 async fn kill(child: &mut Child) -> io::Result<()> {

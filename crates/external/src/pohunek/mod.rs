@@ -20,6 +20,7 @@ use autoreview_engine::model::{ProjectRoute, repository_valid};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::process::{child_environment, run};
 
@@ -152,13 +153,18 @@ pub(crate) fn projects_arguments(host: &str) -> Vec<String> {
 /// Runs the pohunek CLI with `args` in the pohunek environment and returns its stdout.
 ///
 /// A failed run is returned as the error of [`pohunek_failure`].
-pub(crate) async fn pohunek_call(config: &Config, args: &[String]) -> Result<String, Error> {
+pub(crate) async fn pohunek_call(
+    config: &Config,
+    cancel: &CancellationToken,
+    args: &[String],
+) -> Result<String, Error> {
     let environment = pohunek_environment(
         &config.pohunek_state,
         &config.pohunek_runtime,
         std::env::vars_os(),
     );
     match run(
+        cancel,
         &config.pohunek_bin,
         args,
         &[],
@@ -325,12 +331,13 @@ pub(crate) fn choose_route(
 /// Returns the pohunek host and project that run the reviews of `repository`.
 pub(crate) async fn resolve_project(
     config: &Config,
+    cancel: &CancellationToken,
     repository: &str,
     sources: &[String],
 ) -> Result<ProjectRoute, Error> {
     let mut candidates = Vec::new();
     for host in &config.pohunek_hosts {
-        let output = pohunek_call(config, &projects_arguments(host)).await?;
+        let output = pohunek_call(config, cancel, &projects_arguments(host)).await?;
         candidates.extend(route_candidates(
             host,
             &config.github_host,

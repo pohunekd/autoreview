@@ -65,7 +65,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         message: &str,
     ) -> Result<(), Error> {
         retry_step(self.step_policy(), &self.clock, cancel, || {
-            self.integration.notify(level, message)
+            self.integration.notify(cancel, level, message)
         })
         .await
     }

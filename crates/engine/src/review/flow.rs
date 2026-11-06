@@ -80,10 +80,11 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             let settled = review
                 .once::<Discussion, _>(STEP_DISCUSSION, || {
                     let integration = &*self.integration;
+                    let cancel = &review.cancel;
                     let input = &review.input;
                     async move {
                         integration
-                            .list_discussion(&input.pull_request, &input.prior)
+                            .list_discussion(cancel, &input.pull_request, &input.prior)
                             .await
                     }
                 })
@@ -241,8 +242,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let commentable = self
             .once::<CommentableLines, _>(STEP_COMMENTABLE, || {
                 let integration = &*self.engine.integration;
+                let cancel = &self.cancel;
                 let current = &current;
-                async move { integration.list_commentable_lines(current).await }
+                async move { integration.list_commentable_lines(cancel, current).await }
             })
             .await;
         let commentable = match commentable {
@@ -349,10 +351,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         }
         self.once::<Vec<String>, _>(STEP_HUMAN_REVIEW, || {
             let integration = &*self.engine.integration;
+            let cancel = &self.cancel;
             async move {
                 let mut deleted = Vec::new();
                 if !signals.deleted_tests.is_empty() {
-                    deleted = integration.list_deleted_files(current).await?;
+                    deleted = integration.list_deleted_files(cancel, current).await?;
                 }
                 Ok(human_review_signals(signals, &current.labels, &deleted))
             }
@@ -406,8 +409,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let result = self
             .once::<PublishResult, _>(STEP_PUBLICATION, || {
                 let integration = &*self.engine.integration;
+                let cancel = &self.cancel;
                 let review = &rendered.review;
-                async move { integration.publish_review(current, review).await }
+                async move { integration.publish_review(cancel, current, review).await }
             })
             .await;
         let result = match result {

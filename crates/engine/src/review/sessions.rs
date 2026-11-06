@@ -253,11 +253,12 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let step_name = format!("{NOTIFY_STEP_PREFIX}{name}");
         self.once::<bool, _>(&step_name, || {
             let integration = &*self.engine.integration;
+            let cancel = &self.cancel;
             async move {
                 let Some(level) = self.input.level(event) else {
                     return Err(Error::workflow("review_input_invalid", true, None));
                 };
-                integration.notify(level, message).await?;
+                integration.notify(cancel, level, message).await?;
                 Ok(true)
             }
         })
@@ -342,7 +343,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             let mut code = String::new();
             for attempt in 1..=limits.session_cleanup_attempts {
                 let integration = &*self.engine.integration;
-                let remove = integration.remove_session_confirmed(&session).await;
+                let remove = integration
+                    .remove_session_confirmed(&self.cancel, &session)
+                    .await;
                 let remove = match remove {
                     Ok(()) => Ok(()),
                     Err(err) => Err(self.interrupted(err)),
@@ -434,7 +437,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
             request.start = attempt;
             let integration = &*self.engine.integration;
-            let started = integration.ensure_session(&request).await;
+            let started = integration.ensure_session(&self.cancel, &request).await;
             let started = match started {
                 Ok(session) => Ok(session),
                 Err(err) => Err(self.interrupted(err)),
@@ -505,7 +508,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// removal.
     async fn remove_orphaned_session(&self, request: &SessionRequest) -> Result<(), Error> {
         let integration = &*self.engine.integration;
-        let found = integration.find_session(request).await;
+        let found = integration.find_session(&self.cancel, request).await;
         let session = match found {
             Ok(found) => found,
             Err(err) => {
@@ -533,7 +536,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
         };
         if let Some(session) = session {
-            let removed = integration.remove_session_confirmed(&session).await;
+            let removed = integration
+                .remove_session_confirmed(&self.cancel, &session)
+                .await;
             let removed = match removed {
                 Ok(()) => Ok(()),
                 Err(err) => Err(self.interrupted(err)),
@@ -573,11 +578,12 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let current = self
             .fresh(|| {
                 let integration = &*self.engine.integration;
+                let cancel = &self.cancel;
                 let repository = repository.clone();
                 let trigger = trigger.clone();
                 async move {
                     integration
-                        .get_pull_request(&repository, number, &trigger)
+                        .get_pull_request(cancel, &repository, number, &trigger)
                         .await
                 }
             })

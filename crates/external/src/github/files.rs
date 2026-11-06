@@ -12,6 +12,7 @@ use autoreview_engine::error::Error;
 use autoreview_engine::integrations::CommentableLines;
 use autoreview_engine::model::PullRequest;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::{GitHub, response_invalid};
 
@@ -249,10 +250,11 @@ impl GitHub {
     /// Returns the commentable lines of every changed file, keyed by path (`github.go:715-728`).
     pub(crate) async fn commentable_lines(
         &self,
+        cancel: &CancellationToken,
         pr: &PullRequest,
     ) -> Result<CommentableLines, Error> {
         let mut result: CommentableLines = CommentableLines::new();
-        self.visit_changed_files(pr, |file| {
+        self.visit_changed_files(cancel, pr, |file| {
             let lines = commentable_lines_from_patch(&file.patch)?;
             result.insert(file.filename.clone(), lines);
             Ok(())
@@ -262,9 +264,13 @@ impl GitHub {
     }
 
     /// Returns the paths of the files that the pull request removes (`github.go:731-747`).
-    pub(crate) async fn deleted_files(&self, pr: &PullRequest) -> Result<Vec<String>, Error> {
+    pub(crate) async fn deleted_files(
+        &self,
+        cancel: &CancellationToken,
+        pr: &PullRequest,
+    ) -> Result<Vec<String>, Error> {
         let mut removed: Vec<String> = Vec::new();
-        self.visit_changed_files(pr, |file| {
+        self.visit_changed_files(cancel, pr, |file| {
             if file.status == "removed" {
                 removed.push(file.filename.clone());
             }
@@ -281,13 +287,14 @@ impl GitHub {
     /// read before `visit` sees it.
     async fn visit_changed_files(
         &self,
+        cancel: &CancellationToken,
         pr: &PullRequest,
         mut visit: impl FnMut(&ChangedFileRecord) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for page in 1..=self.search_page_limit {
             let arguments = files_args(&pr.repository, pr.number, page);
-            let output = self.github::<()>(&arguments, None).await?;
+            let output = self.github::<()>(cancel, &arguments, None).await?;
             let files = decode_files_page(&output)?;
             for file in &files {
                 if !valid_changed_path(&file.filename) || seen.contains(&file.filename) {

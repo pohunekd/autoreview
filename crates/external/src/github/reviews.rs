@@ -9,6 +9,7 @@ use autoreview_engine::error::Error;
 use autoreview_engine::integrations::{GitHubReview, InlineComment};
 use autoreview_engine::model::{Decision, PublishResult, PullRequest};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::{GitHub, response_invalid};
 
@@ -203,11 +204,12 @@ impl GitHub {
     /// Publishes `review` unless its marker is already on the head (`github.go:794-817`).
     pub(crate) async fn publish_review(
         &self,
+        cancel: &CancellationToken,
         pr: &PullRequest,
         review: &GitHubReview,
     ) -> Result<PublishResult, Error> {
         check_review_marker(review)?;
-        if let Some(existing) = self.find_published_review(pr, review).await? {
+        if let Some(existing) = self.find_published_review(cancel, pr, review).await? {
             return Ok(existing);
         }
         let comments = if review.comments.is_empty() {
@@ -222,10 +224,10 @@ impl GitHub {
             event: review.decision,
         };
         let arguments = reviews_post_args(&pr.repository, pr.number);
-        let output = match self.github(&arguments, Some(&payload)).await {
+        let output = match self.github(cancel, &arguments, Some(&payload)).await {
             Ok(value) => value,
             Err(post_error) => {
-                let second = self.find_published_review(pr, review).await;
+                let second = self.find_published_review(cancel, pr, review).await;
                 if let Ok(Some(existing)) = second {
                     return Ok(existing);
                 }
@@ -239,12 +241,13 @@ impl GitHub {
     /// (`github.go:766-793`).
     async fn find_published_review(
         &self,
+        cancel: &CancellationToken,
         pr: &PullRequest,
         review: &GitHubReview,
     ) -> Result<Option<PublishResult>, Error> {
         for page in 1..=self.search_page_limit {
             let arguments = reviews_list_args(&pr.repository, pr.number, page);
-            let output = self.github::<()>(&arguments, None).await?;
+            let output = self.github::<()>(cancel, &arguments, None).await?;
             match review_page_step(&output, review, &pr.head_sha, &self.login)? {
                 PageStep::Found(result) => return Ok(Some(result)),
                 PageStep::Done => return Ok(None),

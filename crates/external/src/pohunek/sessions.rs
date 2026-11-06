@@ -19,6 +19,7 @@ use autoreview_go_compat::null_default;
 use autoreview_schedule::diagnostic::fetch_failure;
 use autoreview_schedule::metadata::{WorkSession, metadata_args};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::{
     decode_ok, failure_code, is_identifier, pohunek_arguments, pohunek_call, pohunek_environment,
@@ -235,9 +236,10 @@ pub(crate) fn lookup_from_output(output: &str, request: &SessionRequest) -> Resu
 /// Returns the session of `request` as the session list reports it.
 pub(crate) async fn find_session(
     config: &Config,
+    cancel: &CancellationToken,
     request: &SessionRequest,
 ) -> Result<Lookup, Error> {
-    let output = pohunek_call(config, &session_list_arguments(&request.route.host)).await?;
+    let output = pohunek_call(config, cancel, &session_list_arguments(&request.route.host)).await?;
     lookup_from_output(&output, request)
 }
 
@@ -245,9 +247,11 @@ pub(crate) async fn find_session(
 ///
 /// `remove` removes a session and confirms that it is gone; it is called only on a session that
 /// this request owns and that cannot be used. The daemon may accept a start after the client
-/// timed out, so the session list is read again after every start.
+/// timed out, so the session list is read again after every start. That read ignores `cancel`,
+/// as Go reads it with `context.WithoutCancel`, so a start the daemon accepted is still found.
 pub(crate) async fn ensure_session<R, F>(
     config: &Config,
+    cancel: &CancellationToken,
     request: &SessionRequest,
     remove: &R,
 ) -> Result<SessionIdentity, Error>
@@ -255,7 +259,7 @@ where
     R: Fn(SessionIdentity) -> F,
     F: Future<Output = Result<(), Error>>,
 {
-    match find_session(config, request).await {
+    match find_session(config, cancel, request).await {
         Ok(Lookup::Owned(identity)) => return Ok(identity),
         Ok(Lookup::Absent) => {}
         Ok(Lookup::Unhealthy(identity, cause)) => {
@@ -283,6 +287,7 @@ where
         std::env::vars_os(),
     );
     let started = run(
+        cancel,
         &config.pohunek_bin,
         &arguments,
         request.prompt.as_bytes(),
@@ -290,7 +295,7 @@ where
         config.pohunek_timeout,
     )
     .await;
-    match find_session(config, request).await {
+    match find_session(config, &CancellationToken::new(), request).await {
         Ok(Lookup::Owned(identity)) => return Ok(identity),
         Ok(Lookup::Unhealthy(identity, cause)) => {
             return Err(reject(remove, Some(identity), cause).await);

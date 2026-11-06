@@ -100,7 +100,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         };
         match self
             .integration
-            .linear_history(&pr.repository, &published.head_sha, &pr.head_sha)
+            .linear_history(cancel, &pr.repository, &published.head_sha, &pr.head_sha)
             .await
         {
             Err(err) if cancel.is_cancelled() => Err(err),

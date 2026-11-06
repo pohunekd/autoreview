@@ -16,6 +16,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Deserializer, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::sessions::session_list_arguments;
 use super::{decode_ok, decode_strict, pohunek_call, response_invalid};
@@ -302,6 +303,7 @@ where
 /// Returns the complete output of the reviewer `session`, or `None` while it runs.
 pub(crate) async fn session_output(
     config: &Config,
+    cancel: &CancellationToken,
     session: &SessionIdentity,
     protocol: Protocol,
 ) -> Result<Option<Vec<u8>>, Error> {
@@ -310,7 +312,8 @@ pub(crate) async fn session_output(
         chunk_bytes: config.output_chunk_bytes,
         wait_ms: config.output_wait_ms,
     };
-    let call = |arguments: Vec<String>| async move { pohunek_call(config, &arguments).await };
+    let call =
+        |arguments: Vec<String>| async move { pohunek_call(config, cancel, &arguments).await };
     session_output_with(&call, session, protocol, limits).await
 }
 
@@ -370,8 +373,10 @@ where
 /// Removes `session` from its host and fails until the host no longer lists it.
 pub(crate) async fn remove_session_confirmed(
     config: &Config,
+    cancel: &CancellationToken,
     session: &SessionIdentity,
 ) -> Result<(), Error> {
-    let call = |arguments: Vec<String>| async move { pohunek_call(config, &arguments).await };
+    let call =
+        |arguments: Vec<String>| async move { pohunek_call(config, cancel, &arguments).await };
     remove_session_confirmed_with(&call, session).await
 }

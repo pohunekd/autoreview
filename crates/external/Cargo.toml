@@ -20,6 +20,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "process", "time"] }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [lints]

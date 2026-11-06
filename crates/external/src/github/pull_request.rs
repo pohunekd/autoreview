@@ -11,6 +11,7 @@ use autoreview_engine::model::{PullRequest, repository_valid, sha_valid};
 use autoreview_go_compat::{go_time, null_default};
 use autoreview_policy::{Trigger, TriggerKind};
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
 use super::{GitHub, graphql_pull_request, response_invalid};
 
@@ -563,15 +564,16 @@ impl GitHub {
     /// Reads a pull request and checks it against the trigger of its rule (`GetPullRequest`).
     pub(crate) async fn get_pull_request(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         number: i64,
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
-        let raw = self.fetch_pull_request(repository, number).await?;
+        let raw = self.fetch_pull_request(cancel, repository, number).await?;
         let mut pull_request = decode_pull_request(&raw, &self.host, &self.login, trigger)?;
         if trigger.kind == TriggerKind::ReviewRequested {
             pull_request.review_request_id = self
-                .latest_review_request_id(&pull_request.repository, pull_request.number)
+                .latest_review_request_id(cancel, &pull_request.repository, pull_request.number)
                 .await?;
         }
         if pull_request.repository != repository || pull_request.number != number {
@@ -583,22 +585,24 @@ impl GitHub {
     /// Reads a pull request without a trigger check (`ReadPullRequestState`).
     pub(crate) async fn read_pull_request_state(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         number: i64,
     ) -> Result<PullRequestState, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.github::<()>(&args, None).await?;
+        let output = self.github::<()>(cancel, &args, None).await?;
         decode_pull_request_state(repository, number, &output, &self.host, &self.login)
     }
 
     /// Reads the raw pull request data of one pull request (`fetchPullRequest`).
     pub(super) async fn fetch_pull_request(
         &self,
+        cancel: &CancellationToken,
         repository: &str,
         number: i64,
     ) -> Result<GitHubPullRequest, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.github::<()>(&args, None).await?;
+        let output = self.github::<()>(cancel, &args, None).await?;
         decode_pull_request_response(&output)
     }
 
@@ -606,13 +610,18 @@ impl GitHub {
     ///
     /// The events API is read page by page up to the configured page limit; a full last page
     /// at the limit fails with `github_search_limit_exceeded`.
-    async fn latest_review_request_id(&self, repository: &str, number: i64) -> Result<i64, Error> {
+    async fn latest_review_request_id(
+        &self,
+        cancel: &CancellationToken,
+        repository: &str,
+        number: i64,
+    ) -> Result<i64, Error> {
         let mut events = Vec::new();
         for page in 1..=self.search_page_limit {
             let query = format!("per_page={EVENTS_PER_PAGE}&page={page}");
             let path = format!("repos/{repository}/issues/{number}/events?{query}");
             let args = vec!["api".to_owned(), path];
-            let output = self.github::<()>(&args, None).await?;
+            let output = self.github::<()>(cancel, &args, None).await?;
             let decoded = decode_review_request_page(&output, &self.login)?;
             events.extend(decoded.events);
             if decoded.count < EVENTS_PER_PAGE {
