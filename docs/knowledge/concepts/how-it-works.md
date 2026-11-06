@@ -147,8 +147,9 @@ it with a fixed schema and checks it before anything is combined:
 - Paths must be relative and must not climb out of the repository.
 - The result as a whole stays within `limits.result_max_bytes`.
 
-Every reviewer request states the summary, title and body limits, so the
-reviewer knows them before it writes.
+Every reviewer request states the summary, title and body limits, and a Claude
+request also the limit of each prior-finding note, so the reviewer knows them
+before it writes.
 
 Output that is incomplete, unusable or invalid gets a fresh session for that
 reviewer, up to `session.reviewer_run_max_attempts`. Once the attempts are
@@ -173,7 +174,7 @@ handles each finding:
 | Where the finding points | Result |
 |---|---|
 | A changed line of the pull request | Anchored. Posted as an inline comment. |
-| An unchanged line of a changed file | Moved to the closest changed line of that file. The body says where it was reported. Still blocking if it was blocking. |
+| An unchanged line of a changed file | A blocking finding moves to the closest changed line of that file, and its body says where it was reported. A note keeps the line the reviewer reported. |
 | A file the pull request does not change | Not anchored and marked non-blocking. Listed in the review body, never holds the merge back. |
 
 Anchoring runs before verification, so a finding in an unchanged file is a note

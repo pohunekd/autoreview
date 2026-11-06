@@ -415,7 +415,12 @@ mod tests {
     #[test]
     fn finding_outside_the_changed_files_never_blocks() {
         let commentable = BTreeMap::from([("src/a.go".to_owned(), vec![10])]);
+        let input = test_input(
+            test_rule(opus(), OnFindings::RequestChanges, OnClean::Await),
+            test_pull_request(1),
+        );
         let anchored = anchor_findings(
+            &input,
             Artifact {
                 findings: vec![
                     Finding {
@@ -439,10 +444,6 @@ mod tests {
             !anchored.findings[0].non_blocking && anchored.findings[1].non_blocking,
             "findings = {:?}",
             anchored.findings
-        );
-        let input = test_input(
-            test_rule(opus(), OnFindings::RequestChanges, OnClean::Await),
-            test_pull_request(1),
         );
         let artifact = Artifact {
             findings: anchored.findings[1..].to_vec(),

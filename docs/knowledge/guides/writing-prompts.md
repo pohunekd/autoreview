@@ -55,9 +55,9 @@ request context.
   existing consumer, a wrong result or crash on a reachable path, a broken
   locking guarantee, or a test whose only proof is lost. Anything else is a
   note.
-- Ask for anchored findings on changed right-side lines. A finding outside
-  the diff is moved to the closest changed line, so the reviewer should name
-  the other location in the body.
+- Ask for anchored findings on changed right-side lines. A blocking finding
+  outside the diff is moved to the closest changed line, so the reviewer should
+  name the other location in the body. A note keeps the line it names.
 - Keep the summary substantive and bounded. `limits.min_summary_characters` and
   `limits.max_summary_characters` apply. A result outside a limit is rejected,
   and the reviewer gets a fresh session. The engine states the summary, title

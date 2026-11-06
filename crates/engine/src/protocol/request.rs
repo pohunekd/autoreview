@@ -38,7 +38,9 @@ const PRIOR_INSTRUCTIONS: &str = concat!(
 /// Builds the session input of one reviewer.
 ///
 /// A claude-structured reviewer receives a JSON request that carries the schema. A
-/// codex-envelope reviewer receives the plain prompt. Both state the output limits of `cfg`.
+/// codex-envelope reviewer receives the plain prompt. Both state the output limits of `cfg`;
+/// only the claude-structured request names the limit of a prior-finding note, because only
+/// that protocol returns prior_findings.
 ///
 /// # Errors
 ///
@@ -51,28 +53,39 @@ pub(crate) fn build_reviewer_request(
     reviewer: &Reviewer,
     discussion: &Discussion,
 ) -> Result<String, Error> {
-    let limits = output_limits(cfg);
     match reviewer.protocol {
-        Protocol::ClaudeStructured => claude_request(input, reviewer, discussion, &limits),
-        Protocol::CodexEnvelope => Ok(codex_prompt(input, &limits)),
+        Protocol::ClaudeStructured => {
+            claude_request(input, reviewer, discussion, &output_limits(cfg, true))
+        }
+        Protocol::CodexEnvelope => Ok(codex_prompt(input, &output_limits(cfg, false))),
         Protocol::Unset | Protocol::Other(_) => {
             Err(Error::workflow("review_protocol_invalid", true, None))
         }
     }
 }
 
-/// States the output limits that `validate_reviewer_result` enforces.
-fn output_limits(cfg: &Config) -> String {
+/// States the output limits that `validate_reviewer_result` enforces and, with `prior_notes`,
+/// the note limit that `validate_prior_verdicts` enforces.
+fn output_limits(cfg: &Config, prior_notes: bool) -> String {
+    let prior = if prior_notes {
+        format!(
+            " Each prior_findings note has at most {} characters.",
+            cfg.max_body_characters
+        )
+    } else {
+        String::new()
+    };
     format!(
         concat!(
             "Output limits: the summary has {} to {} characters. Each finding has a one-line ",
-            "title of at most {} characters and a body of at most {} characters. Output ",
+            "title of at most {} characters and a body of at most {} characters.{} Output ",
             "outside these limits is refused."
         ),
         cfg.min_summary_characters,
         cfg.max_summary_characters,
         cfg.max_title_characters,
-        cfg.max_body_characters
+        cfg.max_body_characters,
+        prior
     )
 }
 
@@ -280,7 +293,13 @@ mod tests {
         cfg.max_summary_characters = 600;
         cfg.max_title_characters = 120;
         cfg.max_body_characters = 900;
-        let limits = concat!(
+        let claude_limits = concat!(
+            "Output limits: the summary has 40 to 600 characters. Each finding has a one-line ",
+            "title of at most 120 characters and a body of at most 900 characters. Each ",
+            "prior_findings note has at most 900 characters. Output outside these limits is ",
+            "refused."
+        );
+        let codex_limits = concat!(
             "Output limits: the summary has 40 to 600 characters. Each finding has a one-line ",
             "title of at most 120 characters and a body of at most 900 characters. Output ",
             "outside these limits is refused."
@@ -297,7 +316,9 @@ mod tests {
             serde_json::from_str(&raw).expect("claude request is JSON");
         let prompt = request["prompt"].as_str().expect("prompt is a string");
         assert!(
-            prompt.contains(&format!("\n\n{limits}\n\nTrusted request context:\n")),
+            prompt.contains(&format!(
+                "\n\n{claude_limits}\n\nTrusted request context:\n"
+            )),
             "claude prompt = {prompt}"
         );
         let prompt = build_reviewer_request(
@@ -308,7 +329,7 @@ mod tests {
         )
         .expect("codex prompt builds");
         assert!(
-            prompt.contains(&format!("\n\n{limits}\n\nTrusted review context:\n")),
+            prompt.contains(&format!("\n\n{codex_limits}\n\nTrusted review context:\n")),
             "codex prompt = {prompt}"
         );
     }
