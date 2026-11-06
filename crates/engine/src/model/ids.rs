@@ -161,17 +161,11 @@ mod tests {
     use serde_json::Value;
 
     use super::PullRequest;
+    use crate::integrations::SessionRequest;
     use crate::model::review::{AwaitRecord, PublishedRecord, prior_key};
 
     /// Go-written identifiers, shared with the Go reference tests.
     const GOLDEN: &str = include_str!("../../../../testdata/parity/ids.json");
-
-    /// Golden cases of identifiers that later slices port, so this test skips them.
-    const LATER_CASES: &[&str] = &[
-        "session_run1_base",
-        "session_run1_start2",
-        "session_run2_head_checkout",
-    ];
 
     /// One golden case: a named input and the Go output.
     #[derive(Debug, Deserialize)]
@@ -233,20 +227,25 @@ mod tests {
                     let target = pull_request(case).target();
                     serde_json::json!({"key": target.key(), "identity": target.identity()})
                 }
-                name => {
-                    assert!(
-                        LATER_CASES.contains(&name),
-                        "golden case {name} is not ported"
-                    );
-                    continue;
+                "session_run1_base" | "session_run1_start2" | "session_run2_head_checkout" => {
+                    let mut request: SessionRequest = serde_json::from_value(case.input.clone())
+                        .unwrap_or_else(|error| panic!("{}: session input: {error}", case.name));
+                    request.name_prefix = "github-review-".to_owned();
+                    request.branch_prefix = "autoreview/review/".to_owned();
+                    serde_json::json!({
+                        "base_ref": request.base_ref(),
+                        "branch": request.branch(),
+                        "name": request.name(),
+                    })
                 }
+                name => panic!("golden case {name} is not ported"),
             };
             assert_eq!(actual, case.output, "case {}", case.name);
             checked += 1;
         }
         assert_eq!(
-            checked, 9,
-            "golden has the nine identifier cases of this module"
+            checked, 12,
+            "golden has the twelve identifier cases of this module"
         );
     }
 }

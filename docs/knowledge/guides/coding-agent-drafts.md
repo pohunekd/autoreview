@@ -119,7 +119,7 @@ review account.
 3. **Review.** Sonnet reviews the change from the base branch, read-only.
 4. **Blocking findings.** The review is published as REQUEST_CHANGES. The author
    sees the inline comments and the signature line
-   (`Written by AI: autoreview (posted from review-bot's GitHub account, not by a human)`).
+   (`Written by AI: autoreview (posted from a GitHub account, not by a human)`).
 5. **Clean review.** `on_clean: await` leaves the pull request waiting. The
    `approval_requested` event at level `action` is raised. Approve the head
    you checked:

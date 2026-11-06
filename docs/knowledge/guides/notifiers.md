@@ -84,13 +84,13 @@ notify:
     - name: matrix-action
       type: matrix
       homeserver_url: https://matrix.example.org
-      access_token_env: AUTOREVIEW_MATRIX_ACTION_TOKEN
+      access_token_env: AUTOREVIEW_MATRIX_TOKEN
       room: "!actionroom:example.org"
       mention_user: "@you:example.org"
     - name: matrix-digest
       type: matrix
       homeserver_url: https://matrix.example.org
-      access_token_env: AUTOREVIEW_MATRIX_DIGEST_TOKEN
+      access_token_env: AUTOREVIEW_MATRIX_TOKEN
       room: "!digestroom:example.org"
       mention_user: "@you:example.org"
     - name: log
@@ -104,8 +104,12 @@ notify:
     max_items: 50
 ```
 
-- `mention_user` is used only in `action` messages. Setting it on the digest
-  backend changes nothing, because digests never mention anyone.
+- Until M3, every Matrix backend that a level or the review queue reaches must
+  share `homeserver_url`, `access_token_env` and `mention_user`; only `room`
+  differs. Otherwise `config.yaml` is refused with `configuration_invalid` and
+  the first route key whose backend differs from an earlier one.
+- `mention_user` is used only in `action` messages, because digests never
+  mention anyone.
 - The homeserver URL must use HTTPS. Plain HTTP is accepted only on loopback.
 - Messages are `m.text`. The review queue is an `m.notice` with empty
   mentions, so it never notifies anyone, even in the action room.

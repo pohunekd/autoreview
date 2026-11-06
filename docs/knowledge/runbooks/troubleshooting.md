@@ -127,10 +127,14 @@ A reviewer run ends in one of these codes:
   (default in the recommended config: 7200). Check the diff size and the model
   on the review host before you raise the timeout.
 - `review_output_invalid`: the output could not be read as a reviewer result,
-  or it broke an engine check: another pull request or head, the summary
-  length, the count of findings or tests (`max_findings`, `max_tests`), or a
-  finding's id, line, path, title, body, confidence or severity. The error and
-  the warning "retrying reviewer after unusable output" name the failed check.
+  or it broke an engine check: no findings list, another pull request or head,
+  the summary length, the count of findings or tests (`max_findings`,
+  `max_tests`), a finding's id, side, line, path, title, body, confidence or
+  severity, a test's text, or a verdict on a prior finding. The recorded review
+  failure carries only the code. The failed check is named in the `error` field
+  of two log warnings: "retrying reviewer after unusable output" before a fresh
+  run, and "rejecting reviewer output" when the run limit is used up. An
+  unreadable output and a broken prior-finding verdict have no reason there.
   Common cause of an unreadable output: an output larger than
   `session.output_max_bytes`. Codex keeps its transcript in the output, so
   raise that bound for Codex. For a broken limit, tighten the prompt so the

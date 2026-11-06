@@ -269,6 +269,16 @@ pub struct SessionRequest {
     pub start: i64,
     /// Prompt the reviewer receives.
     pub prompt: String,
+    /// Prefix of the session name, from `session.name_prefix`.
+    ///
+    /// Not serialized: the request keeps the JSON shape of the Go engine.
+    #[serde(skip)]
+    pub name_prefix: String,
+    /// Prefix of the reviewer branch, from `session.branch_prefix`.
+    ///
+    /// Not serialized: the request keeps the JSON shape of the Go engine.
+    #[serde(skip)]
+    pub branch_prefix: String,
 }
 
 autoreview_go_compat::object_only_serde!(SessionRequest);
@@ -277,13 +287,13 @@ impl SessionRequest {
     /// Returns the session name, which pohunek uses to find a live session.
     #[must_use]
     pub fn name(&self) -> String {
-        format!("github-review-{}", self.token())
+        format!("{}{}", self.name_prefix, self.token())
     }
 
     /// Returns the branch that holds the reviewer worktree.
     #[must_use]
     pub fn branch(&self) -> String {
-        format!("autoreview/review/{}", self.token())
+        format!("{}{}", self.branch_prefix, self.token())
     }
 
     /// Returns the ref the reviewer worktree starts from.

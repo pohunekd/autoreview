@@ -117,7 +117,7 @@ the review account.
 4. **Decision.** With blocking findings left, the engine publishes one review
    with decision REQUEST_CHANGES. The author sees the inline comments, the
    summary of the first reviewer (Opus), the verification line and the signature
-   (`Written by AI: autoreview (posted from review-bot's GitHub account, not by a human)`).
+   (`Written by AI: autoreview (posted from a GitHub account, not by a human)`).
    The `changes_requested` digest is recorded.
 5. **Clean review.** With no blocking findings left, the review does not
    approve. It waits. The `approval_requested` event at level `action` goes to

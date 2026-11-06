@@ -58,8 +58,8 @@ pohunek:
 
 session:
   group: autoreview
-  branch_prefix: autoreview/
-  name_prefix: autoreview-
+  branch_prefix: autoreview/review/
+  name_prefix: github-review-
   timeout_seconds: 7200
   output_poll_seconds: 15
   start_max_attempts: 3
@@ -116,7 +116,7 @@ cli:
 
 publish:
   # Last line of every review body and inline comment.
-  signature: "Written by AI: autoreview (posted from {login}'s GitHub account, not by a human)"
+  signature: "Written by AI: autoreview (posted from a GitHub account, not by a human)"
   # Comments matching this are treated as machine-written in the discussion
   # of earlier findings.
   ai_signed_pattern: "Written by AI:"
@@ -198,8 +198,8 @@ How credentials apply:
   credential, and with `credential_unused` when a credential serves no rule.
 - **Each account is its own reviewer.** The `review-requested` trigger means a
   request for the credential's `login`; a pull request authored by that
-  login is its own pull request and gets a comment; `{login}` in
-  `publish.signature` is that login. Several credentials may share a login.
+  login is its own pull request and gets a comment. Several credentials may
+  share a login.
 - **Tokens never mix.** Every `gh` call gets only the token of the repository
   it concerns, through `GH_TOKEN` in that child's environment. No other
   process that autoreview starts sees any token, and searches run per
@@ -255,8 +255,8 @@ How reviewer sessions are named, started, read and cleaned up.
 | Key | Meaning |
 |---|---|
 | `group` | pohunek-companion group that every review session is placed in |
-| `branch_prefix` | Prefix of the review branches created on the review host |
-| `name_prefix` | Prefix of the pohunek session names |
+| `branch_prefix` | Prefix of the review branches created on the review host; it must be usable in a git ref name (no whitespace, control character, `..`, `@{` or `~^:?*[\`, and no leading `-` or `/`). Change it only while no review runs |
+| `name_prefix` | Prefix of the pohunek session names, without control characters. A running review finds its session by this name, so change it only while no review runs |
 | `timeout_seconds` | Longest time one reviewer session may run |
 | `output_poll_seconds` | How often a running session's output is read |
 | `start_max_attempts`, `start_retry_seconds` | Session start attempts inside one review; each attempt gets its own branch |
@@ -312,7 +312,7 @@ over a bound is rejected and the reviewer gets a fresh session.
 
 | Key | Meaning |
 |---|---|
-| `signature` | Last line of every review body and inline comment. `{login}` is replaced by the login of the credential that publishes the review. Reviews are posted from a GitHub account, so readers must be told they are machine-written |
+| `signature` | Last line of every review body and inline comment, published as written for every credential. Reviews are posted from a GitHub account, so readers must be told they are machine-written |
 | `ai_signed_pattern` | Text that marks a comment as machine-written. Such a comment is never treated as a human decision on an earlier finding |
 | `github_body_max_bytes` | Bound of one review body or comment |
 

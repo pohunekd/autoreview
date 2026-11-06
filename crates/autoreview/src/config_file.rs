@@ -227,9 +227,9 @@ struct RouteOverrideFile {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SessionFile {
-    /// Prefix of the review branches. Parsed, not mapped.
+    /// Prefix of the review branches.
     branch_prefix: Option<Value>,
-    /// Prefix of the pohunek session names. Parsed, not mapped.
+    /// Prefix of the pohunek session names.
     name_prefix: Option<Value>,
     /// pohunek-companion group every review session is placed in.
     group: Option<Value>,
@@ -608,8 +608,8 @@ fn map_file(
         None => return Err(missing("pohunek.route_overrides")),
     };
     let session = section(&file.session, "session")?;
-    let _ = text(&session.branch_prefix, "session.branch_prefix")?;
-    let _ = text(&session.name_prefix, "session.name_prefix")?;
+    let session_branch_prefix = branch_prefix(&session.branch_prefix)?;
+    let session_name_prefix = name_prefix(&session.name_prefix)?;
     let session_group = text(&session.group, "session.group")?;
     let session_timeout = seconds(&session.timeout_seconds, "session.timeout_seconds")?;
     let output_poll_interval =
@@ -800,6 +800,8 @@ fn map_file(
         terminal_cols,
         terminal_rows,
         session_group,
+        session_name_prefix,
+        session_branch_prefix,
     };
     cross_key_rules(file, &config)?;
     Ok(Mapped {
@@ -1182,11 +1184,11 @@ fn secret_value(
 
 /// The Matrix values of the engine configuration.
 struct MatrixShape {
-    /// Homeserver base URL, empty when no level routes to Matrix.
+    /// Homeserver base URL, empty when neither a level nor the queue routes to Matrix.
     homeserver_url: String,
-    /// Access token, empty when no level routes to Matrix.
+    /// Access token, empty when neither a level nor the queue routes to Matrix.
     access_token: String,
-    /// Mentioned user, empty when no level routes to Matrix.
+    /// Mentioned user, empty when neither a level nor the queue routes to Matrix.
     mention_user: String,
     /// The room of each level; empty for a `none` backend.
     rooms: MatrixRooms,
@@ -1431,6 +1433,41 @@ fn retry_delay_seconds(value: &Value) -> Result<Vec<time::Duration>, Error> {
         previous = delay;
     }
     Ok(out)
+}
+
+/// Reads `session.branch_prefix`, which starts every reviewer branch name.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` for text that cannot be part of a git ref name: whitespace,
+/// a control character, `..`, `@{`, one of `~^:?*[\`, or a leading `-` or `/`.
+fn branch_prefix(value: &Option<Value>) -> Result<String, Error> {
+    let key = "session.branch_prefix";
+    let prefix = text(value, key)?;
+    let refused = prefix.starts_with(['-', '/'])
+        || prefix.contains("..")
+        || prefix.contains("@{")
+        || prefix
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    if refused {
+        return Err(invalid(key, "must be usable in a git ref name"));
+    }
+    Ok(prefix)
+}
+
+/// Reads `session.name_prefix`, which starts every review session name.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` for text with a control character.
+fn name_prefix(value: &Option<Value>) -> Result<String, Error> {
+    let key = "session.name_prefix";
+    let prefix = text(value, key)?;
+    if prefix.chars().any(char::is_control) {
+        return Err(invalid(key, "must not contain a control character"));
+    }
+    Ok(prefix)
 }
 
 /// Builds a `configuration_invalid` error that names `key`.
@@ -1759,6 +1796,8 @@ mod tests {
     fn example_maps_to_the_engine_configuration() {
         let config = mapped(EXAMPLE).expect("the example maps");
         assert_eq!(config.session_group, "autoreview");
+        assert_eq!(config.session_name_prefix, "github-review-");
+        assert_eq!(config.session_branch_prefix, "autoreview/review/");
         assert_eq!(config.github_login, "review-bot");
         assert_eq!(config.github_token, "synthetic-token");
         assert_eq!(config.state_db_path, "/var/lib/autoreview/autoreview.db");
@@ -1942,6 +1981,13 @@ mod tests {
         );
         let cases = [
             (
+                0,
+                "https://other.example.org",
+                "AUTOREVIEW_MATRIX_TOKEN",
+                "@you:example.org",
+                "notify.routes.digest",
+            ),
+            (
                 1,
                 "https://other.example.org",
                 "AUTOREVIEW_MATRIX_TOKEN",
@@ -2110,6 +2156,22 @@ mod tests {
                 "  path: /var/lib/autoreview/autoreview.db",
                 "  path: /var/lib/autoreview/autoreview.db\n  extra: 1",
                 "unknown field `extra`",
+            ),
+            (
+                "  branch_prefix: autoreview/review/",
+                "  branch_prefix: autoreview/review..",
+                concat!(
+                    "configuration_invalid: session.branch_prefix: ",
+                    "must be usable in a git ref name"
+                ),
+            ),
+            (
+                "  name_prefix: github-review-",
+                "  name_prefix: \"github-review-\\t\"",
+                concat!(
+                    "configuration_invalid: session.name_prefix: ",
+                    "must not contain a control character"
+                ),
             ),
         ];
         for (old, new, expected) in cases {
