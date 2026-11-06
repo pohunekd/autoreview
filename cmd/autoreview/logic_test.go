@@ -322,11 +322,11 @@ func TestParseReviewerOutputNormalizesBothProtocols(t *testing.T) {
 	}
 	other := pr
 	other.HeadSHA = sha("e")
-	if _, err := ParseReviewerOutput(cfg, ReviewInput{PullRequest: other}, Discussion{}, opus, claudeOutput(t, pr, []map[string]any{})); errorCode(err) != "artifact_invalid" {
-		t.Fatalf("a result for another head must be rejected, got %v", err)
+	if _, err := ParseReviewerOutput(cfg, ReviewInput{PullRequest: other}, Discussion{}, opus, claudeOutput(t, pr, []map[string]any{})); errorCode(err) != "review_output_invalid" || !reviewerOutputRetryable(err) {
+		t.Fatalf("a result for another head must get a fresh run, got %v", err)
 	}
-	if _, err := ParseReviewerOutput(cfg, ReviewInput{PullRequest: pr}, Discussion{}, opus, claudeOutput(t, pr, []map[string]any{{"id": "C001", "severity": "high", "confidence": "high", "path": "../etc/passwd", "line": 1, "side": "RIGHT", "title": "x", "body": "y"}})); errorCode(err) != "artifact_invalid" {
-		t.Fatalf("a traversing path must be rejected, got %v", err)
+	if _, err := ParseReviewerOutput(cfg, ReviewInput{PullRequest: pr}, Discussion{}, opus, claudeOutput(t, pr, []map[string]any{{"id": "C001", "severity": "high", "confidence": "high", "path": "../etc/passwd", "line": 1, "side": "RIGHT", "title": "x", "body": "y"}})); errorCode(err) != "review_output_invalid" || !reviewerOutputRetryable(err) {
+		t.Fatalf("a traversing path must get a fresh run, got %v", err)
 	}
 	if !outputComplete(policy.ProtocolCodexEnvelope, codexOutput(t, pr, nil, 0)) || outputComplete(policy.ProtocolCodexEnvelope, []byte("still running")) {
 		t.Fatal("Codex output completion is detected by the exit line")
