@@ -217,3 +217,50 @@ func TestDraftOfACodingAgentThatAsksForAReviewIsMarkedReady(t *testing.T) {
 		t.Fatalf("a policy without ready-draft authors must touch no draft: %+v, %v, %v", readied, err, gh.searches)
 	}
 }
+
+// labelSearchPage answers the label search with one fixed page; endCursor is null, as
+// GitHub sends it on the last page.
+type labelSearchPage struct {
+	t     *testing.T
+	page  string
+	calls int
+}
+
+func (gh *labelSearchPage) Run(_ context.Context, _ string, args []string, _ []byte, _ []string) ([]byte, error) {
+	if len(args) > 1 && args[0] == "api" && args[1] == "graphql" {
+		gh.calls++
+		return []byte(gh.page), nil
+	}
+	gh.t.Fatalf("unexpected gh call %v", args)
+	return nil, nil
+}
+
+func labelSearchCandidates(t *testing.T, page string) (CandidateList, int, error) {
+	text := strings.Replace(githubTestPolicy, "trigger: review-requested", `trigger: "label:ai:review"`, 1)
+	loaded, err := policy.Parse([]byte(text), func(string) ([]byte, error) { return []byte("Review the pull request."), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig()
+	cfg.Policy, cfg.GHTimeout, cfg.PollLimit, cfg.SearchPageLimit = loaded, time.Minute, 100, 5
+	gh := &labelSearchPage{t: t, page: page}
+	list, err := (&External{cfg: cfg, runner: gh}).ListCandidates(context.Background())
+	return list, gh.calls, err
+}
+
+func TestEmptyLabelSearchWithANullEndCursorIsTheLastPage(t *testing.T) {
+	list, calls, err := labelSearchCandidates(t, `{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}`)
+	if err != nil || len(list.Candidates) != 0 || len(list.Rejected) != 0 || calls != 1 {
+		t.Fatalf("candidates %+v, rejected %+v, calls %d: %v", list.Candidates, list.Rejected, calls, err)
+	}
+}
+
+func TestNullNodeOfALabelSearchIsSkipped(t *testing.T) {
+	list, calls, err := labelSearchCandidates(t, `{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[null,{"id":"PR_3","number":3,"title":"Add widget","url":"https://github.com/acme/widget/pull/3","state":"OPEN","isDraft":false,"headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","baseRefName":"main","author":{"__typename":"User","login":"colleague"},"labels":{"nodes":[null,{"name":"ai:review"}]},"reviewRequests":{"nodes":[null]},"repository":{"nameWithOwner":"acme/widget"}}]}}}`)
+	if err != nil || len(list.Candidates) != 1 || len(list.Rejected) != 0 || calls != 1 {
+		t.Fatalf("candidates %+v, rejected %+v, calls %d: %v", list.Candidates, list.Rejected, calls, err)
+	}
+	if pr := list.Candidates[0].PullRequest; pr.Number != 3 || !slices.Equal(pr.Labels, []string{"", "ai:review"}) {
+		t.Fatalf("candidate %+v", pr)
+	}
+}

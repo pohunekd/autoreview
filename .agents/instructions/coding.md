@@ -191,11 +191,14 @@ with the expected Rust error code):
   last value.
 - A top-level JSON `null` where an object is expected is an error; Go yields the
   zero value.
-- A JSON `null` for a scalar, enum or struct field, for a map value or for a
-  list entry is an error, and so is a lone surrogate escape such as `\ud800`
-  and `-0` in an integer field. Go reads the zero value for the `null`, U+FFFD
-  for the lone surrogate and `0` for `-0`. For a search result this fails the
-  whole search, where Go rejects only that pull request.
+- In stored state, a JSON `null` for a scalar, enum or struct field, for a map
+  value or for a list entry is an error. In a GitHub or pohunek response, a
+  `null` field that Go decodes into a non-pointer type and a `null` list entry
+  read as the zero value, as in Go, through `null_default` and `null_entries`. A
+  lone surrogate escape such as `\ud800` and `-0` in an integer field are errors
+  everywhere. Go reads the zero value for the `null`, U+FFFD for the lone
+  surrogate and `0` for `-0`. For a search result this fails the whole search,
+  where Go rejects only that pull request.
 - A persisted review input whose policy string enum holds an unknown value
   (protocol, checkout, trigger kind, on_findings, on_clean, on_notes,
   notification level or event) is refused when the row is read, with the code
@@ -229,8 +232,8 @@ with the expected Rust error code):
   comparison and the response envelopes keep the R4 rule.
 - The pohunek CLI output is read fail-closed: a key that differs from a known
   field only in ASCII case is refused, where Go matches it case-insensitively.
-  Duplicate fields, `null` scalars, lone surrogates and out-of-range numbers
-  are refused as in the other decoders.
+  Duplicate fields, lone surrogates and out-of-range numbers are refused as in
+  the other decoders; a `null` field reads as the zero value, as in Go.
 - The GitHub review event (`Decision`) and the review outcome (`Outcome`) are
   enums. Rust refuses a stored value outside their listed values with a serde
   error; Go reads any string. Neither engine writes another value. The store
