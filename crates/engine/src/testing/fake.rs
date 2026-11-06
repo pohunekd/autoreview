@@ -657,7 +657,7 @@ struct ClaimsLine {
 }
 
 /// Reads the claims that a verifier request hands over.
-fn request_claims(prompt: &str) -> VerificationClaims {
+pub(crate) fn request_claims(prompt: &str) -> VerificationClaims {
     let parsed: Value =
         serde_json::from_str(prompt).expect("the fake reads the claims of a verifier request");
     let field = parsed
@@ -765,7 +765,7 @@ fn claude_output_with_prior(
 /// Returns a reviewer output that gives every prior finding the verdict `status` picks.
 ///
 /// Verifier requests get confirmed claims and upheld prior findings.
-fn settling_output(
+pub(crate) fn settling_output(
     findings: Vec<Value>,
     status: impl Fn(&PriorFinding) -> &'static str + Send + Sync + 'static,
 ) -> impl Fn(&SessionRequest) -> String + Send + Sync + 'static {

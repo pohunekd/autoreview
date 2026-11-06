@@ -4,3 +4,4 @@
 
 mod approval;
 mod core;
+mod memory;
