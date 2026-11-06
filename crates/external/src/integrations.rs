@@ -91,6 +91,16 @@ impl External {
             http,
         })
     }
+
+    /// Returns the login of the account behind the GitHub token, in lower case.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the `gh api user` call, and `github_response_invalid` when its
+    /// output holds no login.
+    pub async fn viewer_login(&self, cancel: &CancellationToken) -> Result<String, Error> {
+        self.github.viewer_login(cancel).await
+    }
 }
 
 impl Integrations for External {

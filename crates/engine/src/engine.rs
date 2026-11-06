@@ -48,7 +48,7 @@ pub(crate) const STEP_ARTIFACT: &str = "artifact";
 pub(crate) const STEP_PUBLICATION: &str = "publication";
 
 /// Time source of the engine: monotonic instants and waits between attempts.
-pub(crate) trait Clock: Send + Sync {
+pub trait Clock: Send + Sync {
     /// Returns the current instant of this clock.
     fn now(&self) -> Instant;
 
@@ -61,8 +61,7 @@ pub(crate) trait Clock: Send + Sync {
 
 /// The clock of the running process: the monotonic clock and the Tokio timer.
 #[derive(Debug, Clone, Copy, Default)]
-#[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
-pub(crate) struct SystemClock;
+pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> Instant {
@@ -80,8 +79,7 @@ impl Clock for SystemClock {
 
 /// The review engine. It holds the configuration, the store, the side effects and the set of
 /// reviews this engine has claimed.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
-pub(crate) struct Engine<I, C> {
+pub struct Engine<I, C> {
     /// Validated configuration; every timing and limit is read from here.
     pub(crate) config: Config,
     /// Store of the discovery state and the reviews.
@@ -96,8 +94,7 @@ pub(crate) struct Engine<I, C> {
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Creates an engine from the configuration, the store, the integrations and the clock.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
-    pub(crate) fn new(config: Config, store: Arc<Store>, integration: Arc<I>, clock: C) -> Self {
+    pub fn new(config: Config, store: Arc<Store>, integration: Arc<I>, clock: C) -> Self {
         Self {
             config,
             store,
@@ -153,8 +150,7 @@ where
     ///
     /// Returns `store_unavailable` when the engine lock file cannot be opened,
     /// `engine_already_running` when it is locked, and `configuration_invalid` without a policy.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
-    pub(crate) async fn serve(self: &Arc<Self>, cancel: &CancellationToken) -> Result<(), Error> {
+    pub async fn serve(self: &Arc<Self>, cancel: &CancellationToken) -> Result<(), Error> {
         let lock = OpenOptions::new()
             .create(true)
             .read(true)

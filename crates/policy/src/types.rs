@@ -478,7 +478,7 @@ impl Rule {
 }
 
 /// The parsed review policy: its rules, notification levels and the digest that identifies it.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Policy {
     /// The repository rules in file order; the first match wins.
     pub(crate) rules: Vec<Rule>,

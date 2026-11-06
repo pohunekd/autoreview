@@ -33,8 +33,7 @@ const REVIEW_NOT_AWAITING_APPROVAL: &str = "review_not_awaiting_approval";
 
 /// Everything the engine knows about one pull request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[expect(dead_code, reason = "called by C01")]
-pub(crate) struct PullRequestReviewStatus {
+pub struct PullRequestReviewStatus {
     /// The `repository#number` key of the pull request.
     pub(crate) key: String,
     /// Schedule record of the pull request, if any.
@@ -60,8 +59,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// Returns `review_identity_invalid` for an invalid request, the error of the lock, of the
     /// poll or of the store, and `review_retry_not_dispatched` when no attempt is running.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
-    pub(crate) async fn retry(
+    pub async fn retry(
         &self,
         cancel: &CancellationToken,
         request: &RetryRequest,
@@ -108,8 +106,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// Returns `review_identity_invalid` for an invalid request, the error of the store, and
     /// `review_not_awaiting_approval` when no review matches.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
-    pub(crate) fn resolve(
+    pub fn resolve(
         &self,
         cancel: &CancellationToken,
         request: &ResolveRequest,
@@ -158,11 +155,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns the error of the store.
-    #[expect(dead_code, reason = "called by C01")]
-    pub(crate) fn list_awaiting(
-        &self,
-        cancel: &CancellationToken,
-    ) -> Result<Vec<AwaitRecord>, Error> {
+    pub fn list_awaiting(&self, cancel: &CancellationToken) -> Result<Vec<AwaitRecord>, Error> {
         live(cancel)?;
         let state = self.store.load_discovery()?;
         let mut records: Vec<AwaitRecord> = state.awaiting.into_values().collect();
@@ -177,8 +170,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns the error of the store.
-    #[expect(dead_code, reason = "called by C01")]
-    pub(crate) fn pull_request_status(
+    pub fn pull_request_status(
         &self,
         cancel: &CancellationToken,
         repository: &str,

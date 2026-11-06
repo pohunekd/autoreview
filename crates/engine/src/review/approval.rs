@@ -210,8 +210,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the error of the store, `review_incomplete` for a review without its artifact or
     /// plan, `review_identity_invalid`, `approval_not_required`, `review_not_awaiting_approval`,
     /// `approval_expired` or `review_superseded`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
-    pub(crate) fn approve(
+    pub fn approve(
         &self,
         cancel: &CancellationToken,
         workflow_id: &str,

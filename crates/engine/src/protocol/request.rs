@@ -141,7 +141,7 @@ pub(crate) fn request_invalid(cause: serde_json::Error) -> Error {
 ///
 /// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029, which Go escapes
 /// inside strings.
-pub(crate) fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
+pub fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let raw = serde_json::to_string(value)?;
     let mut output = String::with_capacity(raw.len());
     for character in raw.chars() {

@@ -22,4 +22,12 @@ pub(crate) mod verify;
 mod testing;
 
 #[doc(inline)]
+pub use discovery::commands::PullRequestReviewStatus;
+#[doc(inline)]
+pub use engine::{Clock, Engine, SystemClock};
+#[doc(inline)]
 pub use error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
+#[doc(inline)]
+pub use protocol::request::go_json;
+#[doc(inline)]
+pub use review_queue::QueueResult;

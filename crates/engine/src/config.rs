@@ -131,6 +131,7 @@ pub struct MatrixRooms {
 /// review policy.
 ///
 /// The struct has no default: every field is set by the loader, which fails on a missing key.
+#[derive(Clone)]
 pub struct Config {
     /// The parsed review policy, or `None` when the configuration is validated without one.
     pub policy: Option<Policy>,
@@ -561,7 +562,7 @@ pub(crate) fn github_login_valid(login: &str) -> bool {
 }
 
 /// Reports whether `value` is a valid identifier.
-pub(crate) fn identifier_valid(value: &str) -> bool {
+pub fn identifier_valid(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.is_empty() {
         return false;

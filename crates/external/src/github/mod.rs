@@ -166,7 +166,6 @@ impl GitHub {
     }
 
     /// Returns the login of the account behind the GitHub token, in lower case.
-    #[expect(dead_code, reason = "called by C01")]
     pub(crate) async fn viewer_login(&self, cancel: &CancellationToken) -> Result<String, Error> {
         let output = self
             .github::<()>(cancel, &["api".to_owned(), "user".to_owned()], None)
@@ -188,7 +187,6 @@ autoreview_go_compat::object_only_serde!(Viewer);
 /// Returns the lower-case login of the viewer object that `output` holds.
 ///
 /// An empty login is refused, as Go refuses it.
-#[expect(dead_code, reason = "called by C01")]
 fn decode_viewer_login(output: &str) -> Result<String, Error> {
     let viewer: Viewer =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
