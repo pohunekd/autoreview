@@ -44,7 +44,6 @@ const PRIOR_INSTRUCTIONS: &str = concat!(
 /// Returns `review_protocol_invalid` for a protocol without a request format,
 /// `embedded_asset_invalid` when the schema is not JSON, and `review_request_invalid` when
 /// the prior findings or the discussion cannot be encoded.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 pub(crate) fn build_reviewer_request(
     input: &ReviewInput,
     reviewer: &Reviewer,

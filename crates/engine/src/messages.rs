@@ -62,7 +62,6 @@ fn review_header(title: &str, input: &ReviewInput) -> String {
 }
 
 /// The message that announces the start of an attempt.
-#[expect(dead_code, reason = "called by S26")]
 pub(crate) fn started_message(input: &ReviewInput) -> String {
     format!(
         "{}\nAttempt: {}",

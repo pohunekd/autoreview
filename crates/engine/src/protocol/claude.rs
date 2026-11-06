@@ -117,7 +117,6 @@ impl ClaudeFinding {
 /// `claude_result_invalid` and `claude_result_mismatch` for a wrapper, outer message or prose
 /// result that the engine refuses, and `artifact_invalid` for an artifact that does not match
 /// the pull request or that has a finding the engine refuses.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn parse_claude_output(pr: &PullRequest, raw: &str) -> Result<ReviewerResult, Error> {
     let artifact: ClaudeArtifact = decode_structured(raw)?;
     if artifact.repository != pr.repository

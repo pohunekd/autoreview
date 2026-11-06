@@ -24,15 +24,12 @@ use crate::verify::VerifierResult;
 /// Step that stores the discussion the reviewers of prior findings read.
 ///
 /// Step and state names are persisted; `STEP_ARTIFACT` and `STEP_PUBLICATION` are in `engine`.
-#[expect(dead_code, reason = "called by S28")]
 pub(crate) const STEP_DISCUSSION: &str = "discussion";
 
 /// Step that stores the lines that accept an inline comment.
-#[expect(dead_code, reason = "called by S28")]
 pub(crate) const STEP_COMMENTABLE: &str = "commentable";
 
 /// Step that stores the publication plan.
-#[expect(dead_code, reason = "called by S28")]
 pub(crate) const STEP_PLAN: &str = "plan";
 
 /// Step that stores the rendered GitHub review.
@@ -42,19 +39,15 @@ pub(crate) const STEP_RENDERED: &str = "rendered";
 pub(crate) const STEP_PUBLISHED_AT: &str = "published_at";
 
 /// Step that stores the verification of the blocking claims.
-#[expect(dead_code, reason = "called by S27")]
 pub(crate) const STEP_VERIFICATION: &str = "verification";
 
 /// Step that stores the human review signals the review matched.
-#[expect(dead_code, reason = "called by S28")]
 pub(crate) const STEP_HUMAN_REVIEW: &str = "human_review";
 
 /// State that holds the deadline of the reviewer sessions.
-#[expect(dead_code, reason = "called by S26")]
 pub(crate) const STATE_DEADLINE: &str = "collect_deadline";
 
 /// State that holds the deadline of the verifier, which runs after the reviewers.
-#[expect(dead_code, reason = "called by S27")]
 pub(crate) const STATE_VERIFIER_DEADLINE: &str = "verify_deadline";
 
 /// Prefix of the state that holds the progress of one slot.
@@ -66,7 +59,6 @@ pub(crate) const NOTIFY_STEP_PREFIX: &str = "notify/";
 /// Checks that a stored review input is complete and consistent.
 ///
 /// The checks run in Go's order, so the first failing one names the error.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 pub(crate) fn validate_input(input: &ReviewInput) -> Result<(), BoxError> {
     let pull_request = &input.pull_request;
     if input.version < MIN_INPUT_VERSION
@@ -205,7 +197,6 @@ autoreview_go_compat::object_only_serde!(SlotState);
 /// Stored outcome of combining the reviewer results.
 ///
 /// A combine failure is stored as its code, so a resumed review fails the same way.
-#[expect(dead_code, reason = "called by S28")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct ArtifactOutcome {

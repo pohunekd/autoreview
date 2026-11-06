@@ -319,7 +319,6 @@ pub(crate) fn reviewer_labels(reviewers: &[Reviewer]) -> String {
 
 /// Lists the signals of a human review that the pull request matches: each configured label it
 /// carries, and the deleted files that match a test glob.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S28"))]
 pub(crate) fn human_review_signals(
     signals: &HumanReview,
     labels: &[String],

@@ -30,7 +30,6 @@ const REPLACEMENT: char = '\u{FFFD}';
 ///
 /// Returns the code of the first refusal of the parser of the reviewer's protocol, of the
 /// verdict check, or of the validation of the result.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn parse_reviewer_output(
     cfg: &Config,
     input: &ReviewInput,
@@ -56,7 +55,6 @@ pub(crate) fn parse_reviewer_output(
 
 /// Decodes standard base64 as Go's `StdEncoding.Strict()` does: line breaks are skipped, padding
 /// is required and the trailing bits must be zero.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn decode_go_base64(text: &str) -> Option<Vec<u8>> {
     let filtered: String = text.chars().filter(|c| *c != '\r' && *c != '\n').collect();
     STANDARD.decode(filtered).ok()
@@ -65,7 +63,6 @@ pub(crate) fn decode_go_base64(text: &str) -> Option<Vec<u8>> {
 /// Decodes bytes as UTF-8 with the replacement of Go's `encoding/json`: every byte that starts no
 /// valid sequence becomes one U+FFFD. `String::from_utf8_lossy` replaces a whole invalid subpart
 /// with one U+FFFD, which gives fewer replacements for a truncated sequence.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn go_utf8_lossy(bytes: &[u8]) -> String {
     let mut out = String::new();
     let mut rest = bytes;
@@ -89,7 +86,6 @@ pub(crate) fn go_utf8_lossy(bytes: &[u8]) -> String {
 ///
 /// Go matches keys case-insensitively and keeps the value of the last key, so such a pair decides
 /// the value by position. Text that is not JSON is left to the typed decode, which refuses it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn refuse_case_variant_keys(text: &str, code: &str) -> Result<(), Error> {
     if let Ok(value) = serde_json::from_str::<Value>(text)
         && has_case_variant_keys(&value)

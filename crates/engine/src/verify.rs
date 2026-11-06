@@ -21,7 +21,6 @@ use crate::protocol::request::{CLAUDE_REQUEST_PROTOCOL, compact_schema, go_json,
 use crate::protocol::validate::bounded_text;
 
 /// JSON Schema of the verifier output, copied from the Go engine.
-#[expect(dead_code, reason = "called by S27")]
 const VERIFY_SCHEMA: &[u8] = include_bytes!("../schemas/verify-schema.json");
 
 /// Verdict on a blocking finding: the defect exists and meets the blocking definition.
@@ -40,7 +39,6 @@ pub(crate) const VERDICT_UPHELD: &str = "upheld";
 pub(crate) const VERDICT_REOPENED: &str = "reopened";
 
 /// Trusted part of the verifier request. The claims and the discussion that follow it are not.
-#[expect(dead_code, reason = "called by S27")]
 const VERIFIER_INSTRUCTIONS: &str = concat!(
     "The reviewers of this pull request reported the claims below. Check each of them against \
      the code at the pull request head. Do not review anything else and report no new \
@@ -64,7 +62,6 @@ const VERIFIER_INSTRUCTIONS: &str = concat!(
 );
 
 /// A blocking finding that the verifier checks, as the verifier request carries it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct ClaimFinding {
     /// Id of the finding in this review.
@@ -84,7 +81,6 @@ pub(crate) struct ClaimFinding {
 }
 
 /// An answered prior finding that the verifier checks, as the verifier request carries it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct ClaimPrior {
     /// Key of the prior finding.
@@ -107,7 +103,6 @@ pub(crate) struct ClaimPrior {
 }
 
 /// The claims that the verifier checks.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub(crate) struct VerificationClaims {
     /// Blocking findings of the review.
@@ -132,7 +127,6 @@ pub(crate) struct VerifierResult {
 autoreview_go_compat::object_only_serde!(VerifierResult);
 
 /// Structured output of the verifier session, as the Claude wrapper carries it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct VerifierArtifact {
@@ -163,7 +157,6 @@ impl ReviewInput {
 }
 
 /// Returns the verifier's session identity, which no reviewer of the review shares.
-#[expect(dead_code, reason = "called by S27")]
 pub(crate) fn verifier_reviewer(input: &ReviewInput) -> Option<Reviewer> {
     let verifier = input.rule.pipeline.verifier.as_ref()?;
     let mut reviewer = verifier.reviewer.clone();
@@ -172,7 +165,6 @@ pub(crate) fn verifier_reviewer(input: &ReviewInput) -> Option<Reviewer> {
 }
 
 /// Collects the blocking findings and the answered prior findings that the verifier checks.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
 pub(crate) fn claims_of(input: &ReviewInput, artifact: &Artifact) -> VerificationClaims {
     let mut claims = VerificationClaims {
         findings: Vec::new(),
@@ -211,7 +203,6 @@ pub(crate) fn claims_of(input: &ReviewInput, artifact: &Artifact) -> Verificatio
 
 impl VerificationClaims {
     /// Reports whether there is no claim to verify.
-    #[expect(dead_code, reason = "called by S27")]
     pub(crate) fn is_empty(&self) -> bool {
         self.findings.is_empty() && self.prior.is_empty()
     }
@@ -225,7 +216,6 @@ impl VerificationClaims {
 ///
 /// Returns `embedded_asset_invalid` when the schema is not JSON, and `review_request_invalid`
 /// when the pipeline has no verifier or a part of the request cannot be encoded.
-#[expect(dead_code, reason = "called by S27")]
 pub(crate) fn build_verifier_request(
     input: &ReviewInput,
     claims: &VerificationClaims,
@@ -275,7 +265,6 @@ pub(crate) fn build_verifier_request(
 /// Returns `review_output_invalid` for output of another pull request or head, for a verdict
 /// that skips, invents or repeats a claim, for an unknown verdict or for an empty or too long
 /// note. The error is permanent, as the Go engine marks it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
 pub(crate) fn parse_verifier_output(
     cfg: &Config,
     input: &ReviewInput,
@@ -347,7 +336,6 @@ fn output_invalid() -> Error {
 ///
 /// Nothing is dropped, so the user still sees every claim. A verification that did not finish
 /// is stored and changes nothing else.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S27"))]
 pub(crate) fn apply_verification(artifact: Artifact, verification: Verification) -> Artifact {
     let mut output = artifact;
     output.verification = Some(verification.clone());

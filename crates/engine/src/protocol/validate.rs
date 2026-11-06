@@ -29,7 +29,6 @@ const RETRYABLE_CODES: [&str; 4] = [
 ///
 /// A severity outside `SEVERITIES` ranks first, as the zero value of Go's map lookup does.
 /// Validation refuses such a finding afterwards.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn sort_findings(findings: &mut [Finding]) {
     findings.sort_by(|left, right| {
         severity_rank(&left.severity)
@@ -51,7 +50,6 @@ fn severity_rank(severity: &str) -> usize {
 ///
 /// NUL is refused. Line breaks are allowed only when `multiline` is set. A Rust string is
 /// valid UTF-8 already, so no UTF-8 check is repeated here.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn bounded_text(value: &str, maximum: i64, multiline: bool) -> bool {
     if value.trim().is_empty() {
         return false;
@@ -102,7 +100,6 @@ fn clean_relative_path(path: &str) -> bool {
 ///
 /// Returns `artifact_invalid` when the summary, the count of findings or tests, a finding, a
 /// source ID or a test is out of bounds.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn validate_reviewer_result(cfg: &Config, value: &ReviewerResult) -> Result<(), Error> {
     if char_count(value.summary.trim()) < cfg.min_summary_characters
         || !bounded_text(&value.summary, cfg.max_summary_characters, true)
@@ -147,7 +144,6 @@ fn finding_valid(cfg: &Config, finding: &Finding) -> bool {
 ///
 /// Returns `review_output_invalid` when a verdict breaks one of these rules, or when the
 /// number of verdicts differs from the number of prior findings.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn validate_prior_verdicts(
     cfg: &Config,
     prior: &[PriorFinding],
@@ -181,7 +177,6 @@ pub(crate) fn validate_prior_verdicts(
 }
 
 /// Reports whether a fresh reviewer run may fix the output that `err` describes.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn reviewer_output_retryable(err: &Error) -> bool {
     RETRYABLE_CODES.contains(&error_code(err))
 }

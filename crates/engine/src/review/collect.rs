@@ -29,7 +29,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Runs every reviewer slot to a result.
     ///
     /// It announces the start once the sessions are up.
-    #[expect(dead_code, reason = "called by S28")]
     pub(crate) async fn collect(&mut self) -> Result<(), Error> {
         let ids: Vec<SlotId> = (0..self.slots.len()).map(SlotId::Reviewer).collect();
         self.start_slots(&ids, reviewer_done).await?;

@@ -25,7 +25,6 @@ const NOT_SETTLED_NOTE: &str = "No reviewer settled this finding.";
 ///
 /// Returns `artifact_invalid` when the results do not match the reviewers one to one, when a
 /// source identifier is too short to take a prefix, or when the findings exceed the limit.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn combine_results(
     cfg: &Config,
     input: &ReviewInput,
@@ -77,7 +76,6 @@ pub(crate) fn combine_results(
 ///
 /// A prior finding that no reviewer settled is open. Among equally cautious verdicts the first
 /// one given wins.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S26"))]
 pub(crate) fn combine_prior(
     prior: &[PriorFinding],
     results: &[ReviewerResult],
