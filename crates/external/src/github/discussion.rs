@@ -6,9 +6,6 @@
 
 // Rust guideline compliant 2026-06-26
 
-// Every item here is reached only from the Integrations implementation, which is called by E09.
-#![expect(dead_code, reason = "called by E09")]
-
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 

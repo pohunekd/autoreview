@@ -371,7 +371,7 @@ impl Integrations for FakeIntegration {
         &self,
         session: &SessionIdentity,
         _protocol: Protocol,
-    ) -> impl Future<Output = Result<String, Error>> + Send {
+    ) -> impl Future<Output = Result<Option<Vec<u8>>, Error>> + Send {
         let outcome = {
             let state = self.lock();
             match state.sessions.get(&session.session_id) {
@@ -388,7 +388,7 @@ impl Integrations for FakeIntegration {
         };
         let result = match outcome {
             Err(error) => Err(error),
-            Ok((request, output)) => Ok(output(&request)),
+            Ok((request, output)) => Ok(Some(output(&request).into_bytes())),
         };
         ready(result)
     }

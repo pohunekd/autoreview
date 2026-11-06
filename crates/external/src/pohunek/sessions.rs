@@ -233,7 +233,6 @@ pub(crate) fn lookup_from_output(output: &str, request: &SessionRequest) -> Resu
 }
 
 /// Returns the session of `request` as the session list reports it.
-#[expect(dead_code, reason = "called by E09")]
 pub(crate) async fn find_session(
     config: &Config,
     request: &SessionRequest,
@@ -247,14 +246,14 @@ pub(crate) async fn find_session(
 /// `remove` removes a session and confirms that it is gone; it is called only on a session that
 /// this request owns and that cannot be used. The daemon may accept a start after the client
 /// timed out, so the session list is read again after every start.
-#[expect(dead_code, reason = "called by E09")]
-pub(crate) async fn ensure_session<R>(
+pub(crate) async fn ensure_session<R, F>(
     config: &Config,
     request: &SessionRequest,
     remove: &R,
 ) -> Result<SessionIdentity, Error>
 where
-    R: AsyncFn(SessionIdentity) -> Result<(), Error>,
+    R: Fn(SessionIdentity) -> F,
+    F: Future<Output = Result<(), Error>>,
 {
     match find_session(config, request).await {
         Ok(Lookup::Owned(identity)) => return Ok(identity),
@@ -319,9 +318,10 @@ where
 }
 
 /// Returns the error of a failed request: `cause`, or the failed removal of an owned session.
-async fn reject<R>(remove: &R, session: Option<SessionIdentity>, cause: Error) -> Error
+async fn reject<R, F>(remove: &R, session: Option<SessionIdentity>, cause: Error) -> Error
 where
-    R: AsyncFn(SessionIdentity) -> Result<(), Error>,
+    R: Fn(SessionIdentity) -> F,
+    F: Future<Output = Result<(), Error>>,
 {
     let Some(session) = session else {
         return cause;

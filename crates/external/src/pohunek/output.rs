@@ -262,14 +262,15 @@ pub(crate) fn decode_output_chunk(
 ///
 /// Returns `None` while the reviewer still runs. `call` receives the argument list of each
 /// `session output` call and returns its stdout; a failure of `call` is returned unchanged.
-pub(crate) async fn session_output_with<C>(
+pub(crate) async fn session_output_with<C, F>(
     call: &C,
     session: &SessionIdentity,
     protocol: Protocol,
     limits: OutputLimits,
 ) -> Result<Option<Vec<u8>>, Error>
 where
-    C: AsyncFn(Vec<String>) -> Result<String, Error>,
+    C: Fn(Vec<String>) -> F,
+    F: Future<Output = Result<String, Error>>,
 {
     let mut collected: Vec<u8> = Vec::new();
     let mut after: i64 = 0;
@@ -299,7 +300,6 @@ where
 }
 
 /// Returns the complete output of the reviewer `session`, or `None` while it runs.
-#[expect(dead_code, reason = "called by E09")]
 pub(crate) async fn session_output(
     config: &Config,
     session: &SessionIdentity,
@@ -310,16 +310,17 @@ pub(crate) async fn session_output(
         chunk_bytes: config.output_chunk_bytes,
         wait_ms: config.output_wait_ms,
     };
-    let call = async |arguments: Vec<String>| pohunek_call(config, &arguments).await;
+    let call = |arguments: Vec<String>| async move { pohunek_call(config, &arguments).await };
     session_output_with(&call, session, protocol, limits).await
 }
 
 /// Removes `session` through `call`; success means it is gone or was already absent.
 ///
 /// A reply without an `ok` key is `pohunek_response_invalid`.
-pub(crate) async fn remove_with<C>(call: &C, session: &SessionIdentity) -> Result<(), Error>
+pub(crate) async fn remove_with<C, F>(call: &C, session: &SessionIdentity) -> Result<(), Error>
 where
-    C: AsyncFn(Vec<String>) -> Result<String, Error>,
+    C: Fn(Vec<String>) -> F,
+    F: Future<Output = Result<String, Error>>,
 {
     match call(remove_arguments(session)).await {
         Ok(stdout) => {
@@ -353,12 +354,13 @@ pub(crate) fn cleanup_pending(output: &str, session_id: &str) -> Result<(), Erro
 }
 
 /// Removes `session` through `call`, then confirms the removal through `call`.
-pub(crate) async fn remove_session_confirmed_with<C>(
+pub(crate) async fn remove_session_confirmed_with<C, F>(
     call: &C,
     session: &SessionIdentity,
 ) -> Result<(), Error>
 where
-    C: AsyncFn(Vec<String>) -> Result<String, Error>,
+    C: Fn(Vec<String>) -> F,
+    F: Future<Output = Result<String, Error>>,
 {
     remove_with(call, session).await?;
     let output = call(list_arguments(session)).await?;
@@ -366,11 +368,10 @@ where
 }
 
 /// Removes `session` from its host and fails until the host no longer lists it.
-#[expect(dead_code, reason = "called by E09")]
 pub(crate) async fn remove_session_confirmed(
     config: &Config,
     session: &SessionIdentity,
 ) -> Result<(), Error> {
-    let call = async |arguments: Vec<String>| pohunek_call(config, &arguments).await;
+    let call = |arguments: Vec<String>| async move { pohunek_call(config, &arguments).await };
     remove_session_confirmed_with(&call, session).await
 }
