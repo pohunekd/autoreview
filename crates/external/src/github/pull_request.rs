@@ -8,7 +8,7 @@
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::PullRequestState;
 use autoreview_engine::model::{PullRequest, repository_valid, sha_valid};
-use autoreview_go_compat::{go_time, null_default};
+use autoreview_go_compat::{go_time, null_default, null_entries};
 use autoreview_policy::{Trigger, TriggerKind};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -157,8 +157,8 @@ autoreview_go_compat::object_only_serde!(Author);
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 struct Labels {
-    /// The label nodes; `null` reads as none.
-    #[serde(deserialize_with = "null_default::deserialize")]
+    /// The label nodes; `null` reads as none and a `null` entry as an empty label.
+    #[serde(deserialize_with = "null_entries::deserialize")]
     nodes: Vec<LabelNode>,
 }
 
@@ -179,8 +179,8 @@ autoreview_go_compat::object_only_serde!(LabelNode);
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 struct ReviewRequests {
-    /// The request nodes; `null` reads as none.
-    #[serde(deserialize_with = "null_default::deserialize")]
+    /// The request nodes; `null` reads as none and a `null` entry as an empty request.
+    #[serde(deserialize_with = "null_entries::deserialize")]
     nodes: Vec<ReviewRequestNode>,
 }
 
@@ -527,8 +527,9 @@ pub(crate) fn decode_review_request_page(
     output: &str,
     login: &str,
 ) -> Result<ReviewRequestPage, Error> {
-    let events: Vec<ReviewEvent> =
+    let entries: Vec<Option<ReviewEvent>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let events = null_entries::zero_entries(entries);
     let count = events.len();
     let mut requested = Vec::new();
     for event in events {
