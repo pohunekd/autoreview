@@ -266,4 +266,154 @@ mod tests {
         let reversed = vec![results[1].clone(), results[0].clone()];
         assert!(combine_results(&cfg, &input, &reversed, OffsetDateTime::UNIX_EPOCH).is_err());
     }
+
+    #[test]
+    fn duplicate_findings_merge_into_the_first_reviewers_finding() {
+        let cfg = test_config();
+        let mut first = finding("C002", "a.go", 7, "high");
+        first.confidence = "low".to_owned();
+        first.non_blocking = true;
+        let mut second = finding("C001", "a.go", 7, "high");
+        second.confidence = "high".to_owned();
+        second.title = "Longer".to_owned();
+        second.body = "A longer body.".to_owned();
+        let results = vec![
+            result("opus", vec![first], &[]),
+            result("sonnet", vec![second], &[]),
+        ];
+        let artifact =
+            combine_results(&cfg, &two_reviewers(), &results, OffsetDateTime::UNIX_EPOCH)
+                .expect("duplicate findings combine");
+        let want = Finding {
+            id: "O002".to_owned(),
+            source_id: "C002".to_owned(),
+            reviewer_id: "opus".to_owned(),
+            reviewer_label: "Opus + Sonnet".to_owned(),
+            severity: "high".to_owned(),
+            confidence: "high".to_owned(),
+            path: "a.go".to_owned(),
+            line: 7,
+            title: "Longer".to_owned(),
+            body: "A longer body.".to_owned(),
+            non_blocking: false,
+            ..Finding::default()
+        };
+        assert_eq!(artifact.findings, vec![want]);
+    }
+
+    #[test]
+    fn findings_that_differ_in_path_line_or_severity_stay_apart() {
+        let cfg = test_config();
+        let cases = [
+            ("b.go", 7, "high"),
+            ("a.go", 8, "high"),
+            ("a.go", 7, "medium"),
+        ];
+        for (path, line, severity) in cases {
+            let results = vec![
+                result("opus", vec![finding("C001", "a.go", 7, "high")], &[]),
+                result("sonnet", vec![finding("C001", path, line, severity)], &[]),
+            ];
+            let artifact =
+                combine_results(&cfg, &two_reviewers(), &results, OffsetDateTime::UNIX_EPOCH)
+                    .expect("distinct findings combine");
+            let ids: Vec<&str> = artifact.findings.iter().map(|f| f.id.as_str()).collect();
+            assert_eq!(ids, ["O001", "S001"], "{path}:{line} {severity}");
+        }
+    }
+
+    #[test]
+    fn findings_of_one_reviewer_never_merge_with_each_other() {
+        let cfg = test_config();
+        let results = vec![
+            result(
+                "opus",
+                vec![
+                    finding("C001", "a.go", 7, "high"),
+                    finding("C002", "a.go", 7, "high"),
+                ],
+                &[],
+            ),
+            result(
+                "sonnet",
+                vec![
+                    finding("C001", "a.go", 7, "high"),
+                    finding("C002", "a.go", 7, "high"),
+                ],
+                &[],
+            ),
+        ];
+        let artifact =
+            combine_results(&cfg, &two_reviewers(), &results, OffsetDateTime::UNIX_EPOCH)
+                .expect("findings of one reviewer combine");
+        let got: Vec<(&str, &str)> = artifact
+            .findings
+            .iter()
+            .map(|f| (f.id.as_str(), f.reviewer_label.as_str()))
+            .collect();
+        assert_eq!(got, [("O001", "Opus + Sonnet"), ("O002", "Opus + Sonnet")]);
+    }
+
+    #[test]
+    fn body_tie_keeps_the_first_text_and_length_counts_characters() {
+        let cfg = test_config();
+        let mut tie = finding("C001", "a.go", 7, "high");
+        tie.body = "same".to_owned();
+        let mut other = finding("C001", "a.go", 7, "high");
+        other.title = "Other".to_owned();
+        other.body = "four".to_owned();
+        let mut wide = finding("C002", "a.go", 9, "high");
+        wide.body = "ééé".to_owned();
+        let mut narrow = finding("C002", "a.go", 9, "high");
+        narrow.body = "abcd".to_owned();
+        let results = vec![
+            result("opus", vec![tie, wide], &[]),
+            result("sonnet", vec![other, narrow], &[]),
+        ];
+        let artifact =
+            combine_results(&cfg, &two_reviewers(), &results, OffsetDateTime::UNIX_EPOCH)
+                .expect("tied findings combine");
+        assert_eq!(artifact.findings[0].title, "C001 title");
+        assert_eq!(artifact.findings[0].body, "same");
+        assert_eq!(artifact.findings[1].body, "abcd");
+    }
+
+    #[test]
+    fn one_summary_and_one_list_of_tests_without_duplicates() {
+        let cfg = test_config();
+        let results = vec![
+            result("opus", Vec::new(), &["go test ./...", "go vet ./..."]),
+            result("sonnet", Vec::new(), &["go vet ./...", "Go test ./..."]),
+        ];
+        let artifact =
+            combine_results(&cfg, &two_reviewers(), &results, OffsetDateTime::UNIX_EPOCH)
+                .expect("clean results combine");
+        assert_eq!(artifact.summaries.len(), 1);
+        assert_eq!(artifact.summaries[0].label, "Opus");
+        assert_eq!(artifact.summaries[0].summary, "opus summary");
+        assert_eq!(
+            artifact.tests,
+            ["go test ./...", "go vet ./...", "Go test ./..."]
+        );
+    }
+
+    #[test]
+    fn finding_limit_counts_the_merged_findings() {
+        let mut cfg = test_config();
+        cfg.max_findings = 1;
+        let results = vec![
+            result("opus", vec![finding("C001", "a.go", 7, "high")], &[]),
+            result("sonnet", vec![finding("C001", "a.go", 7, "high")], &[]),
+        ];
+        let input = two_reviewers();
+        let artifact = combine_results(&cfg, &input, &results, OffsetDateTime::UNIX_EPOCH)
+            .expect("one merged finding is within the limit");
+        assert_eq!(artifact.findings.len(), 1);
+
+        let distinct = vec![
+            result("opus", vec![finding("C001", "a.go", 7, "high")], &[]),
+            result("sonnet", vec![finding("C001", "a.go", 8, "high")], &[]),
+        ];
+        assert!(combine_results(&cfg, &input, &distinct, OffsetDateTime::UNIX_EPOCH).is_err());
+    }
 }
