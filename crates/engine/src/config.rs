@@ -516,7 +516,6 @@ impl Config {
     }
 
     /// Returns the run limits of this configuration.
-    #[expect(dead_code, reason = "called by S22")]
     pub(crate) fn run_limits(&self) -> RunLimits {
         RunLimits {
             session_timeout_ms: millis(self.session_timeout),

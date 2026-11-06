@@ -28,6 +28,12 @@ pub(crate) struct StepRetryPolicy {
     pub(crate) max_interval: Duration,
 }
 
+/// Step that stores the combined review of a workflow (`review.go:18`).
+pub(crate) const STEP_ARTIFACT: &str = "artifact";
+
+/// Step that stores the GitHub publication of a workflow (`review.go:23`).
+pub(crate) const STEP_PUBLICATION: &str = "publication";
+
 /// Time source of the engine: monotonic instants and waits between attempts.
 pub(crate) trait Clock: Send + Sync {
     /// Returns the current instant of this clock.
@@ -57,13 +63,13 @@ impl Clock for SystemClock {
 #[expect(dead_code, reason = "called by C01")]
 pub(crate) struct Engine<I, C> {
     /// Validated configuration; every timing and limit is read from here.
-    config: Config,
+    pub(crate) config: Config,
     /// Store of the discovery state and the reviews.
-    store: Arc<Store>,
+    pub(crate) store: Arc<Store>,
     /// GitHub, pohunek and Matrix behind the trait.
-    integration: Arc<I>,
+    pub(crate) integration: Arc<I>,
     /// Time source of the step retries.
-    clock: C,
+    pub(crate) clock: C,
     /// Workflow IDs of the reviews claimed by this engine.
     active: Mutex<BTreeSet<String>>,
 }
@@ -82,7 +88,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     }
 
     /// Returns the retry policy of the workflow steps, read from the configuration.
-    #[expect(dead_code, reason = "called by S22")]
     pub(crate) fn step_policy(&self) -> StepRetryPolicy {
         StepRetryPolicy {
             total: self.config.step_retry,
@@ -121,7 +126,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 /// The stop conditions are a permanent failure, a cancelled `cancel` and a wait that would end
 /// past `policy.total`. The wait never exceeds `policy.max_interval`, and the last error is
 /// returned unchanged.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S22"))]
 pub(crate) async fn retry_step<T, Fut>(
     policy: StepRetryPolicy,
     clock: &impl Clock,
