@@ -113,11 +113,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the error of the search, the store or the post, `review_queue_too_long` when no
     /// entry fits, `matrix_request_invalid` without a transaction ID, and `configuration_invalid`
     /// without a policy or with a negative limit.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
-    pub(crate) async fn review_queue(
-        &self,
-        cancel: &CancellationToken,
-    ) -> Result<QueueResult, Error> {
+    pub async fn review_queue(&self, cancel: &CancellationToken) -> Result<QueueResult, Error> {
         let limit = self.config.queue_max_items;
         let list = retry_step(self.step_policy(), &self.clock, cancel, || {
             self.integration.list_review_requests(cancel, limit)

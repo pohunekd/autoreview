@@ -82,7 +82,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns `discovery_busy` or `store_unavailable` from the lock, or the error of the pass.
-    pub(crate) async fn poll(&self, cancel: &CancellationToken) -> Result<PollResult, Error> {
+    pub async fn poll(&self, cancel: &CancellationToken) -> Result<PollResult, Error> {
         self.with_discovery(|| self.poll_pass(cancel, None)).await
     }
 
