@@ -8,3 +8,6 @@ pub(crate) mod flow;
 pub(crate) mod input;
 pub(crate) mod sessions;
 pub(crate) mod verify_step;
+
+#[cfg(test)]
+mod tests;
