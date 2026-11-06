@@ -1151,12 +1151,12 @@ struct MatrixShape {
     queue_room: String,
 }
 
-/// Maps the routes and the review queue onto the one Matrix backend that they may use.
+/// Maps the routes and the review queue onto Matrix backends that share one identity.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` when a level names other than one backend, names a webhook, or
-/// names a second Matrix backend.
+/// Returns `configuration_invalid` when a level names other than one backend, names a webhook,
+/// or names a Matrix backend with another identity, or when the queue names two Matrix backends.
 fn matrix_shape(
     backends: &[Backend],
     routes: &RoutesFile,
@@ -1176,29 +1176,7 @@ fn matrix_shape(
         &mut matrix,
     )?;
     let log = level_room(backends, &routes.log, "notify.routes.log", &mut matrix)?;
-    let mut queue_room = String::new();
-    for name in queue_backends {
-        let backend = find_backend(backends, name, "notify.review_queue.backends")?;
-        match backend {
-            Backend::None { .. } => {}
-            Backend::Matrix { room, .. } => {
-                let routed = matrix.is_some_and(|chosen| std::ptr::eq(chosen, backend));
-                if !routed {
-                    return Err(invalid(
-                        "notify.review_queue.backends",
-                        "must be none or the Matrix backend of the routes until M3",
-                    ));
-                }
-                queue_room = room.clone();
-            }
-            Backend::Webhook { .. } => {
-                return Err(invalid(
-                    "notify.review_queue.backends",
-                    "must be none or the Matrix backend of the routes until M3",
-                ));
-            }
-        }
-    }
+    let queue_room = queue_room(backends, queue_backends, &mut matrix)?;
     let (homeserver_url, access_token, mention_user) = match matrix {
         Some(Backend::Matrix {
             homeserver_url,
@@ -1225,13 +1203,12 @@ fn matrix_shape(
     })
 }
 
-/// Resolves one route level to its room, and records the Matrix backend it uses.
+/// Resolves one route level to its room and checks its Matrix backend.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` when the level does not name exactly one backend, the backend
-/// is
-/// a webhook, or a different Matrix backend was already chosen.
+/// Returns `configuration_invalid` when the level does not name exactly one backend, the
+/// backend is a webhook, or its identity differs from the Matrix backend chosen before.
 fn level_room<'a>(
     backends: &'a [Backend],
     names: &Option<Value>,
@@ -1246,19 +1223,75 @@ fn level_room<'a>(
     match backend {
         Backend::None { .. } => Ok(String::new()),
         Backend::Matrix { room, .. } => {
-            if let Some(chosen) = matrix
-                && !std::ptr::eq(*chosen, backend)
-            {
-                return Err(invalid(
-                    key,
-                    "all levels must use one Matrix backend until M3",
-                ));
-            }
-            *matrix = Some(backend);
+            share_identity(backend, key, matrix)?;
             Ok(room.clone())
         }
         Backend::Webhook { .. } => Err(invalid(key, "webhook backends are not routed until M3")),
     }
+}
+
+/// Resolves the review queue to its Matrix room, or to no room.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` naming `notify.review_queue.backends` for a webhook, a
+/// second Matrix backend, or a Matrix backend whose identity differs from the routes.
+fn queue_room<'a>(
+    backends: &'a [Backend],
+    names: &[String],
+    matrix: &mut Option<&'a Backend>,
+) -> Result<String, Error> {
+    let key = "notify.review_queue.backends";
+    let mut queue: Option<&Backend> = None;
+    for name in names {
+        let backend = find_backend(backends, name, key)?;
+        match backend {
+            Backend::None { .. } => {}
+            Backend::Matrix { .. } => {
+                if queue.is_some_and(|chosen| !std::ptr::eq(chosen, backend)) {
+                    return Err(invalid(
+                        key,
+                        "must name at most one Matrix backend until M3",
+                    ));
+                }
+                share_identity(backend, key, matrix)?;
+                queue = Some(backend);
+            }
+            Backend::Webhook { .. } => {
+                return Err(invalid(key, "webhook backends are not routed until M3"));
+            }
+        }
+    }
+    match queue {
+        Some(Backend::Matrix { room, .. }) => Ok(room.clone()),
+        _ => Ok(String::new()),
+    }
+}
+
+/// Records `backend` as the Matrix identity, or checks it against the identity chosen before.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` naming `key` when `homeserver_url`, `access_token_env` or
+/// `mention_user` differs from the Matrix backend chosen before.
+fn share_identity<'a>(
+    backend: &'a Backend,
+    key: &str,
+    matrix: &mut Option<&'a Backend>,
+) -> Result<(), Error> {
+    match matrix {
+        Some(chosen) => {
+            if chosen.matrix_identity() != backend.matrix_identity() {
+                return Err(invalid(
+                    key,
+                    "Matrix backends must share homeserver_url, access_token_env and \
+                     mention_user until M3",
+                ));
+            }
+        }
+        None => *matrix = Some(backend),
+    }
+    Ok(())
 }
 
 /// Finds the backend called `name`.
