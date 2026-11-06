@@ -2,7 +2,7 @@
 //!
 //! The sessions run in parallel until each slot has a result.
 //!
-//! Mirrors `cmd/autoreview/review.go:430-547`.
+//! Mirrors `cmd/autoreview/review.go:430-548`.
 
 // Rust guideline compliant 2026-06-26
 
@@ -157,6 +157,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                                 reviewer = %updated.reviewer.id,
                                 run = updated.state.run,
                                 error_code = %error_code(&err),
+                                error = %err,
                                 "retrying reviewer after unusable output"
                             );
                             self.remove_sessions(&[*id]).await?;
@@ -174,6 +175,14 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                             self.start_session(*id).await?;
                             pending = true;
                         } else {
+                            tracing::warn!(
+                                review_id = %self.input.pull_request.review_id(),
+                                reviewer = %updated.reviewer.id,
+                                run = updated.state.run,
+                                error_code = %error_code(&err),
+                                error = %err,
+                                "rejecting reviewer output"
+                            );
                             return Err(session_fault(error_code(&err)));
                         }
                     }

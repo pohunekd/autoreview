@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use crate::config::Config;
-use crate::error::{Error, error_code};
+use crate::error::{BoxError, Error, error_code};
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Discussion, Finding, PriorFinding, PriorVerdict, ReviewerResult};
 
@@ -96,42 +96,102 @@ fn clean_relative_path(path: &str) -> bool {
 
 /// Checks a reviewer result against the configured bounds.
 ///
+/// The checks run in the order of `cmd/autoreview/protocol.go:294-332`; the first failure wins.
+///
 /// # Errors
 ///
-/// Returns `artifact_invalid` when the summary, the count of findings or tests, a finding, a
-/// source ID or a test is out of bounds.
+/// Returns `review_output_invalid` with a reason that names the first failed check.
 pub(crate) fn validate_reviewer_result(cfg: &Config, value: &ReviewerResult) -> Result<(), Error> {
     if char_count(value.summary.trim()) < cfg.min_summary_characters
         || !bounded_text(&value.summary, cfg.max_summary_characters, true)
-        || count_over(value.findings.len(), cfg.max_findings)
-        || count_over(value.tests.len(), cfg.max_tests)
     {
-        return Err(artifact_invalid());
+        return Err(reviewer_output_invalid(format!(
+            "the summary is shorter than {} or longer than {} characters",
+            cfg.min_summary_characters, cfg.max_summary_characters
+        )));
+    }
+    if count_over(value.findings.len(), cfg.max_findings) {
+        return Err(reviewer_output_invalid(format!(
+            "{} findings exceed the limit of {}",
+            value.findings.len(),
+            cfg.max_findings
+        )));
+    }
+    if count_over(value.tests.len(), cfg.max_tests) {
+        return Err(reviewer_output_invalid(format!(
+            "{} tests exceed the limit of {}",
+            value.tests.len(),
+            cfg.max_tests
+        )));
     }
     let mut seen = BTreeSet::new();
-    for finding in &value.findings {
-        if seen.contains(&finding.source_id) || !finding_valid(cfg, finding) {
-            return Err(artifact_invalid());
+    for (index, finding) in value.findings.iter().enumerate() {
+        let number = index + 1;
+        if seen.contains(&finding.source_id) {
+            return Err(reviewer_output_invalid(format!(
+                "finding {number} repeats an id"
+            )));
         }
+        check_finding(cfg, number, finding)?;
         seen.insert(finding.source_id.clone());
     }
-    for test in &value.tests {
+    for (index, test) in value.tests.iter().enumerate() {
         if !bounded_text(test, cfg.max_test_characters, false) {
-            return Err(artifact_invalid());
+            return Err(reviewer_output_invalid(format!(
+                "test {} is empty, multiline or longer than {} characters",
+                index + 1,
+                cfg.max_test_characters
+            )));
         }
     }
     Ok(())
 }
 
-/// Reports whether one finding of a reviewer result is well formed.
-fn finding_valid(cfg: &Config, finding: &Finding) -> bool {
-    clean_relative_path(&finding.path)
-        && finding.line > 0
-        && bounded_text(&finding.path, cfg.max_path_characters, false)
-        && bounded_text(&finding.title, cfg.max_title_characters, false)
-        && bounded_text(&finding.body, cfg.max_body_characters, true)
-        && CONFIDENCE_LEVELS.contains(&finding.confidence.as_str())
-        && SEVERITIES.contains(&finding.severity.as_str())
+/// Checks the finding at 1-based position `number` of a reviewer result.
+///
+/// # Errors
+///
+/// Returns `review_output_invalid` naming the first failed check of the finding.
+fn check_finding(cfg: &Config, number: usize, finding: &Finding) -> Result<(), Error> {
+    if finding.line <= 0 {
+        return Err(reviewer_output_invalid(format!(
+            "finding {number} has no line"
+        )));
+    }
+    if !clean_relative_path(&finding.path)
+        || !bounded_text(&finding.path, cfg.max_path_characters, false)
+    {
+        return Err(reviewer_output_invalid(format!(
+            concat!(
+                "finding {} has a path that is not a clean relative path",
+                " of at most {} characters"
+            ),
+            number, cfg.max_path_characters
+        )));
+    }
+    if !bounded_text(&finding.title, cfg.max_title_characters, false) {
+        return Err(reviewer_output_invalid(format!(
+            "finding {number} has a title that is empty, multiline or longer than {} characters",
+            cfg.max_title_characters
+        )));
+    }
+    if !bounded_text(&finding.body, cfg.max_body_characters, true) {
+        return Err(reviewer_output_invalid(format!(
+            "finding {number} has a body that is empty or longer than {} characters",
+            cfg.max_body_characters
+        )));
+    }
+    if !CONFIDENCE_LEVELS.contains(&finding.confidence.as_str()) {
+        return Err(reviewer_output_invalid(format!(
+            "finding {number} has an unknown confidence"
+        )));
+    }
+    if !SEVERITIES.contains(&finding.severity.as_str()) {
+        return Err(reviewer_output_invalid(format!(
+            "finding {number} has an unknown severity"
+        )));
+    }
+    Ok(())
 }
 
 /// Checks the verdicts on the prior findings.
@@ -181,9 +241,11 @@ pub(crate) fn reviewer_output_retryable(err: &Error) -> bool {
     RETRYABLE_CODES.contains(&error_code(err))
 }
 
-/// The error of a reviewer result that the engine refuses. It is permanent.
-fn artifact_invalid() -> Error {
-    Error::workflow("artifact_invalid", true, None)
+/// The error of a reviewer output that fails the check that `reason` names.
+///
+/// The reason never quotes the output, which is untrusted. A fresh reviewer run may fix it.
+pub(crate) fn reviewer_output_invalid(reason: String) -> Error {
+    Error::workflow("review_output_invalid", true, Some(BoxError::from(reason)))
 }
 
 /// The error of reviewer verdicts that the engine refuses. It is permanent.

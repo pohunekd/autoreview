@@ -471,7 +471,7 @@
         "finding_prefix": "O"
       }
     },
-    "error": "artifact_invalid"
+    "error": "review_output_invalid"
   },
   {
     "name": "claude_head_mismatch_rejected",
@@ -616,7 +616,7 @@
         "finding_prefix": "O"
       }
     },
-    "error": "artifact_invalid"
+    "error": "review_output_invalid"
   },
   {
     "name": "claude_duplicate_key_last_wins",

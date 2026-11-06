@@ -198,6 +198,37 @@ async fn unusable_reviewer_output_gets_a_fresh_run() {
     h.stop_engine().await;
 }
 
+/// A reviewer output that passes the schema but fails the engine's own limits, such as a
+/// multiline title, is a model mistake that a fresh run can fix.
+#[tokio::test]
+async fn reviewer_output_over_the_limits_gets_a_fresh_run() {
+    let mut h = start_harness(|_| {}).await;
+    let valid = reviewer_output(Vec::new());
+    let invalid = reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 3, "title": "Bug\nsecond line", "body": "Details.",
+    })]);
+    h.set_output(move |request: &SessionRequest| {
+        if request.reviewer.id == "opus" && request.run == 1 {
+            return invalid(request);
+        }
+        valid(request)
+    });
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the publication after a reviewer retry", || {
+        h.publications() == 1
+    })
+    .await;
+    let (_, _, started, _) = h.fake.snapshot();
+    let runs = started
+        .iter()
+        .filter(|request| request.reviewer.id == "opus")
+        .count();
+    assert_eq!(runs, 2, "opus ran {runs} times");
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn base_fetch_locked_by_a_concurrent_review_is_retried_on_a_fresh_branch() {
     let mut h = start_harness(|_| {}).await;

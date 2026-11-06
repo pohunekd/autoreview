@@ -397,8 +397,9 @@ mod tests {
             &opus(),
             &claude_output(&pr, json!([]), None),
         )
-        .expect_err("a result for another head is refused");
-        assert_eq!(error_code(&err), "artifact_invalid");
+        .expect_err("a result for another head gets a fresh run");
+        assert_eq!(error_code(&err), "review_output_invalid");
+        assert!(reviewer_output_retryable(&err));
 
         let err = parse_reviewer_output(
             &cfg,
@@ -415,8 +416,9 @@ mod tests {
                 None,
             ),
         )
-        .expect_err("a traversing path is refused");
-        assert_eq!(error_code(&err), "artifact_invalid");
+        .expect_err("a traversing path gets a fresh run");
+        assert_eq!(error_code(&err), "review_output_invalid");
+        assert!(reviewer_output_retryable(&err));
     }
 
     #[test]

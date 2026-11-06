@@ -215,6 +215,33 @@ func TestUnusableReviewerOutputGetsAFreshRun(t *testing.T) {
 	}
 }
 
+// A reviewer output that passes the schema but fails the engine's own limits,
+// such as a multiline title, is a model mistake a fresh run can fix.
+func TestReviewerOutputOverTheLimitsGetsAFreshRun(t *testing.T) {
+	h := startHarness(t, nil)
+	valid := reviewerOutput(t, nil)
+	invalid := reviewerOutput(t, []map[string]any{{"severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go", "line": 3, "title": "Bug\nsecond line", "body": "Details."}})
+	h.setOutput(func(request SessionRequest) []byte {
+		if request.Reviewer.ID == "opus" && request.Run == 1 {
+			return invalid(request)
+		}
+		return valid(request)
+	})
+	pr := integrationPullRequest("acme/widget", sha("a"))
+	h.fake.open(pr, h.rule(pr.Repository))
+	h.pollUntil("the publication after a reviewer retry", func() bool { return h.publications() == 1 })
+	_, _, started, _ := h.fake.snapshot()
+	runs := 0
+	for _, request := range started {
+		if request.Reviewer.ID == "opus" {
+			runs++
+		}
+	}
+	if runs != 2 {
+		t.Fatalf("opus ran %d times", runs)
+	}
+}
+
 func TestBaseFetchLockedByAConcurrentReviewIsRetriedOnAFreshBranch(t *testing.T) {
 	h := startHarness(t, nil)
 	h.fake.mu.Lock()

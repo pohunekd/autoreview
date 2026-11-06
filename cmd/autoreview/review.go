@@ -510,7 +510,7 @@ func (r *review) runSlots(slots []*reviewerSlot, deadlineKey string, done func(*
 					return err
 				}
 			case reviewerOutputRetryable(parseErr) && slot.state.Run < limits.ReviewerRunAttempts:
-				r.engine.logger.WarnContext(r.ctx, "retrying reviewer after unusable output", "review_id", r.input.PullRequest.ReviewID(), "reviewer", reviewer.ID, "run", slot.state.Run, "error_code", errorCode(parseErr))
+				r.engine.logger.WarnContext(r.ctx, "retrying reviewer after unusable output", "review_id", r.input.PullRequest.ReviewID(), "reviewer", reviewer.ID, "run", slot.state.Run, "error_code", errorCode(parseErr), "error", parseErr.Error())
 				if err := r.removeSessions([]*reviewerSlot{slot}); err != nil {
 					return err
 				}
@@ -527,6 +527,7 @@ func (r *review) runSlots(slots []*reviewerSlot, deadlineKey string, done func(*
 				}
 				pending = true
 			default:
+				r.engine.logger.WarnContext(r.ctx, "rejecting reviewer output", "review_id", r.input.PullRequest.ReviewID(), "reviewer", reviewer.ID, "run", slot.state.Run, "error_code", errorCode(parseErr), "error", parseErr.Error())
 				return &sessionFault{workflowError(errorCode(parseErr), true, nil)}
 			}
 		}
