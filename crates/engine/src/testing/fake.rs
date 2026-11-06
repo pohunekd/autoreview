@@ -168,7 +168,6 @@ impl FakeIntegration {
     }
 
     /// Marks a pull request as closed.
-    #[expect(dead_code, reason = "called by S34")]
     pub(crate) fn close(&self, pr: PullRequest) {
         let mut state = self.lock();
         let key = pr.key();
