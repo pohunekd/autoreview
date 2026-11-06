@@ -245,3 +245,185 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
     );
     h.stop_engine().await;
 }
+
+#[tokio::test]
+async fn rewritten_history_gets_a_full_review_that_settles_prior_findings() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 3, "title": "Broken", "body": "It breaks.",
+    })]));
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    h.set_output(reviewer_output(Vec::new()));
+    let mut rebased = pr.clone();
+    rebased.head_sha = sha("c");
+    h.fake.lock().rewritten.insert(rebased.head_sha.clone());
+    h.fake.open(rebased.clone(), h.rule(&pr.repository));
+    let rebased_review_id = format!("Review ID: {}", rebased.review_id());
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, &rebased_review_id)
+    })
+    .await;
+    let (_, _, started, _) = h.fake.snapshot();
+    assert!(
+        started.len() == 4 && h.fake.has_note(Level::Action, "Scope: full"),
+        "a rebased head must get a full review by every reviewer, started {} sessions",
+        started.len()
+    );
+    let reads = h.fake.lock().discussion_reads.len();
+    assert_eq!(
+        reads, 1,
+        "the full review must still settle the prior findings"
+    );
+    h.stop_engine().await;
+}
+
+#[tokio::test]
+async fn missing_previous_review_falls_back_to_a_full_review() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 3, "title": "Broken", "body": "It breaks.",
+    })]));
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    h.store
+        .in_tx(|transaction| {
+            transaction
+                .execute("DELETE FROM review_steps", [])
+                .expect("the review steps are deleted");
+            Ok(())
+        })
+        .expect("the delete of the review steps commits");
+    h.set_output(reviewer_output(Vec::new()));
+    let mut next = pr.clone();
+    next.head_sha = sha("c");
+    h.fake.open(next.clone(), h.rule(&pr.repository));
+    let next_review_id = format!("Review ID: {}", next.review_id());
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, &next_review_id)
+    })
+    .await;
+    let (_, _, started, _) = h.fake.snapshot();
+    let reads = h.fake.lock().discussion_reads.len();
+    assert!(
+        started.len() == 4 && reads == 0,
+        "without the previous result the review must be full and carry no prior findings: \
+         started {}, discussion reads {reads}",
+        started.len()
+    );
+    h.stop_engine().await;
+}
+
+// A resolved thread leaves an open prior finding nothing to answer.
+// So the review publishes it again instead of only naming it.
+#[tokio::test]
+async fn open_prior_finding_without_an_open_thread_is_published_again() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 3, "title": "Broken", "body": "It breaks.",
+    })]));
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    h.fake.lock().discussion.threads = vec![
+        DiscussionThread {
+            key: prior_key(&pr.head_sha, "O001"),
+            resolved: true,
+            replies: Vec::new(),
+        },
+        DiscussionThread {
+            key: prior_key(&pr.head_sha, "S001"),
+            replies: Vec::new(),
+            ..DiscussionThread::default()
+        },
+    ];
+    h.set_output(settling_output(Vec::new(), |_| PRIOR_OPEN));
+    let mut next = pr.clone();
+    next.head_sha = sha("c");
+    h.fake.open(next, h.rule(&pr.repository));
+    h.poll_until("the second review", || h.publications() == 2)
+        .await;
+    let (published, _, _, _) = h.fake.snapshot();
+    let review = &published[1];
+    assert!(
+        review.decision == Decision::RequestChanges
+            && review.comments.len() == 1
+            && review.comments[0].body.contains("Still open from O001")
+            && review.marker.contains(":findings=2:"),
+        "decision={:?} comments={:?} marker={}",
+        review.decision,
+        review.comments,
+        review.marker
+    );
+    h.stop_engine().await;
+}
+
+#[tokio::test]
+async fn human_review_signal_holds_a_clean_automatic_approval_for_the_user() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().deleted = vec![
+        "src/kept.go".to_owned(),
+        "pkg/tests/OwnerTest.php".to_owned(),
+    ];
+    let mut pr = integration_pull_request("risky/widget", &sha("a"));
+    pr.labels = vec!["Needs-Human".to_owned()];
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
+    })
+    .await;
+    assert!(
+        h.fake.has_note(
+            Level::Action,
+            "human review signals: label needs-human; deleted test files \
+             pkg/tests/OwnerTest.php."
+        ) && h.publications() == 0,
+        "the approval request must name the matched signals and nothing may be posted yet"
+    );
+    h.approve_when_awaiting(&pr)
+        .await
+        .expect("the waiting review is approved");
+    h.wait_for("the approval", || h.publications() == 1).await;
+    let (published, _, _, _) = h.fake.snapshot();
+    assert!(
+        published[0].decision == Decision::Approve
+            && published[0].body.contains(
+                "waited for a human approval because the pull request matched: label needs-human"
+            ),
+        "decision={:?} body={}",
+        published[0].decision,
+        published[0].body
+    );
+    h.stop_engine().await;
+}
+
+#[tokio::test]
+async fn human_review_without_a_match_approves_without_the_user() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().deleted = vec!["src/removed.go".to_owned()];
+    let mut pr = integration_pull_request("risky/widget", &sha("a"));
+    pr.labels = vec!["enhancement".to_owned()];
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("an automatic approval", || h.publications() == 1)
+        .await;
+    let (published, _, _, _) = h.fake.snapshot();
+    assert!(
+        published[0].decision == Decision::Approve
+            && !published[0].body.contains("waited for a human")
+            && !h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE),
+        "an unmatched review must approve without the user: {}",
+        published[0].body
+    );
+    h.stop_engine().await;
+}
