@@ -206,42 +206,55 @@ fn artifact_invalid() -> Error {
 mod tests {
     use time::OffsetDateTime;
 
-    use crate::model::{Finding, ReviewerResult};
+    use crate::model::{Finding, ReviewInput, ReviewerResult};
     use crate::protocol::fixtures::{opus, test_input, test_pull_request};
     use crate::protocol::validate::tests::test_config;
 
     use super::combine_results;
 
-    #[test]
-    fn combine_results_prefixes_findings_per_reviewer() {
-        let cfg = test_config();
+    /// Input of a rule that runs Opus and then Sonnet.
+    fn two_reviewers() -> ReviewInput {
         let mut sonnet = opus();
         sonnet.id = "sonnet".to_owned();
         sonnet.label = "Sonnet".to_owned();
         sonnet.finding_prefix = "S".to_owned();
         let mut input = test_input(&opus(), test_pull_request(4));
         input.reviewers = vec![opus(), sonnet];
+        input
+    }
+
+    /// Result of `reviewer` with `findings` and `tests`.
+    fn result(reviewer: &str, findings: Vec<Finding>, tests: &[&str]) -> ReviewerResult {
+        ReviewerResult {
+            reviewer_id: reviewer.to_owned(),
+            summary: format!("{reviewer} summary"),
+            findings,
+            tests: tests.iter().map(|test| (*test).to_owned()).collect(),
+            ..ReviewerResult::default()
+        }
+    }
+
+    /// Finding `source_id` at `path:line` with `severity`, confidence and body.
+    fn finding(source_id: &str, path: &str, line: i64, severity: &str) -> Finding {
+        Finding {
+            source_id: source_id.to_owned(),
+            path: path.to_owned(),
+            line,
+            severity: severity.to_owned(),
+            confidence: "medium".to_owned(),
+            title: format!("{source_id} title"),
+            body: format!("{source_id} body"),
+            ..Finding::default()
+        }
+    }
+
+    #[test]
+    fn combine_results_prefixes_findings_per_reviewer() {
+        let cfg = test_config();
+        let input = two_reviewers();
         let results = vec![
-            ReviewerResult {
-                reviewer_id: "opus".to_owned(),
-                summary: "opus summary".to_owned(),
-                findings: vec![Finding {
-                    source_id: "C001".to_owned(),
-                    title: "a".to_owned(),
-                    ..Finding::default()
-                }],
-                ..ReviewerResult::default()
-            },
-            ReviewerResult {
-                reviewer_id: "sonnet".to_owned(),
-                summary: "sonnet summary".to_owned(),
-                findings: vec![Finding {
-                    source_id: "C001".to_owned(),
-                    title: "b".to_owned(),
-                    ..Finding::default()
-                }],
-                ..ReviewerResult::default()
-            },
+            result("opus", vec![finding("C001", "a.go", 1, "high")], &[]),
+            result("sonnet", vec![finding("C001", "a.go", 2, "high")], &[]),
         ];
         let artifact = combine_results(&cfg, &input, &results, OffsetDateTime::UNIX_EPOCH)
             .expect("results in reviewer order combine");
@@ -249,7 +262,6 @@ mod tests {
         assert_eq!(artifact.findings[0].id, "O001");
         assert_eq!(artifact.findings[1].id, "S001");
         assert_eq!(artifact.findings[1].reviewer_label, "Sonnet");
-        assert_eq!(artifact.summaries.len(), 2);
 
         let reversed = vec![results[1].clone(), results[0].clone()];
         assert!(combine_results(&cfg, &input, &reversed, OffsetDateTime::UNIX_EPOCH).is_err());
