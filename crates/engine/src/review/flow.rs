@@ -94,8 +94,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
         }
         for reviewer in review.input.reviewers.clone() {
-            let prompt = match build_reviewer_request(&review.input, &reviewer, &review.discussion)
-            {
+            let prompt = match build_reviewer_request(
+                &self.config,
+                &review.input,
+                &reviewer,
+                &review.discussion,
+            ) {
                 Ok(prompt) => prompt,
                 Err(err) => return review.fail(err).await,
             };
