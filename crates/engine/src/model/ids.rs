@@ -16,14 +16,12 @@ pub(crate) const WORKFLOW_ID_PREFIX: &str = "prr-v2-";
 pub(crate) const INPUT_VERSION: i64 = 5;
 
 /// Oldest input version a review accepts, so a stored review resumes after an upgrade.
-#[expect(dead_code, reason = "called by S25")]
 pub(crate) const MIN_INPUT_VERSION: i64 = 2;
 
 /// First input version whose findings may be non-blocking; before it every finding blocks.
 pub(crate) const BLOCKING_GATE_VERSION: i64 = 3;
 
 /// First input version that may carry the blocking findings of earlier reviews.
-#[expect(dead_code, reason = "called by S25")]
 pub(crate) const PRIOR_FINDINGS_VERSION: i64 = 4;
 
 /// First input version whose blocking findings the verifier checks before publication.
@@ -146,7 +144,6 @@ pub fn head_prefix_valid(value: &str) -> bool {
 }
 
 /// Reports whether a repository, number and head name one valid review head.
-#[expect(dead_code, reason = "called by S24")]
 pub(crate) fn review_identity_valid(repository: &str, number: i64, head: &str) -> bool {
     repository_valid(repository) && number > 0 && sha_valid(head)
 }
