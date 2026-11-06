@@ -122,6 +122,9 @@ can produce an id that is already in use. Choose prefixes other than `P`.
 Several reviewers in one pipeline give independent opinions on the same
 change. Each reviewer runs its own session with its own agent profile, so the
 reviewers can use different models, and different agents of the same protocol.
+The published review still reads as one: a finding that several reviewers report
+on the same path, line and severity appears once, labelled with every reviewer
+(see [how it works](how-it-works.md#5-result-parsing-and-limits)).
 
 ```yaml
 pipelines:

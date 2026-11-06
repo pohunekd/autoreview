@@ -140,11 +140,23 @@ async fn demoted_critical_finding_on_an_approving_rule_waits_for_the_user() {
 #[tokio::test]
 async fn confirmed_findings_still_request_changes() {
     let mut h = start_harness(|_| {}).await;
-    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
-    h.set_output(reviewer_output(vec![json!({
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3, 4])].into();
+    // Distinct lines keep the two reviewers' findings apart as O001 and S001.
+    let opus = reviewer_output(vec![json!({
         "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
         "line": 3, "title": "Broken", "body": "It breaks.",
-    })]));
+    })]);
+    let sonnet = reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 4, "title": "Also broken", "body": "It breaks too.",
+    })]);
+    h.set_output(move |request: &SessionRequest| {
+        if request.reviewer.id == "sonnet" {
+            sonnet(request)
+        } else {
+            opus(request)
+        }
+    });
     let pr = integration_pull_request("checked/manual", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the request for changes", || h.publications() == 1)

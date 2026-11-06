@@ -8,6 +8,7 @@
 use autoreview_policy::Level;
 use serde_json::json;
 
+use crate::integrations::SessionRequest;
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_OPEN, prior_key};
@@ -30,7 +31,7 @@ async fn notes_only_review_of_an_await_rule_asks_for_approval_and_publishes_the_
     })
     .await;
     assert!(
-        h.fake.has_note(Level::Action, "Non-blocking notes: 2") && h.publications() == 0,
+        h.fake.has_note(Level::Action, "Non-blocking notes: 1") && h.publications() == 0,
         "the approval request must list the notes and nothing may be posted yet"
     );
     h.approve_when_awaiting(&pr)
@@ -41,7 +42,7 @@ async fn notes_only_review_of_an_await_rule_asks_for_approval_and_publishes_the_
     assert!(
         published[0].decision == Decision::Approve
             && published[0].comments.is_empty()
-            && published[0].body.contains("2 non-blocking note(s)"),
+            && published[0].body.contains("1 non-blocking note(s)"),
         "decision={:?} comments={} body={}",
         published[0].decision,
         published[0].comments.len(),
@@ -65,7 +66,7 @@ async fn hand_notes_to_the_author(h: &Harness) -> PullRequest {
         .await;
     h.wait_for("the hand-off notification", || {
         h.fake
-            .has_note(Level::Digest, "Handed 2 non-blocking note(s) on acme/notes")
+            .has_note(Level::Digest, "Handed 1 non-blocking note(s) on acme/notes")
     })
     .await;
     let (published, notes, _, _) = h.fake.snapshot();
@@ -110,7 +111,7 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
             && h.publications() == 1
             && h.fake
                 .has_note(Level::Action, "The author requested the review again")
-            && h.fake.has_note(Level::Action, "Non-blocking notes: 2"),
+            && h.fake.has_note(Level::Action, "Non-blocking notes: 1"),
         "the renewed request must reuse the hand-off review: {} sessions, {} publications",
         h.started_count(),
         h.publications()
@@ -128,7 +129,7 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     assert!(
         published[1].decision == Decision::Approve
             && published[1].comments.is_empty()
-            && published[1].body.contains("2 non-blocking note(s)"),
+            && published[1].body.contains("1 non-blocking note(s)"),
         "decision={:?} comments={} body={}",
         published[1].decision,
         published[1].comments.len(),
@@ -182,18 +183,11 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
     h.poll_until("the request for changes", || h.publications() == 1)
         .await;
 
-    h.fake.lock().discussion.threads = vec![
-        DiscussionThread {
-            key: prior_key(&pr.head_sha, "O001"),
-            replies: Vec::new(),
-            ..DiscussionThread::default()
-        },
-        DiscussionThread {
-            key: prior_key(&pr.head_sha, "S001"),
-            replies: Vec::new(),
-            ..DiscussionThread::default()
-        },
-    ];
+    h.fake.lock().discussion.threads = vec![DiscussionThread {
+        key: prior_key(&pr.head_sha, "O001"),
+        replies: Vec::new(),
+        ..DiscussionThread::default()
+    }];
     h.set_output(settling_output(Vec::new(), |_| PRIOR_OPEN));
     let mut second = pr.clone();
     second.head_sha = sha("c");
@@ -211,12 +205,16 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
     assert!(
         published[1].decision == Decision::RequestChanges
             && published[1].comments.is_empty()
-            && published[1].marker.contains(":findings=2:")
+            && published[1].marker.contains(":findings=1:")
             && published[1]
                 .body
                 .matches("**Still open, blocking**")
                 .count()
-                == 2,
+                == 1
+            && published[1]
+                .body
+                .contains("**Still open, blocking**: O001 HIGH")
+            && !published[1].body.contains("S001"),
         "open prior findings must keep blocking without new threads: decision={:?} \
          comments={} marker={} body={}",
         published[1].decision,
@@ -240,7 +238,7 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
     );
     let reads = h.fake.lock().discussion_reads.clone();
     assert!(
-        reads.len() == 2 && reads[1].len() == 2 && reads[1][0].head_sha == pr.head_sha,
+        reads.len() == 2 && reads[1].len() == 1 && reads[1][0].head_sha == pr.head_sha,
         "the third review must still carry the findings of the first, read {reads:?}"
     );
     h.stop_engine().await;
@@ -327,11 +325,23 @@ async fn missing_previous_review_falls_back_to_a_full_review() {
 #[tokio::test]
 async fn open_prior_finding_without_an_open_thread_is_published_again() {
     let mut h = start_harness(|_| {}).await;
-    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
-    h.set_output(reviewer_output(vec![json!({
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3, 4])].into();
+    // Distinct lines keep the two reviewers' findings apart as O001 and S001.
+    let opus = reviewer_output(vec![json!({
         "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
         "line": 3, "title": "Broken", "body": "It breaks.",
-    })]));
+    })]);
+    let sonnet = reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 4, "title": "Also broken", "body": "It breaks too.",
+    })]);
+    h.set_output(move |request: &SessionRequest| {
+        if request.reviewer.id == "sonnet" {
+            sonnet(request)
+        } else {
+            opus(request)
+        }
+    });
     let pr = integration_pull_request("acme/manual", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the request for changes", || h.publications() == 1)

@@ -102,7 +102,7 @@ async fn findings_request_changes_and_the_next_head_gets_a_full_review() {
         .await;
     let (published, _, _, _) = h.fake.snapshot();
     assert!(
-        published[0].decision == Decision::RequestChanges && published[0].comments.len() == 2,
+        published[0].decision == Decision::RequestChanges && published[0].comments.len() == 1,
         "decision={:?} comments={}",
         published[0].decision,
         published[0].comments.len()
@@ -126,6 +126,53 @@ async fn findings_request_changes_and_the_next_head_gets_a_full_review() {
         "second review = {:?}: {}",
         published[1].decision,
         published[1].body
+    );
+    h.stop_engine().await;
+}
+
+// Two reviewers that report the same defect publish it once, as the first reviewer's finding.
+#[tokio::test]
+async fn same_finding_of_two_reviewers_is_published_once() {
+    let mut h = start_harness(|_| {}).await;
+    let opus = reviewer_output(vec![json!({
+        "severity": "high", "confidence": "medium", "path": "src/a.go", "line": 3,
+        "title": "Broken", "body": "It breaks.",
+    })]);
+    let sonnet = reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "path": "src/a.go", "line": 3,
+        "title": "Broken on empty input", "body": "It breaks on an empty input.",
+    })]);
+    h.set_output(move |request: &SessionRequest| {
+        if request.reviewer.id == "sonnet" {
+            sonnet(request)
+        } else {
+            opus(request)
+        }
+    });
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("a request for changes", || h.publications() == 1)
+        .await;
+    let (published, _, _, _) = h.fake.snapshot();
+    let review = &published[0];
+    let heading = "**O001 HIGH — Broken on empty input** (confidence: high, Opus + Sonnet)\n\n\
+                   It breaks on an empty input.";
+    assert!(
+        review.decision == Decision::RequestChanges
+            && review.comments.len() == 1
+            && review.comments[0].body.starts_with(heading)
+            && review.marker.contains(":findings=1:")
+            && review
+                .body
+                .contains("1 blocking finding(s) are posted as inline comments.")
+            && review.body.contains("**Opus:** ")
+            && !review.body.contains("**Sonnet:** "),
+        "decision={:?} comments={:?} marker={} body={}",
+        review.decision,
+        review.comments,
+        review.marker,
+        review.body
     );
     h.stop_engine().await;
 }

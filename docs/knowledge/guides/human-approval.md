@@ -109,13 +109,14 @@ the review account.
    the review starts.
 2. **Two reviews, one verifier.** Opus and Sonnet each review the change in their
    own pohunek session, read-only, from the base branch. Their findings are
-   numbered with their prefixes, `O001`, `S001` and so on.
+   numbered with their prefixes, `O001`, `S001` and so on. A finding that both
+   report on the same path, line and severity is published once, as the Opus one.
 3. **Verification.** The verifier (Opus) re-checks every blocking finding. Each
    one is confirmed or demoted to a note with the reason. No verifier output
    is dropped.
 4. **Decision.** With blocking findings left, the engine publishes one review
    with decision REQUEST_CHANGES. The author sees the inline comments, the
-   summary per reviewer, the verification line and the signature
+   summary of the first reviewer (Opus), the verification line and the signature
    (`Written by AI: autoreview (posted from review-bot's GitHub account, not by a human)`).
    The `changes_requested` digest is recorded.
 5. **Clean review.** With no blocking findings left, the review does not

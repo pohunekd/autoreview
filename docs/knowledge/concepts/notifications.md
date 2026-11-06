@@ -159,7 +159,7 @@ Scope: full
 The approval request adds the number of blocking findings, the number of notes,
 how to approve, and the time when the wait expires. It says that nothing has been
 posted to GitHub yet.
-The summary of each reviewer and the list of findings follow, with the finding id,
+The summary of the first reviewer and the list of findings follow, with the finding id,
 severity, confidence, location and title. The list of notes comes after the
 approval instruction, so a cut message still shows what to do.
 

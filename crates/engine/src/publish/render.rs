@@ -25,6 +25,9 @@ pub(crate) struct RenderSettings {
     pub(crate) excerpt_characters: i64,
 }
 
+/// Separator of the reviewer labels in a review and in a merged finding.
+pub(crate) const LABEL_SEPARATOR: &str = " + ";
+
 const NO_NEW_BLOCKING: &str = "No new blocking findings were identified.";
 const NO_BLOCKING: &str = "No blocking findings were identified.";
 const NOTES_TO_AUTHOR: &str = "No blocking findings were identified, only the non-blocking notes \
@@ -314,7 +317,7 @@ pub(crate) fn reviewer_labels(reviewers: &[Reviewer]) -> String {
         .iter()
         .map(|reviewer| reviewer.label.as_str())
         .collect();
-    labels.join(" + ")
+    labels.join(LABEL_SEPARATOR)
 }
 
 /// Lists the signals of a human review that the pull request matches: each configured label it
