@@ -1,19 +1,44 @@
-//! The pure part of the review queue: the engine state of each request, its order and the digest.
+//! The review queue: the waiting requests and notes, posted as one digest.
+//!
+//! Mirrors `cmd/autoreview/review_queue.go`.
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_policy::{Policy, TriggerKind};
 use autoreview_schedule::scheduler::Record;
 use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 
-use crate::integrations::ReviewRequest;
+use crate::discovery::poll::live;
+use crate::engine::{Clock, Engine, retry_step};
+use crate::error::{Error, error_code};
+use crate::integrations::{Integrations, ReviewRequest};
+use crate::messages::handoff_age;
 use crate::model::{AwaitRecord, PublishedRecord};
 use crate::publish::decision_text;
 
 /// Note that closes a digest whose list does not show every request.
 const TRUNCATED_TEXT: &str = "The list is truncated: more requests wait for you than are shown.";
+
+/// Prefix of the transaction ID of one queue run (`review_queue.go:135`).
+const TRANSACTION_PREFIX: &str = "queue-";
+
+/// Random bytes of the transaction ID of one queue run (`review_queue.go:131`).
+const TRANSACTION_RANDOM_BYTES: usize = 16;
+
+/// Error code of a digest that has no room for a single entry.
+const REVIEW_QUEUE_TOO_LONG: &str = "review_queue_too_long";
+
+/// Error code of a transaction ID that cannot be drawn.
+const MATRIX_REQUEST_INVALID: &str = "matrix_request_invalid";
+
+/// Error code of a queue limit that the configuration loader refuses.
+const CONFIGURATION_INVALID: &str = "configuration_invalid";
+
+/// Configuration key of the queue limit.
+const QUEUE_MAX_ITEMS_KEY: &str = "notify.review_queue.max_items";
 
 /// Position of a queue entry. The derived order puts the requests that need the owner's action
 /// first, and the notes that wait for their author after the requests.
@@ -32,7 +57,6 @@ pub(crate) enum QueuePriority {
 }
 
 /// The result the review-queue command prints.
-#[expect(dead_code, reason = "called by S34")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct QueueResult {
     /// Requests listed in the digest.
@@ -44,7 +68,6 @@ pub struct QueueResult {
 }
 
 /// One request of the queue with the engine state that explains it.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QueueEntry {
     /// The request as GitHub reported it.
@@ -56,7 +79,6 @@ pub(crate) struct QueueEntry {
 }
 
 /// The engine state the queue reads, each map keyed by `repository#number`.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct QueueState {
     /// Review schedule records.
@@ -68,7 +90,6 @@ pub(crate) struct QueueState {
 }
 
 /// The digest bodies and the count of requests they show.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RenderedQueue {
     /// The plain-text body.
@@ -81,9 +102,156 @@ pub(crate) struct RenderedQueue {
     pub(crate) dropped: bool,
 }
 
+impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Posts the review requests and the notes that wait, as one queue digest.
+    ///
+    /// Nothing is posted when nothing waits. Every retry of the post reuses one transaction ID,
+    /// so the homeserver keeps one copy, while a later run posts its own digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the search, the store or the post, `review_queue_too_long` when no
+    /// entry fits, `matrix_request_invalid` without a transaction ID, and `configuration_invalid`
+    /// without a policy or with a negative limit.
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by C01"))]
+    pub(crate) async fn review_queue(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<QueueResult, Error> {
+        let limit = self.config.queue_max_items;
+        let list = retry_step(self.step_policy(), &self.clock, cancel, || {
+            self.integration.list_review_requests(cancel, limit)
+        })
+        .await?;
+        live(cancel)?;
+        let discovery = self.store.load_discovery()?;
+        let state = QueueState {
+            schedule: discovery.schedule,
+            published: discovery.published,
+            awaiting: discovery.awaiting,
+        };
+        let mut entries = queue_entries(self.policy()?, &state, &list.requests);
+        entries.extend(self.waiting_on_author(cancel, &state, &list.requests).await);
+        if entries.is_empty() {
+            return Ok(QueueResult::default());
+        }
+        // The entries are cut after the sort. So a request that needs the user's action is never
+        // dropped for one that only waits for the engine.
+        let over = i64::try_from(entries.len()).map_or(true, |len| len > limit);
+        let truncated = list.truncated || over;
+        if over {
+            let Ok(kept) = usize::try_from(limit) else {
+                return Err(Error::config(
+                    CONFIGURATION_INVALID,
+                    QUEUE_MAX_ITEMS_KEY,
+                    None,
+                ));
+            };
+            entries.truncate(kept);
+        }
+        let rendered = render_queue(
+            &entries,
+            truncated,
+            self.config.matrix_max_characters,
+            self.config.max_title_characters,
+        );
+        if rendered.shown == 0 {
+            return Err(Error::workflow(REVIEW_QUEUE_TOO_LONG, true, None));
+        }
+        let transaction = queue_transaction_id()?;
+        retry_step(self.step_policy(), &self.clock, cancel, || {
+            self.integration.send_queue_digest(
+                cancel,
+                &transaction,
+                &rendered.plain,
+                &rendered.formatted,
+            )
+        })
+        .await?;
+        Ok(QueueResult {
+            count: i64::try_from(rendered.shown).unwrap_or(i64::MAX),
+            sent: true,
+            truncated: rendered.dropped,
+        })
+    }
+
+    /// Returns the open pull requests whose notes wait for their author.
+    ///
+    /// The author has not requested the review again. A pull request that cannot be read is
+    /// left out of this digest with a warning, also after a cancel, as Go leaves it out.
+    async fn waiting_on_author(
+        &self,
+        cancel: &CancellationToken,
+        state: &QueueState,
+        requests: &[ReviewRequest],
+    ) -> Vec<QueueEntry> {
+        let requested: BTreeSet<String> = requests
+            .iter()
+            .map(|request| format!("{}#{}", request.repository, request.number))
+            .collect();
+        let now = self.clock.wall_now();
+        let mut entries = Vec::new();
+        for (key, record) in &state.published {
+            if !record.awaits_author || requested.contains(key) {
+                continue;
+            }
+            let read = retry_step(self.step_policy(), &self.clock, cancel, || {
+                self.integration
+                    .read_pull_request_state(cancel, &record.repository, record.number)
+            })
+            .await;
+            let current = match read {
+                Ok(current) => current,
+                Err(err) => {
+                    tracing::warn!(
+                        repository = %record.repository,
+                        pull_request = record.number,
+                        error_code = error_code(&err),
+                        "notes hand-off unreadable"
+                    );
+                    continue;
+                }
+            };
+            if !current.open || current.requested {
+                continue;
+            }
+            let mut status = format!(
+                "notes handed to the author {} ago",
+                handoff_age(record, now)
+            );
+            if record.reminded {
+                status.push_str(", reminded");
+            }
+            entries.push(QueueEntry {
+                request: ReviewRequest {
+                    repository: record.repository.clone(),
+                    number: record.number,
+                    title: current.title,
+                    author: current.author,
+                    url: current.url,
+                },
+                status,
+                priority: QueuePriority::WaitingAuthor,
+            });
+        }
+        entries
+    }
+}
+
+/// Returns a fresh transaction ID: `queue-` and 16 random bytes in lowercase hex.
+///
+/// # Errors
+///
+/// Returns `matrix_request_invalid`, permanent, when the system has no random bytes.
+fn queue_transaction_id() -> Result<String, Error> {
+    let mut random = [0_u8; TRANSACTION_RANDOM_BYTES];
+    getrandom::fill(&mut random)
+        .map_err(|err| Error::workflow(MATRIX_REQUEST_INVALID, true, Some(Box::new(err))))?;
+    Ok(format!("{TRANSACTION_PREFIX}{}", hex::encode(random)))
+}
+
 /// Annotates each request with its engine state and sorts the entries.
 /// The order is priority, then repository and number.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 pub(crate) fn queue_entries(
     policy: &Policy,
     state: &QueueState,
@@ -172,7 +340,6 @@ fn schedule_status(record: &Record) -> (String, QueuePriority) {
 
 /// Builds the plain-text and HTML digests with as many entries as fit.
 /// Each body holds at most `limit` characters and never cuts an entry in half.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by S34"))]
 pub(crate) fn render_queue(
     entries: &[QueueEntry],
     truncated: bool,
@@ -320,11 +487,31 @@ pub(crate) fn clean_text(text: &str, max: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use time::OffsetDateTime;
+    use std::future::{Future, ready};
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
-    use super::{QueuePriority, QueueState, clean_text, queue_entries, queue_status, render_queue};
+    use autoreview_policy::Level;
+    use tempfile::TempDir;
+    use time::OffsetDateTime;
+    use time::macros::datetime;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{
+        QueuePriority, QueueResult, QueueState, clean_text, queue_entries, queue_status,
+        render_queue,
+    };
+    use crate::config::Config;
+    use crate::engine::{Clock, Engine};
+    use crate::error::error_code;
     use crate::integrations::ReviewRequest;
-    use crate::model::{AwaitRecord, Decision, PublishedRecord};
+    use crate::model::{AwaitRecord, Decision, PublishedRecord, PullRequest};
+    use crate::protocol::fixtures::sha;
+    use crate::protocol::validate::tests::test_config;
+    use crate::store::Store;
+    use crate::testing::fake::FakeIntegration;
+    use crate::testing::harness::{integration_config, integration_pull_request};
     use autoreview_policy::Policy;
     use autoreview_schedule::scheduler::Record;
 
@@ -690,5 +877,381 @@ notifications:
     fn clean_text_collapses_control_characters_and_limits_length() {
         assert_eq!(clean_text("a\n\tb\u{0}  c", 10), "a b c");
         assert_eq!(clean_text("abcdef", 4), "abc…");
+    }
+
+    /// A clock frozen at one wall time; its waits end at once, as in Go's `newQueueEngine`.
+    struct FrozenClock {
+        /// The instant that every call of `now` returns.
+        instant: Instant,
+        /// The wall time that every call of `wall_now` returns.
+        at: OffsetDateTime,
+    }
+
+    impl Clock for FrozenClock {
+        fn now(&self) -> Instant {
+            self.instant
+        }
+
+        fn sleep(&self, _delay: Duration) -> impl Future<Output = ()> + Send {
+            ready(())
+        }
+
+        fn wall_now(&self) -> OffsetDateTime {
+            self.at
+        }
+    }
+
+    /// The engine of the queue tests.
+    type QueueEngine = Engine<FakeIntegration, FrozenClock>;
+
+    /// The deployed test configuration: `testdata/review.env` and `testdata/review-policy.yaml`.
+    fn queue_config() -> Config {
+        let document = include_str!("../../../testdata/review-policy.yaml");
+        let policy = autoreview_policy::parse(document.as_bytes(), |relative| {
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../testdata")
+                    .join(relative),
+            )
+        })
+        .expect("the deployed policy parses");
+        let mut cfg = test_config();
+        cfg.policy = Some(policy);
+        cfg.github_login = "example-user".to_owned();
+        cfg.queue_matrix_room = "!queue:example.org".to_owned();
+        cfg.queue_max_items = 50;
+        cfg.published_retention = Duration::from_secs(1_209_600);
+        cfg.step_retry = Duration::from_secs(1800);
+        cfg.step_retry_initial = Duration::from_secs(30);
+        cfg.step_retry_max_interval = Duration::from_secs(600);
+        cfg.state_entry_limit = 1000;
+        cfg.max_title_characters = 200;
+        cfg.matrix_max_characters = 12_000;
+        cfg.excerpt_characters = 800;
+        cfg
+    }
+
+    /// Builds an engine on a fresh store, the fake and a clock frozen at `at`.
+    ///
+    /// The returned directory holds the store and must outlive the engine.
+    fn new_queue_engine(
+        cfg: Config,
+        fake: &Arc<FakeIntegration>,
+        at: OffsetDateTime,
+    ) -> (QueueEngine, TempDir) {
+        let dir = TempDir::new().expect("create the store directory");
+        let store = Store::open(
+            &dir.path().join("state.db"),
+            Box::new(OffsetDateTime::now_utc),
+        )
+        .expect("open the store");
+        let clock = FrozenClock {
+            instant: Instant::now(),
+            at,
+        };
+        let engine = Engine::new(cfg, Arc::new(store), Arc::clone(fake), clock);
+        (engine, dir)
+    }
+
+    /// Reports whether `transaction` is `queue-` followed by 32 lowercase hex digits.
+    fn queue_transaction_valid(transaction: &str) -> bool {
+        transaction.strip_prefix("queue-").is_some_and(|hex| {
+            hex.len() == 32
+                && hex
+                    .chars()
+                    .all(|character| matches!(character, '0'..='9' | 'a'..='f'))
+        })
+    }
+
+    #[tokio::test]
+    async fn review_queue_sends_nothing_when_no_request_waits() {
+        let fake = Arc::new(FakeIntegration::new());
+        let (engine, _dir) =
+            new_queue_engine(queue_config(), &fake, datetime!(2026-10-19 14:00 UTC));
+        let result = engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the queue runs");
+        let queued = fake.lock().queued.len();
+        assert!(
+            result == QueueResult::default() && queued == 0,
+            "result {result:?} queued {queued}"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_queue_lists_the_requests_and_truncates_at_the_limit() {
+        let mut cfg = queue_config();
+        cfg.queue_max_items = 2;
+        let fake = Arc::new(FakeIntegration::new());
+        fake.lock().requests = vec![
+            queue_request("example-org/example-repo", 1, "first"),
+            queue_request("example-org/example-repo", 2, "second"),
+            queue_request("example-org/example-repo", 3, "third"),
+        ];
+        let (engine, _dir) = new_queue_engine(cfg, &fake, datetime!(2026-10-19 14:00 UTC));
+        let result = engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the queue runs");
+        assert_eq!(
+            result,
+            QueueResult {
+                count: 2,
+                sent: true,
+                truncated: true
+            }
+        );
+        let queued = fake.lock().queued.clone();
+        assert!(
+            queued.len() == 1
+                && queued[0].plain.contains("Reviews waiting for you (2)")
+                && queued[0].plain.contains("truncated"),
+            "queued {queued:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_queue_retries_with_one_transaction_per_run() {
+        let fake = Arc::new(FakeIntegration::new());
+        fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
+        fake.lock().queue_failures = 2;
+        let (engine, _dir) =
+            new_queue_engine(queue_config(), &fake, datetime!(2026-10-19 14:35 UTC));
+        let result = engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the queue runs");
+        let sends = fake.lock().queue_sends;
+        assert!(result.sent && sends == 3, "result {result:?} sends {sends}");
+        let transactions = fake.lock().queue_transactions.clone();
+        let first = transactions[0].clone();
+        assert!(queue_transaction_valid(&first), "transaction {first:?}");
+        assert!(
+            transactions.iter().all(|transaction| *transaction == first),
+            "retries used transactions {transactions:?}"
+        );
+        // A second run in the same hour posts its own message.
+        engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the second run posts");
+        let queued = fake.lock().queued.clone();
+        assert!(
+            queued.len() == 2 && queued[1].transaction != first,
+            "queued {queued:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_queue_gives_up_when_the_retry_window_ends() {
+        let mut cfg = queue_config();
+        cfg.step_retry = Duration::ZERO;
+        let fake = Arc::new(FakeIntegration::new());
+        fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
+        fake.lock().queue_failures = 1000;
+        let (engine, _dir) = new_queue_engine(cfg, &fake, datetime!(2026-10-19 14:00 UTC));
+        let result = engine.review_queue(&CancellationToken::new()).await;
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|err| error_code(err) == "matrix_unavailable"),
+            "error {result:?}"
+        );
+        let (sends, queued) = {
+            let state = fake.lock();
+            (state.queue_sends, state.queued.len())
+        };
+        assert!(sends == 1 && queued == 0, "sends {sends} queued {queued}");
+    }
+
+    /// Records `pr` as notes handed to its author at `published_at`.
+    ///
+    /// The fake keeps `pr` open, and it no longer requests the review.
+    async fn hand_off(
+        engine: &QueueEngine,
+        fake: &FakeIntegration,
+        pr: &PullRequest,
+        published_at: OffsetDateTime,
+        reminded: bool,
+    ) {
+        fake.lock().current.insert(pr.key(), pr.clone());
+        let record = PublishedRecord {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            head_sha: pr.head_sha.clone(),
+            review_request_id: pr.review_request_id,
+            decision: Decision::Comment,
+            workflow_id: pr.workflow_id(0),
+            published_at,
+            awaits_author: true,
+            reminded,
+        };
+        engine
+            .mark_published(&CancellationToken::new(), &record)
+            .await
+            .expect("the hand-off is recorded");
+    }
+
+    #[tokio::test]
+    async fn unanswered_notes_handoff_reminds_once_and_ends_when_closed() {
+        let at = datetime!(2026-10-23 12:00 UTC);
+        let fake = Arc::new(FakeIntegration::new());
+        let config_dir = TempDir::new().expect("create the configuration directory");
+        let mut cfg = integration_config(config_dir.path());
+        cfg.published_retention = Duration::from_secs(90 * 24 * 60 * 60);
+        let (engine, _dir) = new_queue_engine(cfg, &fake, at);
+        let mut fresh = integration_pull_request("acme/notes", &sha("a"));
+        let mut stale = integration_pull_request("acme/notes", &sha("a"));
+        let mut closed = integration_pull_request("acme/notes", &sha("a"));
+        (fresh.number, stale.number, closed.number) = (101, 102, 103);
+        hand_off(
+            &engine,
+            &fake,
+            &fresh,
+            at - time::Duration::hours(23),
+            false,
+        )
+        .await;
+        hand_off(
+            &engine,
+            &fake,
+            &stale,
+            at - time::Duration::hours(25),
+            false,
+        )
+        .await;
+        hand_off(
+            &engine,
+            &fake,
+            &closed,
+            at - time::Duration::hours(30),
+            false,
+        )
+        .await;
+        fake.close(closed.clone());
+        for _ in 0..2 {
+            engine
+                .poll(&CancellationToken::new())
+                .await
+                .expect("the discovery poll succeeds");
+        }
+        let (_, notes, _, _) = fake.snapshot();
+        let reminders: Vec<_> = notes
+            .iter()
+            .filter(|entry| entry.message.contains("wait for the author"))
+            .collect();
+        assert!(
+            reminders.len() == 1
+                && reminders[0].level == Level::Action
+                && reminders[0]
+                    .message
+                    .contains("acme/notes PR #102 wait for the author for 25 h")
+                && !reminders[0].message.contains("Review ID"),
+            "reminders = {reminders:?}"
+        );
+        let state = engine.store.load_discovery().expect("the state loads");
+        let got = state
+            .published
+            .get(&stale.key())
+            .cloned()
+            .unwrap_or_default();
+        assert!(got.awaits_author && got.reminded, "stale = {got:?}");
+        let got = state
+            .published
+            .get(&fresh.key())
+            .cloned()
+            .unwrap_or_default();
+        assert!(got.awaits_author && !got.reminded, "fresh = {got:?}");
+        let got = state
+            .published
+            .get(&closed.key())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !got.awaits_author,
+            "a closed pull request must end its hand-off: {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_queue_lists_notes_waiting_on_their_author_apart() {
+        let at = datetime!(2026-10-23 12:00 UTC);
+        let fake = Arc::new(FakeIntegration::new());
+        let (engine, _dir) = new_queue_engine(queue_config(), &fake, at);
+        let waiting = PullRequest {
+            repository: "example-org/example-repo".to_owned(),
+            number: 5,
+            head_sha: sha("a"),
+            review_request_id: 3,
+            title: "Optional polish".to_owned(),
+            url: "https://github.com/example-org/example-repo/pull/5".to_owned(),
+            author: "colleague".to_owned(),
+            ..PullRequest::default()
+        };
+        hand_off(
+            &engine,
+            &fake,
+            &waiting,
+            at - time::Duration::hours(30),
+            true,
+        )
+        .await;
+        let result = engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the queue runs");
+        let queued = fake.lock().queued.clone();
+        assert!(
+            result.sent
+                && result.count == 1
+                && !queued[0].plain.contains("Reviews waiting for you")
+                && queued[0].plain.contains(concat!(
+                    "Waiting on author (1)\n- Optional polish (example-org/example-repo#5, ",
+                    "by colleague): notes handed to the author 30 h ago, reminded"
+                )),
+            "result {result:?} queued {queued:?}"
+        );
+        fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
+        engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the second run posts");
+        let queued = fake.lock().queued.clone();
+        let (plain, formatted) = (&queued[1].plain, &queued[1].formatted);
+        assert!(
+            plain.contains("Reviews waiting for you (1)")
+                && plain.find("Waiting on author (1)") >= plain.find("first")
+                && formatted.matches("<ul>").count() == 2
+                && formatted.matches("</ul>").count() == 2,
+            "plain={plain} formatted={formatted}"
+        );
+    }
+
+    #[test]
+    fn review_queue_configuration_is_required() {
+        let mut cfg = queue_config();
+        cfg.queue_matrix_room = String::new();
+        let error = cfg.validate().expect_err("a missing queue room is refused");
+        assert_eq!(
+            error.to_string(),
+            "configuration_invalid: config: invalid Matrix queue room"
+        );
+        let mut cfg = queue_config();
+        cfg.queue_max_items = 1000;
+        let error = cfg
+            .validate()
+            .expect_err("queue limit at the gh search cap was accepted");
+        assert_eq!(
+            error.to_string(),
+            "configuration_invalid: config: configured limit is outside the safe range"
+        );
+        let mut cfg = queue_config();
+        cfg.queue_matrix_room = "not-a-room".to_owned();
+        let error = cfg.validate().expect_err("invalid queue room was accepted");
+        assert_eq!(
+            error.to_string(),
+            "configuration_invalid: config: invalid Matrix queue room"
+        );
     }
 }
