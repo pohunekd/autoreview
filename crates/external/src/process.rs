@@ -101,8 +101,8 @@ pub(crate) fn child_environment(
         .filter(|(name, _)| {
             let name = name.as_os_str();
             let prefixed = name
-                .to_str()
-                .is_some_and(|text| text.starts_with(SECRET_ENV_PREFIX));
+                .as_encoded_bytes()
+                .starts_with(SECRET_ENV_PREFIX.as_bytes());
             !prefixed
                 && !DROPPED_VARIABLES
                     .into_iter()

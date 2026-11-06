@@ -496,17 +496,17 @@ pub(crate) fn parse(
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Result<Config, Error> {
     let file = parse_file(text)?;
-    let config = to_config(&file, &secret, load_policy)?;
-    // The queue posts only to Matrix until M3. `to_config` maps a `none` queue to an empty room,
-    // so the shipped example, whose backends are all `none`, still maps.
-    if config.queue_matrix_room.is_empty() {
+    let mapped = map_file(&file, &secret, load_policy)?;
+    // The queue posts only to Matrix until M3. The check follows the mapping, so the tests can
+    // still map the shipped example, whose backends are all `none`.
+    if !mapped.queue_on_matrix {
         return Err(invalid(
             "notify.review_queue.backends",
             "none is not supported for the review queue",
         ));
     }
-    config.validate()?;
-    Ok(config)
+    mapped.config.validate()?;
+    Ok(mapped.config)
 }
 
 /// Reads the text of `config.yaml` into the file structs. Serde errors, such as an unknown key,
@@ -529,14 +529,39 @@ pub(crate) fn parse_file(text: &str) -> Result<FileConfig, Error> {
 
 /// Maps the file into the engine configuration without the engine's final validation.
 ///
+/// A review queue without a Matrix backend maps to an empty `queue_matrix_room`. The tests use
+/// it to map the shipped example, which [`parse`] refuses.
+///
 /// # Errors
 ///
-/// Returns the errors of [`parse`] except the engine's validation error.
+/// Returns the errors of [`parse`] except the queue check and the engine's validation error.
+#[cfg(test)]
 pub(crate) fn to_config(
     file: &FileConfig,
     secret: &impl Fn(&str) -> Option<String>,
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Result<Config, Error> {
+    map_file(file, secret, load_policy).map(|mapped| mapped.config)
+}
+
+/// The engine configuration and the loader facts that [`parse`] checks after the mapping.
+struct Mapped {
+    /// The engine configuration.
+    config: Config,
+    /// Whether `notify.review_queue.backends` names a Matrix backend.
+    queue_on_matrix: bool,
+}
+
+/// Maps the file into the engine configuration with the loader facts, without the checks.
+///
+/// # Errors
+///
+/// Returns the errors of [`parse`] except the queue check and the engine's validation error.
+fn map_file(
+    file: &FileConfig,
+    secret: &impl Fn(&str) -> Option<String>,
+    load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
+) -> Result<Mapped, Error> {
     let version = integer(present(&file.version, "version")?, "version")?;
     if version != CONFIG_VERSION {
         return Err(invalid("version", "must be 1"));
@@ -708,6 +733,7 @@ pub(crate) fn to_config(
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
     let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
     let shape = matrix_shape(&backends, routes, &queue_backends)?;
+    let queue_on_matrix = shape.queue_room.is_some();
     let config = Config {
         policy: Some(policy),
         schedule,
@@ -725,7 +751,7 @@ pub(crate) fn to_config(
         secret_variables: secret_variables.take(),
         matrix_mention_user: shape.mention_user,
         matrix_rooms: shape.rooms,
-        queue_matrix_room: shape.queue_room,
+        queue_matrix_room: shape.queue_room.unwrap_or_default(),
         queue_max_items,
         state_db_path,
         gh_timeout,
@@ -776,7 +802,10 @@ pub(crate) fn to_config(
         session_group,
     };
     cross_key_rules(file, &config)?;
-    Ok(config)
+    Ok(Mapped {
+        config,
+        queue_on_matrix,
+    })
 }
 
 /// A validated entry of `github.credentials`.
@@ -1161,8 +1190,8 @@ struct MatrixShape {
     mention_user: String,
     /// The room of each level; empty for a `none` backend.
     rooms: MatrixRooms,
-    /// The review queue room; empty when the queue does not reach Matrix.
-    queue_room: String,
+    /// The review queue room; `None` when the queue names no Matrix backend.
+    queue_room: Option<String>,
 }
 
 /// Maps the routes and the review queue onto Matrix backends that share one identity.
@@ -1244,7 +1273,7 @@ fn level_room<'a>(
     }
 }
 
-/// Resolves the review queue to its Matrix room, or to no room.
+/// Resolves the review queue to its Matrix room, or to `None` without a Matrix backend.
 ///
 /// # Errors
 ///
@@ -1254,7 +1283,7 @@ fn queue_room<'a>(
     backends: &'a [Backend],
     names: &[String],
     matrix: &mut Option<&'a Backend>,
-) -> Result<String, Error> {
+) -> Result<Option<String>, Error> {
     let key = "notify.review_queue.backends";
     if names.is_empty() {
         return Err(invalid(key, "must name at least one backend"));
@@ -1280,8 +1309,8 @@ fn queue_room<'a>(
         }
     }
     match queue {
-        Some(Backend::Matrix { room, .. }) => Ok(room.clone()),
-        _ => Ok(String::new()),
+        Some(Backend::Matrix { room, .. }) => Ok(Some(room.clone())),
+        _ => Ok(None),
     }
 }
 
@@ -1736,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    fn example_stops_at_the_engine_matrix_check() {
+    fn example_is_refused_by_the_queue_and_the_engine_matrix_checks() {
         let config = mapped(EXAMPLE).expect("the example maps");
         assert_eq!(
             config
@@ -1744,6 +1773,13 @@ mod tests {
                 .expect_err("none-only routes leave Matrix empty")
                 .to_string(),
             "configuration_invalid: config: invalid Matrix URL"
+        );
+        assert_eq!(
+            error_text(parse(EXAMPLE, secret, example_policy)),
+            concat!(
+                "configuration_invalid: notify.review_queue.backends: ",
+                "none is not supported for the review queue"
+            )
         );
     }
 
@@ -1881,6 +1917,12 @@ mod tests {
         let text = four_backends(entries, "[quiet, queue]");
         let config = parse(&text, secret, example_policy).expect("none next to Matrix loads");
         assert_eq!(config.queue_matrix_room, "!queue:example.org");
+        let text = four_backends(shared_backends(), "[queue]")
+            .replace("room: \"!queue:example.org\"", "room: \"\"");
+        assert_eq!(
+            error_text(parse(&text, secret, example_policy)),
+            "configuration_missing: notify.backends.room"
+        );
     }
 
     #[test]

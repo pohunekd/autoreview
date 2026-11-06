@@ -54,8 +54,10 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 | Reviewer session (`claude`, `codex`) | Review host, in a worktree | Model login, the code in the checked-out ref | Model API only; read-only run |
 | Verifier session | Review host, in a worktree | Same as reviewer | Same as reviewer |
 
-Each `gh` child gets only the token of its credential, as `GH_TOKEN` in its own environment. No GitHub token is in a reviewer session, and the reviewer returns a
-structured result, and only the engine publishes.
+Each `gh` child gets only the token of its credential, as `GH_TOKEN` in its own environment.
+autoreview passes no GitHub token to a reviewer session, whose environment comes from the
+pohunek daemon (see [secrets](secrets.md)); the reviewer returns a structured result, and only
+the engine publishes.
 
 ## Attacks and mitigations
 
@@ -65,8 +67,8 @@ structured result, and only the engine publishes.
 | 2 | Untrusted author gets an auto-approval | Untrusted sections may use `on_clean: comment` or `await`, never `approve`; `validate` rejects `approve` there | Designed; `validate` rule |
 | 3 | Prompt injection through the diff, description, comments or files | Prompts declare PR content as data; reviewer runs are read-only; the engine validates the output and publishes it | See [prompt injection](prompt-injection.md) |
 | 4 | Model output forges the review marker or pings people | Output is neutralized: no `@mentions`, no raw HTML, no images that GitHub would fetch, HTML comment delimiters defused | Engine behaviour |
-| 5 | Reviewer reads a GitHub token | Tokens are passed only to the `gh` calls of their repositories; child processes never inherit one or pohunek session identity variables | Engine behaviour |
-| 6 | Reviewer reads backend secrets or pohunek profile secrets | Keep secrets out of the profile; planned: adapters refuse known secret variables | Partly designed; see [secrets](secrets.md) |
+| 5 | Reviewer reads a GitHub token | Tokens are passed only to the `gh` calls of their repositories, as `GH_TOKEN`; the `gh` and `pohunek` processes autoreview starts inherit no token variable and no pohunek session identity variables | Engine behaviour |
+| 6 | Reviewer reads backend secrets or pohunek profile secrets | The `gh` and `pohunek` processes autoreview starts drop every `AUTOREVIEW_*` variable, every `*_env` name, `GH_TOKEN` and `MATRIX_ACCESS_TOKEN`. Review agents run with the pohunek daemon's environment, which autoreview does not control: keep secrets out of it and out of the profile | Engine behaviour for autoreview's processes; the daemon and the profile are the operator's; see [secrets](secrets.md) |
 | 7 | Wrong account posts reviews | `serve` refuses to start when a token's login differs from its credential's login; a token that fails while running suspends only its own credential | Engine behaviour |
 | 8 | Own pull request gets approved or changes requested | GitHub forbids it, so the engine always posts a comment and raises `findings_on_own_pr` | Policy behaviour |
 | 9 | Approval satisfies branch protection for a head nobody read | An approval binds to the exact head SHA; a new commit or changed request supersedes it | Policy behaviour |

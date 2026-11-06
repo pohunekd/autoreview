@@ -272,7 +272,9 @@ keeps tokens.
 - Check that a token is set without printing it, using the name from
   `config.yaml`: `test -n "$AUTOREVIEW_GH_TOKEN_ZAJCA" && echo set`.
 - Each `gh` child gets only the token of its credential, as `GH_TOKEN` in its own
-  environment. No other child process receives a token.
+  environment. No other process that autoreview starts receives a token; the review
+  agents run with the pohunek daemon's environment, see
+  [secrets](../safety/secrets.md).
 - A token that is pasted into a chat, a log or a configuration file must be
   rotated. Rotating one credential does not affect the others. See
   [secrets](../safety/secrets.md).

@@ -201,9 +201,9 @@ How credentials apply:
   login is its own pull request and gets a comment; `{login}` in
   `publish.signature` is that login. Several credentials may share a login.
 - **Tokens never mix.** Every `gh` call gets only the token of the repository
-  it concerns, through `GH_TOKEN` in that child's environment. No other child
-  process sees any token, and searches run per credential, limited to its
-  `match`.
+  it concerns, through `GH_TOKEN` in that child's environment. No other
+  process that autoreview starts sees any token, and searches run per
+  credential, limited to its `match`.
 - **Startup is strict, runtime is isolated.** `serve` and `validate` check
   every token: one that is rejected, expired, or belongs to another login
   stops startup (`credential_invalid`, `credential_login_mismatch`). While
