@@ -137,7 +137,7 @@ The steps below use these names; replace them with yours:
 - `<go-timer>`: the timer that runs the Go engine's `review-queue`, if there is one;
   leave it out of the commands otherwise. `<go-queue-service>` is the service it starts.
 - `<go-binary>`: the binary the Go units run. If it is `/usr/local/bin/autoreview`,
-  step 1 of the preparation copies it to `/usr/local/bin/autoreview.previous`, and
+  step 1 of the preparation copies it to `/usr/local/bin/autoreview-go`, and
   `<go-binary>` means that copy.
 - `<env-file>`: an `EnvironmentFile=` of `<go-unit>` that holds
   `HERMES_PR_REVIEW_*` variables.
@@ -149,6 +149,8 @@ The steps below use these names; replace them with yours:
   `<store-dir>` its directory.
 - `<pohunek-state>` and `<pohunek-runtime>`: the Go engine's
   `HERMES_PR_REVIEW_POHUNEK_STATE_HOME` and `HERMES_PR_REVIEW_POHUNEK_RUNTIME_DIR`.
+- `<gh-bin>` and `<pohunek-bin>`: the Go engine's `HERMES_PR_REVIEW_GH_BIN` and
+  `HERMES_PR_REVIEW_POHUNEK_BIN`, which become `github.gh_bin` and `pohunek.bin`.
 
 When the unit has more environment files, name each of them, in the unit's
 order, wherever these steps name `<env-file>` and `<secrets-file>`: once per
@@ -169,7 +171,7 @@ autoreview inside it.
    point both units at the copy first:
 
    ```sh
-   install -o root -g root -m 0755 /usr/local/bin/autoreview /usr/local/bin/autoreview.previous
+   install -o root -g root -m 0755 /usr/local/bin/autoreview /usr/local/bin/autoreview-go
    systemctl edit <go-unit>
    systemctl edit <go-queue-service>
    ```
@@ -180,24 +182,28 @@ autoreview inside it.
    ```ini
    [Service]
    ExecStart=
-   ExecStart=/usr/local/bin/autoreview.previous serve
+   ExecStart=/usr/local/bin/autoreview-go serve
    ```
 
    Then run `systemctl daemon-reload` and check with `systemctl cat <go-unit>
-   <go-queue-service>` that both run `/usr/local/bin/autoreview.previous`. Every
+   <go-queue-service>` that both run `/usr/local/bin/autoreview-go`. Every
    later start of the Go engine, a restart during the preparation and the
-   rollback included, now runs the copy. Keep the drop-ins until the Go engine
-   is retired.
+   rollback included, now runs the copy. Do not name the copy
+   `autoreview.previous`: an upgrade of autoreview keeps its own previous binary
+   under that name ([upgrade the binary](#upgrade-the-binary), step 2) and would
+   replace the Go engine with autoreview. Keep the copy and the drop-ins until
+   the Go engine is retired (step 5 of the switch).
 2. Install the autoreview binary as `/usr/local/bin/autoreview` and the unit
    files from the [install page](../../install.md#b-systemd-units). Do not
    start them. The units run in a sandbox: `ProtectSystem=strict` makes every
    path outside `ReadWritePaths=` read-only, `ProtectHome=yes` hides `/home`,
    `/root` and `/run/user`, and `PrivateTmp=yes` gives the service its own
    `/tmp`. So none of `<store>`, `config.yaml`, the policy file, its prompts,
-   `<pohunek-state>` and `<pohunek-runtime>` may be under those directories,
-   and the service must be able to write `<store-dir>` (SQLite writes
-   `<store>-wal` and `<store>-shm` next to the store) and the pohunek
-   directories.
+   `<gh-bin>`, `<pohunek-bin>`, `<pohunek-state>` and `<pohunek-runtime>` may be
+   under those directories, nor any home directory that the `gh` or pohunek
+   CLI reads, such as the home of `<user>`. The service must be able to write
+   `<store-dir>` (SQLite writes `<store>-wal` and `<store>-shm` next to the
+   store) and the pohunek directories.
 3. Give both services the Go engine's user, paths and environment, and its two
    secret variables. autoreview reads tokens only from `AUTOREVIEW_*`
    variables, and the Go engine ignores those, so a rollback still works on the
@@ -251,22 +257,28 @@ autoreview inside it.
    backslash would carry it into the next line; it never decodes the value
    itself. A later file wins, as in systemd.
 5. Check autoreview in the sandbox of its unit while the Go engine still runs.
-   The properties repeat the sandbox of `autoreview.service` and the drop-in of
-   step 3; keep them equal when you change the unit. The command checks that
-   the service can write the store and its directory, then runs `validate`:
+   The properties repeat the lines of `autoreview.service` and of the drop-in of
+   step 3 that decide which paths the service reaches; keep them equal when you
+   change the unit. The command leaves out `CapabilityBoundingSet=`,
+   `StateDirectory=` and `RuntimeDirectory=`, which do not change that. It
+   checks that the service can run both CLIs and write the store, its directory
+   and the pohunek directories, then runs `validate`:
 
    ```sh
    systemd-run --pipe --wait --quiet -p User=<user> -p Group=<group> \
      -p EnvironmentFile=<env-file> -p EnvironmentFile=<secrets-file> \
      -p NoNewPrivileges=yes -p ProtectSystem=strict -p ProtectHome=yes -p PrivateTmp=yes \
      -p 'ReadWritePaths=<store-dir> <pohunek-state> <pohunek-runtime>' \
-     /bin/sh -c 'test -w <store> && test -w <store-dir> || exit 1
+     /bin/sh -c 'test -x <gh-bin> && test -x <pohunek-bin> || exit 1
+       test -w <store> && test -w <store-dir> || exit 1
+       test -w <pohunek-state> && test -w <pohunek-runtime> || exit 1
        export AUTOREVIEW_GH_TOKEN="$$GH_TOKEN" AUTOREVIEW_MATRIX_TOKEN="$$MATRIX_ACCESS_TOKEN"
        exec /usr/local/bin/autoreview --config /etc/autoreview/config.yaml validate'
    ```
 
    The output names the policy digest and the agent profiles. An exit status
-   of 1 with no output means the store or its directory is not writable in the
+   of 1 with no output means that one of the two CLIs cannot be run, or that
+   the store, its directory or a pohunek directory cannot be written in the
    sandbox. Fix any error before you go on.
 
 ### Switch
@@ -308,7 +320,18 @@ autoreview inside it.
    systemctl status autoreview.service --no-pager
    ```
 
-5. Keep the backup and `<go-binary>` until autoreview has published a review.
+5. Keep the backup, `<go-binary>` and the Go drop-ins at least until
+   autoreview has published a review. Removing `<go-binary>` ends the option to
+   roll back. When you retire the Go engine, remove the drop-ins of step 1 of
+   the preparation in the same change, and keep the Go units disabled or remove
+   them: without the drop-ins they would start `/usr/local/bin/autoreview`.
+
+   ```sh
+   rm /etc/systemd/system/<go-unit>.d/override.conf
+   rm /etc/systemd/system/<go-queue-service>.d/override.conf
+   systemctl daemon-reload
+   rm /usr/local/bin/autoreview-go
+   ```
 
 ### Roll back to the Go engine
 
