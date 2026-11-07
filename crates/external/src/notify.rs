@@ -312,7 +312,9 @@ fn encode<T: Serialize + ?Sized>(content: &T) -> Result<Vec<u8>, Error> {
 }
 
 /// Sends one action, digest or log message, as Go's `sendMatrix` does.
-async fn send_matrix(
+///
+/// Every failure is returned, at every level; [`notify`] drops the muted ones.
+pub(crate) async fn send_matrix(
     client: &Client,
     matrix: &Matrix,
     cancel: &CancellationToken,

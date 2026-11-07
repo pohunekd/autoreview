@@ -20,7 +20,7 @@ use crate::model::RejectedCandidate;
 use crate::model::review::Decision;
 use crate::protocol::fixtures::sha;
 use crate::review::input::NOTIFY_STEP_PREFIX;
-use crate::testing::fake::{count_notes, reviewer_output};
+use crate::testing::fake::{INTEGRATION_POLICY, count_notes, reviewer_output};
 use crate::testing::harness::{FakeClock, integration_pull_request, start_harness};
 
 /// Output of a reviewer session that has not finished: Go's nil output.
@@ -508,6 +508,42 @@ async fn failing_notification_backend_does_not_stall_discovery() {
         h.fake.lock().notify_attempts,
         1,
         "the rejected pull request was notified again"
+    );
+    // At the log level the notifier mutes a failure for a review, but a pass still sees it.
+    let mut cfg = h.config();
+    let text = INTEGRATION_POLICY.replace("review_stopped: action", "review_stopped: log");
+    let policy =
+        autoreview_policy::parse(
+            text.as_bytes(),
+            |_| Ok(b"Review the pull request.".to_vec()),
+        )
+        .expect("the log-level policy parses");
+    cfg.policy = Some(policy);
+    let logged = Engine::new(
+        cfg,
+        Arc::clone(&h.store),
+        Arc::clone(&h.fake),
+        FakeClock::new(),
+    );
+    let quiet: Vec<_> = (0..2)
+        .map(|_| integration_pull_request("acme/widget", &sha("c")))
+        .collect();
+    h.fake
+        .lock()
+        .rejected
+        .extend(quiet.iter().map(|pr| RejectedCandidate {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            code: "github_response_invalid".to_owned(),
+        }));
+    logged
+        .poll(&cancel)
+        .await
+        .expect("the log-level poll succeeds");
+    assert_eq!(
+        h.fake.lock().notify_attempts,
+        2,
+        "the second notice of the failed log level was attempted"
     );
 }
 

@@ -87,7 +87,7 @@ review waits:
 
 | Level | Delivery fails | What happens |
 |---|---|---|
-| `digest` or `log` | The message cannot be delivered | Dropped with a warning in the log. The review continues. |
+| `digest` or `log` | The message cannot be delivered | Dropped with a warning in the log. The review continues. A message of a discovery pass is logged as described below. |
 | `action` | The message cannot be delivered | The step fails, except for `approval_requested` and the messages of a discovery pass. |
 
 A failed `action` message fails the step that sent it. The scheduler's own retry
@@ -101,11 +101,13 @@ A discovery pass sends its messages after it has saved its state and released
 the discovery lock: a rejected pull request (`review_stopped`), a review that
 stopped or waits for a retry (`review_stopped`, `retry_scheduled`), and a
 `handoff_reminder`. Each message gets one attempt, bounded by the notifier's
-request timeout. Once a message of a level fails, the later messages of that
-level in the same pass get no attempt. A message that is not delivered is
-logged as the warning `discovery notification dropped` with its event, review
-key, level, error code and `skipped_after_failure` (`true` when it got no
-attempt). A dropped message is never resent: the pass keeps its result, no
+request timeout. Once a message of a level fails, at any level, the later
+messages of that level in the same pass get no attempt. When the service shuts
+down, the messages not yet sent get no attempt and carry the error code
+`shutdown`. A message that is not delivered is logged as the warning
+`discovery notification dropped` with its event, review key, level, error code
+and `skipped_after_failure` (`true` when it got no attempt after a failure of
+its level). A dropped message is never resent: the pass keeps its result, no
 later pass repeats it, and the warning is the only record. A pass that fails
 before it saves sends nothing, and the next pass that saves sends those
 messages.

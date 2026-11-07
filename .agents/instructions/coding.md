@@ -177,8 +177,10 @@ What is not compatible, by decision:
   cutover): not supported.
 - **Discovery notifications (#210):** a discovery pass collects its
   notifications and sends each once after it has saved its state and released
-  the discovery lock. After a failure, the later notifications of the same
-  level in that batch get no attempt. Each one not delivered is logged as
+  the discovery lock. It sees a failure at every level, because it sends with
+  `Integrations::notify_unmuted`. After a failure, the later notifications of
+  the same level in that batch get no attempt, and after a shutdown none gets
+  one (logged with the code `shutdown`). Each one not delivered is logged as
   `discovery notification dropped` and never resent. Go sends them inside the pass under the step
   retry (`discovery.go:36-41`), so an unreachable `action` backend holds the
   lock for `step_retry_seconds`, fails the pass and repeats the message on the

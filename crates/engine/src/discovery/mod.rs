@@ -10,7 +10,6 @@ use std::future::Future;
 use autoreview_policy::{Event, Level, Policy};
 use autoreview_schedule::scheduler::Record;
 use tokio_util::sync::CancellationToken;
-use tracing::Instrument;
 
 use crate::engine::{Clock, Engine};
 use crate::error::{Error, error_code};
@@ -31,6 +30,9 @@ const POLICY_KEY: &str = "policy_file";
 
 /// Schedule phase of a review that waits for its next retry.
 const PHASE_RETRY_WAIT: &str = "retry_wait";
+
+/// Error code logged for a discovery notice that a shutdown left unsent.
+const SHUTDOWN: &str = "shutdown";
 
 /// A notification of a discovery pass, sent once the pass has saved its state.
 #[derive(Debug)]
@@ -69,9 +71,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Sends each notice once, after the discovery lock is released.
     ///
-    /// A notice gets one attempt, bounded by the notifier's request timeout. After a failure,
-    /// the later notices of the same level get no attempt, because the notifier routes by
-    /// level. Every dropped notice is logged, so a notifier outage never fails a pass.
+    /// A notice gets one attempt, bounded by the notifier's request timeout, and a failure is
+    /// seen at every level. After a failure, the later notices of the same level get no
+    /// attempt, because the notifier routes by level. After `cancel`, no notice gets an
+    /// attempt. Every dropped notice is logged, so a notifier outage never fails a pass.
     pub(crate) async fn send_notices(&self, cancel: &CancellationToken, notices: Vec<Notice>) {
         // The level and error code of each level whose notice failed in this batch.
         let mut failed: Vec<(Level, String)> = Vec::new();
@@ -82,12 +85,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 .map(|(_, code)| code.clone());
             let (code, skipped) = match earlier {
                 Some(code) => (code, true),
+                // A shutdown is no notifier failure, so the notifier is not blamed for it.
+                None if cancel.is_cancelled() => (SHUTDOWN.to_owned(), false),
                 None => {
-                    let span = notification_span(&notice.event, &notice.review_key, &notice.level);
                     let sent = self
                         .integration
-                        .notify(cancel, notice.level.clone(), &notice.message)
-                        .instrument(span)
+                        .notify_unmuted(cancel, notice.level.clone(), &notice.message)
                         .await;
                     let Err(err) = sent else {
                         continue;

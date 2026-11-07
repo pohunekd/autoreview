@@ -226,6 +226,16 @@ pub trait Integrations {
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
+    /// Sends a notification to the room of `level` and returns its failure at every level.
+    ///
+    /// Unlike [`Integrations::notify`], a `digest` or `log` message is never dropped silently.
+    fn notify_unmuted(
+        &self,
+        cancel: &CancellationToken,
+        level: Level,
+        message: &str,
+    ) -> impl Future<Output = Result<(), Error>> + Send;
+
     /// Returns the open review requests of the configured login, at most `max` of them.
     fn list_review_requests(
         &self,

@@ -235,11 +235,13 @@ pull request appears.
 
 Check that the `*_env` variable is set without printing it:
 `test -n "$AUTOREVIEW_WEBHOOK_URL" && echo set`. A `digest` or `log` message
-that cannot be delivered is dropped with a warning. An `action` message that
+of a review that cannot be delivered is dropped with the warning
+`matrix notification dropped`. An `action` message that
 cannot be delivered fails the step, and the step is retried; a failed
 `approval_requested` request is logged and the review keeps waiting. A message
-of a discovery pass gets at most one attempt (none after an earlier failure of
-its level in the same pass) and is then dropped with the warning
+of a discovery pass, at any level, gets at most one attempt (none after an
+earlier failure of its level in the same pass, none after a shutdown, which
+logs the code `shutdown`) and is then dropped with the warning
 `discovery notification dropped`, which names the event, the review key, the
 level, the code and `skipped_after_failure`. It is never resent; send its
 content by hand if it matters. Every retry of a

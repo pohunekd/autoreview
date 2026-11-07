@@ -247,6 +247,15 @@ impl Integrations for External {
         notify::notify(&self.http, &self.matrix, cancel, level, message).await
     }
 
+    async fn notify_unmuted(
+        &self,
+        cancel: &CancellationToken,
+        level: Level,
+        message: &str,
+    ) -> Result<(), Error> {
+        notify::send_matrix(&self.http, &self.matrix, cancel, level, message).await
+    }
+
     async fn list_review_requests(
         &self,
         cancel: &CancellationToken,

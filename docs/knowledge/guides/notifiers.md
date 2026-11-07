@@ -195,8 +195,8 @@ Failure handling depends on the level of the event:
 | Level | Delivery fails | Effect |
 |---|---|---|
 | `action` | The backend does not accept the message | The step fails and is retried. Otherwise nobody would learn that an action is needed. A message of a discovery pass is the exception, see below |
-| `digest` | Dropped with a warning in the log | The review and its publication are unaffected |
-| `log` | Dropped with a warning in the log | Nothing else changes |
+| `digest` | Dropped with a warning in the log | The review and its publication are unaffected. A message of a discovery pass follows the rule below |
+| `log` | Dropped with a warning in the log | Nothing else changes. A message of a discovery pass follows the rule below |
 
 The `approval_requested` message is the exception: the review is already
 waiting when it is sent, so a failed delivery is logged as
@@ -206,7 +206,8 @@ approved or its deadline passes.
 
 A discovery pass sends its messages (a rejected pull request, a stopped or
 retried review, a hand-off reminder) once, after it has saved its state. After
-one fails, the rest of that level in the pass get no attempt. Each message that
+one fails, at any level, the rest of that level in the pass get no attempt, and
+after a shutdown no message gets an attempt (code `shutdown`). Each message that
 is not delivered is logged as `discovery notification dropped` with the event,
 the review key, the level, the code and `skipped_after_failure`. It is never
 resent, so the warning is the only record; discovery goes on.
