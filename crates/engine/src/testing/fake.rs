@@ -123,6 +123,10 @@ pub(crate) struct FakeState {
     pub(crate) queue_failures: usize,
     /// Text of the notifications to hold, and the gate they wait on. `None` holds none.
     pub(crate) held_notes: Option<(String, Arc<Semaphore>)>,
+    /// Error code that every notification fails with; `None` lets notifications succeed.
+    pub(crate) notify_fail: Option<String>,
+    /// Number of notification attempts, failed or not.
+    pub(crate) notify_attempts: usize,
 }
 
 /// The fake of the [`Integrations`] boundary.
@@ -592,19 +596,27 @@ impl Integrations for FakeIntegration {
         level: Level,
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        let gate = {
+        let (fail, gate) = {
             let mut state = self.lock();
-            state.notes.push(Note {
-                level,
-                message: message.to_string(),
-            });
-            state
+            state.notify_attempts += 1;
+            let fail = state.notify_fail.clone();
+            if fail.is_none() {
+                state.notes.push(Note {
+                    level,
+                    message: message.to_string(),
+                });
+            }
+            let gate = state
                 .held_notes
                 .as_ref()
                 .filter(|(fragment, _)| message.contains(fragment.as_str()))
-                .map(|(_, gate)| Arc::clone(gate))
+                .map(|(_, gate)| Arc::clone(gate));
+            (fail, gate)
         };
         async move {
+            if let Some(code) = fail {
+                return Err(Error::workflow(code, false, None));
+            }
             if let Some(gate) = gate {
                 // The permit goes back when it drops, so one permit releases every held note.
                 let _permit = gate.acquire().await;
