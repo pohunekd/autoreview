@@ -147,7 +147,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             .supersede_awaiting(cancel, &mut state, &present, &history)
             .await?;
         result.superseded = i64::try_from(supersede.len()).unwrap_or(i64::MAX);
-        self.remind_handoffs(cancel, &mut state, &present, now)
+        self.remind_handoffs(cancel, &mut state, &present, now, &mut notices)
             .await?;
         if let Some(force) = force {
             self.apply_force(&mut state, &present, &history, force, now)?;
@@ -188,9 +188,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 scheduler::plan(previous, &target, &history, now, &self.config.schedule)
                     .map_err(schedule_error)?;
             if decision.notify {
-                let level = self.notify_level(&decision.record)?;
                 let message = scheduler::notification(&target, &decision.record);
-                self.notify_now(cancel, level, &message).await?;
+                notices.push(self.notice(record_event(&decision.record), key, message)?);
             }
             if decision.dispatch {
                 // A route failure is a scheduler failure with its own retry policy, so it is
@@ -210,9 +209,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                             &self.config.schedule,
                         )
                         .map_err(schedule_error)?;
-                        let level = self.notify_level(&decision.record)?;
                         let message = scheduler::notification(&target, &decision.record);
-                        self.notify_now(cancel, level, &message).await?;
+                        notices.push(self.notice(record_event(&decision.record), key, message)?);
                     }
                     Ok(route) => {
                         let published = state.published.get(key);
@@ -259,7 +257,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             save_discovery(transaction, &state)
         })?;
-        Ok(result)
+        Ok(Pass { result, notices })
     }
 
     /// Returns the waits that no longer match their pull request and drops ended waits.
@@ -319,18 +317,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// The reminder is due when the author did not request the review again within the policy's
     /// reminder time. The hand-off of a pull request that is no longer open ends. A failed read
-    /// is retried on the next pass, so it holds up no review.
+    /// is retried on the next pass, so it holds up no review. The reminders go to `notices`.
     ///
     /// # Errors
     ///
-    /// Returns `configuration_invalid` without a policy, the read error when `cancel` is
-    /// cancelled, or the error of a notification.
+    /// Returns `configuration_invalid` without a policy, or the read error when `cancel` is
+    /// cancelled.
     async fn remind_handoffs(
         &self,
         cancel: &CancellationToken,
         state: &mut DiscoveryState,
         present: &BTreeMap<String, Candidate>,
         now: OffsetDateTime,
+        notices: &mut Vec<Notice>,
     ) -> Result<(), Error> {
         let after = self.policy()?.handoff_reminder();
         if after.is_zero() {
@@ -375,14 +374,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     continue;
                 }
                 Ok(current) => {
-                    let level = self.level(Event::HandoffReminder)?;
                     let message = handoff_reminder_message(
                         self.config.excerpt_characters,
                         &record,
                         &current,
                         now,
                     );
-                    self.notify_now(cancel, level, &message).await?;
+                    notices.push(self.notice(Event::HandoffReminder, &key, message)?);
                     record.reminded = true;
                 }
             }
