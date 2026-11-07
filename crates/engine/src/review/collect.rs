@@ -20,6 +20,9 @@ use crate::model::review::milliseconds;
 use crate::protocol::validate::reviewer_output_retryable;
 use crate::protocol::{go_utf8_lossy, parse_reviewer_output};
 
+/// Step name of the read of a reviewer session's output in the retry log.
+const STEP_SESSION_OUTPUT: &str = "session_output";
+
 /// Reports whether the reviewer slot `slot` holds its checked result.
 fn reviewer_done(slot: &ReviewerSlot) -> bool {
     slot.state.result.is_some()
@@ -118,7 +121,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 };
                 let protocol = updated.reviewer.protocol.clone();
                 let output = self
-                    .fresh(|| {
+                    .fresh(STEP_SESSION_OUTPUT, || {
                         let integration = &*self.engine.integration;
                         let cancel = &self.cancel;
                         let session = session.clone();
