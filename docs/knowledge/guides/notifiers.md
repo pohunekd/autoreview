@@ -194,7 +194,7 @@ Failure handling depends on the level of the event:
 
 | Level | Delivery fails | Effect |
 |---|---|---|
-| `action` | The backend does not accept the message | The step fails and is retried. Otherwise nobody would learn that an action is needed |
+| `action` | The backend does not accept the message | The step fails and is retried. Otherwise nobody would learn that an action is needed. A message of a discovery pass is the exception, see below |
 | `digest` | Dropped with a warning in the log | The review and its publication are unaffected |
 | `log` | Dropped with a warning in the log | Nothing else changes |
 
@@ -204,8 +204,15 @@ waiting when it is sent, so a failed delivery is logged as
 queue shows it while the pull request requests the review, until it is
 approved or its deadline passes.
 
-Because a failed `action` delivery fails the step, a broken action backend
-blocks reviews that need a human. Watch for `matrix_unavailable`,
+A discovery pass sends its messages (a rejected pull request, a stopped or
+retried review, a hand-off reminder) once, after it has saved its state. After
+one fails, the rest of that level in the pass get no attempt. Each message that
+is not delivered is logged as `discovery notification dropped` with the event,
+the review key, the level, the code and `skipped_after_failure`. It is never
+resent, so the warning is the only record; discovery goes on.
+
+Because a failed `action` delivery fails the step of a review, a broken action
+backend blocks reviews that need a human. Watch for `matrix_unavailable`,
 `matrix_request_rejected`, `webhook_unavailable` and `webhook_request_rejected`
 in the logs; the [CLI error codes](../../cli.md#error-codes) list them.
 

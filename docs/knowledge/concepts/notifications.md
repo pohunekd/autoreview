@@ -88,7 +88,7 @@ review waits:
 | Level | Delivery fails | What happens |
 |---|---|---|
 | `digest` or `log` | The message cannot be delivered | Dropped with a warning in the log. The review continues. |
-| `action` | The message cannot be delivered | The step fails, except for `approval_requested`. |
+| `action` | The message cannot be delivered | The step fails, except for `approval_requested` and the messages of a discovery pass. |
 
 A failed `action` message fails the step that sent it. The scheduler's own retry
 rules then apply (see [state and recovery](state-and-recovery.md#retry-layers)).
@@ -96,6 +96,19 @@ rules then apply (see [state and recovery](state-and-recovery.md#retry-layers)).
 request is sent, so a failed request is logged as `approval request failed` and
 the review keeps waiting. `autoreview awaiting` lists the wait until it is
 approved or its deadline passes.
+
+A discovery pass sends its messages after it has saved its state and released
+the discovery lock: a rejected pull request (`review_stopped`), a review that
+stopped or waits for a retry (`review_stopped`, `retry_scheduled`), and a
+`handoff_reminder`. Each message gets one attempt, bounded by the notifier's
+request timeout. Once a message of a level fails, the later messages of that
+level in the same pass get no attempt. A message that is not delivered is
+logged as the warning `discovery notification dropped` with its event, review
+key, level, error code and `skipped_after_failure` (`true` when it got no
+attempt). A dropped message is never resent: the pass keeps its result, no
+later pass repeats it, and the warning is the only record. A pass that fails
+before it saves sends nothing, and the next pass that saves sends those
+messages.
 
 A digest or log message is never retried. A backend that is down during a
 digest loses that digest, and the state of the review is still visible with

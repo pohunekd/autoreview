@@ -76,7 +76,7 @@ attempts and stops when its limit is reached.
 
 | Layer | What is retried | Limit | Result when the limit is reached |
 |---|---|---|---|
-| Step retry | A single GitHub read, a pohunek read or a similar step that failed for a transient reason | `schedule.step_retry_seconds` in total, with a backoff that starts at `schedule.step_retry_initial_seconds` and doubles up to `schedule.step_retry_max_interval_seconds` | The error is returned to the review. Permanent errors are never retried. |
+| Step retry | A single GitHub read, a pohunek read or a similar step that failed for a transient reason | `schedule.step_retry_seconds` in total, with a backoff that starts at `schedule.step_retry_initial_seconds` and doubles up to `schedule.step_retry_max_interval_seconds` | The error is returned to the review. Permanent errors are never retried. Each retry is logged as `step failed, retrying` with the step, the code and `delay_ms`. |
 | Scheduler | A whole review attempt that failed with a retryable failure, such as a session that could not start, a pohunek request that failed or timed out, a base fetch that failed, or a GitHub request that failed | One automatic retry for each entry in `schedule.retry_delays_seconds` | `review_stopped` is raised, and the review waits for a manual `autoreview retry`. |
 | Session start | Starting one reviewer session | `session.start_max_attempts`, waiting `session.start_retry_seconds` between them | The review attempt fails and goes to the scheduler. |
 | Reviewer run | A reviewer whose output was incomplete, unusable or invalid | `session.reviewer_run_max_attempts` fresh sessions | The reviewer has no result, and the review fails. |

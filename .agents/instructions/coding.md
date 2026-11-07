@@ -175,6 +175,15 @@ What is not compatible, by decision:
   keys and codes (`command.go:22-47`).
 - **In-flight Go reviews** (statuses `queued`, `running`, `awaiting` at
   cutover): not supported.
+- **Discovery notifications (#210):** a discovery pass collects its
+  notifications and sends each once after it has saved its state and released
+  the discovery lock. After a failure, the later notifications of the same
+  level in that batch get no attempt. Each one not delivered is logged as
+  `discovery notification dropped` and never resent. Go sends them inside the pass under the step
+  retry (`discovery.go:36-41`), so an unreachable `action` backend holds the
+  lock for `step_retry_seconds`, fails the pass and repeats the message on the
+  next pass. The regression test is
+  `failing_notification_backend_does_not_stall_discovery`.
 - **Reserved finding prefix:** a reviewer whose `finding_prefix` is `P` is refused
   when the policy is parsed, with the message `reviewer <id>: finding_prefix P is
   reserved for republished findings`. `P` numbers the prior findings published
