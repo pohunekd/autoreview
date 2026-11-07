@@ -312,7 +312,9 @@ fn encode<T: Serialize + ?Sized>(content: &T) -> Result<Vec<u8>, Error> {
 }
 
 /// Sends one action, digest or log message, as Go's `sendMatrix` does.
-async fn send_matrix(
+///
+/// Every failure is returned, at every level; [`notify`] drops the muted ones.
+pub(crate) async fn send_matrix(
     client: &Client,
     matrix: &Matrix,
     cancel: &CancellationToken,
@@ -395,7 +397,8 @@ pub(crate) async fn notify(
 
 /// Drops a message of a level other than action that the homeserver cannot take.
 ///
-/// The drop is logged with its level and code. Every other error is returned unchanged.
+/// The drop is logged with its level and code; the caller's `notification` span adds the event
+/// and the review key. Every other error is returned unchanged.
 fn drop_if_muted(level: Level, error: Error) -> Result<(), Error> {
     let code = error_code(&error);
     let muted = code == "matrix_unavailable" || code == "matrix_request_rejected";

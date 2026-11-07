@@ -20,8 +20,8 @@ use crate::model::RejectedCandidate;
 use crate::model::review::Decision;
 use crate::protocol::fixtures::sha;
 use crate::review::input::NOTIFY_STEP_PREFIX;
-use crate::testing::fake::{count_notes, reviewer_output};
-use crate::testing::harness::{integration_pull_request, start_harness};
+use crate::testing::fake::{INTEGRATION_POLICY, count_notes, reviewer_output};
+use crate::testing::harness::{FakeClock, integration_pull_request, start_harness};
 
 /// Output of a reviewer session that has not finished: Go's nil output.
 fn unfinished(_: &SessionRequest) -> String {
@@ -442,6 +442,109 @@ async fn rejected_pull_request_is_reported_once_and_does_not_block_others() {
         "the rejected pull request was reported {reports} times"
     );
     h.stop_engine().await;
+}
+
+// A notification backend that always fails neither stalls discovery nor keeps it from saving:
+// the first notice gets one attempt after the save, the second one of the same level none, and
+// the due review is queued (#210).
+#[tokio::test]
+async fn failing_notification_backend_does_not_stall_discovery() {
+    let mut h = start_harness(|cfg| {
+        cfg.step_retry = Duration::from_secs(900);
+        cfg.schedule.debounce = time::Duration::ZERO;
+    })
+    .await;
+    h.stop_engine().await;
+    let engine = Engine::new(
+        h.config(),
+        Arc::clone(&h.store),
+        Arc::clone(&h.fake),
+        FakeClock::new(),
+    );
+    let broken = integration_pull_request("acme/widget", &sha("e"));
+    let other = integration_pull_request("acme/widget", &sha("f"));
+    {
+        let mut state = h.fake.lock();
+        state.notify_fail = Some("matrix_unavailable".to_owned());
+        state.rejected = [&broken, &other]
+            .iter()
+            .map(|pr| RejectedCandidate {
+                repository: pr.repository.clone(),
+                number: pr.number,
+                code: "github_response_invalid".to_owned(),
+            })
+            .collect();
+    }
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    let cancel = CancellationToken::new();
+    let result = engine
+        .poll(&cancel)
+        .await
+        .expect("the poll succeeds while every notification fails");
+    assert_eq!(result.dispatched, 1, "poll result = {result:?}");
+    assert_eq!(
+        engine.clock.elapsed(),
+        Duration::ZERO,
+        "the poll waited for a notification retry"
+    );
+    assert_eq!(
+        h.fake.lock().notify_attempts,
+        1,
+        "the second notice of the failed level was attempted"
+    );
+    let state = h.store.load_discovery().expect("the discovery state loads");
+    for pr in [&broken, &other] {
+        assert_eq!(
+            state.rejected.get(&pr.key()).map(String::as_str),
+            Some("github_response_invalid")
+        );
+    }
+    engine
+        .poll(&cancel)
+        .await
+        .expect("the second poll succeeds");
+    assert_eq!(
+        h.fake.lock().notify_attempts,
+        1,
+        "the rejected pull request was notified again"
+    );
+    // At the log level the notifier mutes a failure for a review, but a pass still sees it.
+    let mut cfg = h.config();
+    let text = INTEGRATION_POLICY.replace("review_stopped: action", "review_stopped: log");
+    let policy =
+        autoreview_policy::parse(
+            text.as_bytes(),
+            |_| Ok(b"Review the pull request.".to_vec()),
+        )
+        .expect("the log-level policy parses");
+    cfg.policy = Some(policy);
+    let logged = Engine::new(
+        cfg,
+        Arc::clone(&h.store),
+        Arc::clone(&h.fake),
+        FakeClock::new(),
+    );
+    let quiet: Vec<_> = (0..2)
+        .map(|_| integration_pull_request("acme/widget", &sha("c")))
+        .collect();
+    h.fake
+        .lock()
+        .rejected
+        .extend(quiet.iter().map(|pr| RejectedCandidate {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            code: "github_response_invalid".to_owned(),
+        }));
+    logged
+        .poll(&cancel)
+        .await
+        .expect("the log-level poll succeeds");
+    assert_eq!(
+        h.fake.lock().notify_attempts,
+        2,
+        "the second notice of the failed log level was attempted"
+    );
 }
 
 // A transient outage longer than the step retry window ends the step with its own retryable

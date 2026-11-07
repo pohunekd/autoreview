@@ -15,8 +15,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use super::input::{NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, SlotState, still_wanted};
+use crate::discovery::notification_span;
 use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine, StepRetryPolicy, retry_step};
 use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
@@ -28,6 +30,9 @@ use crate::messages::{
 use crate::model::review::milliseconds;
 use crate::model::{Discussion, PullRequest, ReviewInput, RunLimits};
 use crate::store::RESULT_FAILURE;
+
+/// Step name of the read of the current pull request in the retry log.
+const STEP_CURRENT_PULL_REQUEST: &str = "current_pull_request";
 
 /// Marks a review interrupted by an engine shutdown.
 ///
@@ -204,7 +209,15 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Some(value) = loaded {
             return Ok(value);
         }
-        match retry_step(self.retry_policy(), &self.engine.clock, &self.cancel, step).await {
+        match retry_step(
+            name,
+            self.retry_policy(),
+            &self.engine.clock,
+            &self.cancel,
+            step,
+        )
+        .await
+        {
             Ok(value) => {
                 live(&self.cancel)?;
                 self.engine
@@ -216,14 +229,26 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         }
     }
 
-    /// Runs `step` with step retries and never stores its output.
+    /// Runs `step` with step retries under `name` and never stores its output.
     ///
     /// It serves reads whose current answer matters on every resume.
-    pub(crate) async fn fresh<T, Fut>(&self, step: impl FnMut() -> Fut) -> Result<T, Error>
+    pub(crate) async fn fresh<T, Fut>(
+        &self,
+        name: &str,
+        step: impl FnMut() -> Fut,
+    ) -> Result<T, Error>
     where
         Fut: Future<Output = Result<T, Error>>,
     {
-        match retry_step(self.retry_policy(), &self.engine.clock, &self.cancel, step).await {
+        match retry_step(
+            name,
+            self.retry_policy(),
+            &self.engine.clock,
+            &self.cancel,
+            step,
+        )
+        .await
+        {
             Ok(value) => Ok(value),
             Err(err) => Err(self.interrupted(err)),
         }
@@ -243,7 +268,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Sends `message` at the level of `event` once per review, under the step `name`.
     ///
-    /// An event without a level fails with `review_input_invalid`.
+    /// An event without a level fails with `review_input_invalid`. A failure before shutdown is
+    /// logged with the event, the review key and the level.
     pub(crate) async fn notify(
         &self,
         name: &str,
@@ -251,19 +277,35 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         message: &str,
     ) -> Result<(), Error> {
         let step_name = format!("{NOTIFY_STEP_PREFIX}{name}");
-        self.once::<bool, _>(&step_name, || {
-            let integration = &*self.engine.integration;
-            let cancel = &self.cancel;
-            let event = event.clone();
-            async move {
-                let Some(level) = self.input.level(event) else {
-                    return Err(Error::workflow("review_input_invalid", true, None));
-                };
-                integration.notify(cancel, level, message).await?;
-                Ok(true)
+        let Some(level) = self.input.level(event.clone()) else {
+            return Err(Error::workflow("review_input_invalid", true, None));
+        };
+        let review_key = self.input.pull_request.key();
+        let span = notification_span(&event, &review_key, &level);
+        let sent = self
+            .once::<bool, _>(&step_name, || {
+                let integration = &*self.engine.integration;
+                let cancel = &self.cancel;
+                let level = level.clone();
+                async move {
+                    integration.notify(cancel, level, message).await?;
+                    Ok(true)
+                }
+            })
+            .instrument(span)
+            .await;
+        if let Err(err) = sent {
+            if !is_shutdown(&err) && !self.cancel.is_cancelled() {
+                tracing::warn!(
+                    event = event.as_str(),
+                    review_key = %review_key,
+                    level = level.as_str(),
+                    error_code = error_code(&err),
+                    "notification failed"
+                );
             }
-        })
-        .await?;
+            return Err(err);
+        }
         Ok(())
     }
 
@@ -577,7 +619,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let number = self.input.pull_request.number;
         let trigger = self.input.rule.trigger.clone();
         let current = self
-            .fresh(|| {
+            .fresh(STEP_CURRENT_PULL_REQUEST, || {
                 let integration = &*self.engine.integration;
                 let cancel = &self.cancel;
                 let repository = repository.clone();

@@ -71,14 +71,18 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
         }
         let key = format!("{}#{}", request.repository, request.number);
-        let record = self
+        // The read after the pass may fail; the saved pass still sends its notices.
+        let (notices, record) = self
             .with_discovery(|| async {
-                self.poll_pass(cancel, Some(request)).await?;
-                live(cancel)?;
-                let state = self.store.load_discovery()?;
-                Ok(state.schedule.get(&key).cloned())
+                let pass = self.poll_pass(cancel, Some(request)).await?;
+                let record = live(cancel)
+                    .and_then(|()| self.store.load_discovery())
+                    .map(|state| state.schedule.get(&key).cloned());
+                Ok((pass.notices, record))
             })
             .await?;
+        self.send_notices(cancel, notices).await;
+        let record = record?;
         let Some(record) = record.filter(|record| record.phase == PHASE_RUNNING) else {
             return Err(Error::workflow(REVIEW_RETRY_NOT_DISPATCHED, true, None));
         };

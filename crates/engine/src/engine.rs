@@ -237,6 +237,8 @@ where
     }
 
     /// Deletes the completed reviews last updated before the retention and logs the count.
+    ///
+    /// A failure after `cancel` is cancelled is not logged.
     fn prune(&self, cancel: &CancellationToken) {
         // A retention beyond the range of `time::Duration` keeps every review.
         let retention =
@@ -244,7 +246,9 @@ where
         let cutoff = self.clock.wall_now().saturating_sub(retention);
         match live(cancel).and_then(|()| self.store.prune_reviews(cutoff)) {
             Err(err) => {
-                tracing::error!(error_code = error_code(&err), "review pruning failed");
+                if !cancel.is_cancelled() {
+                    tracing::error!(error_code = error_code(&err), "review pruning failed");
+                }
             }
             Ok(removed) => {
                 if removed > 0 {
@@ -365,8 +369,9 @@ fn resume_panic(joined: Result<(), tokio::task::JoinError>) {
 ///
 /// The stop conditions are a permanent failure, a cancelled `cancel` and a wait that would end
 /// past `policy.total`. The wait never exceeds `policy.max_interval`, and the last error is
-/// returned unchanged.
+/// returned unchanged. Each retry is logged with `step`, the error code and the wait.
 pub(crate) async fn retry_step<T, Fut>(
+    step_name: &str,
     policy: StepRetryPolicy,
     clock: &impl Clock,
     cancel: &CancellationToken,
@@ -391,6 +396,12 @@ where
                 if elapsed.saturating_add(delay) > policy.total {
                     return Err(err);
                 }
+                tracing::warn!(
+                    step = step_name,
+                    error_code = error_code(&err),
+                    delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                    "step failed, retrying"
+                );
                 if cancel
                     .run_until_cancelled(clock.sleep(delay))
                     .await
@@ -432,6 +443,9 @@ mod tests {
     use crate::error::{Error, error_code};
     use crate::testing::harness::FakeClock;
 
+    /// Step name of the retries in these tests.
+    const TEST_STEP: &str = "test_step";
+
     /// Polls `future` once with a waker that is never woken. The futures of these tests complete
     /// on their first poll, so a pending one is a bug that fails the test instead of hanging it.
     fn block_on<F: Future>(future: F) -> F::Output {
@@ -453,10 +467,11 @@ mod tests {
             max_interval: Duration::from_millis(400),
         };
         let mut calls = 0;
-        let result: Result<i64, Error> = block_on(retry_step(policy, &clock, &cancel, || {
-            calls += 1;
-            ready(Err(Error::workflow("review_identity_invalid", true, None)))
-        }));
+        let result: Result<i64, Error> =
+            block_on(retry_step(TEST_STEP, policy, &clock, &cancel, || {
+                calls += 1;
+                ready(Err(Error::workflow("review_identity_invalid", true, None)))
+            }));
         let err = result.expect_err("a permanent failure is returned");
         assert_eq!(error_code(&err), "review_identity_invalid");
         assert_eq!(calls, 1);
@@ -475,10 +490,11 @@ mod tests {
             max_interval: Duration::from_millis(400),
         };
         let mut calls = 0;
-        let result: Result<i64, Error> = block_on(retry_step(policy, &clock, &cancel, || {
-            calls += 1;
-            ready(Err(Error::workflow("github_request_failed", false, None)))
-        }));
+        let result: Result<i64, Error> =
+            block_on(retry_step(TEST_STEP, policy, &clock, &cancel, || {
+                calls += 1;
+                ready(Err(Error::workflow("github_request_failed", false, None)))
+            }));
         let err = result.expect_err("a failure past the total duration is returned");
         assert_eq!(error_code(&err), "github_request_failed");
         assert_eq!(calls, 4);
@@ -495,14 +511,15 @@ mod tests {
             max_interval: Duration::from_millis(400),
         };
         let mut calls = 0;
-        let result: Result<String, Error> = block_on(retry_step(policy, &clock, &cancel, || {
-            calls += 1;
-            if calls < 3 {
-                ready(Err(Error::workflow("github_request_failed", false, None)))
-            } else {
-                ready(Ok("found".to_owned()))
-            }
-        }));
+        let result: Result<String, Error> =
+            block_on(retry_step(TEST_STEP, policy, &clock, &cancel, || {
+                calls += 1;
+                if calls < 3 {
+                    ready(Err(Error::workflow("github_request_failed", false, None)))
+                } else {
+                    ready(Ok("found".to_owned()))
+                }
+            }));
         assert_eq!(result.expect("the third attempt succeeds"), "found");
         assert_eq!(calls, 3);
     }

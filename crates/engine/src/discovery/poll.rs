@@ -11,7 +11,7 @@ use autoreview_schedule::scheduler::{self, Record, Run};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
-use super::PHASE_RETRY_WAIT;
+use super::{Notice, PHASE_RETRY_WAIT, record_event};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
@@ -60,6 +60,15 @@ const STORE_UNAVAILABLE: &str = "store_unavailable";
 /// Cause text of a Go store call on a cancelled context, Go's `context.Canceled`.
 const CONTEXT_CANCELED: &str = "context canceled";
 
+/// Step name of the candidate search in the retry log.
+const STEP_LIST_CANDIDATES: &str = "list_candidates";
+
+/// Step name of the read of a pull request that left the search, in the retry log.
+const STEP_READ_PULL_REQUEST: &str = "read_pull_request";
+
+/// Step name of the read of a handed-off pull request's state, in the retry log.
+pub(crate) const STEP_READ_PULL_REQUEST_STATE: &str = "read_pull_request_state";
+
 /// Read error codes of a pull request that left the candidates after the search.
 const SKIPPABLE_CANDIDATE_CODES: [&str; 4] = [
     "pull_request_not_open",
@@ -76,30 +85,44 @@ struct Dispatch {
     input: ReviewInput,
 }
 
+/// One saved discovery pass: its counts and the notices it leaves to send.
+pub(crate) struct Pass {
+    /// Counts of the pass, as `poll` returns them.
+    pub(crate) result: PollResult,
+    /// Notifications of the pass, sent after the discovery lock is released.
+    pub(crate) notices: Vec<Notice>,
+}
+
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Plans every candidate under the discovery lock and queues the reviews that are due.
+    ///
+    /// The notifications of the pass are sent after the lock is released; a failed one is
+    /// logged and does not fail the poll.
     ///
     /// # Errors
     ///
     /// Returns `discovery_busy` or `store_unavailable` from the lock, or the error of the pass.
     pub async fn poll(&self, cancel: &CancellationToken) -> Result<PollResult, Error> {
-        self.with_discovery(|| self.poll_pass(cancel, None)).await
+        let pass = self.with_discovery(|| self.poll_pass(cancel, None)).await?;
+        self.send_notices(cancel, pass.notices).await;
+        Ok(pass.result)
     }
 
     /// Runs one discovery pass; `force` asks for a new attempt of one failed head.
     ///
     /// The caller holds the discovery lock. The queued reviews, the superseded waits and the
-    /// discovery state are written in one transaction at the end.
+    /// discovery state are written in one transaction at the end. The pass sends no
+    /// notification; it returns them for the caller to send after the lock is released.
     ///
     /// # Errors
     ///
-    /// Returns the error of the candidate search, of the store, of a notification, of the
-    /// review planning or of `force`, and `state_entry_limit_exceeded` when the schedule is full.
+    /// Returns the error of the candidate search, of the store, of the review planning or of
+    /// `force`, and `state_entry_limit_exceeded` when the schedule is full.
     pub(crate) async fn poll_pass(
         &self,
         cancel: &CancellationToken,
         force: Option<&RetryRequest>,
-    ) -> Result<PollResult, Error> {
+    ) -> Result<Pass, Error> {
         // A failure here leaves the drafts for the next pass and holds up no other review.
         if let Err(err) = self.integration.ready_drafts(cancel).await
             && !cancel.is_cancelled()
@@ -109,9 +132,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 "marking drafts ready for review failed"
             );
         }
-        let listed = retry_step(self.step_policy(), &self.clock, cancel, || {
-            self.integration.list_candidates(cancel)
-        })
+        let listed = retry_step(
+            STEP_LIST_CANDIDATES,
+            self.step_policy(),
+            &self.clock,
+            cancel,
+            || self.integration.list_candidates(cancel),
+        )
         .await?;
         live(cancel)?;
         let history = self.store.run_history(self.config.state_entry_limit)?;
@@ -123,8 +150,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         for candidate in listed.candidates {
             present.insert(candidate.pull_request.key(), candidate);
         }
-        self.report_rejected(cancel, &mut state, &listed.rejected)
-            .await?;
+        let mut notices = Vec::new();
+        self.report_rejected(&mut state, &listed.rejected, &mut notices)?;
         let mut result = PollResult {
             open,
             ..PollResult::default()
@@ -133,7 +160,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             .supersede_awaiting(cancel, &mut state, &present, &history)
             .await?;
         result.superseded = i64::try_from(supersede.len()).unwrap_or(i64::MAX);
-        self.remind_handoffs(cancel, &mut state, &present, now)
+        self.remind_handoffs(cancel, &mut state, &present, now, &mut notices)
             .await?;
         if let Some(force) = force {
             self.apply_force(&mut state, &present, &history, force, now)?;
@@ -174,9 +201,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 scheduler::plan(previous, &target, &history, now, &self.config.schedule)
                     .map_err(schedule_error)?;
             if decision.notify {
-                let level = self.notify_level(&decision.record)?;
                 let message = scheduler::notification(&target, &decision.record);
-                self.notify_now(cancel, level, &message).await?;
+                notices.push(self.notice(record_event(&decision.record), key, message)?);
             }
             if decision.dispatch {
                 // A route failure is a scheduler failure with its own retry policy, so it is
@@ -196,9 +222,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                             &self.config.schedule,
                         )
                         .map_err(schedule_error)?;
-                        let level = self.notify_level(&decision.record)?;
                         let message = scheduler::notification(&target, &decision.record);
-                        self.notify_now(cancel, level, &message).await?;
+                        notices.push(self.notice(record_event(&decision.record), key, message)?);
                     }
                     Ok(route) => {
                         let published = state.published.get(key);
@@ -245,7 +270,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             save_discovery(transaction, &state)
         })?;
-        Ok(result)
+        Ok(Pass { result, notices })
     }
 
     /// Returns the waits that no longer match their pull request and drops ended waits.
@@ -279,14 +304,20 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     continue;
                 }
             } else {
-                let read = retry_step(self.step_policy(), &self.clock, cancel, || {
-                    self.integration.get_pull_request(
-                        cancel,
-                        &record.repository,
-                        record.number,
-                        &record.trigger,
-                    )
-                })
+                let read = retry_step(
+                    STEP_READ_PULL_REQUEST,
+                    self.step_policy(),
+                    &self.clock,
+                    cancel,
+                    || {
+                        self.integration.get_pull_request(
+                            cancel,
+                            &record.repository,
+                            record.number,
+                            &record.trigger,
+                        )
+                    },
+                )
                 .await;
                 match read {
                     Ok(pr) if record.matches(&pr) => continue,
@@ -305,18 +336,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// The reminder is due when the author did not request the review again within the policy's
     /// reminder time. The hand-off of a pull request that is no longer open ends. A failed read
-    /// is retried on the next pass, so it holds up no review.
+    /// is retried on the next pass, so it holds up no review. The reminders go to `notices`.
     ///
     /// # Errors
     ///
-    /// Returns `configuration_invalid` without a policy, the read error when `cancel` is
-    /// cancelled, or the error of a notification.
+    /// Returns `configuration_invalid` without a policy, or the read error when `cancel` is
+    /// cancelled.
     async fn remind_handoffs(
         &self,
         cancel: &CancellationToken,
         state: &mut DiscoveryState,
         present: &BTreeMap<String, Candidate>,
         now: OffsetDateTime,
+        notices: &mut Vec<Notice>,
     ) -> Result<(), Error> {
         let after = self.policy()?.handoff_reminder();
         if after.is_zero() {
@@ -337,10 +369,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             let Some(mut record) = state.published.get(&key).cloned() else {
                 continue;
             };
-            let read = retry_step(self.step_policy(), &self.clock, cancel, || {
-                self.integration
-                    .read_pull_request_state(cancel, &record.repository, record.number)
-            })
+            let read = retry_step(
+                STEP_READ_PULL_REQUEST_STATE,
+                self.step_policy(),
+                &self.clock,
+                cancel,
+                || {
+                    self.integration.read_pull_request_state(
+                        cancel,
+                        &record.repository,
+                        record.number,
+                    )
+                },
+            )
             .await;
             match read {
                 Err(err) if cancel.is_cancelled() => return Err(err),
@@ -361,14 +402,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     continue;
                 }
                 Ok(current) => {
-                    let level = self.level(Event::HandoffReminder)?;
                     let message = handoff_reminder_message(
                         self.config.excerpt_characters,
                         &record,
                         &current,
                         now,
                     );
-                    self.notify_now(cancel, level, &message).await?;
+                    notices.push(self.notice(Event::HandoffReminder, &key, message)?);
                     record.reminded = true;
                 }
             }

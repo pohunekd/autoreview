@@ -123,6 +123,10 @@ pub(crate) struct FakeState {
     pub(crate) queue_failures: usize,
     /// Text of the notifications to hold, and the gate they wait on. `None` holds none.
     pub(crate) held_notes: Option<(String, Arc<Semaphore>)>,
+    /// Error code that every notification fails with; `None` lets notifications succeed.
+    pub(crate) notify_fail: Option<String>,
+    /// Number of notification attempts, failed or not.
+    pub(crate) notify_attempts: usize,
 }
 
 /// The fake of the [`Integrations`] boundary.
@@ -200,6 +204,53 @@ impl FakeIntegration {
         count_notes(&notes, level, fragment) > 0
     }
 
+    /// Records one notification attempt and answers as the Matrix notifier does.
+    ///
+    /// A failure is `notify_fail`. With `muted`, a failure of a level other than action that
+    /// the notifier mutes is dropped, as `notify` drops it, and the note is not recorded.
+    fn send_note(
+        &self,
+        level: Level,
+        message: &str,
+        muted: bool,
+    ) -> impl Future<Output = Result<(), Error>> + Send + use<> {
+        let (outcome, gate) = {
+            let mut state = self.lock();
+            state.notify_attempts += 1;
+            let outcome = match state.notify_fail.clone() {
+                Some(code)
+                    if muted && level != Level::Action && MUTED_CODES.contains(&code.as_str()) =>
+                {
+                    Some(Ok(()))
+                }
+                Some(code) => Some(Err(Error::workflow(code, false, None))),
+                None => None,
+            };
+            if outcome.is_none() {
+                state.notes.push(Note {
+                    level,
+                    message: message.to_string(),
+                });
+            }
+            let gate = state
+                .held_notes
+                .as_ref()
+                .filter(|(fragment, _)| message.contains(fragment.as_str()))
+                .map(|(_, gate)| Arc::clone(gate));
+            (outcome, gate)
+        };
+        async move {
+            if let Some(outcome) = outcome {
+                return outcome;
+            }
+            if let Some(gate) = gate {
+                // The permit goes back when it drops, so one permit releases every held note.
+                let _permit = gate.acquire().await;
+            }
+            Ok(())
+        }
+    }
+
     /// Holds every notification that contains `fragment` after it is recorded.
     ///
     /// A held notification returns once the returned gate has a permit.
@@ -209,6 +260,9 @@ impl FakeIntegration {
         gate
     }
 }
+
+/// Error codes that the Matrix notifier drops for a level other than action.
+const MUTED_CODES: [&str; 2] = ["matrix_unavailable", "matrix_request_rejected"];
 
 /// Counts notes of a level whose message contains a fragment.
 pub(crate) fn count_notes(notes: &[Note], level: Level, fragment: &str) -> usize {
@@ -592,25 +646,16 @@ impl Integrations for FakeIntegration {
         level: Level,
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        let gate = {
-            let mut state = self.lock();
-            state.notes.push(Note {
-                level,
-                message: message.to_string(),
-            });
-            state
-                .held_notes
-                .as_ref()
-                .filter(|(fragment, _)| message.contains(fragment.as_str()))
-                .map(|(_, gate)| Arc::clone(gate))
-        };
-        async move {
-            if let Some(gate) = gate {
-                // The permit goes back when it drops, so one permit releases every held note.
-                let _permit = gate.acquire().await;
-            }
-            Ok(())
-        }
+        self.send_note(level, message, true)
+    }
+
+    fn notify_unmuted(
+        &self,
+        _cancel: &CancellationToken,
+        level: Level,
+        message: &str,
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        self.send_note(level, message, false)
     }
 }
 
