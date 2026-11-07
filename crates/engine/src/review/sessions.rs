@@ -31,6 +31,9 @@ use crate::model::review::milliseconds;
 use crate::model::{Discussion, PullRequest, ReviewInput, RunLimits};
 use crate::store::RESULT_FAILURE;
 
+/// Step name of the read of the current pull request in the retry log.
+const STEP_CURRENT_PULL_REQUEST: &str = "current_pull_request";
+
 /// Marks a review interrupted by an engine shutdown.
 ///
 /// The review keeps its status and resumes from its stored steps on the next start.
@@ -206,7 +209,15 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Some(value) = loaded {
             return Ok(value);
         }
-        match retry_step(self.retry_policy(), &self.engine.clock, &self.cancel, step).await {
+        match retry_step(
+            name,
+            self.retry_policy(),
+            &self.engine.clock,
+            &self.cancel,
+            step,
+        )
+        .await
+        {
             Ok(value) => {
                 live(&self.cancel)?;
                 self.engine
@@ -218,14 +229,26 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         }
     }
 
-    /// Runs `step` with step retries and never stores its output.
+    /// Runs `step` with step retries under `name` and never stores its output.
     ///
     /// It serves reads whose current answer matters on every resume.
-    pub(crate) async fn fresh<T, Fut>(&self, step: impl FnMut() -> Fut) -> Result<T, Error>
+    pub(crate) async fn fresh<T, Fut>(
+        &self,
+        name: &str,
+        step: impl FnMut() -> Fut,
+    ) -> Result<T, Error>
     where
         Fut: Future<Output = Result<T, Error>>,
     {
-        match retry_step(self.retry_policy(), &self.engine.clock, &self.cancel, step).await {
+        match retry_step(
+            name,
+            self.retry_policy(),
+            &self.engine.clock,
+            &self.cancel,
+            step,
+        )
+        .await
+        {
             Ok(value) => Ok(value),
             Err(err) => Err(self.interrupted(err)),
         }
@@ -596,7 +619,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let number = self.input.pull_request.number;
         let trigger = self.input.rule.trigger.clone();
         let current = self
-            .fresh(|| {
+            .fresh(STEP_CURRENT_PULL_REQUEST, || {
                 let integration = &*self.engine.integration;
                 let cancel = &self.cancel;
                 let repository = repository.clone();
