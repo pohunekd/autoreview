@@ -257,7 +257,7 @@ pub enum Level {
 
 impl Level {
     /// Returns the text Go writes for this value.
-    pub(crate) fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Action => "action",
             Self::Digest => "digest",

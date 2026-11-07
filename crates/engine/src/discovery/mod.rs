@@ -10,9 +10,10 @@ use std::future::Future;
 use autoreview_policy::{Event, Level, Policy};
 use autoreview_schedule::scheduler::Record;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
-use crate::engine::{Clock, Engine, retry_step};
-use crate::error::Error;
+use crate::engine::{Clock, Engine};
+use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::model::RejectedCandidate;
 use crate::store::DiscoveryState;
@@ -30,6 +31,19 @@ const POLICY_KEY: &str = "policy_file";
 
 /// Schedule phase of a review that waits for its next retry.
 const PHASE_RETRY_WAIT: &str = "retry_wait";
+
+/// A notification of a discovery pass, sent once the pass has saved its state.
+#[derive(Debug)]
+pub(crate) struct Notice {
+    /// Event that the notification reports.
+    pub(crate) event: Event,
+    /// Key `repository#number` of the pull request that the notification is about.
+    pub(crate) review_key: String,
+    /// Level whose room receives the notification.
+    pub(crate) level: Level,
+    /// Text of the notification.
+    pub(crate) message: String,
+}
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Runs `run` while this engine holds the discovery lock.
@@ -137,6 +151,27 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             .level(event)
             .ok_or_else(|| Error::config(CONFIGURATION_INVALID, POLICY_KEY, None))
     }
+}
+
+/// Returns the notification event of a schedule record.
+///
+/// A record that waits for a retry is `retry_scheduled`; any other is `review_stopped`.
+pub(crate) fn record_event(record: &Record) -> Event {
+    if record.phase == PHASE_RETRY_WAIT {
+        Event::RetryScheduled
+    } else {
+        Event::ReviewStopped
+    }
+}
+
+/// Returns the span of one notification, so the notifier's own log lines name it.
+pub(crate) fn notification_span(event: &Event, review_key: &str, level: &Level) -> tracing::Span {
+    tracing::info_span!(
+        "notification",
+        event = event.as_str(),
+        review_key,
+        level = level.as_str()
+    )
 }
 
 /// Returns the notification of a pull request whose data the engine refuses.
