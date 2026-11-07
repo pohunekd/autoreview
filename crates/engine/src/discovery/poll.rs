@@ -60,6 +60,15 @@ const STORE_UNAVAILABLE: &str = "store_unavailable";
 /// Cause text of a Go store call on a cancelled context, Go's `context.Canceled`.
 const CONTEXT_CANCELED: &str = "context canceled";
 
+/// Step name of the candidate search in the retry log.
+const STEP_LIST_CANDIDATES: &str = "list_candidates";
+
+/// Step name of the read of a pull request that left the search, in the retry log.
+const STEP_READ_PULL_REQUEST: &str = "read_pull_request";
+
+/// Step name of the read of a handed-off pull request's state, in the retry log.
+pub(crate) const STEP_READ_PULL_REQUEST_STATE: &str = "read_pull_request_state";
+
 /// Read error codes of a pull request that left the candidates after the search.
 const SKIPPABLE_CANDIDATE_CODES: [&str; 4] = [
     "pull_request_not_open",
@@ -123,9 +132,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 "marking drafts ready for review failed"
             );
         }
-        let listed = retry_step(self.step_policy(), &self.clock, cancel, || {
-            self.integration.list_candidates(cancel)
-        })
+        let listed = retry_step(
+            STEP_LIST_CANDIDATES,
+            self.step_policy(),
+            &self.clock,
+            cancel,
+            || self.integration.list_candidates(cancel),
+        )
         .await?;
         live(cancel)?;
         let history = self.store.run_history(self.config.state_entry_limit)?;
@@ -291,14 +304,20 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     continue;
                 }
             } else {
-                let read = retry_step(self.step_policy(), &self.clock, cancel, || {
-                    self.integration.get_pull_request(
-                        cancel,
-                        &record.repository,
-                        record.number,
-                        &record.trigger,
-                    )
-                })
+                let read = retry_step(
+                    STEP_READ_PULL_REQUEST,
+                    self.step_policy(),
+                    &self.clock,
+                    cancel,
+                    || {
+                        self.integration.get_pull_request(
+                            cancel,
+                            &record.repository,
+                            record.number,
+                            &record.trigger,
+                        )
+                    },
+                )
                 .await;
                 match read {
                     Ok(pr) if record.matches(&pr) => continue,
@@ -350,10 +369,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             let Some(mut record) = state.published.get(&key).cloned() else {
                 continue;
             };
-            let read = retry_step(self.step_policy(), &self.clock, cancel, || {
-                self.integration
-                    .read_pull_request_state(cancel, &record.repository, record.number)
-            })
+            let read = retry_step(
+                STEP_READ_PULL_REQUEST_STATE,
+                self.step_policy(),
+                &self.clock,
+                cancel,
+                || {
+                    self.integration.read_pull_request_state(
+                        cancel,
+                        &record.repository,
+                        record.number,
+                    )
+                },
+            )
             .await;
             match read {
                 Err(err) if cancel.is_cancelled() => return Err(err),
