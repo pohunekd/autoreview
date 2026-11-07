@@ -67,36 +67,80 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             .await
     }
 
-    /// Sends `message` to the room of `level`, retried under the step policy.
+    /// Sends each notice once, after the discovery lock is released.
+    ///
+    /// A notice gets one attempt, bounded by the notifier's request timeout. After a failure,
+    /// the later notices of the same level get no attempt, because the notifier routes by
+    /// level. Every dropped notice is logged, so a notifier outage never fails a pass.
+    pub(crate) async fn send_notices(&self, cancel: &CancellationToken, notices: Vec<Notice>) {
+        // The level and error code of each level whose notice failed in this batch.
+        let mut failed: Vec<(Level, String)> = Vec::new();
+        for notice in notices {
+            let earlier = failed
+                .iter()
+                .find(|(level, _)| *level == notice.level)
+                .map(|(_, code)| code.clone());
+            let (code, skipped) = match earlier {
+                Some(code) => (code, true),
+                None => {
+                    let span = notification_span(&notice.event, &notice.review_key, &notice.level);
+                    let sent = self
+                        .integration
+                        .notify(cancel, notice.level.clone(), &notice.message)
+                        .instrument(span)
+                        .await;
+                    let Err(err) = sent else {
+                        continue;
+                    };
+                    let code = error_code(&err).to_owned();
+                    failed.push((notice.level.clone(), code.clone()));
+                    (code, false)
+                }
+            };
+            tracing::warn!(
+                event = notice.event.as_str(),
+                review_key = %notice.review_key,
+                level = notice.level.as_str(),
+                error_code = %code,
+                skipped_after_failure = skipped,
+                "discovery notification dropped"
+            );
+        }
+    }
+
+    /// Returns the notice of `event` about `review_key`, at the level of the policy.
     ///
     /// # Errors
     ///
-    /// Returns the last error of the notification when the retries end.
-    pub(crate) async fn notify_now(
+    /// Returns `configuration_invalid` when the policy names no level for `event`.
+    pub(crate) fn notice(
         &self,
-        cancel: &CancellationToken,
-        level: Level,
-        message: &str,
-    ) -> Result<(), Error> {
-        retry_step(self.step_policy(), &self.clock, cancel, || {
-            self.integration.notify(cancel, level.clone(), message)
+        event: Event,
+        review_key: &str,
+        message: String,
+    ) -> Result<Notice, Error> {
+        let level = self.level(event.clone())?;
+        Ok(Notice {
+            event,
+            review_key: review_key.to_owned(),
+            level,
+            message,
         })
-        .await
     }
 
     /// Announces each refused pull request once per refusal code.
     ///
-    /// The user has to look at it, because it is not reviewed. The rejected map of `state` is
-    /// replaced by the current refusals only after every notification is sent.
+    /// The user has to look at it, because it is not reviewed. The notices go to `notices`, and
+    /// the rejected map of `state` is replaced by the current refusals.
     ///
     /// # Errors
     ///
-    /// Returns `configuration_invalid` without a policy level, or the error of a notification.
-    pub(crate) async fn report_rejected(
+    /// Returns `configuration_invalid` without a policy level.
+    pub(crate) fn report_rejected(
         &self,
-        cancel: &CancellationToken,
         state: &mut DiscoveryState,
         rejected: &[RejectedCandidate],
+        notices: &mut Vec<Notice>,
     ) -> Result<(), Error> {
         let mut current = BTreeMap::new();
         for item in rejected {
@@ -107,26 +151,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 continue;
             }
             let message = rejected_message(&key, &item.code);
-            let level = self.level(Event::ReviewStopped)?;
-            self.notify_now(cancel, level, &message).await?;
+            notices.push(self.notice(Event::ReviewStopped, &key, message)?);
         }
         state.rejected = current;
         Ok(())
-    }
-
-    /// Returns the notification level of a schedule record.
-    ///
-    /// A record that waits for a retry is `retry_scheduled`; any other is `review_stopped`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `configuration_invalid` when the policy names no level for the event.
-    pub(crate) fn notify_level(&self, record: &Record) -> Result<Level, Error> {
-        if record.phase == PHASE_RETRY_WAIT {
-            self.level(Event::RetryScheduled)
-        } else {
-            self.level(Event::ReviewStopped)
-        }
     }
 
     /// Returns the review policy of the configuration.
