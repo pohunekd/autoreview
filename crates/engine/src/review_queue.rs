@@ -11,7 +11,7 @@ use autoreview_schedule::scheduler::Record;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::poll::live;
+use crate::discovery::poll::{STEP_READ_PULL_REQUEST_STATE, live};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::{Integrations, ReviewRequest};
@@ -39,6 +39,12 @@ const CONFIGURATION_INVALID: &str = "configuration_invalid";
 
 /// Configuration key of the queue limit.
 const QUEUE_MAX_ITEMS_KEY: &str = "notify.review_queue.max_items";
+
+/// Step name of the review request search in the retry log.
+const STEP_LIST_REVIEW_REQUESTS: &str = "list_review_requests";
+
+/// Step name of the queue digest post in the retry log.
+const STEP_SEND_QUEUE_DIGEST: &str = "send_queue_digest";
 
 /// Position of a queue entry. The derived order puts the requests that need the owner's action
 /// first, and the notes that wait for their author after the requests.
@@ -115,9 +121,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// without a policy or with a negative limit.
     pub async fn review_queue(&self, cancel: &CancellationToken) -> Result<QueueResult, Error> {
         let limit = self.config.queue_max_items;
-        let list = retry_step(self.step_policy(), &self.clock, cancel, || {
-            self.integration.list_review_requests(cancel, limit)
-        })
+        let list = retry_step(
+            STEP_LIST_REVIEW_REQUESTS,
+            self.step_policy(),
+            &self.clock,
+            cancel,
+            || self.integration.list_review_requests(cancel, limit),
+        )
         .await?;
         live(cancel)?;
         let discovery = self.store.load_discovery()?;
@@ -155,14 +165,20 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow(REVIEW_QUEUE_TOO_LONG, true, None));
         }
         let transaction = queue_transaction_id()?;
-        retry_step(self.step_policy(), &self.clock, cancel, || {
-            self.integration.send_queue_digest(
-                cancel,
-                &transaction,
-                &rendered.plain,
-                &rendered.formatted,
-            )
-        })
+        retry_step(
+            STEP_SEND_QUEUE_DIGEST,
+            self.step_policy(),
+            &self.clock,
+            cancel,
+            || {
+                self.integration.send_queue_digest(
+                    cancel,
+                    &transaction,
+                    &rendered.plain,
+                    &rendered.formatted,
+                )
+            },
+        )
         .await?;
         Ok(QueueResult {
             count: i64::try_from(rendered.shown).unwrap_or(i64::MAX),
@@ -191,10 +207,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             if !record.awaits_author || requested.contains(key) {
                 continue;
             }
-            let read = retry_step(self.step_policy(), &self.clock, cancel, || {
-                self.integration
-                    .read_pull_request_state(cancel, &record.repository, record.number)
-            })
+            let read = retry_step(
+                STEP_READ_PULL_REQUEST_STATE,
+                self.step_policy(),
+                &self.clock,
+                cancel,
+                || {
+                    self.integration.read_pull_request_state(
+                        cancel,
+                        &record.repository,
+                        record.number,
+                    )
+                },
+            )
             .await;
             let current = match read {
                 Ok(current) => current,
