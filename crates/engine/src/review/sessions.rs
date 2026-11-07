@@ -15,8 +15,10 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 use super::input::{NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, SlotState, still_wanted};
+use crate::discovery::notification_span;
 use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine, StepRetryPolicy, retry_step};
 use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
@@ -243,7 +245,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Sends `message` at the level of `event` once per review, under the step `name`.
     ///
-    /// An event without a level fails with `review_input_invalid`.
+    /// An event without a level fails with `review_input_invalid`. A failure before shutdown is
+    /// logged with the event, the review key and the level.
     pub(crate) async fn notify(
         &self,
         name: &str,
@@ -251,19 +254,35 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         message: &str,
     ) -> Result<(), Error> {
         let step_name = format!("{NOTIFY_STEP_PREFIX}{name}");
-        self.once::<bool, _>(&step_name, || {
-            let integration = &*self.engine.integration;
-            let cancel = &self.cancel;
-            let event = event.clone();
-            async move {
-                let Some(level) = self.input.level(event) else {
-                    return Err(Error::workflow("review_input_invalid", true, None));
-                };
-                integration.notify(cancel, level, message).await?;
-                Ok(true)
+        let Some(level) = self.input.level(event.clone()) else {
+            return Err(Error::workflow("review_input_invalid", true, None));
+        };
+        let review_key = self.input.pull_request.key();
+        let span = notification_span(&event, &review_key, &level);
+        let sent = self
+            .once::<bool, _>(&step_name, || {
+                let integration = &*self.engine.integration;
+                let cancel = &self.cancel;
+                let level = level.clone();
+                async move {
+                    integration.notify(cancel, level, message).await?;
+                    Ok(true)
+                }
+            })
+            .instrument(span)
+            .await;
+        if let Err(err) = sent {
+            if !is_shutdown(&err) && !self.cancel.is_cancelled() {
+                tracing::warn!(
+                    event = event.as_str(),
+                    review_key = %review_key,
+                    level = level.as_str(),
+                    error_code = error_code(&err),
+                    "notification failed"
+                );
             }
-        })
-        .await?;
+            return Err(err);
+        }
         Ok(())
     }
 
