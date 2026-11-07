@@ -11,7 +11,7 @@ use autoreview_schedule::scheduler::{self, Record, Run};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
-use super::PHASE_RETRY_WAIT;
+use super::{Notice, PHASE_RETRY_WAIT, record_event};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
@@ -76,30 +76,44 @@ struct Dispatch {
     input: ReviewInput,
 }
 
+/// One saved discovery pass: its counts and the notices it leaves to send.
+pub(crate) struct Pass {
+    /// Counts of the pass, as `poll` returns them.
+    pub(crate) result: PollResult,
+    /// Notifications of the pass, sent after the discovery lock is released.
+    pub(crate) notices: Vec<Notice>,
+}
+
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Plans every candidate under the discovery lock and queues the reviews that are due.
+    ///
+    /// The notifications of the pass are sent after the lock is released; a failed one is
+    /// logged and does not fail the poll.
     ///
     /// # Errors
     ///
     /// Returns `discovery_busy` or `store_unavailable` from the lock, or the error of the pass.
     pub async fn poll(&self, cancel: &CancellationToken) -> Result<PollResult, Error> {
-        self.with_discovery(|| self.poll_pass(cancel, None)).await
+        let pass = self.with_discovery(|| self.poll_pass(cancel, None)).await?;
+        self.send_notices(cancel, pass.notices).await;
+        Ok(pass.result)
     }
 
     /// Runs one discovery pass; `force` asks for a new attempt of one failed head.
     ///
     /// The caller holds the discovery lock. The queued reviews, the superseded waits and the
-    /// discovery state are written in one transaction at the end.
+    /// discovery state are written in one transaction at the end. The pass sends no
+    /// notification; it returns them for the caller to send after the lock is released.
     ///
     /// # Errors
     ///
-    /// Returns the error of the candidate search, of the store, of a notification, of the
-    /// review planning or of `force`, and `state_entry_limit_exceeded` when the schedule is full.
+    /// Returns the error of the candidate search, of the store, of the review planning or of
+    /// `force`, and `state_entry_limit_exceeded` when the schedule is full.
     pub(crate) async fn poll_pass(
         &self,
         cancel: &CancellationToken,
         force: Option<&RetryRequest>,
-    ) -> Result<PollResult, Error> {
+    ) -> Result<Pass, Error> {
         // A failure here leaves the drafts for the next pass and holds up no other review.
         if let Err(err) = self.integration.ready_drafts(cancel).await
             && !cancel.is_cancelled()
@@ -123,8 +137,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         for candidate in listed.candidates {
             present.insert(candidate.pull_request.key(), candidate);
         }
-        self.report_rejected(cancel, &mut state, &listed.rejected)
-            .await?;
+        let mut notices = Vec::new();
+        self.report_rejected(&mut state, &listed.rejected, &mut notices)?;
         let mut result = PollResult {
             open,
             ..PollResult::default()
