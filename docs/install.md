@@ -202,8 +202,9 @@ sudo cp examples/single-repo-comment/policy.yaml /etc/autoreview/policy.yaml
 sudo cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
 ```
 
-In `config.yaml`, set the `login` of the credential, `pohunek.hosts` and a
-`matrix` backend in `notify`, see [notifiers](knowledge/guides/notifiers.md).
+In `config.yaml`, set the `login` of the credential, `pohunek.hosts`, and the
+homeserver, room and mentioned user of the placeholder `matrix` backend in
+`notify`, see [notifiers](knowledge/guides/notifiers.md).
 
 The agent profile named as `reviewers.<id>.agent_profile` in `policy.yaml` must
 exist on the review host; autoreview does not create it. `autoreview profiles

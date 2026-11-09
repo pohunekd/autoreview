@@ -19,8 +19,9 @@ reviewed and how is in [policy.yaml](policy.md).
 **Every key is required.** autoreview has no built-in defaults: a missing key
 stops the service at startup with an error that names it.
 [`examples/config.yaml`](../examples/config.yaml) holds every key with a
-recommended value and a comment; its `notify` block needs a `matrix` backend
-before it loads. Secrets are never in
+recommended value and a comment, and it loads as it is; its `notify` block routes
+every level and the review queue to one `matrix` backend with placeholder values.
+CI loads it with every example policy. Secrets are never in
 the file; keys ending in `_env` name the environment variable that holds them.
 
 The service finds the file through `--config <path>` or the
@@ -28,8 +29,7 @@ The service finds the file through `--config <path>` or the
 
 ## Complete file
 
-The values below are those of `examples/config.yaml`, with a `matrix` backend in
-`notify`.
+The values below are those of `examples/config.yaml`.
 
 ```yaml
 version: 1
