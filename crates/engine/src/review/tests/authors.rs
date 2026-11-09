@@ -2,13 +2,17 @@
 
 // Rust guideline compliant 2026-06-26
 
-use autoreview_policy::{Checkout, Permission};
+use std::sync::Arc;
 
+use autoreview_policy::{Checkout, Permission};
+use tokio_util::sync::CancellationToken;
+
+use crate::engine::Engine;
 use crate::integrations::SessionRequest;
 use crate::model::PullRequest;
 use crate::model::review::Decision;
 use crate::protocol::fixtures::sha;
-use crate::testing::harness::{Harness, integration_pull_request, start_harness};
+use crate::testing::harness::{FakeClock, Harness, integration_pull_request, start_harness};
 
 /// Returns the sessions that were started for `pr`.
 fn sessions_of(h: &Harness, pr: &PullRequest) -> Vec<SessionRequest> {
@@ -87,4 +91,64 @@ async fn clean_review_of_a_fork_pull_request_is_a_comment_from_the_base_checkout
         "only the unlisted author of a same-repository pull request is looked up: {reads:?}"
     );
     h.stop_engine().await;
+}
+
+// A permission read that fails rejects only the pull requests of that author, read once in the
+// pass; the listed maintainer's pull request is still dispatched in the same pass (#33).
+#[tokio::test]
+async fn failing_permission_read_rejects_only_its_pull_requests() {
+    let mut h = start_harness(|cfg| {
+        cfg.schedule.debounce = time::Duration::ZERO;
+    })
+    .await;
+    h.stop_engine().await;
+    let engine = Engine::new(
+        h.config(),
+        Arc::clone(&h.store),
+        Arc::clone(&h.fake),
+        FakeClock::new(),
+    );
+    let mut first = integration_pull_request("public/widget", &sha("a"));
+    first.author = "member".to_owned();
+    first.author_type = "User".to_owned();
+    let mut second = integration_pull_request("public/widget", &sha("c"));
+    second.author = "member".to_owned();
+    second.author_type = "User".to_owned();
+    let mut listed = integration_pull_request("public/widget", &sha("d"));
+    listed.author = "maintainer".to_owned();
+    listed.author_type = "User".to_owned();
+    h.fake.lock().permission_fail.insert(
+        "public/widget member".to_owned(),
+        "github_request_failed".to_owned(),
+    );
+    for pr in [&first, &second, &listed] {
+        h.fake.open(pr.clone(), h.rule(&pr.repository));
+    }
+    let result = engine
+        .poll(&CancellationToken::new())
+        .await
+        .expect("the pass succeeds despite the failed read");
+    assert_eq!(
+        result.dispatched, 1,
+        "only the listed maintainer is dispatched"
+    );
+    let state = h.store.load_discovery().expect("the discovery state loads");
+    for pr in [&first, &second] {
+        assert!(
+            state.rejected.get(&pr.key()).map(String::as_str) == Some("github_request_failed")
+                && !state.schedule.contains_key(&pr.key()),
+            "{}: rejected={:?}",
+            pr.key(),
+            state.rejected.get(&pr.key())
+        );
+    }
+    assert!(
+        state.schedule.contains_key(&listed.key()),
+        "the listed maintainer is scheduled"
+    );
+    assert_eq!(
+        h.fake.lock().permission_reads,
+        vec!["public/widget member".to_owned()],
+        "the failing author is read once in the pass"
+    );
 }

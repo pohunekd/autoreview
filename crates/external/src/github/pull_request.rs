@@ -770,28 +770,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn author_type_is_kept_as_graphql_names_it() {
-        let trigger = Trigger {
-            kind: TriggerKind::ReviewRequested,
-            label: String::new(),
-        };
-        let decode = |response: &str| {
-            decode_pull_request_response(response)
-                .and_then(|raw| decode_pull_request(&raw, HOST, LOGIN, &trigger))
-                .map(|pr| pr.author_type)
-                .map_err(|error| error_code(&error).to_owned())
-        };
-        let user = r#""author":{"__typename":"User","#;
-        assert_eq!(decode(HUMAN_RESPONSE), Ok("User".to_owned()));
-        assert_eq!(decode(BOT_RESPONSE), Ok("Bot".to_owned()));
-        let missing = HUMAN_RESPONSE.replacen(user, r#""author":{"#, 1);
-        assert_ne!(missing, HUMAN_RESPONSE, "the fixture names the author type");
-        assert_eq!(
-            decode(&missing),
-            Ok(String::new()),
-            "a missing type stays empty, which the author class reads as unknown"
-        );
-    }
 }

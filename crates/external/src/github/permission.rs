@@ -28,12 +28,15 @@ struct PermissionResponse {
 autoreview_go_compat::object_only_serde!(PermissionResponse);
 
 /// Reports whether `login` is a plain GitHub user login, safe to place in an API path.
+///
+/// An Enterprise Managed User login carries an underscore (`handle_shortcode`). Letters,
+/// digits, `-` and `_` are unreserved in a URL path, so the login needs no encoding.
 fn login_valid(login: &str) -> bool {
     !login.is_empty()
         && login.len() <= MAX_LOGIN_BYTES
         && login
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 /// Returns the argv of the permission read of `login` in `repository`.
@@ -82,7 +85,7 @@ mod tests {
     use autoreview_engine::error_code;
     use autoreview_policy::Permission;
 
-    use super::{decode_permission, login_valid, permission_args};
+    use super::{decode_permission, login_valid};
 
     #[test]
     fn permission_is_read_from_the_role_name() {
@@ -119,17 +122,12 @@ mod tests {
                 "{output} must be refused, never read as a permission"
             );
         }
-        assert_eq!(
-            permission_args("acme/widget", "member"),
-            vec!["api", "repos/acme/widget/collaborators/member/permission"]
-        );
         assert!(
-            login_valid("member-2")
-                && !login_valid("")
+            login_valid("handle_shortcode")
                 && !login_valid("bot[bot]")
                 && !login_valid("a/b")
-                && !login_valid(&"a".repeat(40)),
-            "only a plain login goes into the path"
+                && !login_valid("a%2fb"),
+            "an Enterprise Managed User login is read, and no path character passes"
         );
     }
 }

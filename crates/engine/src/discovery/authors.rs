@@ -2,13 +2,15 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::collections::BTreeMap;
+
 use autoreview_policy::{AuthorClass, AuthorType, Authors, Permission, Untrusted};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{Clock, Engine};
-use crate::error::Error;
+use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
-use crate::model::{Candidate, CandidateList};
+use crate::model::{Candidate, CandidateList, RejectedCandidate};
 
 /// Returns the candidate with its author class, or `None` when the rule skips the author.
 ///
@@ -48,13 +50,16 @@ pub(crate) fn classify_candidate(
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Lists the candidates and resolves the author class of each one.
     ///
-    /// The permission is read only when it can change the class. A candidate whose rule skips
-    /// untrusted authors, or that the policy no longer covers, is dropped with a log line.
+    /// The permission is read only when it can change the class, once per author and
+    /// repository in a pass. A candidate whose rule skips untrusted authors, or that the policy
+    /// no longer covers, is dropped with a log line. A candidate whose permission read fails is
+    /// rejected with the read's code, so it is never reviewed as trusted and the other
+    /// candidates go on; the next pass reads it again.
     ///
     /// # Errors
     ///
-    /// Returns the error of the search or of a permission read, and `configuration_invalid`
-    /// when the configuration has no policy.
+    /// Returns the error of the search, the error of a permission read after a cancel, and
+    /// `configuration_invalid` when the configuration has no policy.
     pub(crate) async fn list_classified(
         &self,
         cancel: &CancellationToken,
@@ -62,6 +67,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let listed = self.integration.list_candidates(cancel).await?;
         let policy = self.policy()?;
         let mut candidates = Vec::new();
+        let mut rejected = listed.rejected;
+        // A failed read is kept as its code, so a failing author costs one read per pass.
+        let mut reads: BTreeMap<(String, String), Result<Option<Permission>, String>> =
+            BTreeMap::new();
         for candidate in listed.candidates {
             let pr = &candidate.pull_request;
             let review_id = pr.review_id();
@@ -74,9 +83,38 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             };
             let author_type = AuthorType::from_typename(&pr.author_type);
             let permission = if authors.needs_permission(&pr.author, author_type, pr.fork) {
-                self.integration
-                    .author_permission(cancel, &pr.repository, &pr.author)
-                    .await?
+                let key = (pr.repository.clone(), pr.author.clone());
+                let read = if let Some(read) = reads.get(&key) {
+                    read.clone()
+                } else {
+                    let read = match self
+                        .integration
+                        .author_permission(cancel, &pr.repository, &pr.author)
+                        .await
+                    {
+                        Err(err) if cancel.is_cancelled() => return Err(err),
+                        Err(err) => Err(error_code(&err).to_owned()),
+                        Ok(permission) => Ok(permission),
+                    };
+                    reads.insert(key, read.clone());
+                    read
+                };
+                match read {
+                    Ok(permission) => permission,
+                    Err(code) => {
+                        tracing::warn!(
+                            review_id = %review_id,
+                            error_code = %code,
+                            "author permission read failed"
+                        );
+                        rejected.push(RejectedCandidate {
+                            repository: pr.repository.clone(),
+                            number: pr.number,
+                            code,
+                        });
+                        continue;
+                    }
+                }
             } else {
                 None
             };
@@ -93,7 +131,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
         Ok(CandidateList {
             candidates,
-            rejected: listed.rejected,
+            rejected,
         })
     }
 }

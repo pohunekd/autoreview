@@ -138,6 +138,8 @@ pub(crate) struct FakeState {
     pub(crate) permissions: BTreeMap<String, Permission>,
     /// Every permission read, as `repository login`, in order.
     pub(crate) permission_reads: Vec<String>,
+    /// Error code of each failing permission read, keyed by `repository login`.
+    pub(crate) permission_fail: BTreeMap<String, String>,
 }
 
 /// The fake of the [`Integrations`] boundary.
@@ -384,9 +386,12 @@ impl Integrations for FakeIntegration {
     ) -> impl Future<Output = Result<Option<Permission>, Error>> + Send {
         let key = format!("{repository} {login}");
         let mut state = self.lock();
-        let permission = state.permissions.get(&key).copied();
+        let result = match state.permission_fail.get(&key) {
+            Some(code) => Err(Error::workflow(code, true, None)),
+            None => Ok(state.permissions.get(&key).copied()),
+        };
         state.permission_reads.push(key);
-        ready(Ok(permission))
+        ready(result)
     }
 
     fn host_routes(

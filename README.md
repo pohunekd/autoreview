@@ -63,7 +63,7 @@ and the service unit.
 |---|---|---|
 | 1. Extract and decouple | Fresh history, rename, move every personal or organisation-specific value into configuration, `Notifier` interface | Tests pass; `validate` accepts an example policy with no Matrix configured |
 | 2. Adapters and installer | Claude and Codex adapters with one result contract, pohunek profile generator, release binaries, container image, systemd unit, workflow plugin, `autoreview init` | A clean host goes from `init` to a published review by following the docs |
-| 3. Safe defaults for public repositories | Author/fork-aware rules, `base` checkout for untrusted authors, threat model, pohunek version check | A fork pull request cannot be auto-approved and never runs head code with setup hooks |
+| 3. Safe defaults for public repositories | Author/fork-aware rules, `base` checkout for untrusted authors, threat model, pohunek version check | A fork pull request whose author is not listed in `logins` cannot be auto-approved and never runs head code with setup hooks |
 | 4. Migrate the original deployment | The private deployment consumes a release; legacy review markers and state still read | Incremental reviews continue on pull requests reviewed before the migration |
 | 5. Examples, docs, dogfooding | One small policy per scenario over the pohunek repositories, validated in CI; live on `pohunekd/*` | Every example passes `validate` in CI; the org's pull requests are reviewed by it |
 | 6. After v1 | Approval by a GitHub comment command, GitHub App identity, more notifier backends | Decided one by one when started |

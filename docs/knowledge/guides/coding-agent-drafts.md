@@ -146,15 +146,18 @@ listed. Nothing is marked ready, and nothing is reviewed until a request arrives
 
 ```sh
 autoreview --config /etc/autoreview/config.yaml candidates   # drafts that would be marked ready
-autoreview review --repository zajca/pohunek 64              # state and author class of PR #64
+autoreview review --repository zajca/pohunek 64              # engine state for PR #64
 autoreview retry --repository zajca/pohunek 64 3f2a9c1d0b7e  # after review_stopped
 ```
 
+`review` does not show the author class; the `review scheduled` log line carries the
+`author_class` each review was given.
+
 ## Variations
 
-- **Another agent.** Add its plain login to `ready_draft_authors`, and to
-  `authors.trusted.logins` if its pull requests should be trusted. Keep both lists
-  lowercase and unique.
+- **Another agent.** Add its plain login to `ready_draft_authors`. If its pull
+  requests should be trusted, add `"name[bot]"` (quoted) to `authors.trusted.logins`;
+  a plain login there matches only a user. Keep both lists lowercase and unique.
 - **Agent work is commented, not approved.** Change `on_clean: await` to
   `on_clean: comment`. Clean agent work then gets a comment and no approval wait,
   which suits a repository where the agent's pull requests are merged by a
