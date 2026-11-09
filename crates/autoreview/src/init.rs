@@ -113,3 +113,118 @@ impl Example {
         }
     }
 }
+
+/// The arguments of `init`; every one is required.
+#[derive(Debug, Args)]
+pub(crate) struct InitArguments {
+    /// Absolute directory that receives config.yaml, policy.yaml and prompts/.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) dir: PathBuf,
+    /// GitHub login of the one credential, in lowercase.
+    #[arg(long, value_name = "LOGIN")]
+    pub(crate) login: String,
+    /// Name of the pohunek host that runs the reviewers.
+    #[arg(long, value_name = "HOST")]
+    pub(crate) pohunek_host: String,
+    /// The example whose policy and prompts are written.
+    #[arg(long, value_enum, value_name = "NAME")]
+    pub(crate) example: Example,
+}
+
+/// What `init` prints after it wrote every file.
+#[derive(Debug, Serialize)]
+pub(crate) struct InitResult {
+    /// The directory, as given.
+    directory: String,
+    /// The absolute paths of the written files, in the order they were written.
+    files: Vec<String>,
+    /// The pohunek agent profiles that the policy's reviewers run, as `validate` prints them.
+    agent_profiles: Vec<String>,
+}
+
+/// One file that `init` writes, relative to the directory.
+#[derive(Debug)]
+pub(crate) struct SetupFile {
+    /// Path relative to the directory, for example `prompts/generic.md`.
+    pub(crate) relative: &'static str,
+    /// The bytes of the file.
+    pub(crate) contents: Vec<u8>,
+}
+
+/// Writes the configuration directory and returns what it wrote.
+///
+/// # Errors
+///
+/// Returns `command_invalid` when `--config` is given, `configuration_invalid` naming a flag
+/// or `policy_file`, `init_file_exists` naming the first path in the way, and
+/// `workflow_failed` when a file cannot be written.
+pub(crate) fn run(
+    config_path: Option<&Path>,
+    arguments: &InitArguments,
+) -> Result<InitResult, Error> {
+    if config_path.is_some() {
+        return Err(command_invalid(Some(
+            "--config is not an option of init; init writes into --dir".into(),
+        )));
+    }
+    let directory = directory(&arguments.dir)?;
+    let files = render(arguments, directory)?;
+    let agent_profiles = agent_profiles(&files)?;
+    let written = write(Path::new(directory), &files)?;
+    Ok(InitResult {
+        directory: directory.to_owned(),
+        files: written,
+        agent_profiles,
+    })
+}
+
+/// Returns `dir` as text when it is a clean absolute UTF-8 path.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` naming `--dir`.
+fn directory(dir: &Path) -> Result<&str, Error> {
+    match dir.to_str() {
+        Some(text) if clean_absolute(text) => Ok(text),
+        _ => Err(invalid_flag("--dir", "must be a clean absolute UTF-8 path")),
+    }
+}
+
+/// Renders every file of the example in the order `init` writes them.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` naming `--login` or `--pohunek-host`, and the errors of
+/// [`render_config`].
+pub(crate) fn render(arguments: &InitArguments, directory: &str) -> Result<Vec<SetupFile>, Error> {
+    if !github_login_valid(&arguments.login) {
+        return Err(invalid_flag("--login", "is not a lowercase GitHub login"));
+    }
+    if !identifier_valid(&arguments.pohunek_host) {
+        return Err(invalid_flag(
+            "--pohunek-host",
+            "must match [A-Za-z0-9][A-Za-z0-9._-]*",
+        ));
+    }
+    let config = render_config(directory, &arguments.login, &arguments.pohunek_host)?;
+    let mut files = vec![
+        SetupFile {
+            relative: CONFIG_NAME,
+            contents: config.into_bytes(),
+        },
+        SetupFile {
+            relative: POLICY_NAME,
+            contents: arguments.example.policy().to_vec(),
+        },
+    ];
+    for (relative, contents) in DEFAULT_PROMPTS
+        .iter()
+        .chain(arguments.example.extra_prompts())
+    {
+        files.push(SetupFile {
+            relative,
+            contents: contents.to_vec(),
+        });
+    }
+    Ok(files)
+}
