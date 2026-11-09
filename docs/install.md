@@ -2,14 +2,19 @@
 type: Reference
 id: reference/install
 title: Install autoreview
-description: Prerequisites, the four install paths (release archive with checksum and attestation, systemd units, container image, pohunek workflow plugin planned in #41), building from source, first configuration, the first review and where to go for upgrades.
+description: Prerequisites, the four install paths (release archive with checksum and attestation, systemd units, container image after 0.1.0 planned in #40, pohunek workflow plugin planned in #41), building from source, first configuration, the first review and where to go for upgrades.
 source_kind: manual
 intents: [setup, help]
 ---
 
 # Install autoreview
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change. The release archives are built by the release workflow of `pohunekd/autoreview` from the first version tag on; no release is published yet. The container image `ghcr.io/pohunekd/autoreview` is planned for v0.1 and is not published yet.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0. The release workflow of
+> `pohunekd/autoreview` publishes the release archives from `v0.1.0` on. The
+> release ships no systemd unit files: path b writes them by hand, and shipped
+> units are planned in #39. The container image `ghcr.io/pohunekd/autoreview`
+> comes after 0.1.0 and is planned in #40.
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
 agents run as reviewers in pohunek sessions on the **review hosts**, where a
@@ -24,7 +29,7 @@ pohunek daemon runs and the repositories are registered.
 - **Repositories registered** with `pohunek project add` on a review host. The first
   host of `pohunek.hosts` that has the repository runs its reviews, unless
   `pohunek.route_overrides` pins it ([multiple hosts](knowledge/guides/multihost.md)).
-- **GitHub CLI (`gh`)** on the autoreview host (the container image bundles it).
+- **GitHub CLI (`gh`)** on the autoreview host (the planned container image bundles it).
 - **GitHub token** of the account autoreview acts as, held in the variable named
   by the `token_env` of the one credential (`AUTOREVIEW_GH_TOKEN` in the
   example). It belongs to the credential's `login`; several credentials are
@@ -41,7 +46,7 @@ pohunek daemon runs and the repositories are registered.
 |---|---|---|
 | a. Release binary (default) | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
 | b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
-| c. Container | You run containers | `ghcr.io/pohunekd/autoreview:<version>` (planned) |
+| c. Container | You run containers | `ghcr.io/pohunekd/autoreview:<version>`, after 0.1.0 (planned in #40) |
 | d. pohunek workflow plugin | Not available yet | Planned in #41 |
 
 Paths a and b need the `autoreview` system user that path b creates.
@@ -198,6 +203,9 @@ The `autoreview` user needs a route to each review host (for example NetBird) an
 the pohunek client access the CLI needs. That setup is not in the reference pages yet.
 
 ## c. Container
+
+The container image comes after 0.1.0 and is planned in #40; this section
+describes its design.
 
 The image bundles `gh` and the `pohunek` CLI at pinned versions. The config is
 mounted read-only, state goes to a volume, and the container must reach the review

@@ -9,7 +9,8 @@ intents: [setup, help]
 
 # Use cases
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** These pages describe autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 Every scenario below is a policy file plus a config file. Start from the
 closest scenario, copy its example, and change the repository names. The

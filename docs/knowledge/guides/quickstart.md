@@ -9,7 +9,9 @@ intents: [setup, help]
 
 # Quickstart
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0. The container image this page
+> mentions comes after 0.1.0 and is planned in #40.
 
 This guide takes one repository from nothing to a review comment posted by
 autoreview. It uses one reviewer and comments only, so nothing is approved
@@ -188,10 +190,10 @@ new commits and settles earlier findings, as a Claude reviewer does. See
 ## 15. Run as a service
 
 Once one review works, run autoreview as a long-running service so it reviews
-without manual polls. Install the systemd unit or the container image as
-described in [install](../../install.md), and let `autoreview serve` run until
-you stop it. Reviews that are running at shutdown resume after the next
-start.
+without manual polls. Install the systemd unit, or the container image that comes
+after 0.1.0 (planned in #40), as described in [install](../../install.md), and
+let `autoreview serve` run until you stop it. Reviews that are running at
+shutdown resume after the next start.
 
 Before you leave this setup running, read the
 [threat model](../safety/threat-model.md). Repositories with untrusted

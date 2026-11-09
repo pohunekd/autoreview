@@ -9,7 +9,8 @@ intents: [setup, help]
 
 # Untrusted authors
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 Every repository rule must say who it trusts. The `authors` block splits pull
 request authors into two classes. A trusted author gets the rule's normal

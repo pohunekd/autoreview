@@ -9,7 +9,8 @@ intents: [debug, help]
 
 # Retry and recovery
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 A review moves through steps. Each step is retried by the scheduler, and a
 review that still fails after its retries stops with the event

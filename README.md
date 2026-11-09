@@ -2,9 +2,11 @@
 
 Policy-driven AI pull request review on top of [pohunek](https://github.com/zajca/pohunek) sessions.
 
-> **Status: planning.** This repository contains no code yet. The engine runs
-> privately today and is being extracted into a reusable, configurable project.
-> This README is the rough plan.
+> **Status: 0.1.0.** autoreview 0.1.0 is the first release. It ships static
+> Linux binaries for `x86_64` and `aarch64` as release archives, each with a
+> `.sha256` file and a build provenance attestation; see [install](docs/install.md).
+> It does not implement the whole v0.1 design yet: each part that is still
+> planned names its open issue.
 
 ## What it does
 
@@ -32,8 +34,8 @@ one GitHub review with inline comments.
 
 ## Documentation
 
-The documentation is written ahead of the first release and describes the
-design v0.1 implements.
+The documentation describes autoreview 0.1.0; parts marked planned are not in
+0.1.0.
 
 - [Features](docs/features.md) - what it does and a map of every page
 - [Quickstart](docs/knowledge/guides/quickstart.md) and
@@ -55,7 +57,7 @@ GitHub (gh) --> discovery --> policy match --> review workflow (SQLite)
 The engine needs three parts to be useful: the engine itself (Rust), the
 reviewer adapters that turn a pohunek agent session into one structured,
 read-only review run, and an installer that creates the pohunek agent profiles
-and the service unit.
+(planned in #25) and the service unit (planned in #39).
 
 ## Rough plan
 
@@ -68,10 +70,11 @@ and the service unit.
 | 5. Examples, docs, dogfooding | One small policy per scenario over the pohunek repositories, validated in CI; live on `pohunekd/*` | Every example passes `validate` in CI; the org's pull requests are reviewed by it |
 | 6. After v1 | Approval by a GitHub comment command, GitHub App identity, more notifier backends | Decided one by one when started |
 
-### Planned examples
+### Examples
 
-Each example is a short policy file with a README, all over pohunek and related
-repositories:
+Each example is a short policy file with a README under
+[examples/](examples/), all over pohunek and related repositories. The last two
+scenarios are guides without a policy of their own:
 
 1. `single-repo-comment` - one repository, label trigger, one Codex reviewer, always comment
 2. `solo-maintainer` - own pull requests get a comment, others request changes or approve
@@ -81,22 +84,27 @@ repositories:
 6. `notes-handoff` - non-blocking notes go to the author first
 7. `coding-agent-drafts` - drafts of coding agents marked ready and reviewed
 8. `public-repositories` - external authors: label gate, base checkout, comment only
-9. `multihost` - several pohunek hosts and route overrides
-10. `notifiers` - Matrix rooms per level or per event and the review queue
+9. [`multihost`](docs/knowledge/guides/multihost.md) - several pohunek hosts and
+   route overrides
+10. [`notifiers`](docs/knowledge/guides/notifiers.md) - Matrix rooms per level or
+    per event and the review queue
 
-## Requirements (planned)
+## Requirements
 
 - pohunek daemon on one or more review hosts with the repositories registered
 - `gh` CLI and one GitHub token (tokens per owner or repository are planned in #13)
 - Claude Code and/or Codex CLI on the review hosts
-- Linux with systemd or a container runtime (the workflow plugin is planned in #41)
+- Linux on `x86_64` or `aarch64`; the systemd units are written by hand from the
+  install page (shipped units are planned in #39, the container image in #40
+  and the workflow plugin in #41)
 
-## Security model (planned)
+## Security model
 
 Pull request content is untrusted. Reviewers run read-only and must not follow
-instructions found in the diff, comments or repository files. For public
-repositories the defaults keep untrusted authors behind a maintainer label,
-review them from a base checkout, and never auto-approve them.
+instructions found in the diff, comments or repository files. Every rule says
+which authors it trusts. An untrusted author is skipped or reviewed from a base
+checkout, and is never auto-approved; the `public-repositories` example also
+keeps untrusted authors behind a maintainer label.
 
 ## Decisions so far
 
@@ -110,9 +118,10 @@ review them from a base checkout, and never auto-approve them.
 - Claude Code and Codex reviewers share one result contract.
 - Clean reviews that wait for a human are approved through the CLI, with an
   optional Hermes Agent integration (planned in #43); approval by GitHub comment and a GitHub
-  App identity come after v1.
+  App identity come after v1 (#46, #47).
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
-- Distributed as release binaries with systemd units, as a container image,
-  and as a pohunek workflow plugin (planned in #41).
+- Distributed as static Linux release archives from 0.1.0 on; systemd units
+  and an installer (planned in #39), a container image (planned in #40) and a
+  pohunek workflow plugin (planned in #41) follow.
 - MIT license.
