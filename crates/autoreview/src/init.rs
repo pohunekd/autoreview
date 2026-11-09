@@ -397,3 +397,6 @@ impl Created {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
