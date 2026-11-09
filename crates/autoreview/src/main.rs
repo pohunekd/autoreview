@@ -206,7 +206,7 @@ fn report(error: &Error) {
 async fn run(cli: Cli) -> Result<(), Error> {
     let environment = std::env::var_os(CONFIG_ENV);
     let path = config_file::resolve_path(cli.config.as_deref(), environment.as_deref())?;
-    let config = config_file::load(&path)?;
+    let (config, _mcp) = config_file::load(&path)?;
     let external = Arc::new(External::new(config.clone())?);
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;

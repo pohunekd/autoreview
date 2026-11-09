@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, MatrixRooms, RouteOverride, SECRET_ENV_PREFIX};
+use autoreview_engine::mcp::{McpClientEntry, McpConfig};
 use autoreview_policy::{EVENTS, Event, Policy};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -160,6 +161,32 @@ pub(crate) struct FileConfig {
     publish: Option<PublishFile>,
     /// The `notify` section.
     notify: Option<NotifyFile>,
+    /// The `mcp` section; only `autoreview mcp` needs it.
+    mcp: Option<McpFile>,
+}
+
+/// The `mcp` section.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpFile {
+    /// Address the MCP server listens on, as `IP:PORT`.
+    listen: Option<Value>,
+    /// `Host` header values the server accepts.
+    allowed_hosts: Option<Value>,
+    /// The clients of the server.
+    clients: Option<Vec<McpClientFile>>,
+}
+
+/// One entry of `mcp.clients`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpClientFile {
+    /// Name of the client in the logs.
+    name: Option<Value>,
+    /// `read` or `write`.
+    scope: Option<Value>,
+    /// SHA-256 digest of the client's token, as lowercase hexadecimal.
+    token_sha256: Option<Value>,
 }
 
 /// The `github` section.
@@ -452,13 +479,38 @@ pub(crate) fn resolve_path(
 /// Returns the errors of [`parse`], and `configuration_invalid` naming `config` when the file
 /// cannot
 /// be read.
-pub(crate) fn load(path: &Path) -> Result<Config, Error> {
+pub(crate) fn load(path: &Path) -> Result<(Config, Option<McpConfig>), Error> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         Error::config(CONFIGURATION_INVALID, DOCUMENT_NAME, Some(Box::new(error)))
     })?;
-    parse(&text, environment_secret, |policy_path| {
+    let config = parse(&text, environment_secret, |policy_path| {
         autoreview_policy::load(policy_path).map_err(|error| Box::new(error) as _)
-    })
+    })?;
+    let mcp = mcp_section(&parse_file(&text)?)?;
+    Ok((config, mcp))
+}
+
+/// Reads the `mcp` section; `None` when the configuration has none.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for an absent key of the section, and the errors of
+/// [`McpConfig::new`].
+pub(crate) fn mcp_section(file: &FileConfig) -> Result<Option<McpConfig>, Error> {
+    let Some(mcp) = &file.mcp else {
+        return Ok(None);
+    };
+    let listen = text(&mcp.listen, "mcp.listen")?;
+    let allowed_hosts = text_list(&mcp.allowed_hosts, "mcp.allowed_hosts")?;
+    let mut entries = Vec::new();
+    for client in section(&mcp.clients, "mcp.clients")? {
+        entries.push(McpClientEntry {
+            name: text(&client.name, "mcp.clients.name")?,
+            scope: text(&client.scope, "mcp.clients.scope")?,
+            token_sha256: text(&client.token_sha256, "mcp.clients.token_sha256")?,
+        });
+    }
+    McpConfig::new(&listen, allowed_hosts, &entries).map(Some)
 }
 
 /// Reads a secret from the environment by variable name. Only the value of one variable is read,
@@ -2508,5 +2560,50 @@ mod tests {
                 "notes_handoff.reminder_hours of the policy"
             )
         );
+    }
+
+    #[test]
+    fn mcp_section_is_optional_and_every_key_is_required() {
+        let file = parse_file(EXAMPLE).expect("the example parses");
+        assert_eq!(mcp_section(&file).expect("no section is valid"), None);
+        let client = concat!(
+            "    - name: hermes\n",
+            "      scope: write\n",
+            "      token_sha256: ",
+            "\"2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae\"\n",
+        );
+        let section = format!(
+            "mcp:\n  listen: \"127.0.0.1:8787\"\n  allowed_hosts: [mcp.example.com]\n  \
+             clients:\n{client}"
+        );
+        let full = format!("{EXAMPLE}{section}");
+        let loaded = mcp_section(&parse_file(&full).expect("valid YAML"))
+            .expect("the section is valid")
+            .expect("the section is present");
+        assert_eq!(loaded.clients.len(), 1);
+        let cases = [
+            (
+                "  listen: \"127.0.0.1:8787\"\n",
+                "configuration_missing: mcp.listen",
+            ),
+            (
+                "  allowed_hosts: [mcp.example.com]\n",
+                "configuration_missing: mcp.allowed_hosts",
+            ),
+            (
+                "      scope: write\n",
+                "configuration_missing: mcp.clients.scope",
+            ),
+        ];
+        for (removed, expected) in cases {
+            // The example holds a commented copy of the section, so only the section changes.
+            let text = format!("{EXAMPLE}{}", section.replacen(removed, "", 1));
+            let result = mcp_section(&parse_file(&text).expect("valid YAML"));
+            assert_eq!(
+                result.expect_err("a key is missing").to_string(),
+                expected,
+                "without {removed:?}"
+            );
+        }
     }
 }
