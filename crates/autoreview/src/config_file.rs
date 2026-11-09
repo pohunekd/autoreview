@@ -1945,6 +1945,53 @@ mod tests {
         );
     }
 
+    /// Reads a prompt of the example in `directory` as its README installs it.
+    ///
+    /// A prompt comes from the example's own `prompts/`, or is one of the two default prompts
+    /// of the repository's `prompts/`, which every README copies.
+    fn example_prompt(directory: &Path, relative: &str) -> std::io::Result<Vec<u8>> {
+        let own = directory.join(relative);
+        if own.is_file() {
+            return std::fs::read(own);
+        }
+        if relative == "prompts/generic.md" || relative == "prompts/verifier.md" {
+            return std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join(relative),
+            );
+        }
+        Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+    }
+
+    #[test]
+    fn every_example_policy_validates_with_the_example_config() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut directories: Vec<PathBuf> = std::fs::read_dir(&examples)
+            .expect("the examples directory is readable")
+            .map(|entry| entry.expect("an examples entry").path())
+            .filter(|path| path.join("policy.yaml").is_file())
+            .collect();
+        directories.sort();
+        assert!(
+            directories.len() >= 8,
+            "found only {} example policies",
+            directories.len()
+        );
+        for directory in &directories {
+            let document =
+                std::fs::read(directory.join("policy.yaml")).expect("the policy is readable");
+            let loaded = parse(EXAMPLE, secret, |path| {
+                assert_eq!(path, Path::new("/etc/autoreview/policy.yaml"));
+                autoreview_policy::parse(&document, |relative| example_prompt(directory, relative))
+                    .map_err(|error| Box::new(error) as _)
+            });
+            if let Err(error) = loaded {
+                panic!("{}: {error}", directory.display());
+            }
+        }
+    }
+
     /// The notify backends, routes and queue backends of the example.
     const EXAMPLE_NOTIFY: &str = concat!(
         "  backends:\n",
