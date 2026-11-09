@@ -124,9 +124,11 @@ account.
    `findings_on_own_pr` event at level `action`, which means you are expected to
    act.
 4. A clean review is published as a comment, not an approval.
-5. The notifications with the default `notify` section reach the log only. Add
-   a backend (see the [notifiers guide](notifiers.md)) to get `findings_on_own_pr`
-   where you read messages.
+5. With the `notify` section of `examples/config.yaml`, every notification goes
+   to its one `matrix` backend at its level once the homeserver, room and
+   mentioned user are set (see the [notifiers guide](notifiers.md)). So
+   `findings_on_own_pr` reaches that room as an `action` message that mentions
+   you.
 
 ## Walk-through: a contributor with write permission
 

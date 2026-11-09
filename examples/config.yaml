@@ -93,20 +93,26 @@ publish:
   # GitHub accepts at most 65536 characters per review body or comment.
   github_body_max_bytes: 60000
 
-# Until M3 every route and the review queue need a matrix backend, so this
-# none-only block is refused at load. See docs/knowledge/guides/notifiers.md.
+# Every level and the review queue need a matrix backend until M3. Replace the
+# homeserver, the room and the mentioned user with your own; the token is read
+# from the variable named by access_token_env. See
+# docs/knowledge/guides/notifiers.md.
 notify:
   timeout_seconds: 30
   max_characters: 8000
   backends:
-    - name: log
-      type: none
+    - name: matrix
+      type: matrix
+      homeserver_url: https://matrix.example.org
+      access_token_env: AUTOREVIEW_MATRIX_TOKEN
+      room: "!roomid:example.org"
+      mention_user: "@you:example.org"
   routes:
-    action: [log]
-    digest: [log]
-    log: [log]
+    action: [matrix]
+    digest: [matrix]
+    log: [matrix]
   review_queue:
-    backends: [log]
+    backends: [matrix]
     max_items: 50
 
 # Optional: the MCP server of `autoreview mcp`. See

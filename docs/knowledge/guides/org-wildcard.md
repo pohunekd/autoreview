@@ -131,7 +131,8 @@ Three pull requests, all labelled `ai:review` by a write-permission maintainer.
 3. Blocking findings are published as REQUEST_CHANGES. A clean review is published
    as a comment with the summary. Nothing is approved.
 4. Notifications: `changes_requested` (digest) or `commented` (digest). With the
-   default `notify` section they reach the log only.
+   `notify` section of `examples/config.yaml` they reach its `matrix` backend at
+   level `digest` once the homeserver, room and mentioned user are set.
 
 **`pohunekd/pohunek-companion-android`, PR #9 (Kotlin).** The same flow with the
 `android` pipeline and `prompts/android.md`.

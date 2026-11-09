@@ -29,9 +29,9 @@ autoreview --config <directory>/config.yaml validate
 ```
 
 In the copy of `config.yaml`, set `policy_file` to the absolute path of the
-policy, the `login` of the credential, `pohunek.hosts`, `store.path` and a
-`matrix` backend in `notify` (see the
-[notifiers guide](../docs/knowledge/guides/notifiers.md)). For examples with
+policy, the `login` of the credential, `pohunek.hosts`, `store.path`, and the
+homeserver, room and mentioned user of the placeholder `matrix` backend in
+`notify` (see the [notifiers guide](../docs/knowledge/guides/notifiers.md)). For examples with
 extra prompt files, copy them into `<directory>/prompts/` as well (see the
 README of `org-wildcard`). `autoreview init` is planned in #8.
 Every example references the same two
@@ -40,9 +40,11 @@ default prompts, `prompts/generic.md` and `prompts/verifier.md`.
 ## Shared choices
 
 - Every example lists all notification events. Levels follow the reference
-  defaults. Every route needs a `matrix` backend: the `none` block of
-  `config.yaml` is refused at load (see the
-  [notifiers guide](../docs/knowledge/guides/notifiers.md)).
+  defaults. Every route and the review queue need a `matrix` backend until M3,
+  so `config.yaml` routes them to one backend with placeholder values.
+- CI loads every example policy with `config.yaml` through the same loader as
+  `validate` (`every_example_policy_validates_with_the_example_config`), with
+  the prompts each README copies.
 - `unmatched: skip` is the only value. A pull request no rule matches is never reviewed.
 - Each `authors` section states who is trusted. No example relies on an implicit default.
 - Examples use `checkout: base` for every pipeline, so reviewers read repository

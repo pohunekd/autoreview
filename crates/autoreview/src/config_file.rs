@@ -558,8 +558,8 @@ pub(crate) fn parse(
 ) -> Result<Config, Error> {
     let file = parse_file(text)?;
     let mapped = map_file(&file, &secret, load_policy)?;
-    // The queue posts only to Matrix until M3. The check follows the mapping, so the tests can
-    // still map the shipped example, whose backends are all `none`.
+    // The queue posts only to Matrix until M3. The check follows the mapping, so a test can map
+    // a config whose queue names only `none` backends.
     if !mapped.queue_on_matrix {
         return Err(invalid(
             "notify.review_queue.backends",
@@ -591,7 +591,7 @@ pub(crate) fn parse_file(text: &str) -> Result<FileConfig, Error> {
 /// Maps the file into the engine configuration without the engine's final validation.
 ///
 /// A review queue without a Matrix backend maps to an empty `queue_matrix_room`. The tests use
-/// it to map the shipped example, which [`parse`] refuses.
+/// it to map configs that [`parse`] refuses.
 ///
 /// # Errors
 ///
@@ -1930,53 +1930,83 @@ mod tests {
     }
 
     #[test]
-    fn example_is_refused_by_the_queue_and_the_engine_matrix_checks() {
-        let config = mapped(EXAMPLE).expect("the example maps");
-        assert_eq!(
-            config
-                .validate()
-                .expect_err("none-only routes leave Matrix empty")
-                .to_string(),
-            "configuration_invalid: config: invalid Matrix URL"
-        );
-        assert_eq!(
-            error_text(parse(EXAMPLE, secret, example_policy)),
-            concat!(
-                "configuration_invalid: notify.review_queue.backends: ",
-                "none is not supported for the review queue"
-            )
+    fn example_passes_the_loader_and_the_engine_validation() {
+        let config = parse(EXAMPLE, secret, example_policy).expect("the example loads");
+        assert_eq!(config.matrix_rooms.action, "!roomid:example.org");
+        assert_eq!(config.matrix_rooms.log, "!roomid:example.org");
+        assert_eq!(config.queue_matrix_room, "!roomid:example.org");
+        assert_eq!(config.matrix_homeserver_url, "https://matrix.example.org");
+        assert_eq!(config.matrix_access_token, "synthetic-matrix-token");
+        assert_eq!(config.matrix_mention_user, "@you:example.org");
+        let file = parse_file(EXAMPLE).expect("the example parses");
+        assert!(
+            mcp_section(&file).is_ok_and(|mcp| mcp.is_none()),
+            "the example keeps the MCP server off"
         );
     }
 
+    /// Reads a prompt of the example in `directory` as its README installs it.
+    ///
+    /// A prompt comes from the example's own `prompts/`, or is one of the two default prompts
+    /// of the repository's `prompts/`, which every README copies.
+    fn example_prompt(directory: &Path, relative: &str) -> std::io::Result<Vec<u8>> {
+        let own = directory.join(relative);
+        if own.is_file() {
+            return std::fs::read(own);
+        }
+        if relative == "prompts/generic.md" || relative == "prompts/verifier.md" {
+            return std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join(relative),
+            );
+        }
+        Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+    }
+
     #[test]
-    fn matrix_routed_example_passes_engine_validation() {
-        let text = mutated(
-            "    - name: log\n      type: none",
-            concat!(
-                "    - name: log\n",
-                "      type: matrix\n",
-                "      homeserver_url: https://matrix.example.org\n",
-                "      access_token_env: AUTOREVIEW_MATRIX_TOKEN\n",
-                "      room: \"!roomid:example.org\"\n",
-                "      mention_user: \"@you:example.org\"",
-            ),
+    fn every_example_policy_validates_with_the_example_config() {
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut directories: Vec<PathBuf> = std::fs::read_dir(&examples)
+            .expect("the examples directory is readable")
+            .map(|entry| entry.expect("an examples entry").path())
+            .filter(|path| path.join("policy.yaml").is_file())
+            .collect();
+        directories.sort();
+        assert!(
+            directories.len() >= 8,
+            "found only {} example policies",
+            directories.len()
         );
-        let config = parse(&text, secret, example_policy)
-            .expect("the example routed to one Matrix backend passes validation");
-        assert_eq!(config.matrix_rooms.action, "!roomid:example.org");
+        for directory in &directories {
+            let document =
+                std::fs::read(directory.join("policy.yaml")).expect("the policy is readable");
+            let loaded = parse(EXAMPLE, secret, |path| {
+                assert_eq!(path, Path::new("/etc/autoreview/policy.yaml"));
+                autoreview_policy::parse(&document, |relative| example_prompt(directory, relative))
+                    .map_err(|error| Box::new(error) as _)
+            });
+            if let Err(error) = loaded {
+                panic!("{}: {error}", directory.display());
+            }
+        }
     }
 
     /// The notify backends, routes and queue backends of the example.
     const EXAMPLE_NOTIFY: &str = concat!(
         "  backends:\n",
-        "    - name: log\n",
-        "      type: none\n",
+        "    - name: matrix\n",
+        "      type: matrix\n",
+        "      homeserver_url: https://matrix.example.org\n",
+        "      access_token_env: AUTOREVIEW_MATRIX_TOKEN\n",
+        "      room: \"!roomid:example.org\"\n",
+        "      mention_user: \"@you:example.org\"\n",
         "  routes:\n",
-        "    action: [log]\n",
-        "    digest: [log]\n",
-        "    log: [log]\n",
+        "    action: [matrix]\n",
+        "    digest: [matrix]\n",
+        "    log: [matrix]\n",
         "  review_queue:\n",
-        "    backends: [log]\n",
+        "    backends: [matrix]\n",
     );
 
     /// Returns one `matrix` entry of `notify.backends`.
@@ -2291,7 +2321,10 @@ mod tests {
                 "github.credentials.token_env",
             ),
             ("      match: [\"*\"]\n", "github.credentials.match"),
-            ("    - name: log\n      type: none\n", "notify.backends"),
+            (
+                "      room: \"!roomid:example.org\"\n",
+                "notify.backends.room",
+            ),
         ];
         for (old, key) in cases {
             let text = mutated(old, "");
@@ -2309,14 +2342,8 @@ mod tests {
                 "configuration_invalid: notify.max_characters: must be a positive integer",
             ),
             (
-                "    - name: log\n      type: none",
-                concat!(
-                    "    - name: log\n      type: matrix\n",
-                    "      homeserver_url: https://matrix.example.org:65536\n",
-                    "      access_token_env: AUTOREVIEW_MATRIX_TOKEN\n",
-                    "      room: \"!roomid:example.org\"\n",
-                    "      mention_user: \"@you:example.org\""
-                ),
+                "      homeserver_url: https://matrix.example.org\n",
+                "      homeserver_url: https://matrix.example.org:65536\n",
                 concat!(
                     "configuration_invalid: notify.backends.homeserver_url: ",
                     "port must be at most 65535"
