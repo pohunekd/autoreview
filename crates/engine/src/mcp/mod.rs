@@ -7,6 +7,8 @@
 
 #[expect(dead_code, reason = "the MCP server of round 11 checks the tokens")]
 pub(crate) mod access;
+#[expect(dead_code, reason = "the tools of round 11 return these results")]
+pub(crate) mod results;
 
 #[doc(inline)]
 pub use access::{McpClient, McpClientEntry, McpConfig, Scope};
