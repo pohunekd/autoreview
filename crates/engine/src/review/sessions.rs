@@ -268,6 +268,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Sends `message` at the level of `event` once per review, under the step `name`.
     ///
+    /// The message takes the route of `event` in the engine configuration, see
+    /// [`Config::notify_route`](crate::config::Config::notify_route).
+    ///
     /// The message gets one attempt, bounded by the notifier's request timeout. A failure is
     /// logged and stored as handled, so the review goes on and never sends the message again.
     /// An event without a level fails with `review_input_invalid`. After a shutdown nothing is
@@ -292,10 +295,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         }
         let review_key = self.input.pull_request.key();
         let span = notification_span(&event, &review_key, &level);
+        let route = self.engine.config.notify_route(&event, level.clone());
         let sent = self
             .engine
             .integration
-            .notify(&self.cancel, level.clone(), message)
+            .notify(&self.cancel, route, level.clone(), message)
             .instrument(span)
             .await;
         let shutdown = self.cancel.is_cancelled();
