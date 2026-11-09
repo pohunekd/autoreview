@@ -31,13 +31,11 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
-| `credential_invalid` | A token was rejected, has expired, or its variable is empty; its repositories are not reviewed | [credential_invalid](#credential_invalid) |
-| `credential_login_mismatch` | A token belongs to another account than the `login` of its credential | [credential_login_mismatch](#credential_login_mismatch) |
-| `credential_not_covered`, `credential_unused` | A policy rule has no credential, or a credential serves no rule | [credential_not_covered and credential_unused](#credential_not_covered-and-credential_unused) |
-| Event `credential_expiring` | A token expires within `github.expiry_warning_days` | [credential_expiring](#credential_expiring) |
+| `configuration_invalid` naming `github.credentials.login` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
+| `configuration_invalid` naming `github.credentials` | More than one credential, or a `match` other than `["*"]` | [Credential errors](#credential-errors) |
 | A fine-grained token sees nothing | Organization approval pending, wrong resource owner, or repository not selected | [A fine-grained token sees nothing](#a-fine-grained-token-sees-nothing) |
 | `engine_already_running` | Another `serve` uses the same database | Stop the other process |
-| `matrix_unavailable`, `matrix_request_rejected`, `webhook_unavailable`, `webhook_request_rejected` | A notifier did not accept a message | [Notifier failures](#notifier-failures) |
+| `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message | [Notifier failures](#notifier-failures) |
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a human | [Approval errors](#approval-errors) |
 | `review_superseded`, `approval_expired` | The wait ended and nothing was posted | [Approval errors](#approval-errors) |
 | `head_changed` | The head SHA given is no longer the pull request head | [Approval errors](#approval-errors) |
@@ -111,7 +109,7 @@ A route override pins one repository to one host. See
 
 | Code | Meaning and fix |
 |---|---|
-| `pohunek_session_start_failed` | The host could not start a session. Check that the agent profile exists (`autoreview profiles install`) and that the runtime package is installed on that host. Each start attempt uses its own branch, so the engine retries up to `session.start_max_attempts`. |
+| `pohunek_session_start_failed` | The host could not start a session. Check that the agent profile exists on that host and that the runtime package is installed on that host. Each start attempt uses its own branch, so the engine retries up to `session.start_max_attempts`. |
 | `pohunek_base_fetch_ref_locked` | The base fetch hit a locked ref (pohunek [#1437](https://github.com/zajca/pohunek/issues/1437)). The engine retries on a fresh `-startN` branch. Repeated failures: see [stale sessions and branches](stale-sessions-and-branches.md). |
 | `pohunek_session_warning` | The session reported a warning. The engine retries on a fresh branch. Read the warning on the review host before you change the policy. |
 | `pohunek_request_failed`, `pohunek_request_timeout` | The pohunek call failed or passed `pohunek.timeout_seconds`. A session start includes the base fetch, so 45 seconds is the recommended minimum. |
@@ -156,64 +154,38 @@ rules. Raise `schedule.poll_limit` only when the narrowing is not enough.
 
 ## Credential errors
 
-`serve` and `validate` check every token of `github.credentials` before they do
-anything else. A token that fails a check stops startup with its error code. While
-the service runs, a token that GitHub rejects only suspends its own credential; the
-other credentials keep working. Replacing the token and restarting resumes them.
+The loader accepts exactly one credential, with `match: ["*"]`. Any other list
+is refused with `configuration_invalid` naming `github.credentials`; several
+credentials are planned in #13. An empty or unset token variable is refused at
+load with `configuration_missing` naming `github.credentials.token_env`.
 
 Check that a variable is set without printing its value:
 `test -n "$AUTOREVIEW_GH_TOKEN" && echo set`. Use the variable name from the
 credential's `token_env`.
 
-### credential_invalid
+### Token of another account
 
-GitHub rejected the token, its expiry has passed, or the variable is empty. At
-startup, `serve` and `validate` refuse with `credential_invalid`. While running, the
-event `credential_invalid` (level `action` in the examples) is raised, and the
-repositories of that credential are not reviewed until the token is replaced. Reviews
-in flight wait. Replace the value of the variable named by `token_env`, then restart
-the service.
-
-### credential_login_mismatch
-
-The token belongs to another account than the `login` of its credential. Startup
-refuses, and the message names both logins. Either correct `login` in the
-credential, or replace the token with one of that account. Several credentials may
-share a login, but each token must belong to the login of its own credential.
+`serve` asks GitHub for the token's login before it starts. When the token
+belongs to another account than the `login` of the credential, it refuses with
+`configuration_invalid` naming `github.credentials.login`, and the logged error
+names the token's login. Either correct `login`, or replace the token with one
+of that account. A token that GitHub refuses stops `serve` with the error of
+that call. A startup check of every token is planned in #15, and checks while
+running in #19.
 
 To see which login a token belongs to, load the environment file into a shell
 without printing it, then ask GitHub with the token of that variable. Never print the
-token itself. autoreview passes each token only to the `gh` children of its own
-credential, as `GH_TOKEN`, and ignores `GH_TOKEN` in its own environment:
+token itself. autoreview passes the token only to its `gh` children, as
+`GH_TOKEN`, and ignores `GH_TOKEN` in its own environment:
 
 ```sh
 set -a; . /etc/autoreview/autoreview.env; set +a
 GH_TOKEN="$AUTOREVIEW_GH_TOKEN" gh api user --jq .login
 ```
 
-### credential_not_covered and credential_unused
-
-Both are reported by `validate`, so `serve` refuses to start on them too.
-`credential_not_covered` means a repository that a policy rule can match has no
-credential. `credential_unused` means a credential serves no rule. Fix a
-not-covered rule by adding a credential whose `match` covers its repository, placed
-above any broader credential. For an unused credential, remove it or correct its
-`match`. A credential that an earlier credential fully covers is also an error; its
-message names the credential.
-
-### credential_expiring
-
-GitHub reports a token's expiry date in the `GitHub-Authentication-Token-Expiration`
-header. `validate` prints it as `expires_at` for every credential, and `null` means
-the token has no expiry date. Within `github.expiry_warning_days` of that date the
-event `credential_expiring` (level `action` in the examples) is raised once a day.
-Nothing stops before the expiry. Create a new token for the same `login`, replace the
-variable named by `token_env`, and restart the service. An expired token then gives
-`credential_invalid`.
-
 ### A fine-grained token sees nothing
 
-`validate` can pass, because the token itself is valid, while discovery finds no
+`serve` can start, because the token itself is valid, while discovery finds no
 pull requests in a repository. A fine-grained token covers one resource owner, and an
 organization may require an admin to approve the token before it sees anything. Check:
 
@@ -230,11 +202,11 @@ pull request appears.
 
 | Code | Meaning and fix |
 |---|---|
-| `matrix_unavailable`, `webhook_unavailable` | The backend could not be reached. Check the URL and the network path from the autoreview host. Matrix URLs must use HTTPS (plain HTTP only on loopback). |
-| `matrix_request_rejected`, `webhook_request_rejected` | The backend refused the message. Check the room, the token or the webhook URL. |
+| `matrix_unavailable` | The homeserver could not be reached. Check the URL and the network path from the autoreview host. Matrix URLs must use HTTPS (plain HTTP only on loopback). |
+| `matrix_request_rejected` | The homeserver refused the message. Check the room and the token. |
 
 Check that the `*_env` variable is set without printing it:
-`test -n "$AUTOREVIEW_WEBHOOK_URL" && echo set`. A `digest` or `log` message
+`test -n "$AUTOREVIEW_MATRIX_TOKEN" && echo set`. A `digest` or `log` message
 of a review that cannot be delivered is dropped with the warning
 `matrix notification dropped`. An `action` message that
 cannot be delivered fails the step, and the step is retried; a failed

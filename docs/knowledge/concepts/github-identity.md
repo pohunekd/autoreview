@@ -2,7 +2,7 @@
 type: Concept
 id: concept/github-identity
 title: GitHub identity
-description: What a GitHub credential is (token, login and the repositories it serves), single token versus per-owner, per-repository and different-account credentials, how triggers, own pull requests, signatures and the review queue follow a login, the startup check versus runtime suspension, expiry warnings, organization approval, and the token permissions each GitHub call needs.
+description: What a GitHub credential is (token and login), the one credential the loader accepts, how triggers, own pull requests and approvals follow its login, the startup login check, token kinds and organization approval, and the token permissions each GitHub call needs; several credentials, token checks and expiry warnings are planned.
 source_kind: manual
 intents: [setup, help, debug]
 ---
@@ -24,75 +24,31 @@ a file. It is read from the environment variable named by `token_env`, and each
 
 | Field | Meaning |
 |---|---|
-| `name` | Shown in logs and notifications |
-| `login` | The account the token belongs to. The engine checks it at startup |
+| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; not used yet |
+| `login` | The account the token belongs to. `serve` checks it at startup |
 | `token_env` | The environment variable that holds the token |
-| `match` | The repositories the credential serves: `owner/repository`, `owner/*` or `*` |
+| `match` | `["*"]`: the credential serves every repository |
 
-Each repository is served by exactly one credential: the first credential whose
-`match` covers it. Every policy rule must be covered by a credential
-(`credential_not_covered` otherwise), and every credential must serve at least
-one rule (`credential_unused` otherwise). The rules and their order are in
-[policy: repository rules](../../policy.md#repository-rules).
+The loader accepts exactly one credential, with `match: ["*"]`, so it serves
+every repository of the [policy rules](../../policy.md#repository-rules).
 
 ## Choosing the shape
 
-| Shape | Configuration | Use when |
-|---|---|---|
-| Single token | One credential with `match: ["*"]` | One account reviews everything it can reach. `autoreview init` writes this shape |
-| Token per owner | One fine-grained credential for each owner, with `match: [owner/*]` | Each owner grants its own token, and a token only ever covers one owner |
-| Token per repository | A credential for `owner/repository`, listed above the owner's credential | One repository needs a narrower token than its owner's |
-| Different account per owner | Credentials for the same or different logins, one per owner | Reviews of one owner should appear from another account, for example a machine user for a public organization and your own account for private repositories |
-
-Several credentials may share a login. The login decides who the reviews appear
-from and what the reviewer is asked for, so the shapes differ in three places:
-the tokens (how much a leak exposes), the accounts (who the reviews appear from),
-and the rules (which login a trigger asks for).
-
-### Worked example
-
-Repositories of `zajca` are reviewed from your own account, and repositories of
-`pohunekd` from a machine user. Each credential serves a rule, and nothing
-follows a `*`:
-
-```yaml
-credentials:
-  - name: personal
-    login: zajca
-    token_env: AUTOREVIEW_GH_TOKEN_ZAJCA
-    match: [zajca/*]
-  - name: pohunekd-bot
-    login: pohunekd-review
-    token_env: AUTOREVIEW_GH_TOKEN_POHUNEKD
-    match: [pohunekd/*]
-```
-
-With these credentials:
-
-- A `review-requested` rule for `zajca/*` finds requests made to `zajca`, and the
-  reviews are published and approved as `zajca`.
-- A `label:ai:review` rule for `pohunekd/*` reads the label, and the reviews are
-  published and approved as `pohunekd-review`.
-- A pull request in `zajca/*` that `zajca` authored is an own pull request and
-  gets a comment. A pull request in `pohunekd/*` authored by `zajca` is not an own
-  pull request, because `pohunekd-review` is the reviewing account there, so it can
-  receive an approval from that account, if the account has write access.
-- The signature names the login of the credential that served the review.
-
-To give one repository its own token, put a credential with
-`match: [zajca/pohunek]` above the `zajca/*` credential. The first match wins.
+The only shape the loader accepts is one credential with `match: ["*"]`: one
+account reviews everything its token can reach. A token per owner, a token per
+repository and an account per owner are planned in #13.
 
 ## What the login decides
 
-The login of the serving credential is used in these places, and nowhere else:
+The login of the credential is used in these places, and nowhere else:
 
 | Place | Rule |
 |---|---|
-| `review-requested` trigger | The search finds pull requests that request a review from the login. Searches run per credential and only within its `match` |
+| `review-requested` trigger | The search finds pull requests that request a review from the login |
 | Drafts of `ready_draft_authors` | A draft that requests a review from the login is marked ready |
 | Own pull request | A pull request authored by the login gets a comment, whatever the rule says. See [the own pull request rule](#the-own-pull-request-rule) |
 | Answered findings on auto-approve rules | Only a comment by the login, which is not AI-signed, closes a finding. A comment by another account, including the owner's own account under a machine-user credential, does not. See [incremental reviews](incremental-reviews.md#answered-on-auto-approve-rules) |
-| Review queue | Grouped by account when the credentials have different logins. See [notifications](notifications.md#review-queue) |
+| Review queue | Lists the pull requests that request a review from the login. See [notifications](notifications.md#review-queue) |
 
 A machine user needs write access on each repository whose rule approves, or the
 approval does not count toward branch protection. See
@@ -100,31 +56,17 @@ approval does not count toward branch protection. See
 
 ## Startup check and runtime suspension
 
-`autoreview serve` and `autoreview validate` check every credential before they
-do anything else. For each token, the check reads the token's login and its
-expiry date, and then:
-
-- A token that is rejected, expired, or belongs to another login than its
-  credential stops startup (`credential_invalid`, `credential_login_mismatch`).
-  The service does not start while any credential is broken.
-- While the service runs, each token is checked every
-  `github.credential_check_hours`, and GitHub may reject a token at any call.
-  A failing credential is suspended **alone**: its repositories are not reviewed,
-  reviews in flight wait, the `credential_invalid` event is raised, and every
-  other credential keeps working. Replacing the token and restarting the service
-  resumes the suspended repositories.
-
-The startup check refuses to start, so a broken token cannot review with the wrong
-login. The runtime check isolates the failure, so one expired machine-user token
-does not stop the reviews of another owner.
+`autoreview serve` asks GitHub for the token's login before it starts. A token
+of another account stops it with `configuration_invalid` naming
+`github.credentials.login`, and a token that GitHub refuses stops it with the
+error of that call. `validate` makes no GitHub call. A startup check of every
+token is planned in #15, and checks while running with the suspension of a
+failing credential in #19.
 
 ### Expiry
 
-GitHub reports a token's expiry date in the
-`GitHub-Authentication-Token-Expiration` response header. The date is shown by
-`autoreview validate` as `expires_at`, and `null` means the token has no expiry
-date. Within `github.expiry_warning_days` of the expiry, the `credential_expiring`
-event is raised once a day, so a token can be rotated before it stops working.
+Reporting a token's expiry date is planned in #15, and a warning before the
+expiry in #19.
 
 ## Token kinds and organization approval
 
@@ -181,9 +123,8 @@ verified: the GraphQL reference page fetched did not include it.
 - **Single resource owner.** A fine-grained token is limited to one user or
   organization. The [managing personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
   page states: "Each token is limited to access resources owned by a single user or
-  organization." A credential with a fine-grained token therefore serves one owner
-  or repository, which is why several owners need several credentials (see
-  [repositories of several owners](#repositories-of-several-owners)).
+  organization." A fine-grained token therefore covers one owner; several
+  credentials for several owners are planned in #13.
 
 ### Classic token
 
@@ -204,19 +145,7 @@ host that runs its reviews, in addition to the token of its credential.
 
 ## Repositories of several owners
 
-Each owner can have its own credential, so one autoreview service reviews
-repositories of several owners. A credential's `match` decides which of them it
-serves, and the first match wins. Two ways to split the owners:
-
-- **One token per owner** (fine-grained): each owner grants a token that covers
-  that owner only. Each credential's `match` is `owner/*`.
-- **One account per owner**: a credential for each owner names the account that
-  should appear as the reviewer, for example a machine user for a public
-  organization. See the worked example in [what a credential is](#worked-example).
-
-A repository with its own token goes above its owner's credential. Every policy
-rule needs a credential, and every credential needs a rule, so the two lists
-match when `autoreview validate` passes.
+Planned in #13.
 
 ## Approvals and branch protection
 
@@ -228,7 +157,7 @@ with write permissions in the repository or from a designated code owner." (see
 
 The consequence for autoreview: the login of the credential that posts the
 `APPROVE` review must have write permission on the repository, or the approval does
-not count toward a required approval count. Give each credential's login write
+not count toward a required approval count. Give the credential's login write
 permission on every repository whose rule uses `on_clean: approve` or
 `on_clean: await`.
 
@@ -265,12 +194,12 @@ keeps tokens.
 
 ## Handling the tokens
 
-- Put each token in the environment under the name given by its `token_env`. The
+- Put the token in the environment under the name given by its `token_env`. The
   name must start with `AUTOREVIEW_`. The install of the service sets the
   environment, see [install](../../install.md).
 - Check that a token is set without printing it, using the name from
-  `config.yaml`: `test -n "$AUTOREVIEW_GH_TOKEN_ZAJCA" && echo set`.
-- Each `gh` child gets only the token of its credential, as `GH_TOKEN` in its own
+  `config.yaml`: `test -n "$AUTOREVIEW_GH_TOKEN" && echo set`.
+- Each `gh` child gets the token as `GH_TOKEN` in its own
   environment. No other process that autoreview starts receives a token; the review
   agents run with the pohunek daemon's environment, see
   [secrets](../safety/secrets.md).

@@ -7,8 +7,8 @@ github:
   timeout_seconds: 30
   credential_check_hours: 24
   expiry_warning_days: 14
-  # Evaluated top to bottom; the first credential whose match covers a
-  # repository reviews it. Each token must belong to its login.
+  # Exactly one credential with match ["*"] is accepted until #13. Its token
+  # must belong to its login.
   credentials:
     - name: default
       login: review-bot
@@ -93,6 +93,8 @@ publish:
   # GitHub accepts at most 65536 characters per review body or comment.
   github_body_max_bytes: 60000
 
+# Until M3 every route and the review queue need a matrix backend, so this
+# none-only block is refused at load. See docs/knowledge/guides/notifiers.md.
 notify:
   timeout_seconds: 30
   max_characters: 8000

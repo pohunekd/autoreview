@@ -24,11 +24,11 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 
 | Asset | Why it matters | Where it lives |
 |---|---|---|
-| GitHub tokens, one per credential | Each lets the service read pull requests and post reviews and approvals as its login, in the repositories its `match` covers | Environment of the autoreview host, named by `token_env`; passed only to the `gh` calls of those repositories |
-| Approvals of the credentials' accounts | An approval can satisfy branch protection, so it is the most valuable outcome | GitHub; published by the engine |
+| GitHub token of the credential | It lets the service read pull requests and post reviews and approvals as its login, wherever its scope reaches | Environment of the autoreview host, named by `token_env`; passed only to its `gh` children |
+| Approvals of the credential's account | An approval can satisfy branch protection, so it is the most valuable outcome | GitHub; published by the engine |
 | Review host | Runs reviewer agents in worktrees, with the code and the agent's credentials | Each pohunek review host |
 | Reviewer model accounts | Keys or logins of the models that review code and cost money | The runtime login on the review host, not the pohunek profile |
-| Backend secrets | Matrix tokens and webhook URLs, which are secrets for most services | Environment, named by `*_env` keys |
+| Backend secrets | The Matrix token of the notifier | Environment, named by `*_env` keys |
 | Store | Review history, discovery state, published decisions | SQLite file at `store.path` |
 
 ## Actors
@@ -69,7 +69,7 @@ the engine publishes.
 | 4 | Model output forges the review marker or pings people | Output is neutralized: no `@mentions`, no raw HTML, no images that GitHub would fetch, HTML comment delimiters defused | Engine behaviour |
 | 5 | Reviewer reads a GitHub token | Tokens are passed only to the `gh` calls of their repositories, as `GH_TOKEN`; the `gh` and `pohunek` processes autoreview starts inherit no token variable and no pohunek session identity variables | Engine behaviour |
 | 6 | Reviewer reads backend secrets or pohunek profile secrets | The `gh` and `pohunek` processes autoreview starts drop every `AUTOREVIEW_*` variable, every `*_env` name, `GH_TOKEN` and `MATRIX_ACCESS_TOKEN`. Review agents run with the pohunek daemon's environment, which autoreview does not control: keep secrets out of it and out of the profile | Engine behaviour for autoreview's processes; the daemon and the profile are the operator's; see [secrets](secrets.md) |
-| 7 | Wrong account posts reviews | `serve` refuses to start when a token's login differs from its credential's login; a token that fails while running suspends only its own credential | Engine behaviour |
+| 7 | Wrong account posts reviews | `serve` refuses to start when the token's login differs from the credential's login; checks while running are planned in #19 | Engine behaviour |
 | 8 | Own pull request gets approved or changes requested | GitHub forbids it, so the engine always posts a comment and raises `findings_on_own_pr` | Policy behaviour |
 | 9 | Approval satisfies branch protection for a head nobody read | An approval binds to the exact head SHA; a new commit or changed request supersedes it | Policy behaviour |
 | 10 | Approval spoofed by a comment | Approval is a CLI command, not a comment; comment-based approval is post-v1 | Not in v0.1 |
@@ -100,13 +100,12 @@ These are not solved by autoreview. Operators must accept or mitigate them.
 - **Token scope.** A token with more rights than posting reviews can do more
   than the engine needs. Use the narrowest scopes that work, see
   [GitHub identity](../concepts/github-identity.md).
-- **One host holds every token.** The autoreview host holds one token per
-  credential, so a compromised host exposes all of them. A leaked token exposes
-  only the repositories of its credential, see
+- **The host holds the token.** A compromised autoreview host exposes the
+  token and everything its scope reaches, see
   [secrets](secrets.md#blast-radius-of-a-token).
 - **Model accounts and costs.** Reviews spend the model accounts on the review
   hosts. Limit who can trigger a review.
-- **Notifier channels.** Matrix rooms and chat webhooks receive review text.
+- **Notifier channels.** Matrix rooms receive review text.
   Choose rooms and channels with the same audience as the repository.
 
 ## Recommended host isolation

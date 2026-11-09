@@ -13,8 +13,8 @@ intents: [setup, help]
 
 Every scenario below is a policy file plus a config file. Start from the
 closest scenario, copy its example, and change the repository names. The
-examples live in [`examples/`](../../../examples/) and are the files
-`autoreview init --example <name>` writes.
+examples live in [`examples/`](../../../examples/); their README says how to
+copy one.
 
 ## Choose a scenario
 
@@ -85,7 +85,7 @@ one value per dimension for each repository rule.
 | Notifications | Level per event, routes to backends | `notifications`, `notify.routes` | [notifications](../concepts/notifications.md) |
 | Hosts | pohunek hosts that run reviewers, route overrides | `pohunek.hosts`, `pohunek.route_overrides` | [multihost](multihost.md) |
 
-Two dimensions are not in a policy: the GitHub accounts (one `login` per credential in
+Two dimensions are not in a policy: the GitHub account (the `login` of the credential in
 `github.credentials` of [config.yaml](../../configuration.md)) and the review prompt text
 ([writing prompts](writing-prompts.md)).
 
@@ -98,4 +98,4 @@ Two dimensions are not in a policy: the GitHub accounts (one `login` per credent
 - [Writing prompts](writing-prompts.md) explains what a prompt must and must
   not do.
 - [Hermes approval](hermes-approval.md) is an optional chat integration for
-  the approval step.
+  the approval step, planned in #43.

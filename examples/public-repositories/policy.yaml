@@ -60,8 +60,6 @@ notifications:
   approval_requested: action
   handoff_reminder: action
   findings_on_own_pr: action
-  credential_invalid: action
-  credential_expiring: action
   review_stopped: action
   cleanup_manual: action
   command_failed: action

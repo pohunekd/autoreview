@@ -2,7 +2,7 @@
 type: Guide
 id: guide/combining
 title: Combining patterns
-description: Recipes that layer several autoreview scenarios in one policy - human approval, auto-approve and a wildcard, trusted and untrusted authors in one repository, cheap and strict pipelines, notes hand-off with coding-agent drafts, experiments, notification routing, two review hosts and a credential per owner - and the validation rules that interact.
+description: Recipes that layer several autoreview scenarios in one policy - human approval, auto-approve and a wildcard, trusted and untrusted authors in one repository, cheap and strict pipelines, notes hand-off with coding-agent drafts, experiments, notification routing, two review hosts - and the validation rules that interact.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -181,10 +181,9 @@ notifications: {approval_requested: action, approved: digest, started: log}
 notify:
   backends:
     - {name: matrix-action, type: matrix, homeserver_url: https://matrix.example.org, access_token_env: AUTOREVIEW_MATRIX_TOKEN, room: "!action:example.org", mention_user: "@you:example.org"}
-    - {name: team-chat, type: webhook, url_env: AUTOREVIEW_WEBHOOK_URL, format: slack}
-    - {name: log, type: none}
-  routes: {action: [matrix-action], digest: [team-chat], log: [log]}   # only action mentions a person
-  review_queue: {backends: [team-chat], max_items: 50}
+    - {name: matrix-digest, type: matrix, homeserver_url: https://matrix.example.org, access_token_env: AUTOREVIEW_MATRIX_TOKEN, room: "!digest:example.org", mention_user: "@you:example.org"}
+  routes: {action: [matrix-action], digest: [matrix-digest], log: [matrix-digest]}   # only action mentions a person
+  review_queue: {backends: [matrix-digest], max_items: 50}
 ```
 
 Change a level in the policy and a channel in the configuration independently.
@@ -208,36 +207,7 @@ Install the profiles on both hosts ([multihost guide](multihost.md)).
 
 ## Recipe h: different accounts per owner
 
-Reviews of `zajca/*` are requested from your own account and approved as it, and
-reviews of `pohunekd/*` are requested from a machine user. Only `config.yaml`
-changes: each account gets its own credential, and the policy rules stay as they
-are. The [complete example](../../policy.md#a-complete-example) of the policy
-reference works unchanged with these credentials:
-
-```yaml
-# config.yaml
-github:
-  credentials:
-    - name: personal                # your account, for your own repositories
-      login: zajca
-      token_env: AUTOREVIEW_GH_TOKEN_ZAJCA
-      match: [zajca/*]
-    - name: pohunekd-bot            # machine user of the organization
-      login: pohunekd-review
-      token_env: AUTOREVIEW_GH_TOKEN_POHUNEKD
-      match: [pohunekd/*]
-```
-
-- A `review-requested` rule is served only by a request for the login of the
-  credential that covers its repository. Request the review from `zajca` for
-  `zajca/*` and from `pohunekd-review` for `pohunekd/*`; a request to the other
-  account starts nothing.
-- A pull request authored by the login of its credential gets a comment, as on every
-  rule. Pull requests of `zajca` in `zajca/*` are therefore comment-only.
-- The machine user needs access to the repositories of `pohunekd/*`; see
-  [GitHub identity](../concepts/github-identity.md).
-- `autoreview validate` checks that every rule has a credential and that every token
-  belongs to its login. The review queue is grouped by account.
+Planned in #13.
 
 ## Rules that interact
 
@@ -251,7 +221,6 @@ Startup checks these, naming the key on error.
 | An unreachable rule is an error | A specific rule below its wildcard | Move the specific rule above |
 | One reviewer protocol per pipeline; the verifier needs `claude-structured` | Mixing `codex` and `opus`, or a verifier on Codex | Split the pipeline (recipe c) |
 | Own pull requests always get a comment | Testing approval with a bot-authored pull request | Test with another author |
-| Every rule has a credential whose `match` covers it (`credential_not_covered`) | A new owner in `repositories` with no credential | Add a credential for it in `config.yaml` |
 
 Policy edits apply to the next review; test on a live pull request as in
 [writing prompts](writing-prompts.md#testing-a-prompt-on-one-pull-request).

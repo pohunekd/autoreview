@@ -17,9 +17,10 @@ polls, its limits, where it keeps state and where notifications go. What gets
 reviewed and how is in [policy.yaml](policy.md).
 
 **Every key is required.** autoreview has no built-in defaults: a missing key
-stops the service at startup with an error that names it. `autoreview init`
-writes a complete file with every key, a recommended value and a comment, so
-you start from a working file and change what you need. Secrets are never in
+stops the service at startup with an error that names it.
+[`examples/config.yaml`](../examples/config.yaml) holds every key with a
+recommended value and a comment; its `notify` block needs a `matrix` backend
+before it loads. Secrets are never in
 the file; keys ending in `_env` name the environment variable that holds them.
 
 The service finds the file through `--config <path>` or the
@@ -27,7 +28,8 @@ The service finds the file through `--config <path>` or the
 
 ## Complete file
 
-The values below are the ones `autoreview init` writes.
+The values below are those of `examples/config.yaml`, with a `matrix` backend in
+`notify`.
 
 ```yaml
 version: 1
@@ -39,8 +41,8 @@ github:
   timeout_seconds: 30
   credential_check_hours: 24
   expiry_warning_days: 14
-  # Evaluated top to bottom; the first credential whose match covers a
-  # repository reviews it. Each token must belong to its login.
+  # Exactly one credential with match ["*"] is accepted until #13. Its token
+  # must belong to its login.
   credentials:
     - name: default
       login: review-bot
@@ -127,14 +129,18 @@ notify:
   timeout_seconds: 30
   max_characters: 8000
   backends:
-    - name: log
-      type: none
+    - name: matrix
+      type: matrix
+      homeserver_url: https://matrix.example.org
+      access_token_env: AUTOREVIEW_MATRIX_TOKEN
+      room: "!roomid:example.org"
+      mention_user: "@you:example.org"
   routes:
-    action: [log]
-    digest: [log]
-    log: [log]
+    action: [matrix]
+    digest: [matrix]
+    log: [matrix]
   review_queue:
-    backends: [log]
+    backends: [matrix]
     max_items: 50
 ```
 
@@ -152,79 +158,46 @@ notify:
 | `host` | GitHub host; `github.com` in this release |
 | `gh_bin` | Absolute path of the GitHub CLI |
 | `timeout_seconds` | Timeout of one `gh` call |
-| `credential_check_hours` | How often every token is checked while the service runs |
-| `expiry_warning_days` | Days before a token's expiry at which `credential_expiring` is raised |
-| `credentials` | One or more credentials, see below |
+| `credential_check_hours` | Interval of the token check while the service runs, which is planned in #19 |
+| `expiry_warning_days` | Days before a token's expiry for the expiry warning, which is planned in #19 |
+| `credentials` | Exactly one credential with `match: ["*"]`, see below |
 
 ### Credentials
 
-A credential is one GitHub token, the account it belongs to, and the
-repositories it serves. Use one credential with `match: ["*"]` for a single
-token, or several for fine-grained tokens per owner or per repository, and
-for different accounts per owner (for example a machine user for a public
-organization and your own account for private repositories).
+A credential is one GitHub token and the account it belongs to. The loader
+accepts exactly one credential, with `match: ["*"]`; any other list is refused
+with `configuration_invalid` naming `github.credentials`. Several credentials,
+per owner or per repository, are planned in #13.
 
 ```yaml
 credentials:
-  - name: pohunek-core            # fine-grained, only zajca/pohunek
-    login: zajca
-    token_env: AUTOREVIEW_GH_TOKEN_POHUNEK
-    match: [zajca/pohunek]
-  - name: pohunekd-site           # fine-grained, only the website repository
-    login: pohunekd-review
-    token_env: AUTOREVIEW_GH_TOKEN_POHUNEKD_SITE
-    match: [pohunekd/pohunek.dev]
-  - name: pohunekd-bot            # machine user, the rest of the organization
-    login: pohunekd-review
-    token_env: AUTOREVIEW_GH_TOKEN_POHUNEKD
-    match: [pohunekd/*]
+  - name: default
+    login: review-bot
+    token_env: AUTOREVIEW_GH_TOKEN
+    match: ["*"]
 ```
 
 | Key | Meaning |
 |---|---|
-| `name` | `[a-z0-9][a-z0-9_-]{0,31}`, unique; shown in logs and notifications |
-| `login` | The account the token belongs to. Reviews of the covered repositories are requested from, published by, and approved as this account |
+| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; not used yet |
+| `login` | The account the token belongs to. Reviews are requested from, published by, and approved as this account |
 | `token_env` | Environment variable that holds the token; it must start with `AUTOREVIEW_` |
-| `match` | Lowercase `owner/repository`, `owner/*`, or `*` |
+| `match` | `["*"]` |
 
-How credentials apply:
+How the credential applies:
 
-- **First match wins.** A repository is served by the first credential whose
-  `match` covers it; put repository credentials above their owner's. A
-  credential an earlier one fully covers is an error, like a shadowed policy
-  rule.
-- **Every policy rule is covered.** `validate` fails with
-  `credential_not_covered` when a repository a rule can match has no
-  credential, and with `credential_unused` when a credential serves no rule.
-- **Each account is its own reviewer.** The `review-requested` trigger means a
+- **Its login is the reviewer.** The `review-requested` trigger means a
   request for the credential's `login`; a pull request authored by that
-  login is its own pull request and gets a comment. Several credentials may
-  share a login.
-- **Tokens never mix.** Every `gh` call gets only the token of the repository
-  it concerns, through `GH_TOKEN` in that child's environment. No other
-  process that autoreview starts sees any token, and searches run per
-  credential, limited to its `match`.
-- **Startup is strict, runtime is isolated.** `serve` and `validate` check
-  every token: one that is rejected, expired, or belongs to another login
-  stops startup (`credential_invalid`, `credential_login_mismatch`). While
-  running, a token that fails its check every `credential_check_hours` or is
-  rejected by GitHub suspends only its credential: its repositories are not
-  reviewed, the `credential_invalid` event is raised, and every other
-  credential keeps working. A review in flight retries its GitHub step like
-  any transient failure; if the credential is not back within
-  `schedule.step_retry_seconds`, the review stops (`review_stopped`) and can be
-  retried later. Replacing the token and restarting the service resumes the
-  credential. The same name is an error code when a command or the startup
-  check fails, and an event when a running service suspends a credential.
-- **A review keeps its account.** A review stores the name of the credential
-  that served it when it was dispatched and publishes with it, so a waiting
-  approval is posted by the account that reviewed. If that credential no
-  longer exists or no longer covers the repository after a configuration
-  change, the review stops with `credential_not_covered` and a retry uses the
-  credential that serves the repository then.
-- **Expiry is watched.** GitHub reports a token's expiry date in the
-  `GitHub-Authentication-Token-Expiration` response header. Within
-  `expiry_warning_days` of it, `credential_expiring` is raised once a day.
+  login is its own pull request and gets a comment.
+- **The token stays with `gh`.** Every `gh` call gets the token through
+  `GH_TOKEN` in that child's environment. No other process that autoreview
+  starts sees it.
+- **Startup checks the login.** `serve` asks GitHub for the token's login
+  before it starts and refuses with `configuration_invalid` naming
+  `github.credentials.login` when the token belongs to another account.
+  Checks while running and the suspension of a failing credential are planned
+  in #19.
+- **Expiry.** A warning before a token expires is planned in #19.
 
 A fine-grained token covers one resource owner, and an organization may
 require an admin to approve it before it sees anything. See
@@ -319,36 +292,32 @@ over a bound is rejected and the reviewer gets a fresh session.
 ## notify
 
 Notifications have three levels (see [policy notifications](policy.md#notifications)).
-`routes` sends each level to one or more named backends. Several backends of
-the same type are fine, for example one Matrix room per level.
+`routes` sends each level to one named backend. Several backends of the same
+type are fine, for example one Matrix room per level.
 
 | Key | Meaning |
 |---|---|
 | `timeout_seconds` | Timeout of one delivery |
 | `max_characters` | Longer messages are cut |
 | `backends` | List of named backends, see below |
-| `routes` | `action`, `digest` and `log`, each a list of backend names |
+| `routes` | `action`, `digest` and `log`, each a list of exactly one backend name |
 | `review_queue.backends` | Backends that receive the hourly review queue |
 | `review_queue.max_items` | Most pull requests listed in one queue message |
 
-A message goes to every backend of its level. An `action` message counts as
-delivered only when every one of its backends accepted it; otherwise the step
-fails and is retried for the backends that did not accept it, because the person who has to act may watch only one
-channel. A `digest` or `log` message that a backend rejects is dropped for that
-backend with a warning. `autoreview review-queue` fails with the backend's
+An `action` message that its backend does not accept fails the step, which is
+retried. A `digest` or `log` message that its backend rejects is dropped with a
+warning. `autoreview review-queue` fails with the backend's
 error code when a queue backend rejects the message, so its timer shows the
-failure. `review_queue.backends` must name one `matrix` backend; `none` is not
-supported for the review queue yet, so a list of `none` backends only, or an
-empty list, is refused at load.
+failure. `review_queue.backends` must name one `matrix` backend; a list of
+`none` backends only, or an empty list, is refused at load. Several backends
+per level are planned in #27.
 
 ### Backend `none`
 
-```yaml
-- name: log
-  type: none
-```
-
-Writes nothing but the structured log. Use it to run without notifications.
+A `none` backend writes nothing but the structured log. It is accepted only in
+`review_queue.backends` next to a `matrix` backend. A route that names it is
+refused at load with `configuration_invalid: config: invalid Matrix <level> room`.
+Running without notifications is planned in #29.
 
 ### Backend `matrix`
 
@@ -368,17 +337,7 @@ notifies anyone.
 
 ### Backend `webhook`
 
-```yaml
-- name: team-chat
-  type: webhook
-  url_env: AUTOREVIEW_WEBHOOK_URL
-  format: slack         # json, slack or discord
-```
-
-POSTs one JSON body per message. `json` is autoreview's own message object
-(level, event, title, text, review id, links); `slack` and `discord` wrap the
-text in those services' incoming-webhook format. The URL is a secret for most
-services, so it comes from the environment.
+Planned in #29.
 
 Other channels can be added as backend types without changing the policy;
 see the [notifications concept](knowledge/concepts/notifications.md).
@@ -414,9 +373,6 @@ ignored and is set only for each `gh` child, to the token of its credential.
 The `gh` and `pohunek` processes that autoreview starts inherit no variable
 named by an `*_env` key or starting with `AUTOREVIEW_`, nor the Go engine's
 `GH_TOKEN` and `MATRIX_ACCESS_TOKEN`.
-
-The same variables can come from a file given with `--env-file` (owner-only,
-mode `0600`), which the workflow plugin uses; see the [CLI reference](cli.md).
 
 Never put a secret value in `config.yaml`, `policy.yaml` or a prompt. To check
 that a variable is set without printing it:

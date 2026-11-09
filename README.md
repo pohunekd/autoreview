@@ -26,9 +26,8 @@ one GitHub review with inline comments.
   answered, taking the PR discussion into account.
 - **Durable state** - SQLite store, retries with backoff, approval deadlines,
   session cleanup, an hourly review-queue digest.
-- **Notifications** - action / digest / log levels routed to one or more
-  notifier backends (none, Matrix and webhook first; the layer is built for
-  any channel).
+- **Notifications** - action / digest / log levels routed to Matrix rooms per
+  level, plus the review queue; `none` and webhook backends are planned in #29.
 
 ## Documentation
 
@@ -82,14 +81,14 @@ repositories:
 7. `coding-agent-drafts` - drafts of coding agents marked ready and reviewed
 8. `public-repositories` - external authors: label gate, base checkout, comment only
 9. `multihost` - several pohunek hosts and route overrides
-10. `notifiers` - none, Matrix and webhook side by side
+10. `notifiers` - Matrix rooms per level and the review queue
 
 ## Requirements (planned)
 
 - pohunek daemon on one or more review hosts with the repositories registered
-- `gh` CLI and one or more GitHub tokens (per owner or repository, optionally a different account per owner)
+- `gh` CLI and one GitHub token (tokens per owner or repository are planned in #13)
 - Claude Code and/or Codex CLI on the review hosts
-- Linux with systemd, a container runtime, or pohunek's workflow plugin store
+- Linux with systemd or a container runtime (the workflow plugin is planned in #41)
 
 ## Security model (planned)
 
@@ -101,17 +100,18 @@ review them from a base checkout, and never auto-approve them.
 ## Decisions so far
 
 - Binary `autoreview`; one YAML configuration file with every key required
-  and written out in full by `autoreview init`; secrets only in `AUTOREVIEW_*`
+  and written out in full by `autoreview init` (planned in #8); secrets only in `AUTOREVIEW_*`
   environment variables.
 - GitHub tokens as a list of credentials: one token, fine-grained tokens per
-  owner or per repository, and a different account per owner if wanted.
-  Failing or expiring tokens are reported and stop only their repositories.
+  owner or per repository, and a different account per owner if wanted
+  (planned in #13). Failing or expiring tokens are reported and stop only their
+  repositories (planned in #19).
 - Claude Code and Codex reviewers share one result contract.
 - Clean reviews that wait for a human are approved through the CLI, with an
-  optional Hermes Agent integration; approval by GitHub comment and a GitHub
+  optional Hermes Agent integration (planned in #43); approval by GitHub comment and a GitHub
   App identity come after v1.
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
 - Distributed as release binaries with systemd units, as a container image,
-  and as a pohunek workflow plugin.
+  and as a pohunek workflow plugin (planned in #41).
 - MIT license.

@@ -185,8 +185,9 @@ autoreview retry --repository zajca/pohunek 42 3f2a9c1d0b7e
 - **Notes to the author first.** Add `on_notes: comment` and
   `notes_handoff.reminder_hours`, as in [notes hand-off](notes-handoff.md). It
   requires `on_clean: await` and `review-requested`, which this rule already has.
-- **Approve from chat.** Run the same `resolve` and `approve` commands from an
-  integration; see [approve from chat with Hermes](hermes-approval.md).
+- **Approve from chat.** A chat integration that runs the same `resolve` and
+  `approve` commands is planned in #43; see
+  [approve from chat with Hermes](hermes-approval.md).
 
 ## Combine with
 

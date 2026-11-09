@@ -2,7 +2,7 @@
 type: Guide
 id: guide/hermes-approval
 title: Approve from chat with Hermes
-description: Optional integration that lets a reply to an autoreview approval notification in a Hermes Agent chat approve the clean review - the skill, the gateway guard plugin, the flow through resolve and approve, and the security invariants that keep the chat from publishing anything else.
+description: Planned optional integration (#43) that lets a reply to an autoreview approval notification in a Hermes Agent chat approve the clean review - the planned skill and gateway guard plugin, the flow through resolve and approve, and the security invariants that keep the chat from publishing anything else.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -12,17 +12,18 @@ intents: [setup, help]
 > **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
 
 A rule with `on_clean: await` waits for a person before its clean review is
-approved on GitHub. The person can approve from the CLI with
-`autoreview approve`, or from a chat with this optional integration. It uses
-[Hermes Agent](https://github.com/NousResearch/hermes-agent) as the chat agent,
-with a skill and a gateway guard plugin shipped in `integrations/hermes/`.
-Nothing else in autoreview depends on Hermes.
+approved on GitHub. Today the person approves from the CLI with
+`autoreview resolve` and `autoreview approve`. Approving from a chat with
+[Hermes Agent](https://github.com/NousResearch/hermes-agent), through a skill
+and a gateway guard plugin, is planned in #43; the repository contains neither
+yet, and the rest of this page describes their design. Nothing else in
+autoreview depends on Hermes.
 
-The integration does one thing: turn a reply `approve` to an approval
-notification into the two commands the CLI already has. It does not review,
+The planned integration does one thing: turn a reply `approve` to an approval
+notification into the two commands the CLI already has. It is not to review,
 retry, poll or post anything.
 
-## The flow
+## The planned flow
 
 1. autoreview finishes a clean review under a rule with `on_clean: await`. The
    review waits, and the event `approval_requested` is sent (its level is
@@ -66,8 +67,8 @@ demoted to notes; the notification lists them, and the reply is the decision.
 ## Security invariants
 
 These rules are what keep a chat message from publishing more than an approval.
-The skill and the plugin enforce them; a change that weakens one of them is a
-change to the security model, not a refactor.
+The planned skill and plugin are to enforce them; a change that weakens one of
+them is a change to the security model, not a refactor.
 
 - Act only on an explicit reply to a bot notification of a review with no
   blocking findings, and only when the reply asks for `approve`. A plain
@@ -83,10 +84,10 @@ change to the security model, not a refactor.
 - Only senders on the Matrix allowlist get the quote, so only they can cause an
   approval through the chat.
 
-## The guard plugin
+## The planned guard plugin
 
 Hermes calls plugin hooks around each message and tool call. The guard plugin
-is a Python module with these hooks:
+is planned as a Python module with these hooks:
 
 - `pre_gateway_dispatch` quotes the replied-to notice, as described in step 3.
   It fetches the event from the homeserver with the bot's own token, accepts
@@ -98,42 +99,16 @@ is a Python module with these hooks:
   allowed.
 - `on_session_reset` and `on_session_finalize` clear that mark.
 
-The plugin is a guard, not the only control. The skill's own rules and the
-engine's checks (exact head, stored review state) still apply if the plugin is
-absent, so run both.
+The plugin is to be a guard, not the only control: the skill's own rules and
+the engine's checks (exact head, stored review state) apply without it.
 
 ## Setup
 
-1. Install the skill directory from `integrations/hermes/skills/` into the
-   Hermes skills directory. It contains one `SKILL.md`.
-2. Install the plugin from `integrations/hermes/plugins/` and enable it in the
-   Hermes configuration. Its reply quoting is configured per plugin entry, with
-   timeouts and snippet sizes bounded to small values:
-
-   ```yaml
-   plugins:
-     entries:
-       autoreview-guard:
-         reply_context:
-           timeout_seconds: 10          # 1-30
-           max_snippet_chars: 1000      # 1-4000
-   ```
-
-3. Provide the Matrix settings the plugin reads from the environment:
-   `MATRIX_HOMESERVER`, `MATRIX_USER_ID`, `MATRIX_ALLOWED_USERS` (a comma-separated
-   list) and `MATRIX_ACCESS_TOKEN`. The token is a secret: set it in the gateway's
-   environment and never in a file or a chat. Check that it is set without
-   printing it, for example `test -n "$MATRIX_ACCESS_TOKEN" && echo set`.
-4. Create a wrapper script that runs the CLI with the autoreview configuration,
-   for example `$HOME/.hermes/scripts/autoreview` containing one `exec` line
-   that calls `autoreview --config <path> "$@"`. The skill calls this wrapper,
-   so the configuration path is set in one place. Do not give the chat any other
-   command.
-5. Confirm the wiring with a dry run: reply `approve` to an old notification
-   whose review is no longer waiting. The skill must report the stable error from
-   `resolve` or `approve` and must not publish anything.
+Planned in #43.
 
 ## What to expect
+
+With the planned integration:
 
 - A reply to a notification of a review that is not waiting returns a stable
   error and posts nothing.

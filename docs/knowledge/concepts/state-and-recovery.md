@@ -118,7 +118,8 @@ attempts. A session that cannot be removed in those attempts raises
 To remove the session by hand, find it with the pohunek commands and remove it with
 `pohunek session rm`. The notification names the session and its host. The runbook
 [stale sessions and branches](../runbooks/stale-sessions-and-branches.md) gives the
-steps. Leftover review branches are removed with `autoreview prune-branches`.
+steps. Removing a session leaves its review branch on the review host, and no
+autoreview command removes review branches.
 
 ## Retention
 

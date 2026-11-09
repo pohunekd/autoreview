@@ -42,11 +42,11 @@ retention settings (`store.review_retention_seconds`,
    sudo -u autoreview autoreview --config /etc/autoreview/config.yaml validate
    ```
 
-   `validate` loads `config.yaml`, the policy and every prompt, and checks that
-   the pohunek CLI answers at a supported version. A new key or a changed
+   `validate` loads `config.yaml`, the policy and every prompt. A new key or a changed
    policy rule shows up here as a named error. Fix it before the restart.
 4. Compare `agent_profiles` in the output with the profiles on each review host.
-   A profile the policy now needs is created with `autoreview profiles install`.
+   Create a profile the policy now needs on each review host; `autoreview
+   profiles install` is planned in #25.
 5. Restart the service and check its state:
 
    ```sh
@@ -74,34 +74,7 @@ service that reviews code.
 
 ## Upgrade the workflow plugin
 
-On a machine that runs autoreview as the pohunek workflow plugin, back up the store
-first. The plugin's action list has no `backup-db`, so run it with an autoreview
-binary of the current version, as the owner user, with `--config` pointing at the
-plugin's `config.yaml`. Find the configuration directory with
-`pohunek workflow inspect pohunekd.autoreview`.
-
-1. Keep the current archive, `autoreview-<current-version>.tar.zst`, so that you can reinstall it.
-2. Install the new archive as in [path d](../../install.md#d-pohunek-workflow-plugin),
-   first without `--yes` to review it, then with `--yes`:
-
-   ```sh
-   pohunek workflow install autoreview-<new-version>.tar.zst --sha256 <digest>
-   pohunek workflow install autoreview-<new-version>.tar.zst --sha256 <digest> --yes
-   ```
-
-3. Validate the configuration with the new version, and compare its `agent_profiles`
-   with the profiles on each review host, as in steps 3 and 4 of the binary upgrade:
-
-   ```sh
-   pohunek workflow run --json pohunekd.autoreview validate
-   ```
-
-4. Check that the service runs the new version and that the next review publishes.
-   The reference does not name a status command for plugin services.
-
-To roll back, install the kept archive again with `--yes`. Restore the backup over
-`store.path` too, but only if the new version may have changed the store, as in
-[roll back](#roll-back).
+Not available yet: there is no workflow plugin. Planned in #41.
 
 ## Store migrations
 
@@ -413,13 +386,10 @@ Commands:
 
 ## pohunek version compatibility
 
-`validate` checks `pohunek --version` against the range this autoreview release
-supports, and checks the commands the engine uses (`project list`,
-`session new|output|rm`). A pohunek upgrade is therefore an upgrade of
-autoreview's dependency too:
+A check of `pohunek --version` in `validate` is planned in #9. The engine uses
+`project list` and `session new|output|rm`, so a pohunek upgrade is an upgrade
+of autoreview's dependency too:
 
-- After a pohunek upgrade on a review host, run `validate` on the autoreview
-  host. A version outside the range is refused.
 - The minimum version is raised after an upstream fix. Two issues drive the
   workarounds: [zajca/pohunek#1437](https://github.com/zajca/pohunek/issues/1437)
   (base fetch lock) and [zajca/pohunek#1438](https://github.com/zajca/pohunek/issues/1438)

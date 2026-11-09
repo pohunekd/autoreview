@@ -16,10 +16,14 @@ walk-through.
 ## Use it
 
 ```sh
-autoreview init --dir /etc/autoreview --login <github-login> \
-  --pohunek-host <pohunek-host> --example auto-approve
+mkdir -p /etc/autoreview/prompts
+cp examples/config.yaml /etc/autoreview/config.yaml
+cp examples/auto-approve/policy.yaml /etc/autoreview/policy.yaml
+cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
 autoreview --config /etc/autoreview/config.yaml validate
 ```
+
+Set the keys that [use one](../README.md#use-one) names first.
 
 Install the `autoreview-sonnet` profile on the review host. Approvals are posted
 from the account of the credential that serves `pohunekd/pohunek.dev`, so that

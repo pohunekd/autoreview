@@ -16,10 +16,14 @@ walk-through.
 ## Use it
 
 ```sh
-autoreview init --dir /etc/autoreview --login <github-login> \
-  --pohunek-host <pohunek-host> --example public-repositories
+mkdir -p /etc/autoreview/prompts
+cp examples/config.yaml /etc/autoreview/config.yaml
+cp examples/public-repositories/policy.yaml /etc/autoreview/policy.yaml
+cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
 autoreview --config /etc/autoreview/config.yaml validate
 ```
+
+Set the keys that [use one](../README.md#use-one) names first.
 
 Install the `autoreview-sonnet` and `autoreview-codex` profiles on the review
 host. Projects must be registered with `pohunek project add` on the review host,

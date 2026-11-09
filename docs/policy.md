@@ -96,8 +96,6 @@ notifications:
   approval_requested: action
   handoff_reminder: action
   findings_on_own_pr: action
-  credential_invalid: action
-  credential_expiring: action
   review_stopped: action
   cleanup_manual: action
   command_failed: action
@@ -110,9 +108,9 @@ notifications:
   superseded: log
 ```
 
-The rules above span two owners, `zajca` and `pohunekd`; each is served by a
-[credential](configuration.md#credentials) in `config.yaml`, which may be a
-different account per owner.
+The rules above span two owners, `zajca` and `pohunekd`; both are served by the
+one [credential](configuration.md#credentials) in `config.yaml`. A credential
+per owner is planned in #13.
 
 ## Top-level keys
 
@@ -139,7 +137,7 @@ A reviewer is one coding agent run in its own pohunek session.
 |---|---|
 | id (map key) | `[a-z0-9][a-z0-9_-]{0,31}`; `verifier` is reserved |
 | `protocol` | `claude-structured` or `codex-envelope`, see [reviewers and adapters](knowledge/concepts/reviewers-and-adapters.md) |
-| `agent_profile` | The pohunek agent profile that runs the adapter, created by `autoreview profiles install` |
+| `agent_profile` | The pohunek agent profile that runs the adapter; it must exist on the review host, and `autoreview profiles install` is planned in #25 |
 | `label` | Name shown in the review body, one line, at most 64 characters |
 | `finding_prefix` | One uppercase letter other than `P` (reserved for prior findings published again), unique across reviewers. A reviewer numbers its findings `C001`, `C002`; the published id takes the prefix instead of `C`, so Opus's `C002` is published as `O002` |
 
@@ -281,8 +279,6 @@ Every event gets one of three levels. Where each level goes is configured in
 | `approval_requested` | A clean review waits for a human approval |
 | `handoff_reminder` | Notes handed to an author got no renewed review request within `notes_handoff.reminder_hours` |
 | `findings_on_own_pr` | A review of the reviewing account's own pull request has blocking findings |
-| `credential_invalid` | A GitHub token was rejected, expired or belongs to another login; its repositories are not reviewed until the token is replaced and the service restarted |
-| `credential_expiring` | A GitHub token expires within `github.expiry_warning_days`; raised once a day |
 | `review_stopped` | A review failed after its retries, or an approved review could not be published |
 | `cleanup_manual` | A reviewer session could not be removed and needs a manual `pohunek session rm` |
 | `command_failed` | An operator command (approve, retry) failed |
@@ -293,6 +289,8 @@ Every event gets one of three levels. Where each level goes is configured in
 | `started` | A review started |
 | `retry_scheduled` | A failed review step is retried later |
 | `superseded` | A newer commit replaced a review, or the pull request stopped asking for one (review request or label removed, closed, back to draft) |
+
+Events for a rejected or an expiring GitHub token are planned in #19.
 
 A `digest` or `log` message the notifier cannot deliver is dropped with a
 warning. An `action` message that cannot be delivered fails the step, because

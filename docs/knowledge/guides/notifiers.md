@@ -2,7 +2,7 @@
 type: Guide
 id: guide/notifiers
 title: Notifiers
-description: Configure where autoreview messages go - no notifier, Matrix rooms per level, webhooks for Slack, Discord or plain JSON, several backends per level, the review queue and delivery-failure semantics.
+description: Configure where autoreview messages go - Matrix rooms per level, the review queue and delivery-failure semantics; no notifier, webhooks and several backends per level are planned.
 source_kind: manual
 intents: [setup, help, debug]
 ---
@@ -13,7 +13,7 @@ intents: [setup, help, debug]
 
 Every event in the policy has one of three levels: `action`, `digest` or
 `log`. The notification section of `config.yaml` says where each level goes.
-A level is routed to one or more named backends, and a backend is one
+A level is routed to one named backend, and a backend is one
 endpoint of one type. The policy decides *what* is worth a message; this guide
 covers *where* the message goes.
 
@@ -28,21 +28,25 @@ notify:
   timeout_seconds: 30          # one delivery
   max_characters: 8000         # longer messages are cut
   backends:
-    - name: log
-      type: none
+    - name: matrix
+      type: matrix
+      homeserver_url: https://matrix.example.org
+      access_token_env: AUTOREVIEW_MATRIX_TOKEN
+      room: "!roomid:example.org"
+      mention_user: "@you:example.org"
   routes:
-    action: [log]              # each level: a list of backend names
-    digest: [log]
-    log: [log]
+    action: [matrix]           # each level: a list of one backend name
+    digest: [matrix]
+    log: [matrix]
   review_queue:
-    backends: [log]
+    backends: [matrix]
     max_items: 50
 ```
 
 - `backends` defines named endpoints. Names are used in the routes, and the
   same type may appear several times under different names.
-- `routes` maps each level to a list of backend names. Every backend in the
-  list receives the message of that level.
+- `routes` maps each level to a list of exactly one backend name. Several
+  backends per level are planned in #27.
 - `review_queue.backends` lists the backends of the review queue, which is a
   separate message and not an event.
 
@@ -51,30 +55,16 @@ backends when they must not share a room.
 
 ## No notifier
 
-```yaml
-backends:
-  - name: log
-    type: none
-routes:
-  action: [log]
-  digest: [log]
-  log: [log]
-review_queue:
-  backends: [log]
-  max_items: 50
-```
-
-Nothing leaves the host, and the structured log is the only record. Use this
-while you evaluate autoreview. Until M3 the review queue needs a `matrix`
-backend: a `review_queue.backends` list of `none` backends only is refused at
-load, see [configuration](../../configuration.md). A clean review that waits for a human is then
-visible only through `autoreview awaiting`, so pair `human-approval` setups
-with a real backend.
+Planned in #29. Until then every route and the review queue need a `matrix`
+backend. A route to a `none` backend is refused at load with
+`configuration_invalid: config: invalid Matrix <level> room`. A
+`review_queue.backends` list of `none` backends only is refused too, see
+[configuration](../../configuration.md#backend-none).
 
 ## Matrix, one room per level
 
 A common layout uses two rooms: one that notifies a person, and one quiet room
-for results. The log stays on the `log` backend.
+for results. The `log` level shares the quiet room.
 
 ```yaml
 notify:
@@ -93,12 +83,10 @@ notify:
       access_token_env: AUTOREVIEW_MATRIX_TOKEN
       room: "!digestroom:example.org"
       mention_user: "@you:example.org"
-    - name: log
-      type: none
   routes:
     action: [matrix-action]
     digest: [matrix-digest]
-    log: [log]
+    log: [matrix-digest]
   review_queue:
     backends: [matrix-digest]
     max_items: 50
@@ -121,63 +109,17 @@ token. Do not reuse a personal access token for it.
 
 ## Webhook for Slack, Discord or JSON
 
-```yaml
-notify:
-  timeout_seconds: 30
-  max_characters: 8000
-  backends:
-    - name: team-chat
-      type: webhook
-      url_env: AUTOREVIEW_WEBHOOK_URL
-      format: slack            # json, slack or discord
-    - name: log
-      type: none
-  routes:
-    action: [team-chat]
-    digest: [team-chat]
-    log: [log]
-  review_queue:
-    backends: [team-chat]
-    max_items: 50
-```
-
-One JSON body is POSTed per message:
-
-- `json` is autoreview's own message object: level, event, title, text,
-  review id and links. Use it for your own receiver.
-- `slack` and `discord` wrap the text in the incoming-webhook format of that
-  service.
-
-The webhook URL is a secret for most services. It comes from the variable
-named in `url_env` and is never written into `config.yaml`. Check that it is
-set without printing it:
-
-```sh
-test -n "$AUTOREVIEW_WEBHOOK_URL" && echo set
-```
+Planned in #29.
 
 ## Several backends for one level
 
-A level may list two backends. For example, `action` can reach a Matrix room
-and a Slack channel, so one unavailable service does not hide a required
-action:
-
-```yaml
-routes:
-  action: [matrix-action, team-chat]
-  digest: [matrix-digest]
-  log: [log]
-```
-
-Every backend in the list gets the message. Each one has its own `timeout_seconds`
-budget, so a slow backend delays only its own delivery.
+Planned in #27.
 
 ## Review queue
 
 `autoreview review-queue` lists every open pull request that requests a review
-from the login of one of its credentials and whose engine state is known, including
-those that wait on the author. The list is grouped by account when the credentials
-have different logins. It sends the list to `review_queue.backends` and prints it. The
+from the login of the credential and whose engine state is known, including
+those that wait on the author. It sends the list to `review_queue.backends` and prints it. The
 list holds at most `review_queue.max_items` pull requests.
 
 The queue is a quiet notice, not an event: when no request waits, nothing is
@@ -213,9 +155,8 @@ the review key, the level, the code and `skipped_after_failure`. It is never
 resent, so the warning is the only record; discovery goes on.
 
 Because a failed `action` delivery fails the step of a review, a broken action
-backend blocks reviews that need a human. Watch for `matrix_unavailable`,
-`matrix_request_rejected`, `webhook_unavailable` and `webhook_request_rejected`
-in the logs; the [CLI error codes](../../cli.md#error-codes) list them.
+backend blocks reviews that need a human. Watch for `matrix_unavailable` and
+`matrix_request_rejected` in the logs; the [CLI error codes](../../cli.md#error-codes) list them.
 
 `autoreview validate` checks the notification configuration, not whether a
 backend is reachable. After you change a backend, confirm delivery with a real
@@ -226,11 +167,7 @@ event, for example a review that reaches `approval_requested` on a
 
 | Need | Layout |
 |---|---|
-| Try it out | `none` for every level |
-| Team chat with a mention | Matrix or Slack for `action`, `digest` in a quiet room |
-| Own dashboard | `webhook` with `format: json` for every level |
-| An action must not be missed | Two backends for `action` |
-| No notifications | `none`, and check `autoreview awaiting` yourself |
+| Team chat with a mention | Matrix for `action`, `digest` in a quiet room |
 
 For how the level of each event is chosen, see
 [policy notifications](../../policy.md#notifications). The model behind

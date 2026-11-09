@@ -2,7 +2,7 @@
 type: Runbook
 id: runbook/stale-sessions-and-branches
 title: Stale sessions and branches
-description: Why review branches and pohunek sessions accumulate on the review hosts, how to remove them safely with autoreview prune-branches, and how to keep a recovery list.
+description: Why review branches and pohunek sessions accumulate on the review hosts, and how to remove a session that autoreview could not remove.
 source_kind: manual
 intents: [debug, help]
 ---
@@ -13,7 +13,7 @@ intents: [debug, help]
 
 Every reviewer run happens in a pohunek session on a review host, and each
 session works on its own review branch. Two upstream behaviours make these
-pile up. autoreview works around both in v0.1.
+pile up.
 
 ## Why branches accumulate
 
@@ -26,8 +26,8 @@ pile up. autoreview works around both in v0.1.
   `<session.branch_prefix><workflow>-<reviewer>-run<N>[-start<M>]`, so a single
   review can leave several branches behind.
 
-autoreview does not delete these branches while a review uses them. Removing
-them is a maintenance step, described below.
+autoreview removes a reviewer's session, not its branch, and no autoreview
+command removes review branches. A pruning command is planned in #42.
 
 ## When a session cannot be removed
 
@@ -45,46 +45,11 @@ Use the session name from the listing. Check the review first: `cleanup_manual`
 is raised for a finished review, and a session that still runs a review is not
 a leftover. If a session is still running, check its output before you remove it.
 
-## Remove leftover branches
+## Branches of running reviews
 
-`autoreview prune-branches` lists the review branches under
-`session.branch_prefix` on the review hosts that no running review uses. It
-deletes nothing unless you pass `--yes`. Always run the dry run first.
-
-```sh
-# Dry run: lists the branches that would be removed
-autoreview --config /etc/autoreview/config.yaml prune-branches
-
-# Limit to one host or to older branches
-autoreview --config /etc/autoreview/config.yaml prune-branches --host <review-host> --older-than-days 14
-
-# Delete, and keep the printed list of branch and commit pairs
-autoreview --config /etc/autoreview/config.yaml prune-branches --yes > prune-$(date +%F).json
-```
-
-Store the output of the `--yes` run. Each entry has the `branch` and the
-`commit`. If a branch was removed by mistake, the commit can be recovered for as
-long as git keeps it. Recreate the branch from the saved commit:
-
-```sh
-git branch <branch> <commit>
-```
-
-Run the command from a clone that has the commit, or fetch it first. Keep the
-file out of the repository; it names review branches and commits, not secrets.
-
-## Recovery list
-
-Keep every `prune-branches --yes` output for at least as long as the
-`store.review_retention_seconds` of your reviews. Without it, a branch
-that was removed by mistake cannot be matched to its review.
-
-## Do not clean up by hand
-
-Do not delete review branches with `git push --delete` or `git branch -D` on
-the review host while `serve` runs. The command checks that no running review
-uses a branch; a manual delete does not. Use `prune-branches`, or
-`pohunek session rm` for a session that `cleanup_manual` names.
+A running review works on its branch, and nothing checks a manual delete
+against the running reviews. Do not delete review branches with
+`git push --delete` or `git branch -D` on the review host while `serve` runs.
 
 ## Related pages
 

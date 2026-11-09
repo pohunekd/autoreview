@@ -252,8 +252,8 @@ removed raises `cleanup_manual`, and someone removes it by hand with
 
 Completed reviews are deleted after `store.review_retention_seconds`. Published
 decisions are kept for `store.published_retention_seconds`, because the next
-review of the same pull request uses them as its baseline. Leftover review
-branches on the review hosts are removed by `autoreview prune-branches`. See
+review of the same pull request uses them as its baseline. Review branches
+stay on the review hosts after their sessions are removed. See
 [stale sessions and branches](../runbooks/stale-sessions-and-branches.md).
 
 ## Where to go next

@@ -13,8 +13,8 @@ intents: [setup, help]
 
 A pipeline names one review prompt, and the verifier names one more. The
 prompt tells the reviewer how to review; autoreview decides what to review
-and what to publish. Start from the generic prompt that `autoreview init`
-writes into `prompts/generic.md`, and change it only where your repositories
+and what to publish. Start from the generic prompt in
+`prompts/generic.md` of this repository, and change it only where your repositories
 need something different.
 
 ## What the reviewer receives

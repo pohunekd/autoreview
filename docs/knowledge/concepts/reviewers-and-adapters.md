@@ -71,17 +71,8 @@ each reviewer, on top of the official pohunek runtime package for the agent:
 Claude Code for `claude-structured`, Codex for `codex-envelope`. The runtime
 package must already be installed on the review host.
 
-```bash
-autoreview profiles install --host review-host --agent claude --model <model-id> --name autoreview-opus
-autoreview profiles install --host review-host --agent codex --model <model-id> --name autoreview-codex
-```
-
-The command creates the profile and a small adapter wrapper on that host. Running
-it again with the same arguments changes nothing. It refuses to overwrite a
-profile that it did not create unless `--replace` is given. `autoreview validate`
-prints the profiles the policy needs, and `autoreview init` prints the same list
-for a new installation. The reference is
-[CLI: profiles install](../../cli.md#autoreview-profiles-install).
+autoreview does not create the profiles; `autoreview profiles install` is planned
+in #25. `autoreview validate` prints the profiles the policy needs.
 
 The `agent_profile` key of a reviewer names the profile that its sessions start
 with. The profile must exist on every review host that runs the reviewer.
@@ -190,8 +181,8 @@ and the design below is the outline that such a protocol would have to meet.
 5. **A blocking flag.** The result carries it, as both current protocols do.
 6. **Environment rules.** No GitHub token, no pohunek identity variables, and
    bounded output.
-7. **A profile installer.** `autoreview profiles install` support for the new
-   runtime, with the same idempotency and `--replace` rule.
+7. **A profile installer.** Support for the new runtime in
+   `autoreview profiles install` (planned in #25).
 8. **Validation.** The new protocol name is added to the policy validator, and
    the pipeline rules above (one protocol per pipeline, verifier protocol) are
    checked for it.
