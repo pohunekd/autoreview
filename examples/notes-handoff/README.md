@@ -27,6 +27,10 @@ autoreview --config /etc/autoreview/config.yaml validate
 
 Set the keys that [use one](../README.md#use-one) names first.
 
+Until #34, `validate` refuses this policy, because the engine accepts only
+`trusted: any` until author classes are enforced; see
+[policy: authors](../../docs/policy.md#authors).
+
 Install the `autoreview-sonnet` profile on the review host. The `notes_handoff`
 section is required by the validator because a rule sets `on_notes`; remove both
 the `on_notes` line and the section to turn the hand-off off.

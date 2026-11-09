@@ -21,7 +21,11 @@ repository cannot be opened to strangers by leaving the key out.
 
 Until author classes are resolved and enforced (#33, #34), the engine validates the
 whole section but accepts only `trusted: any`; a rule that trusts only some authors is
-refused at load. The rest of this page describes the behaviour after #34.
+refused at load with
+`authors: only trusted any is accepted until author classes are enforced (#33, #34)`.
+`trusted: any` reviews every author, forks included, with the rule's outcomes, approval
+too, so until #34 use it only for a repository without outside contributors, and remove a
+rule for any other repository. The rest of this page describes the behaviour after #34.
 
 ## The two classes
 

@@ -34,6 +34,10 @@ autoreview --config /etc/autoreview/config.yaml validate
 
 Set the keys that [use one](../README.md#use-one) names first.
 
+Until #34, `validate` refuses this policy, because the engine accepts only
+`trusted: any` until author classes are enforced; see
+[policy: authors](../../docs/policy.md#authors).
+
 Install the `autoreview-sonnet` and `autoreview-codex` profiles on the review
 host. The generic pipeline approves clean reviews, which the validator accepts
 because its incremental reviewers are the same as its full reviewers.

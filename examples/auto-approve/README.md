@@ -25,6 +25,10 @@ autoreview --config /etc/autoreview/config.yaml validate
 
 Set the keys that [use one](../README.md#use-one) names first.
 
+Until #34, `validate` refuses this policy, because the engine accepts only
+`trusted: any` until author classes are enforced; see
+[policy: authors](../../docs/policy.md#authors).
+
 Install the `autoreview-sonnet` profile on the review host. Approvals are posted
 from the account of the credential that serves `pohunekd/pohunek.dev`, so that
 credential's `login` must be the account that should approve, and its token variable

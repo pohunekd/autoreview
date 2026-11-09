@@ -152,6 +152,10 @@ autoreview review --repository pohunekd/pohunek.dev 88               # author cl
 autoreview retry --repository pohunekd/pohunek.dev 88 3f2a9c1d0b7e   # after review_stopped, same head only
 ```
 
+Until #34, `validate` refuses the policy of this guide, because the engine accepts only
+`trusted: any` until author classes are enforced; see
+[policy: authors](../../policy.md#authors).
+
 `review` shows the author class the review was given. Check it on the first
 fork pull request you review.
 
