@@ -114,3 +114,84 @@ fn every_example_and_its_prompts_are_embedded() {
         assert_eq!(contents, on_disk.as_slice(), "{relative}");
     }
 }
+
+#[test]
+fn written_config_is_the_reference_apart_from_policy_login_and_host() {
+    let written = render_config("/srv/autoreview", LOGIN, HOST).expect("the template renders");
+    let expected = reference_file()
+        .replace(
+            "policy_file: /etc/autoreview/policy.yaml\n",
+            "policy_file: \"/srv/autoreview/policy.yaml\"\n",
+        )
+        .replace(
+            "      login: review-bot\n",
+            "      login: \"review-bot-2\"\n",
+        )
+        .replace("  hosts: [review-host]\n", "  hosts: [\"review-host-2\"]\n");
+    assert_eq!(without_comments(&written), without_comments(&expected));
+}
+
+#[test]
+fn init_then_validate_loads_every_example() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    for example in Example::value_variants().iter().copied() {
+        // A space and a quote check that the policy path is quoted in the YAML.
+        let directory = root.path().join(format!("{} \"setup\"", name(example)));
+        let text = directory.to_str().expect("a UTF-8 temporary path");
+        let files = render(&arguments(&directory, example), text).expect("the files render");
+        let profiles = agent_profiles(&files).expect("the embedded policy loads");
+        let written = write(&directory, &files).expect("init writes into a new directory");
+        let relative: Vec<&str> = files.iter().map(|file| file.relative).collect();
+        let expected: Vec<String> = relative
+            .iter()
+            .map(|path| directory.join(path).to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(written, expected);
+        let config = fs::read_to_string(directory.join("config.yaml")).expect("config.yaml");
+        let loaded = config_file::parse(&config, config_file::tests::secret, |path| {
+            autoreview_policy::load(path).map_err(|error| Box::new(error) as _)
+        })
+        .unwrap_or_else(|error| panic!("{}: {error}", name(example)));
+        let policy = loaded.policy.as_ref().expect("the config names a policy");
+        assert_eq!(policy.agent_profiles(), profiles, "{}", name(example));
+        assert!(!profiles.is_empty(), "{}", name(example));
+        assert_eq!(loaded.github_login, LOGIN);
+        assert_eq!(loaded.pohunek_hosts, [HOST]);
+    }
+}
+
+#[test]
+fn init_names_an_existing_file_and_changes_nothing() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let directory = root.path().join("setup");
+    let prompts = directory.join("prompts");
+    fs::create_dir_all(&prompts).expect("prompts/ is created");
+    fs::write(prompts.join("verifier.md"), "kept\n").expect("the existing prompt is written");
+    let text = directory.to_str().expect("a UTF-8 temporary path");
+    let init = arguments(&directory, Example::SingleRepoComment);
+    let files: Vec<SetupFile> = render(&init, text).expect("the files render");
+    let error = write(&directory, &files).expect_err("an existing file is refused");
+    let path = prompts.join("verifier.md");
+    assert_eq!(
+        config_error(&error),
+        (INIT_FILE_EXISTS, path.to_str().expect("a UTF-8 path"))
+    );
+    assert_eq!(error_code(&error), INIT_FILE_EXISTS);
+    let mut left: Vec<PathBuf> = walk(&directory);
+    left.sort();
+    assert_eq!(left, [prompts.clone(), path.clone()]);
+    assert_eq!(fs::read_to_string(&path).expect("the prompt"), "kept\n");
+}
+
+/// Returns every path below `directory`, depth first.
+fn walk(directory: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(directory).expect("a readable directory") {
+        let path = entry.expect("an entry").path();
+        if path.is_dir() {
+            paths.extend(walk(&path));
+        }
+        paths.push(path);
+    }
+    paths
+}
