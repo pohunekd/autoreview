@@ -64,7 +64,7 @@ Whatever the model reads and returns, the engine does the following.
 | Hidden marker | The marker `<!-- autoreview:v1:... -->` is written by the engine only. Model output cannot forge it, so a stale or fake review cannot be treated as the current one. |
 | Verifier | Blocking findings that the verifier cannot confirm become notes with the reason. Nothing is dropped silently. |
 | Escalation | On auto-approve rules, a demoted serious finding turns the approval into a wait for a human. |
-| Human approval | `on_clean: await` leaves the final approval to a person, who approves an exact head SHA. |
+| Human approval | `on_clean: await` leaves the final approval to a person, who approves an exact head SHA, or to an MCP client with the `write` scope. Give that scope only to agents that keep review text out of their instructions, see the [MCP server guide](../guides/mcp-server.md#untrusted-output). |
 | AI signature | Every body and inline comment ends with `publish.signature`. A reader knows it is machine-written. Comments that match `publish.ai_signed_pattern` never count as a human decision on an earlier finding. |
 | Own pull requests | A review of a pull request by the reviewing account is always a comment, so an injected "approve" cannot approve it. |
 

@@ -30,6 +30,7 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 | Reviewer model accounts | Keys or logins of the models that review code and cost money | The runtime login on the review host, not the pohunek profile |
 | Backend secrets | The Matrix token of the notifier | Environment, named by `*_env` keys |
 | Store | Review history, discovery state, published decisions | SQLite file at `store.path` |
+| MCP bearer tokens | A `write` token can approve a waiting review and start a discovery pass; a `read` token reads review text and runs GitHub searches | Held by each MCP client; the configuration holds only their SHA-256 digests (`mcp.clients[N].token_sha256`). Rotate a token by replacing its digest and restarting `autoreview mcp` |
 
 ## Actors
 
@@ -42,12 +43,15 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 | Other comment authors | Not trusted | Comments and review threads, which are read as discussion of earlier findings |
 | Reviewer model | Untrusted output | The text it returns; it can be steered by the content it reads |
 | GitHub | Trusted platform | Stores the reviews; its search results bound discovery |
+| MCP client with the `write` scope | Semi-trusted | `resolve`, `approve` and `retry`, and the read tools. An agent client reads review text that pull request authors and models wrote, so injected text can steer it |
+| MCP client with the `read` scope | Semi-trusted | The read tools: review text, statuses and the review queue |
 
 ## What runs where
 
 | Component | Host | Holds | Reaches |
 |---|---|---|---|
 | `autoreview` service | Autoreview host | GitHub tokens, backend secrets, the store | GitHub through `gh`; pohunek CLI; notifier backends |
+| `autoreview mcp` | Autoreview host, behind a TLS reverse proxy | The token digests, the store (same file as the service), the engine credential for the GitHub calls of `review_queue` and `retry` | GitHub through `gh`; MCP clients through the proxy |
 | `gh` | Autoreview host | One credential's token, for the calls of its repositories | GitHub API |
 | `pohunek` CLI | Autoreview host | Its own state and runtime directories, no GitHub token | Review host daemons |
 | pohunek daemon | Review host | Sessions, worktrees, project setup | Git remote, the agent runtime |
@@ -72,13 +76,14 @@ the engine publishes.
 | 7 | Wrong account posts reviews | `serve` refuses to start when the token's login differs from the credential's login; checks while running are planned in #19 | Engine behaviour |
 | 8 | Own pull request gets approved or changes requested | GitHub forbids it, so the engine always posts a comment and raises `findings_on_own_pr` | Policy behaviour |
 | 9 | Approval satisfies branch protection for a head nobody read | An approval binds to the exact head SHA; a new commit or changed request supersedes it | Policy behaviour |
-| 10 | Approval spoofed by a comment | Approval is a CLI command, not a comment; comment-based approval is post-v1 | Not in v0.1 |
+| 10 | Approval spoofed by a comment | Approval is the `approve` CLI command or the `approve` tool of an MCP client with the `write` scope, never a comment; both check the exact head. Comment-based approval is post-v1 | Not in v0.1 |
 | 11 | Human comment reused to close a finding on an auto-approve rule | Comments marked by `publish.ai_signed_pattern` are never a human decision; on auto-approve rules a finding closes as answered only when it rests on the reviewing account's own comment that is not AI-signed | Engine behaviour |
 | 12 | Anyone with triage rights triggers a costly run | Use `review-requested` or a label that only maintainers can add; untrusted authors are skipped or reviewed with `comment` | Policy choice; per-author rate limit not in v0.1 |
 | 13 | Discovery hides pull requests when a search is truncated | Truncated search is an error (`github_search_limit_exceeded`), never a silent drop | Engine behaviour |
 | 14 | A reviewer returns oversized or malformed output | Schema-validated result, `limits` bounds; the reviewer gets a fresh session | Engine behaviour |
 | 15 | Two engines process one database | `serve` refuses a second process on the same database (`engine_already_running`) | Engine behaviour |
 | 16 | Secret written into config, policy or a prompt | Only `*_env` names appear in config; secret values stay in the environment file | Operator rule |
+| 17 | An agent with an MCP `write` token is steered into `approve` or `retry` by text injected into a pull request | Tool results carry review text as neutralized data inside an untrusted-data notice; `approve` publishes only a clean review that waits at the exact head. Give the `write` scope only to agents that keep review text out of their instructions | Operator choice; see the [MCP server guide](../guides/mcp-server.md#untrusted-output) |
 
 ## Residual risks
 

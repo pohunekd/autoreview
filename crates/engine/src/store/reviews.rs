@@ -41,6 +41,13 @@ pub enum ReviewFilter {
     ReviewKey(String),
     /// The awaiting reviews that have no approval decision yet.
     AwaitingUndecided,
+    /// The reviews with a status and of a repository; `None` matches every value.
+    Matching {
+        /// Status that the review has, for example `awaiting`.
+        status: Option<String>,
+        /// Repository as `owner/name` whose pull requests the review is of.
+        repository: Option<String>,
+    },
 }
 
 /// One review row as the store returns it. The JSON keys are the Go field tags.
@@ -174,6 +181,15 @@ impl Store {
                      ORDER BY {created} DESC, workflow_id LIMIT ?2"
                 );
                 collect_reviews(&connection, &sql, &[&REVIEW_AWAITING, &limit])
+            }
+            ReviewFilter::Matching { status, repository } => {
+                // The key is `repository#number`, so the repository is the text before `#`.
+                let sql = format!(
+                    "SELECT {REVIEW_COLUMNS} FROM reviews WHERE (?1 IS NULL OR status = ?1) \
+                     AND (?2 IS NULL OR substr(review_key, 1, length(?2) + 1) = ?2 || '#') \
+                     ORDER BY {created} DESC, workflow_id LIMIT ?3"
+                );
+                collect_reviews(&connection, &sql, &[status, repository, &limit])
             }
         }
     }

@@ -6,7 +6,8 @@
   `schedule`, `engine`, `external` and the `autoreview` binary. The `engine`
   crate reaches side effects (processes, HTTP) only through the `Integrations`
   trait; its `clippy.toml` disallows `std::process::Command`,
-  `tokio::process::Command` and `reqwest::Client`. The imported reference
+  `tokio::process::Command` and `reqwest::Client`. Its `mcp` module answers
+  the HTTP requests that the binary's listener accepts; it binds no socket. The imported reference
   engine lives in `cmd/` and `internal/` until it is deleted. Reviewer
   adapters are Python wrappers under `adapters/`, optional integrations under
   `integrations/`, prompts under `prompts/`, examples under `examples/`, and
@@ -233,6 +234,11 @@ What is not compatible, by decision:
   can collide with a republished `P001` (`protocol.go:363`). A policy that Go
   accepts with `P` needs another letter before it runs on Rust. The regression
   test is `reserved_finding_prefix_is_rejected_naming_the_reviewer`.
+
+- **MCP server (#179):** `autoreview mcp` has no Go counterpart. The `mcp`
+  section exists only in `config.yaml`, which Go does not read, and the server
+  writes the store only through the engine functions of the CLI commands
+  (`approve_head`, `retry`), so every row stays readable by Go after a rollback.
 
 - **Lost session runtime (#213):** a session whose runtime pohunek reports as
   lost (`runtime.state` `lost`, or state `failed` with a `loss_reason`) fails its

@@ -119,40 +119,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// entry fits, `matrix_request_invalid` without a transaction ID, and `configuration_invalid`
     /// without a policy or with a negative limit.
     pub async fn review_queue(&self, cancel: &CancellationToken) -> Result<QueueResult, Error> {
-        let limit = self.config.queue_max_items;
-        let list = retry_step(
-            STEP_LIST_REVIEW_REQUESTS,
-            self.step_policy(),
-            &self.clock,
-            cancel,
-            || self.integration.list_review_requests(cancel, limit),
-        )
-        .await?;
-        live(cancel)?;
-        let discovery = self.store.load_discovery()?;
-        let state = QueueState {
-            schedule: discovery.schedule,
-            published: discovery.published,
-            awaiting: discovery.awaiting,
-        };
-        let mut entries = queue_entries(self.policy()?, &state, &list.requests);
-        entries.extend(self.waiting_on_author(cancel, &state, &list.requests).await);
+        let (entries, truncated) = self.queue_snapshot(cancel).await?;
         if entries.is_empty() {
             return Ok(QueueResult::default());
-        }
-        // The entries are cut after the sort. So a request that needs the user's action is never
-        // dropped for one that only waits for the engine.
-        let over = i64::try_from(entries.len()).map_or(true, |len| len > limit);
-        let truncated = list.truncated || over;
-        if over {
-            let Ok(kept) = usize::try_from(limit) else {
-                return Err(Error::config(
-                    CONFIGURATION_INVALID,
-                    QUEUE_MAX_ITEMS_KEY,
-                    None,
-                ));
-            };
-            entries.truncate(kept);
         }
         let rendered = render_queue(
             &entries,
@@ -187,6 +156,55 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             sent: true,
             truncated: rendered.dropped,
         })
+    }
+
+    /// Returns the queue entries in digest order, at most `queue_max_items` of them.
+    ///
+    /// The flag reports that requests were left out. Nothing is sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the search or the store, and `configuration_invalid` without a
+    /// policy or with a negative limit.
+    pub(crate) async fn queue_snapshot(
+        &self,
+        cancel: &CancellationToken,
+    ) -> Result<(Vec<QueueEntry>, bool), Error> {
+        let limit = self.config.queue_max_items;
+        let list = retry_step(
+            STEP_LIST_REVIEW_REQUESTS,
+            self.step_policy(),
+            &self.clock,
+            cancel,
+            || self.integration.list_review_requests(cancel, limit),
+        )
+        .await?;
+        live(cancel)?;
+        let discovery = self.store.load_discovery()?;
+        let state = QueueState {
+            schedule: discovery.schedule,
+            published: discovery.published,
+            awaiting: discovery.awaiting,
+        };
+        let mut entries = queue_entries(self.policy()?, &state, &list.requests);
+        entries.extend(self.waiting_on_author(cancel, &state, &list.requests).await);
+        if entries.is_empty() {
+            return Ok((entries, list.truncated));
+        }
+        // The entries are cut after the sort. So a request that needs the user's action is never
+        // dropped for one that only waits for the engine.
+        let over = i64::try_from(entries.len()).map_or(true, |len| len > limit);
+        if over {
+            let Ok(kept) = usize::try_from(limit) else {
+                return Err(Error::config(
+                    CONFIGURATION_INVALID,
+                    QUEUE_MAX_ITEMS_KEY,
+                    None,
+                ));
+            };
+            entries.truncate(kept);
+        }
+        Ok((entries, list.truncated || over))
     }
 
     /// Returns the open pull requests whose notes wait for their author.

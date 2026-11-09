@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::input::STEP_PLAN;
 use super::sessions::{Review, is_shutdown};
+use crate::config::identifier_valid;
 use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
 use crate::error::{Error, error_code};
@@ -19,7 +20,8 @@ use crate::model::review::{
     APPROVAL_KIND_APPROVE, APPROVAL_KIND_EXPIRED, APPROVAL_KIND_SUPERSEDED,
 };
 use crate::model::{
-    ApprovalResult, ApproveRequest, Artifact, AwaitRecord, Outcome, PublishResult, ReviewOutcome,
+    ApprovalResult, ApproveRequest, Artifact, AwaitRecord, Outcome, PublishResult, ResolveRequest,
+    ReviewOutcome,
 };
 use crate::publish::plan::PublicationPlan;
 use crate::store::{RESULT_SUCCESS, REVIEW_AWAITING};
@@ -204,6 +206,32 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Approves the review that waits at the full head of the request.
+    ///
+    /// The review is found by its pull request and head, never by a workflow ID of the caller,
+    /// so an approval can only publish the review that waits at exactly that head.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Engine::resolve`] and [`Engine::approve`], and
+    /// `review_identity_invalid` when the resolved head or workflow ID does not match.
+    pub fn approve_head(
+        &self,
+        cancel: &CancellationToken,
+        request: &ApproveRequest,
+    ) -> Result<ApprovalResult, Error> {
+        let resolve = ResolveRequest {
+            repository: request.repository.clone(),
+            number: request.number,
+            head_prefix: request.head_sha.clone(),
+        };
+        let resolved = self.resolve(cancel, &resolve)?;
+        if resolved.head_sha != request.head_sha || !identifier_valid(&resolved.workflow_id) {
+            return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
+        }
+        self.approve(cancel, &resolved.workflow_id, request)
+    }
+
     /// Records the user's approval of a clean review that waits for it.
     ///
     /// The engine publishes the review on its next tick.

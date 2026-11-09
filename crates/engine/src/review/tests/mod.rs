@@ -4,5 +4,6 @@
 
 mod approval;
 mod core;
+mod mcp;
 mod memory;
 mod verify;

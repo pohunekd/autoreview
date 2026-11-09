@@ -99,3 +99,5 @@ Two dimensions are not in a policy: the GitHub account (the `login` of the crede
   not do.
 - [Hermes approval](hermes-approval.md) is an optional chat integration for
   the approval step, planned in #43.
+- [MCP server](mcp-server.md) lets any MCP client list, read, approve and
+  retry reviews.
