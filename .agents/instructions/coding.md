@@ -186,6 +186,22 @@ What is not compatible, by decision:
   lock for `step_retry_seconds`, fails the pass and repeats the message on the
   next pass. The regression test is
   `failing_notification_backend_does_not_stall_discovery`.
+- **Review notifications (#212):** a running review gives each notification one
+  attempt, bounded by `notify.timeout_seconds`, without the step retry. A
+  failure that the notifier returns is logged as `review notification dropped`
+  with the event, the review key, the level and the code (`shutdown` after a
+  cancel, which stores nothing), and the `notify/...` step is stored as `false`,
+  so the review goes on and a resumed review does not resend it. A `digest` or
+  `log` failure that the notifier mutes is stored as `true`, as a sent message.
+  Go's `notify` reads any stored value as sent. `autoreview review-queue` posts
+  its digest once, logs `review queue digest dropped` and fails with the code.
+  Go retries both under the step retry (`review.go:212-216`,
+  `review_queue.go:79`), so an unreachable `action` backend holds a review slot
+  for `step_retry_seconds` and then fails the review. The regression tests are
+  `failing_notification_backend_does_not_stall_a_review` and
+  `review_queue_sends_once_with_one_transaction_per_run`; the latter replaces
+  the Go ports `review_queue_retries_with_one_transaction_per_run` and
+  `review_queue_gives_up_when_the_retry_window_ends`.
 - **Reserved finding prefix:** a reviewer whose `finding_prefix` is `P` is refused
   when the policy is parsed, with the message `reviewer <id>: finding_prefix P is
   reserved for republished findings`. `P` numbers the prior findings published
