@@ -151,9 +151,9 @@ The engine combines the results of both protocols the same way: the decision
 and the notes hand-off do not depend on the protocol. A `codex-envelope` result
 carries no blocking flag and no verdicts on prior findings, so every Codex
 finding blocks at any severity and a Codex pipeline gets no prior findings; both
-are planned in #23. A `codex-envelope` pipeline also skips the commit history
-check of an incremental review, so it stays incremental after a rebase or a force
-push; the check is planned in #237. Two more differences remain:
+are planned in #23. The commit history check of an incremental review is the
+same for both protocols: a rebase or a force push widens the review to full. Two
+more differences remain:
 
 - **One protocol per pipeline.** The pipeline prompt is written for one request
   and one result format, and the engine combines the results of all reviewers of

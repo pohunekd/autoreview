@@ -38,13 +38,14 @@ A rule that approves without a human and whose last published decision was not a
 approval gets a full review. That keeps the approval resting on a complete
 baseline (see [the stricter rule](#the-stricter-rule-for-auto-approve-rules)).
 
-**Step two: the commit history.** For the scope to stay incremental the stored
-result of that review must still exist, and the new head must extend the reviewed
-head in a straight line:
+**Step two: the commit history.** For the scope to stay incremental the new head
+must extend the reviewed head in a straight line. This check applies to every
+protocol. A `claude-structured` pipeline also needs the stored result of that
+review, because it holds the prior findings:
 
-- If the stored result is gone (for example after `store.review_retention_seconds`
-  or after an upgrade of the engine), the review widens to full. The log records
-  the reason as `previous_review_not_stored`.
+- If the stored result of a `claude-structured` review is gone (for example after
+  `store.review_retention_seconds` or after an upgrade of the engine), the review
+  widens to full. The log records the reason as `previous_review_not_stored`.
 - If the new head is not a linear extension of the reviewed one, the review
   widens to full. A rebase, a force push, or a merge of the base branch makes the
   diff between the two heads something other than the author's own change. The
@@ -59,10 +60,11 @@ exception is a renewed review request for the same head after a notes hand-off.
 That request adopts the stored result of the hand-off review (see
 [notes hand-off](decisions.md#notes-hand-off)). Neither case is incremental.
 
-Step two and the collection of prior findings apply only to a
-`claude-structured` pipeline. A `codex-envelope` pipeline keeps the scope of step
-one, even after a rebase or a force push; its history check is planned in #237.
-It gets no prior findings; they are planned in #23.
+The history check is the same for both protocols, so a rebase or a force push
+widens a `codex-envelope` review to full too, with the same log reasons. The
+collection of prior findings and the stored-result check apply only to a
+`claude-structured` pipeline. A `codex-envelope` pipeline gets no prior findings,
+so it needs no stored result; its prior findings are planned in #23.
 
 ### Which reviewers run
 

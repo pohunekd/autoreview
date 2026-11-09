@@ -280,6 +280,61 @@ async fn rewritten_history_gets_a_full_review_that_settles_prior_findings() {
     h.stop_engine().await;
 }
 
+// A Codex pipeline that approves on its own reviews a rewritten head in full: an incremental
+// review would approve the rebased head on the diff from a head it does not extend (#237).
+#[tokio::test]
+async fn rewritten_history_gets_a_full_review_on_a_codex_pipeline() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "path": "src/a.go", "line": 3,
+        "title": "Broken", "body": "It breaks.",
+    })]));
+    let mut pr = integration_pull_request("public/widget", &sha("a"));
+    pr.author = "maintainer".to_owned();
+    pr.author_type = "User".to_owned();
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    h.set_output(reviewer_output(Vec::new()));
+    for (head, rewritten, count) in [("c", false, 2), ("d", false, 3), ("e", true, 4)] {
+        let mut next = pr.clone();
+        next.head_sha = sha(head);
+        if rewritten {
+            h.fake.lock().rewritten.insert(next.head_sha.clone());
+        }
+        h.fake.open(next, h.rule(&pr.repository));
+        h.poll_until("the next review", || h.publications() == count)
+            .await;
+    }
+    let (published, _, started, _) = h.fake.snapshot();
+    let scopes: Vec<(Decision, bool, bool)> = published
+        .iter()
+        .zip(&started)
+        .map(|(review, request)| {
+            (
+                review.decision.clone(),
+                review.body.contains("full review of"),
+                request
+                    .prompt
+                    .contains("Trusted previously reviewed head SHA"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        scopes,
+        [
+            (Decision::RequestChanges, true, false),
+            (Decision::Approve, true, false),
+            (Decision::Approve, false, true),
+            (Decision::Approve, true, false),
+        ],
+        "after a request for changes and after a rewritten history the review must be full; \
+         only the linear push after the approval is incremental (decision, full, previous head)"
+    );
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn missing_previous_review_falls_back_to_a_full_review() {
     let mut h = start_harness(|_| {}).await;
