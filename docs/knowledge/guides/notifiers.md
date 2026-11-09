@@ -136,15 +136,16 @@ Failure handling depends on the level of the event:
 
 | Level | Delivery fails | Effect |
 |---|---|---|
-| `action` | The backend does not accept the message | The step fails and is retried. Otherwise nobody would learn that an action is needed. A message of a discovery pass is the exception, see below |
+| `action` | Dropped with the warning `review notification dropped` | The review goes on and does not resend it. A message of a discovery pass follows the rule below |
 | `digest` | Dropped with a warning in the log | The review and its publication are unaffected. A message of a discovery pass follows the rule below |
 | `log` | Dropped with a warning in the log | Nothing else changes. A message of a discovery pass follows the rule below |
 
-The `approval_requested` message is the exception: the review is already
-waiting when it is sent, so a failed delivery is logged as
-`approval request failed`. `autoreview awaiting` lists the wait, and the review
-queue shows it while the pull request requests the review, until it is
-approved or its deadline passes.
+A message of a review gets one attempt, bounded by `notify.timeout_seconds`.
+The `action` warning names the event, the review key, the level and the code
+(`shutdown` when the service stopped during the attempt; the resumed review then
+tries once more). A lost `approval_requested` message does not hide the wait:
+`autoreview awaiting` lists it, and the review queue shows it while the pull
+request requests the review, until it is approved or its deadline passes.
 
 A discovery pass sends its messages (a rejected pull request, a stopped or
 retried review, a hand-off reminder) once, after it has saved its state. After
@@ -154,9 +155,10 @@ is not delivered is logged as `discovery notification dropped` with the event,
 the review key, the level, the code and `skipped_after_failure`. It is never
 resent, so the warning is the only record; discovery goes on.
 
-Because a failed `action` delivery fails the step of a review, a broken action
-backend blocks reviews that need a human. Watch for `matrix_unavailable` and
-`matrix_request_rejected` in the logs; the [CLI error codes](../../cli.md#error-codes) list them.
+A broken action backend does not stop reviews, but nobody learns from it that
+a human is needed. Watch for `review notification dropped`, `matrix_unavailable`
+and `matrix_request_rejected` in the logs; the
+[CLI error codes](../../cli.md#error-codes) list them.
 
 `autoreview validate` checks the notification configuration, not whether a
 backend is reachable. After you change a backend, confirm delivery with a real

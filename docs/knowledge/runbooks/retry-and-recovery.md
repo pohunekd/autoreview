@@ -87,9 +87,9 @@ you rely on the request alone.
 ## A review published, but a notification failed
 
 Publishing the review on GitHub and sending the notice are two operations. A
-failed `action` notice fails the step, so the step is retried. A failed
-approval request is the exception: it is logged and the review keeps waiting. A
-failed `digest` or `log` notice is dropped with a warning and nothing is retried.
+notice gets one attempt. A failed notice is dropped with a warning
+(`review notification dropped` at the `action` level, `matrix notification
+dropped` otherwise), the review completes as published, and nothing is retried.
 
 When you see a notification failure after a publication:
 
@@ -99,10 +99,10 @@ When you see a notification failure after a publication:
 2. Check the store with `autoreview review --repository <owner/repo> <number>`.
    A published decision shows `publication_status: published` and a
    `github_review_id`.
-3. Do not retry or re-run a review only to resend a notice. The reference does
-   not say how a notification failure after publication is retried, so a
-   blind retry could publish a second decision on a changed head. If the
-   publication is missing on GitHub, check the `review_stopped` event first.
+3. Do not retry or re-run a review only to resend a notice. A dropped notice
+   is never resent, so a blind retry could publish a second decision on a
+   changed head. If the publication is missing on GitHub, check the
+   `review_stopped` event first.
 4. Fix the notifier (see [notifier failures](troubleshooting.md#notifier-failures)).
    Then tell the people concerned about the decision by hand, if they need it.
 
