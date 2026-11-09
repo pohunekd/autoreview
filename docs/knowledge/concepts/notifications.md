@@ -23,9 +23,9 @@ takes the route of its level. The keys are in
 
 | Level | Meaning | Who is told |
 |---|---|---|
-| `action` | Someone has to do something. The message names the person to mention. | The backends that the `action` route lists. The configured person is mentioned. |
-| `digest` | A quiet record of a result. | The backends of the `digest` route. Nobody is mentioned. |
-| `log` | Muted. | Only the structured log. Backends of the `log` route receive it too, if listed. |
+| `action` | Someone has to do something. The message names the person to mention. | The backends that the `action` route lists, or the event's own route. The configured person is mentioned. |
+| `digest` | A quiet record of a result. | The backends of the `digest` route, or the event's own route. Nobody is mentioned. |
+| `log` | Muted. | Only the structured log. Backends of the `log` route, or the event's own route, receive it too, if listed. |
 
 Routes map each level to one backend name. Several backends of the same type
 are fine, for example one chat room per level:

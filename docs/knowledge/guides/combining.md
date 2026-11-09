@@ -169,7 +169,9 @@ Two consequences follow:
 
 ## Recipe f: one policy, different notification routing per level
 
-The policy sets the level of each event; `config.yaml` sets where each level goes:
+The policy sets the level of each event; `config.yaml` sets where each level goes.
+A single event can also go to its own room, see
+[event routes](../../configuration.md#event-routes).
 
 ```yaml
 # policy.yaml: levels only; list every event of the policy reference

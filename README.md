@@ -27,7 +27,8 @@ one GitHub review with inline comments.
 - **Durable state** - SQLite store, retries with backoff, approval deadlines,
   session cleanup, an hourly review-queue digest.
 - **Notifications** - action / digest / log levels routed to Matrix rooms per
-  level, plus the review queue; `none` and webhook backends are planned in #29.
+  level, single events optionally to their own room, plus the review queue;
+  `none` and webhook backends are planned in #29.
 
 ## Documentation
 
@@ -81,7 +82,7 @@ repositories:
 7. `coding-agent-drafts` - drafts of coding agents marked ready and reviewed
 8. `public-repositories` - external authors: label gate, base checkout, comment only
 9. `multihost` - several pohunek hosts and route overrides
-10. `notifiers` - Matrix rooms per level and the review queue
+10. `notifiers` - Matrix rooms per level or per event and the review queue
 
 ## Requirements (planned)
 

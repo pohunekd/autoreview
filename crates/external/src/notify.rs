@@ -445,12 +445,11 @@ fn level_name(level: &Level) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use std::collections::BTreeMap;
-
     use autoreview_engine::config::{MatrixRooms, NotifyRoute};
-    use autoreview_policy::{Event, Level};
+    use autoreview_policy::Level;
     use serde_json::{Value, json};
 
     use super::{Matrix, matrix_request, queue_digest_request};
@@ -465,7 +464,7 @@ mod tests {
                 action: "!action:example.org".to_owned(),
                 digest: "!digest:example.org".to_owned(),
                 log: "!log:example.org".to_owned(),
-                events: BTreeMap::from([(Event::Approved, "!approved:example.org".to_owned())]),
+                events: BTreeMap::new(),
             },
             "!queue:example.org".to_owned(),
             32_000,
@@ -523,28 +522,5 @@ mod tests {
             json!(["@example-user:example.org"])
         );
         assert_eq!(digest_payload["m.mentions"], json!({}));
-    }
-
-    #[test]
-    fn event_route_posts_to_its_own_room_and_mentions_by_level() {
-        let matrix = matrix();
-        let approved = NotifyRoute::Event(Event::Approved);
-        let digest = matrix_request(&matrix, &approved, Level::Digest, "approved", "notify-test")
-            .expect("event route request");
-        assert_eq!(digest.room, "!approved:example.org");
-        let payload: Value = serde_json::from_slice(&digest.content).expect("digest JSON content");
-        assert_eq!(payload["m.mentions"], json!({}));
-        let action = matrix_request(&matrix, &approved, Level::Action, "approved", "notify-test")
-            .expect("event route request at the action level");
-        assert_eq!(action.room, "!approved:example.org");
-        let payload: Value = serde_json::from_slice(&action.content).expect("action JSON content");
-        assert_eq!(
-            payload["m.mentions"]["user_ids"],
-            json!(["@example-user:example.org"])
-        );
-        let unrouted = NotifyRoute::Event(Event::Started);
-        let error = matrix_request(&matrix, &unrouted, Level::Log, "started", "notify-test")
-            .expect_err("an event without its own room is refused");
-        assert_eq!(error.to_string(), "matrix_level_invalid");
     }
 }

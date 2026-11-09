@@ -1172,11 +1172,11 @@ fn secret_value(
 
 /// The Matrix values of the engine configuration.
 struct MatrixShape {
-    /// Homeserver base URL, empty when neither a level nor the queue routes to Matrix.
+    /// Homeserver base URL, empty when no route and no queue reaches Matrix.
     homeserver_url: String,
-    /// Access token, empty when neither a level nor the queue routes to Matrix.
+    /// Access token, empty when no route and no queue reaches Matrix.
     access_token: String,
-    /// Mentioned user, empty when neither a level nor the queue routes to Matrix.
+    /// Mentioned user, empty when no route and no queue reaches Matrix.
     mention_user: String,
     /// The level and event rooms; empty for a `none` backend.
     rooms: MatrixRooms,
