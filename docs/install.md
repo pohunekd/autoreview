@@ -66,11 +66,14 @@ sha256sum --check "$archive.sha256"
 ```
 
 With the GitHub CLI, also check the attestation. It proves that the release
-workflow of this repository built the archive:
+workflow of this repository built the archive from the release tag on a
+GitHub-hosted runner; an attestation from a run on another branch or ref does
+not pass:
 
 ```sh
 gh attestation verify "$archive" --repo pohunekd/autoreview \
-  --signer-workflow pohunekd/autoreview/.github/workflows/release.yml
+  --signer-workflow pohunekd/autoreview/.github/workflows/release.yml \
+  --source-ref "refs/tags/v$version" --deny-self-hosted-runners
 ```
 
 Unpack the archive and install the binary:

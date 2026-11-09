@@ -54,7 +54,8 @@ to call the current issue done.
 - One issue, one branch, one PR. Keep PRs small; an issue too large for one
   reviewable PR is split into sub-issues (plan-epic skill), not into stacked
   PRs.
-- Branch: `<issue-number>-<short-slug>`. Parallel agents work in separate
+- Branch: `<issue-number>-<short-slug>`; the only exception is the release
+  branch `release-X.Y.Z` (see "Releases"). Parallel agents work in separate
   worktrees under `../autoreview-worktrees/<slug>` and never share a build
   cache concurrently.
 - Commits: imperative English subject, body with the why when not obvious, no
@@ -90,7 +91,8 @@ the release pull request only when the owner asks. `.github/workflows/release.ym
 builds the archives from a pushed tag `v<version>` and creates a draft release.
 It never creates a tag and never publishes.
 
-1. On a branch `release-X.Y.Z`, set `version = "X.Y.Z"` under
+1. On a branch `release-X.Y.Z` (a release has no issue, so this name is the
+   exception to the branch convention), set `version = "X.Y.Z"` under
    `[workspace.package]` in `Cargo.toml`, then run `cargo update --workspace`.
    It updates only the workspace crates in `Cargo.lock`; `--locked` fails
    without it.
@@ -107,9 +109,20 @@ It never creates a tag and never publishes.
    is the `CHANGELOG.md` section. Check the draft (two archives, two `.sha256`
    files, the notes), then publish it.
 
-A failed run deletes the draft it created and never touches the tag; fix the
-cause and re-run the failed jobs. A leftover draft of the tag blocks the run:
-delete it first. A manual run of the `Release` workflow is a dry run: it builds
+A failed or cancelled run deletes the draft it created and never touches the
+tag. A leftover draft of the tag blocks the run: delete it first.
+
+- **Transient failure** (runner, network or GitHub API error): re-run the
+  failed jobs of the same run.
+- **Failure that needs a code change:** the run refuses a tag that points to
+  another commit than the one it built, so the tag must move to the fix.
+  Delete the draft of the tag if one is left, delete the unpublished tag
+  (`git push origin :refs/tags/vX.Y.Z` and `git tag -d vX.Y.Z`), merge the fix
+  into `main`, then tag the new merge commit and push the tag as in step 4.
+  Never delete or move the tag of a published release; release a new version
+  instead.
+
+A manual run of the `Release` workflow is a dry run: it builds
 the archives of the selected branch and uploads them as workflow artifacts
 only.
 

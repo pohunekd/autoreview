@@ -167,7 +167,8 @@ jobs:
 
   # The only job with `contents: write`. It runs no repository code. It creates
   # a draft for the existing tag (`--verify-tag` never creates one) and removes
-  # only a draft that this run created and could not complete.
+  # only a draft that this run created, when a later step fails or the run is
+  # cancelled.
   release:
     name: release
     needs: [meta, attest]
@@ -235,8 +236,11 @@ jobs:
             echo "::error::the draft assets differ from the built archives"
             exit 1
           fi
+      # failure() is false on a cancelled run or a job timeout, so cancelled() is
+      # needed too. A skipped draft step means an earlier step stopped the job and
+      # any existing draft is not this run's.
       - name: Remove the incomplete draft
-        if: failure() && (steps.draft.outcome == 'success' || steps.draft.outcome == 'failure')
+        if: (failure() || cancelled()) && steps.draft.outcome != 'skipped'
         run: |
           set -euo pipefail
           for id in $(gh api --paginate "repos/$GH_REPO/releases" \
