@@ -5,14 +5,15 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use autoreview_policy::Level;
+use autoreview_policy::{Event, Level};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::NotifyRoute;
 use crate::engine::{Engine, SystemClock};
 use crate::error::{Error, error_code};
 use crate::integrations::SessionRequest;
@@ -440,6 +441,62 @@ async fn rejected_pull_request_is_reported_once_and_does_not_block_others() {
     assert_eq!(
         reports, 1,
         "the rejected pull request was reported {reports} times"
+    );
+    h.stop_engine().await;
+}
+
+// An event route carries its event, in discovery and in a review (#187).
+// Every other event keeps the route of its level.
+#[tokio::test]
+async fn event_routes_carry_their_events_and_the_rest_keep_their_levels() {
+    let mut h = start_harness(|cfg| {
+        cfg.matrix_rooms.events = BTreeMap::from([
+            (Event::Approved, "!approved:example.org".to_owned()),
+            (Event::ReviewStopped, "!stopped:example.org".to_owned()),
+        ]);
+    })
+    .await;
+    let broken = integration_pull_request("acme/widget", &sha("e"));
+    h.fake.lock().rejected = vec![RejectedCandidate {
+        repository: broken.repository.clone(),
+        number: broken.number,
+        code: "github_response_invalid".to_owned(),
+    }];
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("an automatic approval", || h.publications() == 1)
+        .await;
+    h.wait_for("the approval notification", || {
+        h.fake.has_note(Level::Digest, "Approved acme/widget PR")
+    })
+    .await;
+    let (_, notes, _, _) = h.fake.snapshot();
+    let rejected = format!("{} is not started", broken.key());
+    let mut own = Vec::new();
+    for note in &notes {
+        let expected = if note.message.contains("Approved acme/widget PR") {
+            NotifyRoute::Event(Event::Approved)
+        } else if note.message.contains(&rejected) {
+            NotifyRoute::Event(Event::ReviewStopped)
+        } else {
+            NotifyRoute::Level(note.level.clone())
+        };
+        assert_eq!(note.route, expected, "route of {note:?}");
+        if matches!(note.route, NotifyRoute::Event(_)) {
+            own.push(note.route.clone());
+        }
+    }
+    assert_eq!(
+        own,
+        [
+            NotifyRoute::Event(Event::ReviewStopped),
+            NotifyRoute::Event(Event::Approved)
+        ],
+        "each routed event was sent once on its own route"
+    );
+    assert!(
+        own.len() < notes.len(),
+        "no notification took a level route: {notes:?}"
     );
     h.stop_engine().await;
 }
