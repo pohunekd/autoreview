@@ -2,7 +2,7 @@
 type: Concept
 id: concept/reviewers-and-adapters
 title: Reviewers and adapters
-description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the pohunek agent profiles that autoreview installs, finding prefixes, mixing models, and how a new agent would be added.
+description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the pohunek agent profiles it runs (an installer is planned in #25), finding prefixes, mixing models, and how a new agent would be added.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -28,9 +28,9 @@ reviewer declares exactly one protocol.
 | `claude-structured` | A Claude Code run with a JSON schema that the runtime enforces | The schema-enforced structured output of the run | Reviewers and the verifier |
 | `codex-envelope` | A Codex run that prints a result envelope | A base64 result frame followed by a line that reports exit status 0 | Reviewers only |
 
-Both protocols return one result contract: a summary, findings with their blocking
-flag, the tests the reviewer ran, and one verdict per prior finding. The protocol
-only decides how the result is produced.
+Both protocols return a summary, findings and the tests the reviewer ran. Only a
+`claude-structured` result also carries the blocking flag of each finding and one
+verdict per prior finding; for `codex-envelope` both are planned in #23.
 
 With `claude-structured` the runtime itself refuses output that does not match
 the schema, and the engine also checks the output against the request. The
@@ -147,10 +147,11 @@ Constraints on the mix:
 
 ## Why one pipeline uses one protocol
 
-Both protocols return the same result contract, and the engine handles their
-findings the same way: the blocking flag and the decision, the notes, the
-verdicts on prior findings, incremental re-reviews and the notes hand-off do not
-depend on the protocol. Two differences remain:
+The engine combines the results of both protocols the same way: the decision,
+incremental re-reviews and the notes hand-off do not depend on the protocol. A
+`codex-envelope` result carries no blocking flag and no verdicts on prior
+findings, so every Codex finding blocks at any severity and a Codex pipeline gets
+no prior findings; both are planned in #23. Two more differences remain:
 
 - **One protocol per pipeline.** The pipeline prompt is written for one request
   and one result format, and the engine combines the results of all reviewers of

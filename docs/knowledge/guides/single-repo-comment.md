@@ -112,10 +112,11 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
    [notifiers guide](notifiers.md). An event can have its own route instead, see
    [event routes](../../configuration.md#event-routes).
 8. **A new push is re-reviewed.** After the debounce, Codex reviews only the new
-   commits and settles earlier findings, as a Claude reviewer does; see
-   [incremental reviews](../concepts/incremental-reviews.md). As in every pipeline,
-   only blocking findings of severity high or critical block; the others are
-   notes. Here the rule never requests changes, so the outcome stays a comment.
+   commits; see [incremental reviews](../concepts/incremental-reviews.md). Codex
+   returns no blocking flag and no verdicts on earlier findings, so each Codex
+   finding blocks at any severity and earlier findings are not settled; Codex
+   notes and settling are planned in #23. Here the rule never requests changes,
+   so the outcome stays a comment.
 
 If a review stops after its retries you get a `review_stopped` action event.
 The rule has no approval step, so nothing waits on you otherwise.

@@ -5,8 +5,9 @@ Policy-driven AI pull request review on top of [pohunek](https://github.com/zajc
 > **Status: 0.1.0.** autoreview 0.1.0 is the first release. It ships static
 > Linux binaries for `x86_64` and `aarch64` as release archives, each with a
 > `.sha256` file and a build provenance attestation; see [install](docs/install.md).
-> It does not implement the whole v0.1 design yet: each part that is still
-> planned names its open issue.
+> It does not implement the whole v0.1 design yet. The [Rough plan](#rough-plan)
+> table is the roadmap and its open items are tracked in GitHub issues; every
+> other part that is still planned names its open issue.
 
 ## What it does
 

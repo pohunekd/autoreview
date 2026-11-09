@@ -58,8 +58,9 @@ exception is a renewed review request for the same head after a notes hand-off.
 That request adopts the stored result of the hand-off review (see
 [notes hand-off](decisions.md#notes-hand-off)). Neither case is incremental.
 
-The commit history check and the collection of prior findings apply to every
-pipeline, whichever protocol its reviewers use.
+The commit history check applies to every pipeline. Prior findings are collected
+only for a `claude-structured` pipeline; for `codex-envelope` they are planned in
+#23.
 
 ### Which reviewers run
 

@@ -23,10 +23,11 @@ described in [policy](../../policy.md#repository-rules).
 Every finding is either **blocking** or a **note**. Only blocking findings count
 toward the decision. Notes are published, but they never hold the merge back.
 
-- A finding from any reviewer, whichever protocol it uses, is blocking only when
-  the reviewer marks it `blocking` and its severity is `critical` or `high`. A
-  finding marked blocking at `medium` or `low` is a note. Both protocols return
-  the blocking flag (see [reviewers and adapters](reviewers-and-adapters.md#protocols)).
+- A finding of a `claude-structured` reviewer is blocking only when the reviewer
+  marks it `blocking` and its severity is `critical` or `high`. A finding marked
+  blocking at `medium` or `low` is a note. A `codex-envelope` result has no
+  blocking flag, so each Codex finding is blocking at any severity; Codex notes
+  are planned in #23 (see [reviewers and adapters](reviewers-and-adapters.md#protocols)).
 - A finding in a file the pull request does not change is a note (see
   [how it works](how-it-works.md#6-anchoring-findings-to-changed-lines)).
 - The verifier can turn a blocking finding into a note, with the reason

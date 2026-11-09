@@ -10,8 +10,8 @@ intents: [setup, help]
 # Install autoreview
 
 > **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0. The release workflow of
-> `pohunekd/autoreview` publishes the release archives from `v0.1.0` on. The
+> marked planned or "not in v0.1" are not in 0.1.0. The release archives are
+> published from `v0.1.0` on; the release workflow builds and attests them. The
 > release ships no systemd unit files: path b writes them by hand, and shipped
 > units are planned in #39. The container image `ghcr.io/pohunekd/autoreview`
 > comes after 0.1.0 and is planned in #40.

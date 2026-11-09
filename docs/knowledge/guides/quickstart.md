@@ -183,17 +183,19 @@ GitHub does not allow an author to approve their own pull request.
 ## 14. Repeat with a second push
 
 Push a new commit to the pull request. After the debounce period, the review
-runs again. The reviewer of this example is Codex, and it re-reviews only the
-new commits and settles earlier findings, as a Claude reviewer does. See
+runs again. The reviewer of this example is Codex, and it reviews only the new
+commits. Codex returns no blocking flag and no verdicts on earlier findings, so
+each Codex finding blocks at any severity and earlier findings are not settled;
+Codex notes and settling are planned in #23. See
 [incremental reviews](../concepts/incremental-reviews.md).
 
 ## 15. Run as a service
 
 Once one review works, run autoreview as a long-running service so it reviews
-without manual polls. Install the systemd unit, or the container image that comes
-after 0.1.0 (planned in #40), as described in [install](../../install.md), and
-let `autoreview serve` run until you stop it. Reviews that are running at
-shutdown resume after the next start.
+without manual polls. Write the systemd units of install path b, or use the
+container image that comes after 0.1.0 (planned in #40), as described in
+[install](../../install.md), and let `autoreview serve` run until you stop it.
+Reviews that are running at shutdown resume after the next start.
 
 Before you leave this setup running, read the
 [threat model](../safety/threat-model.md). Repositories with untrusted
