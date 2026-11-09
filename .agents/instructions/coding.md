@@ -234,6 +234,16 @@ What is not compatible, by decision:
   can collide with a republished `P001` (`protocol.go:363`). A policy that Go
   accepts with `P` needs another letter before it runs on Rust. The regression
   test is `reserved_finding_prefix_is_rejected_naming_the_reviewer`.
+- **History check of Codex pipelines (#237):** the linear history check of an
+  incremental review runs for every protocol, so a `codex-envelope` re-review
+  whose head does not extend the published head linearly, or whose history
+  cannot be read, is full (`history_not_linear`, `history_unknown`). The
+  stored-result check (`previous_review_not_stored`) and the prior findings stay
+  `claude-structured` only (#23). Go returns before both checks for any other
+  protocol (`discovery.go:90`), so a Codex rule with `on_clean: approve` can
+  approve a rebased head on an incremental review. No stored row changes, and a
+  rollback to Go brings the Go behaviour back. The regression test is
+  `rewritten_history_gets_a_full_review_on_a_codex_pipeline`.
 
 - **MCP server (#179):** `autoreview mcp` has no Go counterpart. The `mcp`
   section exists only in `config.yaml`, which Go does not read, and the server

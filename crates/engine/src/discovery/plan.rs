@@ -61,10 +61,10 @@ fn full_scope() -> ReviewScope {
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Decides the scope and the prior findings of the review of `candidate`.
     ///
-    /// The prior findings are the blocking findings of the last published review and those it
-    /// left open. An incremental scope also needs that review's stored result and a head that
-    /// extends the reviewed one linearly; otherwise the review is full and keeps the prior
-    /// findings.
+    /// An incremental scope needs a head that extends the reviewed one linearly; otherwise the
+    /// review is full. A `claude-structured` pipeline also gets the blocking findings of the last
+    /// published review and those it left open, so its incremental scope also needs that
+    /// review's stored result. A `codex-envelope` pipeline gets no prior findings (#23).
     ///
     /// # Errors
     ///
@@ -81,9 +81,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let Some(published) = published else {
             return Ok((scope, Vec::new()));
         };
-        if published.head_sha == pr.head_sha
-            || candidate.rule.pipeline.protocol != Protocol::ClaudeStructured
-        {
+        if published.head_sha == pr.head_sha {
+            return Ok((scope, Vec::new()));
+        }
+        if candidate.rule.pipeline.protocol != Protocol::ClaudeStructured {
+            if !scope.incremental() {
+                return Ok((scope, Vec::new()));
+            }
+            let scope = self.linear_scope(cancel, pr, published, scope).await?;
             return Ok((scope, Vec::new()));
         }
         let stored = self.prior_findings(published)?;
@@ -98,6 +103,24 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             );
             return Ok((full_scope(), Vec::new()));
         };
+        let scope = self.linear_scope(cancel, pr, published, scope).await?;
+        Ok((scope, prior))
+    }
+
+    /// Keeps an incremental `scope` only when the head extends the published head linearly.
+    ///
+    /// A history that is not linear or cannot be read widens the review to full.
+    ///
+    /// # Errors
+    ///
+    /// Returns the history error when `cancel` is cancelled.
+    async fn linear_scope(
+        &self,
+        cancel: &CancellationToken,
+        pr: &PullRequest,
+        published: &PublishedRecord,
+        scope: ReviewScope,
+    ) -> Result<ReviewScope, Error> {
         match self
             .integration
             .linear_history(cancel, &pr.repository, &published.head_sha, &pr.head_sha)
@@ -112,7 +135,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     error_code = error_code(&err),
                     "review widened to full"
                 );
-                Ok((full_scope(), prior))
+                Ok(full_scope())
             }
             Ok(false) => {
                 tracing::info!(
@@ -120,9 +143,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     reason = "history_not_linear",
                     "review widened to full"
                 );
-                Ok((full_scope(), prior))
+                Ok(full_scope())
             }
-            Ok(true) => Ok((scope, prior)),
+            Ok(true) => Ok(scope),
         }
     }
 
