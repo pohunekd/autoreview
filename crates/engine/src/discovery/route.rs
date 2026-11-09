@@ -285,4 +285,73 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn host_that_failed_earlier_in_the_pass_is_not_called_again() {
+        let none = BTreeMap::new();
+        let cancel = CancellationToken::new();
+        let mut failures = HostFailures::new();
+        failures.insert("a".to_owned(), "pohunek_request_timeout".to_owned());
+        let answers = [("a", Ok(&["p1"][..])), ("b", Ok(&["p2"][..]))];
+        let (result, called) = search(&["a", "b"], &answers, &none, &mut failures, &cancel).await;
+        assert_eq!(outcome(&result), Ok(route("b", "p2")));
+        assert_eq!(called, ["b"]);
+        let answers = [("a", Ok(&["p1"][..])), ("b", Ok(&[][..]))];
+        let (result, called) = search(&["a", "b"], &answers, &none, &mut failures, &cancel).await;
+        assert_eq!(outcome(&result), Err("pohunek_request_timeout".to_owned()));
+        assert_eq!(called, ["b"]);
+    }
+
+    #[tokio::test]
+    async fn route_override_asks_only_its_host_and_never_falls_back() {
+        let cancel = CancellationToken::new();
+        let mut overrides = BTreeMap::new();
+        overrides.insert(
+            REPOSITORY.to_owned(),
+            RouteOverride {
+                host: "b".to_owned(),
+                project_id: "p2".to_owned(),
+            },
+        );
+        // (answers, expected outcome)
+        let cases: Vec<(Answers, Outcome)> = vec![
+            (
+                vec![("a", Ok(&["p1"])), ("b", Ok(&["p1", "p2"]))],
+                Ok(route("b", "p2")),
+            ),
+            (
+                vec![("a", Ok(&["p1"])), ("b", Ok(&["p1"]))],
+                Err("project_route_not_found".to_owned()),
+            ),
+            (
+                vec![("a", Ok(&["p2"])), ("b", Err("pohunek_request_failed"))],
+                Err("pohunek_request_failed".to_owned()),
+            ),
+        ];
+        for (answers, want) in cases {
+            let mut failures = HostFailures::new();
+            let (result, called) =
+                search(&["a", "b"], &answers, &overrides, &mut failures, &cancel).await;
+            assert_eq!(outcome(&result), want, "answers={answers:?}");
+            assert_eq!(called, ["b"], "answers={answers:?}");
+        }
+        let mut failures = HostFailures::new();
+        let answers = [("a", Ok(&["p2"][..]))];
+        let (result, called) = search(&["a"], &answers, &overrides, &mut failures, &cancel).await;
+        assert_eq!(outcome(&result), Err("project_route_not_found".to_owned()));
+        assert!(called.is_empty(), "called={called:?}");
+    }
+
+    #[tokio::test]
+    async fn cancelled_search_returns_the_failure_without_skipping() {
+        let none = BTreeMap::new();
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut failures = HostFailures::new();
+        let answers = [("a", Err("pohunek_request_failed")), ("b", Ok(&["p2"][..]))];
+        let (result, called) = search(&["a", "b"], &answers, &none, &mut failures, &cancel).await;
+        assert_eq!(outcome(&result), Err("pohunek_request_failed".to_owned()));
+        assert_eq!(called, ["a"]);
+        assert!(failures.is_empty(), "failures={failures:?}");
+    }
 }
