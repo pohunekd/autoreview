@@ -2,7 +2,7 @@
 type: Guide
 id: guide/multihost
 title: Several review hosts
-description: Run reviewers on more than one pohunek host - list the hosts, register each repository on exactly one of them or pin it with a route override, install the agent profiles on every host, reach remote hosts over an overlay network and size the concurrency.
+description: Run reviewers on more than one pohunek host - list the hosts in priority order, register each repository on the hosts that may review it or pin it with a route override, skip a failing host, install the agent profiles on every host, reach remote hosts over an overlay network and size the concurrency.
 source_kind: manual
 intents: [setup, project, debug]
 ---
@@ -32,7 +32,8 @@ pohunek:
   route_overrides: {}
 ```
 
-- `hosts` lists the pohunek host names that may run reviewers. One or more.
+- `hosts` lists the pohunek host names that may run reviewers, in priority
+  order. One or more.
 - `route_overrides` is a map from `owner/repo` to `{host, project_id}`. It is
   empty until a repository needs a pin, see below.
 - `pohunek.timeout_seconds` covers one pohunek call, including the base fetch
@@ -45,8 +46,8 @@ host in the list is reachable, so check each host with a manual review.
 
 ## How a host is chosen
 
-For each review autoreview looks for the repository among the pohunek projects
-of every host in `hosts`:
+For each review autoreview asks the hosts in `hosts` in order for their
+pohunek projects and stops at the first host that has the repository:
 
 1. Only projects whose source is allowed by the pipeline's `project_sources`
    are candidates. `manual` means a project registered with
@@ -54,26 +55,45 @@ of every host in `hosts`:
    A pipeline that lists both accepts both.
 2. A candidate matches when its origin URL names the repository. The match is
    on the origin URL, not on the directory name.
-3. Exactly one candidate must match.
-   - No candidate: the review stops with `project_route_not_found`.
-   - Several candidates: the review stops with `project_route_ambiguous`,
-     unless `route_overrides` names one of them.
+3. The first host with a match runs the review; the later hosts are not asked.
+   - Two candidates on that host: the review stops with
+     `project_route_ambiguous`, unless `route_overrides` names one of them.
+   - No candidate on any host: the review stops with `project_route_not_found`.
 
-The host is chosen for each review, so changing a registration takes effect
-with the next review.
+The host is chosen when a review attempt is dispatched and stored with it, so
+a restarted review resumes on the same host and is never moved. Changing a
+registration or the order of `hosts` takes effect with the next attempt.
+Choosing a host by its state (idle, power, memory, local models) is planned in
+#180.
 
-## Register each repository on one host
+## When a host fails
 
-Register the repository as a pohunek project on the host that should review
-it. Run the registration on that host:
+A host that does not answer its project list (unreachable, a pohunek error, a
+timeout) is skipped, and the next host in `hosts` is asked. Each skip is logged
+at WARN as `review host skipped` with `host`, `repository`, `error_code` and
+`skipped_after_failure`. A host that failed is not asked again in the same
+discovery pass (`skipped_after_failure` is then `true`), so a dead host costs one
+`pohunek.timeout_seconds` per pass, not one per pull request.
+
+A failing host never stops the reviews of repositories that other hosts serve.
+When no later host has the repository, the review fails with the code of the
+first skipped host (for example `pohunek_request_timeout`), not with
+`project_route_not_found`, so the route retry policy tries it again.
+
+## Register each repository
+
+Register the repository as a pohunek project on each host that may review it.
+Run the registration on that host:
 
 ```sh
 pohunek project add <repository-path>
 ```
 
-Keep one registration per repository in the whole `hosts` list. The layout
-that avoids `project_route_ambiguous` is the simplest one: each repository is
-registered on exactly one host, and the policy does not need any override.
+A repository registered on one host always goes there. A repository
+registered on several hosts goes to the first of them in `hosts`, and to the
+next one when that host fails. Keep one registration per repository on each
+host: two projects of the same repository on one host are
+`project_route_ambiguous`.
 
 A layout that splits repositories over hosts works well when the repositories
 differ in size or in the tools they need:
@@ -85,9 +105,10 @@ differ in size or in the tools they need:
 
 ## Pin a repository with a route override
 
-Use `route_overrides` when a repository is registered on more than one host on
-purpose, for example a mirror or a copy kept for testing. The override names
-the host and the pohunek project id that must be used:
+Use `route_overrides` when a repository must always run on one host and
+project, for example a copy kept for testing on a lower-priority host, or two
+projects of the repository on one host. The override names the host and the
+pohunek project id that must be used:
 
 ```yaml
 pohunek:
@@ -101,11 +122,12 @@ pohunek:
 - The key is the lowercase `owner/repo`.
 - `host` must be one of `hosts`. `project_id` is the id of the project on that
   host, as pohunek reports it.
-- An override replaces the search for that repository only. It still requires
-  the project to exist on the named host; a missing project is an error, not a
-  silent fallback to another host.
+- An override replaces the search for that repository only: only the named
+  host is asked. It still requires the project to exist on the named host; a
+  missing project is an error, not a silent fallback to another host, and a
+  failing named host makes the review wait for its next retry.
 
-Use an override to resolve an ambiguous route. Do not use it to hide a missing
+Use an override to pin a route. Do not use it to hide a missing
 registration: a repository that is registered nowhere still fails with
 `project_route_not_found`, which is the signal you need.
 
@@ -153,8 +175,9 @@ For review limits and session timeouts, see
 
 | Error | Cause | Fix |
 |---|---|---|
-| `project_route_not_found` | No host has the repository as a project allowed by `project_sources` | Run `pohunek project add` on the host that should review it, or allow the source in the pipeline |
-| `project_route_ambiguous` | Two or more hosts have the repository | Remove the extra registration, or add a `route_overrides` entry |
+| `project_route_not_found` | No host that answered has the repository as a project allowed by `project_sources` | Run `pohunek project add` on the host that should review it, or allow the source in the pipeline |
+| `project_route_ambiguous` | The host that serves the repository has it as two or more projects | Remove the extra registration, or add a `route_overrides` entry |
+| `review host skipped` (WARN) | A host did not answer its project list; the next host was asked | Check the host and the overlay |
 | `pohunek_request_timeout` | A host did not answer in time | Check the host and the overlay; raise `pohunek.timeout_seconds` for slow links |
 | `pohunek_session_start_failed` | The host could not start a session | Check the host's pohunek daemon and the profile installed on it |
 
