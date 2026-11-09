@@ -2,7 +2,7 @@
 type: Guide
 id: guide/notifiers
 title: Notifiers
-description: Configure where autoreview messages go - no notifier, Matrix rooms per level, webhooks for Slack, Discord or plain JSON, several backends per level, the review queue and delivery-failure semantics.
+description: Configure where autoreview messages go - Matrix rooms per level, the review queue and delivery-failure semantics; no notifier, webhooks and several backends per level are planned.
 source_kind: manual
 intents: [setup, help, debug]
 ---
@@ -13,7 +13,7 @@ intents: [setup, help, debug]
 
 Every event in the policy has one of three levels: `action`, `digest` or
 `log`. The notification section of `config.yaml` says where each level goes.
-A level is routed to one or more named backends, and a backend is one
+A level is routed to one named backend, and a backend is one
 endpoint of one type. The policy decides *what* is worth a message; this guide
 covers *where* the message goes.
 
@@ -28,21 +28,25 @@ notify:
   timeout_seconds: 30          # one delivery
   max_characters: 8000         # longer messages are cut
   backends:
-    - name: log
-      type: none
+    - name: matrix
+      type: matrix
+      homeserver_url: https://matrix.example.org
+      access_token_env: AUTOREVIEW_MATRIX_TOKEN
+      room: "!roomid:example.org"
+      mention_user: "@you:example.org"
   routes:
-    action: [log]              # each level: a list of backend names
-    digest: [log]
-    log: [log]
+    action: [matrix]           # each level: a list of one backend name
+    digest: [matrix]
+    log: [matrix]
   review_queue:
-    backends: [log]
+    backends: [matrix]
     max_items: 50
 ```
 
 - `backends` defines named endpoints. Names are used in the routes, and the
   same type may appear several times under different names.
-- `routes` maps each level to a list of backend names. Every backend in the
-  list receives the message of that level.
+- `routes` maps each level to a list of exactly one backend name. Several
+  backends per level are planned in #27.
 - `review_queue.backends` lists the backends of the review queue, which is a
   separate message and not an event.
 
@@ -51,30 +55,16 @@ backends when they must not share a room.
 
 ## No notifier
 
-```yaml
-backends:
-  - name: log
-    type: none
-routes:
-  action: [log]
-  digest: [log]
-  log: [log]
-review_queue:
-  backends: [log]
-  max_items: 50
-```
-
-Nothing leaves the host, and the structured log is the only record. Use this
-while you evaluate autoreview. Until M3 the review queue needs a `matrix`
-backend: a `review_queue.backends` list of `none` backends only is refused at
-load, see [configuration](../../configuration.md). A clean review that waits for a human is then
-visible only through `autoreview awaiting`, so pair `human-approval` setups
-with a real backend.
+Planned in #29. Until then every route and the review queue need a `matrix`
+backend. A route to a `none` backend is refused at load with
+`configuration_invalid: config: invalid Matrix <level> room`. A
+`review_queue.backends` list of `none` backends only is refused too, see
+[configuration](../../configuration.md#backend-none).
 
 ## Matrix, one room per level
 
 A common layout uses two rooms: one that notifies a person, and one quiet room
-for results. The log stays on the `log` backend.
+for results. The `log` level shares the quiet room.
 
 ```yaml
 notify:
@@ -93,12 +83,10 @@ notify:
       access_token_env: AUTOREVIEW_MATRIX_TOKEN
       room: "!digestroom:example.org"
       mention_user: "@you:example.org"
-    - name: log
-      type: none
   routes:
     action: [matrix-action]
     digest: [matrix-digest]
-    log: [log]
+    log: [matrix-digest]
   review_queue:
     backends: [matrix-digest]
     max_items: 50
