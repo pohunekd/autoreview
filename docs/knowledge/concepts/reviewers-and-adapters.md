@@ -2,14 +2,15 @@
 type: Concept
 id: concept/reviewers-and-adapters
 title: Reviewers and adapters
-description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the pohunek agent profiles that autoreview installs, finding prefixes, mixing models, and how a new agent would be added.
+description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the pohunek agent profiles it runs (an installer is planned in #25), finding prefixes, mixing models, and how a new agent would be added.
 source_kind: manual
 intents: [setup, help]
 ---
 
 # Reviewers and adapters
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 A **reviewer** is one coding agent run in its own pohunek session. The agent
 reads the pull request in a worktree, writes findings, and returns them in a
@@ -27,9 +28,9 @@ reviewer declares exactly one protocol.
 | `claude-structured` | A Claude Code run with a JSON schema that the runtime enforces | The schema-enforced structured output of the run | Reviewers and the verifier |
 | `codex-envelope` | A Codex run that prints a result envelope | A base64 result frame followed by a line that reports exit status 0 | Reviewers only |
 
-Both protocols return one result contract: a summary, findings with their blocking
-flag, the tests the reviewer ran, and one verdict per prior finding. The protocol
-only decides how the result is produced.
+Both protocols return a summary, findings and the tests the reviewer ran. Only a
+`claude-structured` result also carries the blocking flag of each finding and one
+verdict per prior finding; for `codex-envelope` both are planned in #23.
 
 With `claude-structured` the runtime itself refuses output that does not match
 the schema, and the engine also checks the output against the request. The
@@ -146,10 +147,13 @@ Constraints on the mix:
 
 ## Why one pipeline uses one protocol
 
-Both protocols return the same result contract, and the engine handles their
-findings the same way: the blocking flag and the decision, the notes, the
-verdicts on prior findings, incremental re-reviews and the notes hand-off do not
-depend on the protocol. Two differences remain:
+The engine combines the results of both protocols the same way: the decision
+and the notes hand-off do not depend on the protocol. A `codex-envelope` result
+carries no blocking flag and no verdicts on prior findings, so every Codex
+finding blocks at any severity and a Codex pipeline gets no prior findings; both
+are planned in #23. A `codex-envelope` pipeline also skips the commit history
+check of an incremental review, so it stays incremental after a rebase or a force
+push; the check is planned in #237. Two more differences remain:
 
 - **One protocol per pipeline.** The pipeline prompt is written for one request
   and one result format, and the engine combines the results of all reviewers of
@@ -178,7 +182,8 @@ and the design below is the outline that such a protocol would have to meet.
 4. **Verdicts, when the protocol supports them.** One verdict per prior finding.
    A protocol without verdicts can run only in a pipeline that has no prior
    findings to settle, or it must add the verdicts first.
-5. **A blocking flag.** The result carries it, as both current protocols do.
+5. **A blocking flag.** The result carries it, as `claude-structured` does; for
+   `codex-envelope` it is planned in #23.
 6. **Environment rules.** No GitHub token, no pohunek identity variables, and
    bounded output.
 7. **A profile installer.** Support for the new runtime in

@@ -9,7 +9,9 @@ intents: [setup, help]
 
 # Features
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0. The container image this page
+> mentions comes after 0.1.0 and is planned in #40.
 
 autoreview is a small service that reviews GitHub pull requests with coding
 agents you already run. It finds pull requests that ask for a review, runs one
@@ -55,7 +57,8 @@ can go to the author first. Your own pull requests always get a comment.
 **Re-reviews only what changed.** After a push, the new commits are reviewed
 against the last published head, and every earlier blocking finding is settled
 as fixed, still open, or answered, taking the pull request discussion into
-account. [Incremental reviews](knowledge/concepts/incremental-reviews.md)
+account. Settling needs Claude reviewers; for Codex it is planned in #23.
+[Incremental reviews](knowledge/concepts/incremental-reviews.md)
 
 **Keeps humans in charge where it matters.** A clean review can wait for your
 approval, given from the CLI or a chat integration and bound to the exact head
@@ -88,14 +91,14 @@ clean up are reported. [State and recovery](knowledge/concepts/state-and-recover
   runtime packages installed.
 - The GitHub CLI and one token, of your own account or a machine user; several
   tokens are planned in #13. [GitHub identity](knowledge/concepts/github-identity.md)
-- Linux with systemd or a container runtime; the pohunek workflow plugin is
-  planned in #41.
+- Linux with systemd, or a container runtime for the container image that comes
+  after 0.1.0 (planned in #40); the pohunek workflow plugin is planned in #41.
 
 ## Documentation map
 
 | Start here | |
 |---|---|
-| [Install](install.md) | Binary, container, first configuration, first review |
+| [Install](install.md) | Binary, container (after 0.1.0, planned in #40), first configuration, first review |
 | [Quickstart](knowledge/guides/quickstart.md) | One repository, one reviewer, comments only |
 | [Use cases](knowledge/guides/index.md) | Pick a scenario and combine them |
 

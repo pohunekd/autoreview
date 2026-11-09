@@ -9,7 +9,8 @@ intents: [setup, update, debug, help]
 
 # Configuration reference
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 `config.yaml` holds the technical settings of one autoreview service: which
 GitHub account it acts as, which pohunek hosts run the reviewers, how often it

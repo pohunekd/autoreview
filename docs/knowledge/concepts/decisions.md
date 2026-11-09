@@ -9,7 +9,8 @@ intents: [setup, help, debug]
 
 # Decisions and outcomes
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 A finished review has a list of findings. The decision turns that list into
 exactly one GitHub review event: `REQUEST_CHANGES`, `COMMENT` or `APPROVE`. Or,
@@ -22,10 +23,11 @@ described in [policy](../../policy.md#repository-rules).
 Every finding is either **blocking** or a **note**. Only blocking findings count
 toward the decision. Notes are published, but they never hold the merge back.
 
-- A finding from any reviewer, whichever protocol it uses, is blocking only when
-  the reviewer marks it `blocking` and its severity is `critical` or `high`. A
-  finding marked blocking at `medium` or `low` is a note. Both protocols return
-  the blocking flag (see [reviewers and adapters](reviewers-and-adapters.md#protocols)).
+- A finding of a `claude-structured` reviewer is blocking only when the reviewer
+  marks it `blocking` and its severity is `critical` or `high`. A finding marked
+  blocking at `medium` or `low` is a note. A `codex-envelope` result has no
+  blocking flag, so each Codex finding is blocking at any severity; Codex notes
+  are planned in #23 (see [reviewers and adapters](reviewers-and-adapters.md#protocols)).
 - A finding in a file the pull request does not change is a note (see
   [how it works](how-it-works.md#6-anchoring-findings-to-changed-lines)).
 - The verifier can turn a blocking finding into a note, with the reason
