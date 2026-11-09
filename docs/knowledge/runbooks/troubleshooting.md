@@ -22,8 +22,8 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | Symptom or code | Usual cause | Fix |
 |---|---|---|
 | Pull request never appears | Trigger not met, no rule matches, or it is a draft | [Nothing gets reviewed](#nothing-gets-reviewed) |
-| `project_route_not_found` | Repository is not registered on a host in `pohunek.hosts` | [Route errors](#project_route_not_found) |
-| `project_route_ambiguous` | Registered on two hosts, no `route_overrides` entry | [Route errors](#project_route_ambiguous) |
+| `project_route_not_found` | Repository is not registered on an answering host in `pohunek.hosts` | [Route errors](#project_route_not_found) |
+| `project_route_ambiguous` | Registered twice on the host that serves it, no `route_overrides` entry | [Route errors](#project_route_ambiguous) |
 | `pohunek_session_start_failed` | Review host could not start the session | [Session start failures](#session-start-failures) |
 | `pohunek_session_lost` | The session worker was lost while the session started | [Review host checks](#review-host-checks) |
 | `pohunek_base_fetch_timeout`, `pohunek_base_fetch_authentication_failed` | Git on the review host could not fetch the base: no network, a hung SSH agent or a locked credential helper | [Review host checks](#review-host-checks) |
@@ -88,15 +88,18 @@ The repository is not registered as a pohunek project on any host in
   or `auto` (discovered projects) for the pipeline.
 - The host is listed in `pohunek.hosts`.
 
-When a host does not answer, the error is `pohunek_request_failed` or
-`pohunek_request_timeout`. The reference does not say whether an unreachable
-host is reported as `project_route_not_found`. Check the tunnel to the host and
-the `pohunek.timeout_seconds` value.
+A host that does not answer is skipped and logged as `review host skipped` with
+the host and the code (`pohunek_request_failed`, `pohunek_request_timeout`). When
+no later host has the repository, the review fails with that code, not with
+`project_route_not_found`, and the route retry policy tries it again. Check the
+tunnel to the host and the `pohunek.timeout_seconds` value.
 
 ### project_route_ambiguous
 
-The repository is registered on two or more hosts and no route pins it. Either
-remove the duplicate registration, or pin the repository:
+The repository is registered as two or more projects on the host that serves
+it, and no route pins it. A registration on two different hosts is not
+ambiguous: the first host of `pohunek.hosts` runs the review. Either remove the
+duplicate registration, or pin the repository:
 
 ```yaml
 pohunek:
