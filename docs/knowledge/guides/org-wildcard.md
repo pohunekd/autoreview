@@ -9,7 +9,8 @@ intents: [setup, project, help]
 
 # Organisation rules
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 One rule covers every repository of an organisation, and more specific rules
 above it cover the repositories that need their own pipeline and prompt. This

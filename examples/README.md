@@ -5,7 +5,7 @@ it shows, and any prompt files it needs beyond the two default prompts in
 [`prompts/`](../prompts/). [config.yaml](config.yaml) is the complete
 configuration shared by all examples.
 
-> **Status: planned for v0.1.** autoreview is not released yet. These examples describe the design the first release implements.
+> **Status: 0.1.0.** These examples are written for autoreview 0.1.0, the first release.
 
 | Example | Shows | Repositories | Outcome |
 |---|---|---|---|

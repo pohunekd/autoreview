@@ -9,7 +9,8 @@ intents: [setup, help]
 
 # Comment on one repository
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 This is the first setup to run. One repository, one reviewer, a label that
 starts a review, and only comments on the pull request. Nothing is approved and
@@ -111,10 +112,11 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
    [notifiers guide](notifiers.md). An event can have its own route instead, see
    [event routes](../../configuration.md#event-routes).
 8. **A new push is re-reviewed.** After the debounce, Codex reviews only the new
-   commits and settles earlier findings, as a Claude reviewer does; see
-   [incremental reviews](../concepts/incremental-reviews.md). As in every pipeline,
-   only blocking findings of severity high or critical block; the others are
-   notes. Here the rule never requests changes, so the outcome stays a comment.
+   commits; see [incremental reviews](../concepts/incremental-reviews.md). Codex
+   returns no blocking flag and no verdicts on earlier findings, so each Codex
+   finding blocks at any severity and earlier findings are not settled; Codex
+   notes and settling are planned in #23. Here the rule never requests changes,
+   so the outcome stays a comment.
 
 If a review stops after its retries you get a `review_stopped` action event.
 The rule has no approval step, so nothing waits on you otherwise.

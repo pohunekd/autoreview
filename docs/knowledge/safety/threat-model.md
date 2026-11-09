@@ -9,7 +9,8 @@ intents: [setup, help]
 
 # Threat model
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 autoreview reads pull requests written by people it may not trust, sends them
 to coding agents, and then posts a review under a GitHub account. Its threats

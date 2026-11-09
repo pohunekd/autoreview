@@ -9,7 +9,8 @@ intents: [setup, project, help]
 
 # Policy reference
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 The policy decides **what** is reviewed, **by whom**, and **what happens with
 the result**. It lives in its own file, `policy.yaml`, next to the prompt files

@@ -3,7 +3,8 @@
 Hand-written documentation for autoreview, in the same layout as the pohunek
 knowledge bundle so pohunek.dev can render both.
 
-> **Status: planned for v0.1.** autoreview is not released yet. These pages describe the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** These pages describe autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 - **Concepts** explain how a review works:
   [how it works](concepts/how-it-works.md),

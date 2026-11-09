@@ -9,7 +9,8 @@ intents: [setup, help]
 
 # Public repositories
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 On a public repository anyone can open a pull request, including from a fork.
 That author has no reason to be trusted, and their code must never reach the

@@ -9,7 +9,8 @@ intents: [setup, help]
 
 # Combining patterns
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
+> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
+> marked planned or "not in v0.1" are not in 0.1.0.
 
 The recipes layer the [scenario guides](index.md) in one `policy.yaml`. Each
 shows only the parts that change; the top-level keys are as in the
@@ -108,9 +109,10 @@ repositories:
 
 A pipeline cannot mix `codex` and `opus` (`all reviewers must use the same protocol`),
 and the verifier must be a Claude reviewer, so it belongs to `strict`.
-The cheap pass costs less and returns the same result contract as `strict`, so its
-blocking findings, notes and incremental reviews behave the same. It has no
-verifier, because a verifier must be a Claude reviewer and therefore sits in `strict`.
+The cheap pass costs less, but each Codex finding blocks at any severity and its
+re-reviews settle no earlier findings (both planned in #23); a rebase or a force
+push does not widen them to full (planned in #237). It has no verifier, because a
+verifier must be a Claude reviewer and therefore sits in `strict`.
 
 ## Recipe d: notes for humans, drafts of coding agents marked ready
 
