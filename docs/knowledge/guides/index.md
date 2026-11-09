@@ -82,7 +82,7 @@ one value per dimension for each repository rule.
 | Pipeline | Reviewers, incremental reviewers, prompt, checkout, project sources, verifier | `pipelines` | [policy](../../policy.md#pipelines) |
 | Outcomes | Blocking findings, clean review, notes | `on_findings`, `on_clean`, `on_notes` | [decisions](../concepts/decisions.md) |
 | Authors | Trusted by login or permission, untrusted handling | `authors` | [untrusted authors](../safety/untrusted-authors.md) |
-| Notifications | Level per event, routes to backends | `notifications`, `notify.routes` | [notifications](../concepts/notifications.md) |
+| Notifications | Level per event, routes per level or event to backends | `notifications`, `notify.routes` | [notifications](../concepts/notifications.md) |
 | Hosts | pohunek hosts that run reviewers, route overrides | `pohunek.hosts`, `pohunek.route_overrides` | [multihost](multihost.md) |
 
 Two dimensions are not in a policy: the GitHub account (the `login` of the credential in

@@ -2,7 +2,7 @@
 type: Concept
 id: concept/notifications
 title: Notifications
-description: The events autoreview emits, their three levels, how levels route to notifier backends, what happens when a delivery fails, the hourly review queue, the contents of a message and its Review ID, and how a new backend type would be added.
+description: The events autoreview emits, their three levels, how levels and single events route to notifier backends, what happens when a delivery fails, the hourly review queue, the contents of a message and its Review ID, and how a new backend type would be added.
 source_kind: manual
 intents: [setup, help, debug]
 ---
@@ -14,8 +14,10 @@ intents: [setup, help, debug]
 autoreview tells people about reviews that need them, and it records the rest.
 Each **event** has a **level**. Each level goes to one or more **backends**. The
 policy sets the level of every event, and the configuration sets the routes from
-levels to backends. The keys are in [policy: notifications](../../policy.md#notifications)
-and [configuration: notify](../../configuration.md#notify).
+levels to backends. A single event can have its own route; every other event
+takes the route of its level. The keys are in
+[policy: notifications](../../policy.md#notifications) and
+[configuration: notify](../../configuration.md#notify).
 
 ## Levels
 
@@ -48,6 +50,11 @@ notify:
     digest: [matrix-digest]
     log: [matrix-digest]
 ```
+
+An event can have its own route next to the levels, for example
+`approved: [matrix-approvals]` under `routes`. That event goes only to its own
+route; its level still decides whether the person is mentioned and whether a
+failed delivery is dropped. Every other event goes to the route of its level.
 
 Routes reach `matrix` backends; `none` and `webhook` backends are planned in
 #29. See [notifiers](../guides/notifiers.md) for the setup.
@@ -106,13 +113,14 @@ A discovery pass sends its messages after it has saved its state and released
 the discovery lock: a rejected pull request (`review_stopped`), a review that
 stopped or waits for a retry (`review_stopped`, `retry_scheduled`), and a
 `handoff_reminder`. Each message gets one attempt, bounded by the notifier's
-request timeout. Once a message of a level fails, at any level, the later
-messages of that level in the same pass get no attempt. When the service shuts
+request timeout. Once a message fails, at any level, the later messages of the
+same route in the same pass get no attempt; the route is the event's own route
+or, without one, its level. When the service shuts
 down, the messages not yet sent get no attempt and carry the error code
 `shutdown`. A message that is not delivered is logged as the warning
 `discovery notification dropped` with its event, review key, level, error code
 and `skipped_after_failure` (`true` when it got no attempt after a failure of
-its level). A dropped message is never resent: the pass keeps its result, no
+its route). A dropped message is never resent: the pass keeps its result, no
 later pass repeats it, and the warning is the only record. A pass that fails
 before it saves sends nothing, and the next pass that saves sends those
 messages.
