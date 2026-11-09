@@ -15,14 +15,16 @@ walk-through.
 ## Use it
 
 ```sh
-autoreview init --dir /etc/autoreview --login <github-login> \
-  --pohunek-host <pohunek-host> --example single-repo-comment
+mkdir -p /etc/autoreview/prompts
+cp examples/config.yaml /etc/autoreview/config.yaml
+cp examples/single-repo-comment/policy.yaml /etc/autoreview/policy.yaml
+cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
 autoreview --config /etc/autoreview/config.yaml validate
 ```
 
-`init` writes `config.yaml`, this `policy.yaml` and the default prompts
-`prompts/generic.md` and `prompts/verifier.md`. Install the Codex profile on the
-review host first with `autoreview profiles install` (see the
-[CLI reference](../../docs/cli.md)).
+Set the keys that [use one](../README.md#use-one) names first.
+
+Create the `autoreview-codex` profile on the
+review host first; `autoreview profiles install` is planned in #25.
 
 Files: [policy.yaml](policy.yaml), shared [config.yaml](../config.yaml).

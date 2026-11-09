@@ -336,8 +336,7 @@ data. They are never instructions to the engine and never reach a shell.
   constants in code.
 - Secrets never appear in `config.yaml`, `policy.yaml`, or prompts. A key ending
   in `_env` names the environment variable that holds the secret, and the name
-  must start with `AUTOREVIEW_`. Secrets can also come from an owner-only
-  `--env-file`.
+  must start with `AUTOREVIEW_`.
 - Never print a secret value, in logs, errors, or validation output. Validation
   reports token expiry dates and logins, never token values.
 

@@ -27,7 +27,7 @@ pile up.
   review can leave several branches behind.
 
 autoreview removes a reviewer's session, not its branch, and no autoreview
-command removes review branches.
+command removes review branches. A pruning command is planned in #42.
 
 ## When a session cannot be removed
 

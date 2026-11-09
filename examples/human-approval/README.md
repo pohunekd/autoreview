@@ -16,10 +16,14 @@ walk-through.
 ## Use it
 
 ```sh
-autoreview init --dir /etc/autoreview --login <github-login> \
-  --pohunek-host <pohunek-host> --example human-approval
+mkdir -p /etc/autoreview/prompts
+cp examples/config.yaml /etc/autoreview/config.yaml
+cp examples/human-approval/policy.yaml /etc/autoreview/policy.yaml
+cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
 autoreview --config /etc/autoreview/config.yaml validate
 ```
+
+Set the keys that [use one](../README.md#use-one) names first.
 
 Install the `autoreview-opus` and `autoreview-sonnet` profiles on the review
 host. Set `approval.timeout_hours` to how long a clean review may wait for you.

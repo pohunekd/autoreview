@@ -40,10 +40,9 @@ pohunek daemon runs and the repositories are registered.
 | a. Release binary | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
 | b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
 | c. Container | You run containers | `ghcr.io/pohunekd/autoreview:<version>` (planned) |
-| d. pohunek workflow plugin | The machine already runs pohunek as the account that owns the review | the plugin `pohunekd.autoreview`: a service, a job and actions |
+| d. pohunek workflow plugin | Not available yet | Planned in #41 |
 
-Paths a and b need the `autoreview` system user that path b creates. Path d runs as
-the pohunek owner user and creates no system user.
+Paths a and b need the `autoreview` system user that path b creates.
 
 ## a. Release binary
 
@@ -186,79 +185,29 @@ the image. The image layout is not documented yet.
 
 ## d. pohunek workflow plugin
 
-autoreview is also distributed as the pohunek workflow plugin `pohunekd.autoreview`.
-Use it on a machine that already runs pohunek as the account that owns the review.
-pohunek installs the service and the job as user service units of that owner, so the
-plugin runs as the owner user, not as a dedicated system user. See the
-[pohunek workflow plugin guide](https://pohunek.dev/docs/guides/workflow-plugins/)
-for how plugins are installed, verified and run.
-
-Install the plugin archive `autoreview-<version>.tar.zst` from the release, with
-the digest published next to it. Run the command without `--yes` first to review
-what the plugin declares, then repeat it with `--yes`:
-
-```sh
-pohunek workflow install autoreview-<version>.tar.zst --sha256 <digest>
-pohunek workflow install autoreview-<version>.tar.zst --sha256 <digest> --yes
-```
-
-The plugin declares:
-
-- a **service** that runs `serve`;
-- a **job** that sends the hourly review queue (`review-queue`);
-- an **action** for every other command of the [CLI reference](cli.md): `init`,
-  `validate`, `profiles-install`, `poll`, `candidates`, `reviews`, `review`,
-  `awaiting`, `approve`, `resolve`, `retry` and `backup-db`.
-
-Every action runs the same `autoreview` binary through the plugin's wrapper,
-which passes the plugin's own files explicitly:
-
-```
-autoreview --config "$POHUNEK_PLUGIN_CONFIG_DIR/config.yaml" <command> ...
-```
-
-pohunek starts plugin processes with an empty environment: no `PATH` and no
-tokens. Secrets come only from the variables named by the `*_env` keys. Without
-a `PATH`, `github.gh_bin` and `pohunek.bin` are absolute paths; for the plugin,
-`pohunek.bin` must be the CLI pohunek hands the plugin (`validate` checks it).
-`config.yaml` is in the
-plugin's owner-private configuration directory, which survives uninstall
-(`uninstall --purge` removes it). Find it with:
-
-```sh
-pohunek workflow inspect pohunekd.autoreview
-```
-
-Set it up with the `init` action, then validate:
-
-```sh
-pohunek workflow run pohunekd.autoreview init --login <github-login> --pohunek-host <host> --example single-repo-comment
-pohunek workflow run --json pohunekd.autoreview validate
-pohunek workflow run --json pohunekd.autoreview approve --repository <owner/repo> <number> <head-sha>
-```
-
-For the plugin, `init` writes into the plugin's configuration directory and
-sets `store.path` inside the plugin's state directory; `--dir` is not used.
-`backup-db` needs an absolute target path outside the plugin's directories.
+Not available yet: the repository contains no workflow plugin. Planned in #41.
 
 ## First configuration
 
-Write `config.yaml`, a policy and the prompts from an example. The command
-refuses to overwrite existing files. `--login` becomes the login of the one credential
-that `init` writes, which reads its token from `AUTOREVIEW_GH_TOKEN`; add credentials
-for other accounts by hand, see [credentials](configuration.md#credentials).
+Copy `examples/config.yaml`, a policy from the
+[examples](../examples/README.md) and the prompts of `prompts/` from a checkout
+of this repository. `autoreview init` is planned in #8.
 
 ```sh
-sudo autoreview init --dir /etc/autoreview --login <github-login> --pohunek-host <host> --example single-repo-comment
+sudo install -d /etc/autoreview/prompts
+sudo cp examples/config.yaml /etc/autoreview/config.yaml
+sudo cp examples/single-repo-comment/policy.yaml /etc/autoreview/policy.yaml
+sudo cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
 ```
 
-Create the agent profile on the review host, named as `reviewers.<id>.agent_profile` in `policy.yaml`:
+In `config.yaml`, set the `login` of the credential, `pohunek.hosts` and a
+`matrix` backend in `notify`, see [notifiers](knowledge/guides/notifiers.md).
 
-```sh
-sudo -u autoreview autoreview --config /etc/autoreview/config.yaml profiles install --host <host> --agent claude --model <model-id> --name autoreview-opus
-```
+The agent profile named as `reviewers.<id>.agent_profile` in `policy.yaml` must
+exist on the review host; autoreview does not create it. `autoreview profiles
+install` is planned in #25.
 
-Check configuration, policy, prompts and pohunek version before every start:
+Check configuration, policy and prompts before every start:
 
 ```sh
 sudo -u autoreview autoreview --config /etc/autoreview/config.yaml validate
@@ -279,7 +228,7 @@ autoreview --config /etc/autoreview/config.yaml review --repository <owner/repo>
 ```
 
 Open a test pull request in a matching repository and request a review from the
-login of the credential that serves the repository, or add the `label:` trigger's label.
+login of the credential, or add the `label:` trigger's label.
 
 ## Upgrade
 

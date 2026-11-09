@@ -235,8 +235,8 @@ github:
   rule. Pull requests of `zajca` in `zajca/*` are therefore comment-only.
 - The machine user needs access to the repositories of `pohunekd/*`; see
   [GitHub identity](../concepts/github-identity.md).
-- `autoreview validate` checks that every rule has a credential and that every token
-  belongs to its login. The review queue is grouped by account.
+- Several credentials are planned in #13; until then the loader accepts one
+  credential with `match: ["*"]`.
 
 ## Rules that interact
 
@@ -250,7 +250,6 @@ Startup checks these, naming the key on error.
 | An unreachable rule is an error | A specific rule below its wildcard | Move the specific rule above |
 | One reviewer protocol per pipeline; the verifier needs `claude-structured` | Mixing `codex` and `opus`, or a verifier on Codex | Split the pipeline (recipe c) |
 | Own pull requests always get a comment | Testing approval with a bot-authored pull request | Test with another author |
-| Every rule has a credential whose `match` covers it (`credential_not_covered`) | A new owner in `repositories` with no credential | Add a credential for it in `config.yaml` |
 
 Policy edits apply to the next review; test on a live pull request as in
 [writing prompts](writing-prompts.md#testing-a-prompt-on-one-pull-request).

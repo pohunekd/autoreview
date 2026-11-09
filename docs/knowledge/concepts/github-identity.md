@@ -25,21 +25,20 @@ a file. It is read from the environment variable named by `token_env`, and each
 | Field | Meaning |
 |---|---|
 | `name` | Shown in logs and notifications |
-| `login` | The account the token belongs to. The engine checks it at startup |
+| `login` | The account the token belongs to. `serve` checks it at startup |
 | `token_env` | The environment variable that holds the token |
 | `match` | The repositories the credential serves: `owner/repository`, `owner/*` or `*` |
 
 Each repository is served by exactly one credential: the first credential whose
-`match` covers it. Every policy rule must be covered by a credential
-(`credential_not_covered` otherwise), and every credential must serve at least
-one rule (`credential_unused` otherwise). The rules and their order are in
+`match` covers it. Until #13 the loader accepts only one credential, with
+`match: ["*"]`. The rules and their order are in
 [policy: repository rules](../../policy.md#repository-rules).
 
 ## Choosing the shape
 
 | Shape | Configuration | Use when |
 |---|---|---|
-| Single token | One credential with `match: ["*"]` | One account reviews everything it can reach. `autoreview init` writes this shape |
+| Single token | One credential with `match: ["*"]` | One account reviews everything it can reach. The only shape the loader accepts until #13 |
 | Token per owner | One fine-grained credential for each owner, with `match: [owner/*]` | Each owner grants its own token, and a token only ever covers one owner |
 | Token per repository | A credential for `owner/repository`, listed above the owner's credential | One repository needs a narrower token than its owner's |
 | Different account per owner | Credentials for the same or different logins, one per owner | Reviews of one owner should appear from another account, for example a machine user for a public organization and your own account for private repositories |
@@ -100,31 +99,17 @@ approval does not count toward branch protection. See
 
 ## Startup check and runtime suspension
 
-`autoreview serve` and `autoreview validate` check every credential before they
-do anything else. For each token, the check reads the token's login and its
-expiry date, and then:
-
-- A token that is rejected, expired, or belongs to another login than its
-  credential stops startup (`credential_invalid`, `credential_login_mismatch`).
-  The service does not start while any credential is broken.
-- While the service runs, each token is checked every
-  `github.credential_check_hours`, and GitHub may reject a token at any call.
-  A failing credential is suspended **alone**: its repositories are not reviewed,
-  reviews in flight wait, and every
-  other credential keeps working. Replacing the token and restarting the service
-  resumes the suspended repositories.
-
-The startup check refuses to start, so a broken token cannot review with the wrong
-login. The runtime check isolates the failure, so one expired machine-user token
-does not stop the reviews of another owner.
+`autoreview serve` asks GitHub for the token's login before it starts. A token
+of another account stops it with `configuration_invalid` naming
+`github.credentials.login`, and a token that GitHub refuses stops it with the
+error of that call. `validate` makes no GitHub call. A startup check of every
+token is planned in #15, and checks while running with the suspension of a
+failing credential in #19.
 
 ### Expiry
 
-GitHub reports a token's expiry date in the
-`GitHub-Authentication-Token-Expiration` response header. The date is shown by
-`autoreview validate` as `expires_at`, and `null` means the token has no expiry
-date. A warning within `github.expiry_warning_days` of the expiry is planned in
-#19.
+Reporting a token's expiry date is planned in #15, and a warning before the
+expiry in #19.
 
 ## Token kinds and organization approval
 

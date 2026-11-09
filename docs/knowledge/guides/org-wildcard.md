@@ -2,7 +2,7 @@
 type: Guide
 id: guide/org-wildcard
 title: Organisation rules
-description: One organisation matched by a wildcard, with two repositories that have their own pipelines and prompts and a generic rule for everything else - with the policy, the first-match-wins order, a walk-through per repository, the prompt files that init does not copy, and the commands to check the rules.
+description: One organisation matched by a wildcard, with two repositories that have their own pipelines and prompts and a generic rule for everything else - with the policy, the first-match-wins order, a walk-through per repository, the prompt files of the example, and the commands to check the rules.
 source_kind: manual
 intents: [setup, project, help]
 ---
@@ -151,14 +151,16 @@ escalation that add a person back in when a serious finding is demoted.
 
 ## Prompts
 
-`autoreview init` writes `prompts/generic.md` and `prompts/verifier.md` only. The
-companion and Android prompts are part of this example and must be copied next
-to the policy. Without them, validation fails because the policy names prompt files
+The companion and Android prompts are part of this example and must be copied
+next to the default prompts `prompts/generic.md` and
+`prompts/verifier.md`. Without them, validation fails because the policy names prompt files
 that do not exist:
 
 ```sh
-autoreview init --dir /etc/autoreview --login <github-login> \
-  --pohunek-host <pohunek-host> --example org-wildcard
+mkdir -p /etc/autoreview/prompts
+cp examples/config.yaml /etc/autoreview/config.yaml
+cp examples/org-wildcard/policy.yaml /etc/autoreview/policy.yaml
+cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
 cp examples/org-wildcard/prompts/companion.md examples/org-wildcard/prompts/android.md \
   /etc/autoreview/prompts/
 autoreview --config /etc/autoreview/config.yaml validate

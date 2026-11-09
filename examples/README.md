@@ -1,10 +1,9 @@
 # Examples
 
-Each directory is one scenario: a `policy.yaml` that validates on its own, a
-`README.md` that says what it shows, and any prompt files it needs beyond the
-two that `autoreview init` writes. [config.yaml](config.yaml) is the complete
-configuration shared by all examples; `autoreview init` writes its own copy with
-your values.
+Each directory is one scenario: a `policy.yaml`, a `README.md` that says what
+it shows, and any prompt files it needs beyond the two default prompts in
+[`prompts/`](../prompts/). [config.yaml](config.yaml) is the complete
+configuration shared by all examples.
 
 > **Status: planned for v0.1.** autoreview is not released yet. These examples describe the design the first release implements.
 
@@ -22,21 +21,29 @@ your values.
 ## Use one
 
 ```sh
-autoreview init --dir <directory> --login <github-login> --pohunek-host <host> --example <name>
+mkdir -p <directory>/prompts
+cp examples/config.yaml <directory>/config.yaml
+cp examples/<name>/policy.yaml <directory>/policy.yaml
+cp prompts/generic.md prompts/verifier.md <directory>/prompts/
 autoreview --config <directory>/config.yaml validate
 ```
 
-`init` writes `policy.yaml` from the named example and the default prompts. For
-examples with extra prompt files, copy them into the policy directory as well
-(see the README of `org-wildcard`). Every example references the same two
+In the copy of `config.yaml`, set `policy_file` to the absolute path of the
+policy, the `login` of the credential and `pohunek.hosts`. For examples with
+extra prompt files, copy them into `<directory>/prompts/` as well (see the
+README of `org-wildcard`). `autoreview init` is planned in #8.
+Every example references the same two
 default prompts, `prompts/generic.md` and `prompts/verifier.md`.
 
 ## Shared choices
 
 - Every example lists all notification events. Levels follow the reference
-  defaults; `action` events have no notifier until you add one to `notify.routes`
-  (see the [notifiers guide](../docs/knowledge/guides/notifiers.md)).
+  defaults. Every route needs a `matrix` backend: the `none` block of
+  `config.yaml` is refused at load (see the
+  [notifiers guide](../docs/knowledge/guides/notifiers.md)).
 - `unmatched: skip` is the only value. A pull request no rule matches is never reviewed.
 - Each `authors` section states who is trusted. No example relies on an implicit default.
+  The loader refuses `authors` sections until #32, so `validate` refuses every
+  example until then.
 - Examples use `checkout: base` for every pipeline, so reviewers read repository
   guidance from trusted content.

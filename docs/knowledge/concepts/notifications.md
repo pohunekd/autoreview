@@ -186,13 +186,13 @@ with an ellipsis. Excerpts inside it are bounded by `limits.excerpt_characters`.
 
 ## Adding a backend (design)
 
-Not in v0.1. The first release has the three types above. The design below keeps
-any later channel out of the rest of the engine.
+Not in v0.1. The design below keeps any later channel out of the rest of the
+engine.
 
 1. **One channel-neutral message.** Every event produces the same message object:
    level, event, title, text, Review ID and links. The backend decides how to
    show it. The text is plain. A backend that supports formatting adds it
-   itself. The webhook `json` format already uses this object.
+   itself.
 2. **A registry of backend types.** Each type registers its name, its
    configuration keys and a send function. The engine looks a backend up by the
    `type` key, so a new type needs no change in the policy.
@@ -203,7 +203,7 @@ any later channel out of the rest of the engine.
    the message (never retried). The rules for `digest`, `log` and `action`
    above apply to every backend type.
 5. **Secrets come from the environment.** A backend that needs a token names the
-   variable in an `*_env` key, as the Matrix and webhook backends do.
+   variable in an `*_env` key, as the Matrix backend does.
 
 Phase 6 of the project plan lists further backends as later decisions, each made
 when a concrete need arrives.

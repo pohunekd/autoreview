@@ -13,8 +13,8 @@ intents: [setup, help]
 
 Every scenario below is a policy file plus a config file. Start from the
 closest scenario, copy its example, and change the repository names. The
-examples live in [`examples/`](../../../examples/) and are the files
-`autoreview init --example <name>` writes.
+examples live in [`examples/`](../../../examples/); their README says how to
+copy one.
 
 ## Choose a scenario
 

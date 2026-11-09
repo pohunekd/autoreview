@@ -39,7 +39,7 @@ Do not use it when:
 reviewers:
   codex:
     protocol: codex-envelope         # runs Codex and prints a result envelope
-    agent_profile: autoreview-codex  # the pohunek profile created by autoreview profiles install
+    agent_profile: autoreview-codex  # the pohunek profile on the review host
     label: Codex
     finding_prefix: X                # findings are X001, X002, ...
 
@@ -47,7 +47,7 @@ pipelines:
   default:
     reviewers: [codex]
     incremental_reviewers: [codex]   # a new push is reviewed by the same reviewer
-    prompt: prompts/generic.md       # written by autoreview init
+    prompt: prompts/generic.md       # copied from prompts/ of this repository
     checkout: base                   # repository guidance comes from the trusted base
     project_sources: [manual]        # only repositories registered with pohunek project add
 
@@ -89,9 +89,9 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
    `autoreview candidates` (read-only): it lists what the next discovery pass
    would consider.
 2. **The label starts the review.** `zajca` adds `ai:review`. The next discovery
-   pass (the `init` configuration polls every 60 seconds) makes the pull request
+   pass (the example configuration polls every 60 seconds) makes the pull request
    a candidate.
-3. **The debounce waits for the pushes to settle.** The `init` configuration
+3. **The debounce waits for the pushes to settle.** The example configuration
    sets `debounce_seconds: 120`: the review starts after two quiet minutes, so a
    burst of pushes is reviewed once.
 4. **Codex reviews in its own pohunek session.** The adapter runs Codex read-only
@@ -106,9 +106,9 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
    `Written by AI: autoreview (posted from a GitHub account, not by a human)`.
    The review does not block the merge.
 7. **Notifications.** The start is a `started` event (level `log`). The
-   published result is a `commented` event (level `digest`). With the default
-   `notify` section that `init` writes, both only reach the structured log. Add
-   a backend to see them elsewhere; see the [notifiers guide](notifiers.md).
+   published result is a `commented` event (level `digest`). Both go to the
+   `matrix` backends that `notify.routes` names for their levels; see the
+   [notifiers guide](notifiers.md).
 8. **A new push is re-reviewed.** After the debounce, Codex reviews only the new
    commits and settles earlier findings, as a Claude reviewer does; see
    [incremental reviews](../concepts/incremental-reviews.md). As in every pipeline,

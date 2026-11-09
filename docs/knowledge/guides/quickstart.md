@@ -42,10 +42,6 @@ runs:
 autoreview --help
 ```
 
-A machine that already runs pohunek as the owner of the review can install autoreview as a
-[pohunek workflow plugin](../../install.md#d-pohunek-workflow-plugin) instead; the rest of this guide then
-runs its commands as `pohunek workflow run pohunekd.autoreview <action>`.
-
 ## 3. Create a working directory
 
 Pick a directory for the configuration. The rest of this guide calls it
@@ -57,19 +53,20 @@ export AUTOREVIEW_HOME="$HOME/autoreview"
 
 ## 4. Write the starting files
 
-`autoreview init` writes `config.yaml`, the `policy.yaml` of the example, and
-the two prompts. It refuses to overwrite files, so run it once in an empty
-directory. Use your own GitHub login and the pohunek host name from step 1.
+Copy the example configuration, the policy of the example and the two prompts
+from a checkout of this repository. `autoreview init` is planned in #8.
 
 ```sh
-autoreview init --dir "$AUTOREVIEW_HOME" \
-  --login <github-login> \
-  --pohunek-host <host> \
-  --example single-repo-comment
+mkdir -p "$AUTOREVIEW_HOME/prompts"
+cp examples/config.yaml "$AUTOREVIEW_HOME/config.yaml"
+cp examples/single-repo-comment/policy.yaml "$AUTOREVIEW_HOME/policy.yaml"
+cp prompts/generic.md prompts/verifier.md "$AUTOREVIEW_HOME/prompts/"
 ```
 
-The command prints the agent profiles the policy needs. Keep that list for
-step 6.
+In `$AUTOREVIEW_HOME/config.yaml`, set `policy_file` to the absolute path of
+`$AUTOREVIEW_HOME/policy.yaml`, `store.path` to a file under `$AUTOREVIEW_HOME`,
+the `login` of the credential to your GitHub login and `pohunek.hosts` to the
+host name from step 1.
 
 ## 5. Point the policy at your repository
 
@@ -86,23 +83,15 @@ route to a `none` backend is refused at load. Set one up with the
 
 ## 6. Install the agent profile
 
-The policy names one agent profile for its reviewer. Create it on the review
-host with the profile name from the `init` output:
-
-```sh
-autoreview profiles install \
-  --host <host> \
-  --agent codex \
-  --model <model> \
-  --name <profile-name>
-```
+The policy names one agent profile for its reviewer in
+`reviewers.<id>.agent_profile`. It must exist on the review host; autoreview
+does not create it. `autoreview profiles install` is planned in #25.
 
 The base runtime must already be installed on that host, see step 1.
-Running the command again with the same arguments changes nothing.
 
 ## 7. Provide the GitHub token
 
-`init` wrote one credential that covers every repository and reads its token from
+The example configuration has one credential that covers every repository and reads its token from
 `AUTOREVIEW_GH_TOKEN`. Export the token from your secret store into the shell that
 runs autoreview. Do not print it, paste it into a file, or put it in the
 configuration. To check that it is set without showing it:
@@ -113,22 +102,26 @@ test -n "$AUTOREVIEW_GH_TOKEN" && echo set
 
 autoreview gives this token only to the `gh` calls for its repositories. Before
 the first run, the token must belong to the `login` of that credential in
-`config.yaml`, the value you passed to `init`. The service refuses to start
-otherwise (`credential_login_mismatch`).
+`config.yaml`, the value you set in step 4. `serve` refuses to start otherwise,
+with `configuration_invalid` naming `github.credentials.login`.
+
+The Matrix backend of step 5 reads its token from the variable named by its
+`access_token_env`, for example `AUTOREVIEW_MATRIX_TOKEN`. Export it the same
+way and check it with `test -n "$AUTOREVIEW_MATRIX_TOKEN" && echo set`.
 
 ## 8. Validate the configuration
 
 Point autoreview at the configuration and check it. `validate` loads the
-config and the policy, reads every prompt, and confirms that the pohunek CLI
-answers.
+config and the policy, reads every prompt and checks that the token variables
+are set. It makes no GitHub or pohunek call.
 
 ```sh
 export AUTOREVIEW_CONFIG="$AUTOREVIEW_HOME/config.yaml"
 autoreview validate
 ```
 
-A valid setup prints one JSON object with `policy_digest`,
-`agent_profiles` and `pohunek_version`. An error prints `error` with a code
+A valid setup prints one JSON object with `policy_digest` and
+`agent_profiles`. An error prints `error` with a code
 and the name of the key that failed. Fix it and run `validate` again; see
 [configuration](../../configuration.md) for every key.
 
@@ -206,7 +199,6 @@ authors need the rules from [public repositories](public-repositories.md).
 
 ## Next steps
 
-- Add a notifier so you learn when a review needs you:
-  [notifiers](notifiers.md).
+- Give each level its own Matrix room: [notifiers](notifiers.md).
 - Add an approval step: [human approval](human-approval.md).
 - Run reviewers on a second host: [multihost](multihost.md).

@@ -67,7 +67,7 @@ Untrusted authors and forks are reviewed from the base checkout and are never
 approved automatically. [Untrusted authors](knowledge/safety/untrusted-authors.md)
 
 **Tells the right person.** Events have three levels (act now, digest, log)
-routed to notifier backends: none, Matrix, or any webhook. An hourly queue
+routed to Matrix rooms; `none` and webhook backends are planned in #29. An hourly queue
 lists every pull request waiting on you or on its author.
 [Notifications](knowledge/concepts/notifications.md)
 

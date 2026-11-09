@@ -114,15 +114,10 @@ registration: a repository that is registered nowhere still fails with
 A reviewer runs an agent profile on the host where its review runs. A review
 runs on the host where its repository is registered, so every host that can
 receive a review of the policy's repositories needs every profile the policy
-names. Install them on each of those hosts:
+names. Create them on each of those hosts; autoreview does not create them, and
+`autoreview profiles install` is planned in #25.
 
-```sh
-autoreview profiles install --host review-host-a --agent claude --model <model> --name autoreview-opus
-autoreview profiles install --host review-host-b --agent claude --model <model> --name autoreview-opus
-```
-
-Repeat the command with the same arguments changes nothing, so the installation
-can be scripted. The base runtime (`claude` or `codex`) must already be the
+The base runtime (`claude` or `codex`) must already be the
 official pohunek runtime package on each host. See
 [reviewers and adapters](../concepts/reviewers-and-adapters.md).
 
@@ -145,7 +140,7 @@ raise the timeout before you blame the host.
 ## Capacity
 
 `schedule.max_concurrent_reviews` limits how many reviews run at once in one
-autoreview service, across all hosts. `autoreview init` writes 8. Each review
+autoreview service, across all hosts. The example configuration sets 8. Each review
 is a full agent run with its own worktree, so raise the value only when the
 hosts can run that many sessions. If one host receives every review, check the
 registrations: a repository registered on one host only always goes there.

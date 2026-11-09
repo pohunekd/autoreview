@@ -26,9 +26,8 @@ one GitHub review with inline comments.
   answered, taking the PR discussion into account.
 - **Durable state** - SQLite store, retries with backoff, approval deadlines,
   session cleanup, an hourly review-queue digest.
-- **Notifications** - action / digest / log levels routed to one or more
-  notifier backends (none, Matrix and webhook first; the layer is built for
-  any channel).
+- **Notifications** - action / digest / log levels routed to Matrix rooms per
+  level, plus the review queue; `none` and webhook backends are planned in #29.
 
 ## Documentation
 
@@ -101,7 +100,7 @@ review them from a base checkout, and never auto-approve them.
 ## Decisions so far
 
 - Binary `autoreview`; one YAML configuration file with every key required
-  and written out in full by `autoreview init`; secrets only in `AUTOREVIEW_*`
+  and written out in full by `autoreview init` (planned in #8); secrets only in `AUTOREVIEW_*`
   environment variables.
 - GitHub tokens as a list of credentials: one token, fine-grained tokens per
   owner or per repository, and a different account per owner if wanted.

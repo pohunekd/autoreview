@@ -113,9 +113,9 @@ A maintainer opens PR #17 in `pohunekd/pohunek.dev` and adds the label
 7. **A new commit.** A push to PR #17 supersedes the earlier review (`superseded`,
    level `log`). The new head is reviewed by the same rule.
 
-Notifications use the defaults that `init` writes, which send every level to
-the structured log. Add a backend to see `approval_requested` or
-`findings_on_own_pr` anywhere else; see the [notifiers guide](notifiers.md).
+Notifications go to the `matrix` backends of `notify.routes`. Route `action` to
+a room someone watches to see `approval_requested` or `findings_on_own_pr`;
+see the [notifiers guide](notifiers.md).
 
 ## Inspect and approve an escalated wait
 

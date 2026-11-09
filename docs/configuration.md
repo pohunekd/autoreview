@@ -17,9 +17,10 @@ polls, its limits, where it keeps state and where notifications go. What gets
 reviewed and how is in [policy.yaml](policy.md).
 
 **Every key is required.** autoreview has no built-in defaults: a missing key
-stops the service at startup with an error that names it. `autoreview init`
-writes a complete file with every key, a recommended value and a comment, so
-you start from a working file and change what you need. Secrets are never in
+stops the service at startup with an error that names it.
+[`examples/config.yaml`](../examples/config.yaml) holds every key with a
+recommended value and a comment; its `notify` block needs a `matrix` backend
+before it loads. Secrets are never in
 the file; keys ending in `_env` name the environment variable that holds them.
 
 The service finds the file through `--config <path>` or the
@@ -27,7 +28,8 @@ The service finds the file through `--config <path>` or the
 
 ## Complete file
 
-The values below are the ones `autoreview init` writes.
+The values below are those of `examples/config.yaml`, with a `matrix` backend in
+`notify`.
 
 ```yaml
 version: 1
@@ -156,76 +158,45 @@ notify:
 | `host` | GitHub host; `github.com` in this release |
 | `gh_bin` | Absolute path of the GitHub CLI |
 | `timeout_seconds` | Timeout of one `gh` call |
-| `credential_check_hours` | How often every token is checked while the service runs |
+| `credential_check_hours` | Interval of the token check while the service runs, which is planned in #19 |
 | `expiry_warning_days` | Days before a token's expiry for the expiry warning, which is planned in #19 |
-| `credentials` | One or more credentials, see below |
+| `credentials` | Exactly one credential with `match: ["*"]`, see below |
 
 ### Credentials
 
-A credential is one GitHub token, the account it belongs to, and the
-repositories it serves. Use one credential with `match: ["*"]` for a single
-token, or several for fine-grained tokens per owner or per repository, and
-for different accounts per owner (for example a machine user for a public
-organization and your own account for private repositories).
+A credential is one GitHub token and the account it belongs to. The loader
+accepts exactly one credential, with `match: ["*"]`; any other list is refused
+with `configuration_invalid` naming `github.credentials`. Several credentials,
+per owner or per repository, are planned in #13.
 
 ```yaml
 credentials:
-  - name: pohunek-core            # fine-grained, only zajca/pohunek
-    login: zajca
-    token_env: AUTOREVIEW_GH_TOKEN_POHUNEK
-    match: [zajca/pohunek]
-  - name: pohunekd-site           # fine-grained, only the website repository
-    login: pohunekd-review
-    token_env: AUTOREVIEW_GH_TOKEN_POHUNEKD_SITE
-    match: [pohunekd/pohunek.dev]
-  - name: pohunekd-bot            # machine user, the rest of the organization
-    login: pohunekd-review
-    token_env: AUTOREVIEW_GH_TOKEN_POHUNEKD
-    match: [pohunekd/*]
+  - name: default
+    login: review-bot
+    token_env: AUTOREVIEW_GH_TOKEN
+    match: ["*"]
 ```
 
 | Key | Meaning |
 |---|---|
-| `name` | `[a-z0-9][a-z0-9_-]{0,31}`, unique; shown in logs and notifications |
-| `login` | The account the token belongs to. Reviews of the covered repositories are requested from, published by, and approved as this account |
+| `name` | `[a-z0-9][a-z0-9_-]{0,31}`; shown in logs |
+| `login` | The account the token belongs to. Reviews are requested from, published by, and approved as this account |
 | `token_env` | Environment variable that holds the token; it must start with `AUTOREVIEW_` |
-| `match` | Lowercase `owner/repository`, `owner/*`, or `*` |
+| `match` | `["*"]` |
 
-How credentials apply:
+How the credential applies:
 
-- **First match wins.** A repository is served by the first credential whose
-  `match` covers it; put repository credentials above their owner's. A
-  credential an earlier one fully covers is an error, like a shadowed policy
-  rule.
-- **Every policy rule is covered.** `validate` fails with
-  `credential_not_covered` when a repository a rule can match has no
-  credential, and with `credential_unused` when a credential serves no rule.
-- **Each account is its own reviewer.** The `review-requested` trigger means a
+- **Its login is the reviewer.** The `review-requested` trigger means a
   request for the credential's `login`; a pull request authored by that
-  login is its own pull request and gets a comment. Several credentials may
-  share a login.
-- **Tokens never mix.** Every `gh` call gets only the token of the repository
-  it concerns, through `GH_TOKEN` in that child's environment. No other
-  process that autoreview starts sees any token, and searches run per
-  credential, limited to its `match`.
-- **Startup is strict, runtime is isolated.** `serve` and `validate` check
-  every token: one that is rejected, expired, or belongs to another login
-  stops startup (`credential_invalid`, `credential_login_mismatch`). While
-  running, a token that fails its check every `credential_check_hours` or is
-  rejected by GitHub suspends only its credential: its repositories are not
-  reviewed, and every other
-  credential keeps working. A review in flight retries its GitHub step like
-  any transient failure; if the credential is not back within
-  `schedule.step_retry_seconds`, the review stops (`review_stopped`) and can be
-  retried later. Replacing the token and restarting the service resumes the
-  credential. The same name is an error code when a command or the startup
-  check fails.
-- **A review keeps its account.** A review stores the name of the credential
-  that served it when it was dispatched and publishes with it, so a waiting
-  approval is posted by the account that reviewed. If that credential no
-  longer exists or no longer covers the repository after a configuration
-  change, the review stops with `credential_not_covered` and a retry uses the
-  credential that serves the repository then.
+  login is its own pull request and gets a comment.
+- **The token stays with `gh`.** Every `gh` call gets the token through
+  `GH_TOKEN` in that child's environment. No other process that autoreview
+  starts sees it.
+- **Startup checks the login.** `serve` asks GitHub for the token's login
+  before it starts and refuses with `configuration_invalid` naming
+  `github.credentials.login` when the token belongs to another account.
+  Checks while running and the suspension of a failing credential are planned
+  in #19.
 - **Expiry.** A warning before a token expires is planned in #19.
 
 A fine-grained token covers one resource owner, and an organization may

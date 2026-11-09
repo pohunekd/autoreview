@@ -149,9 +149,9 @@ autoreview retry --repository pohunekd/pohunek-companion 23 3f2a9c1d0b7e
    24 hours. Then the review waits. `approval.timeout_hours` (168 hours in this
    example) still applies, after which `approval_expired` (digest) is recorded.
 
-The notification levels above are the defaults that `init` writes. The default
-`notify` section routes `action` only to the log, so configure a backend before
-you rely on the reminder; see the [notifiers guide](notifiers.md).
+The notification levels above are those of the example policy. Route `action`
+to a room someone watches before you rely on the reminder; see the
+[notifiers guide](notifiers.md).
 
 ## Variations
 

@@ -20,16 +20,19 @@ walk-through.
 
 ## Use it
 
-`autoreview init` writes only the generic and verifier prompts, so copy the two
-extra prompts from this example into the policy directory as well:
+Copy the two extra prompts of this example next to the default prompts:
 
 ```sh
-autoreview init --dir /etc/autoreview --login <github-login> \
-  --pohunek-host <pohunek-host> --example org-wildcard
+mkdir -p /etc/autoreview/prompts
+cp examples/config.yaml /etc/autoreview/config.yaml
+cp examples/org-wildcard/policy.yaml /etc/autoreview/policy.yaml
+cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
 cp examples/org-wildcard/prompts/companion.md examples/org-wildcard/prompts/android.md \
   /etc/autoreview/prompts/
 autoreview --config /etc/autoreview/config.yaml validate
 ```
+
+Set the keys that [use one](../README.md#use-one) names first.
 
 Install the `autoreview-sonnet` and `autoreview-codex` profiles on the review
 host. The generic pipeline approves clean reviews, which the validator accepts
