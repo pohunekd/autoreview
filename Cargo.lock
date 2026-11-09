@@ -114,6 +114,7 @@ dependencies = [
  "hyper-util",
  "serde",
  "serde-saphyr",
+ "tempfile",
  "time",
  "tokio",
  "tokio-util",
