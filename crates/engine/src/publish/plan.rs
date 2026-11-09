@@ -41,7 +41,8 @@ pub(crate) fn blocking_count(input: &ReviewInput, artifact: &Artifact) -> usize 
 /// follows the rule's clean outcome. A clean review that the rule would approve without the user
 /// waits for them when the verifier demoted findings the policy wants them to see, or when the
 /// pull request matched a human review signal of the rule. A rule with on_notes comment hands a
-/// review of notes only to a human author first, unless the author already had them.
+/// review of notes only to a human author first, unless the author already had them. An
+/// untrusted author never gets notes handed off and is approved only by the user.
 pub(crate) fn plan_publication(
     input: &ReviewInput,
     artifact: &Artifact,
@@ -66,6 +67,7 @@ pub(crate) fn plan_publication(
         && input.handoff.is_none()
         && !own
         && !input.pull_request.author_bot
+        && !input.author_class.untrusted()
     {
         plan.decision = Decision::Comment;
         plan.notes_to_author = true;
@@ -73,6 +75,11 @@ pub(crate) fn plan_publication(
         plan.decision = Decision::Approve;
         plan.await_approval = true;
     } else {
+        plan.decision = Decision::Comment;
+    }
+    if input.author_class.untrusted() && plan.decision == Decision::Approve && !plan.await_approval
+    {
+        // Only the user approves an untrusted author's pull request.
         plan.decision = Decision::Comment;
     }
     if own && plan.decision != Decision::Comment {
@@ -100,8 +107,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use autoreview_policy::{
-        Checkout, EVENTS, Event, Level, OnClean, OnFindings, OnNotes, Pipeline, Protocol, Reviewer,
-        Rule, Trigger, TriggerKind,
+        AuthorClass, Checkout, EVENTS, Event, Level, OnClean, OnFindings, OnNotes, Pipeline,
+        Protocol, Reviewer, Rule, Trigger, TriggerKind,
     };
 
     use super::{PublicationPlan, plan_publication, publication_event};
@@ -308,6 +315,59 @@ mod tests {
                 plan_publication(&input, &artifact, "reviewer"),
                 want,
                 "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn clean_review_of_an_untrusted_author_is_never_approved_without_the_user() {
+        let cases = [
+            (
+                OnClean::Approve,
+                AuthorClass::Untrusted,
+                Decision::Comment,
+                false,
+            ),
+            (
+                OnClean::Approve,
+                AuthorClass::Other("x".to_owned()),
+                Decision::Comment,
+                false,
+            ),
+            (
+                OnClean::Await,
+                AuthorClass::Untrusted,
+                Decision::Approve,
+                true,
+            ),
+            (
+                OnClean::Approve,
+                AuthorClass::Trusted,
+                Decision::Approve,
+                false,
+            ),
+            (
+                OnClean::Approve,
+                AuthorClass::Unset,
+                Decision::Approve,
+                false,
+            ),
+        ];
+        for (on_clean, class, decision, await_approval) in cases {
+            let mut rule = test_rule(opus(), OnFindings::Comment, on_clean.clone());
+            rule.on_notes = OnNotes::Comment;
+            let mut input = test_input(rule, test_pull_request(1));
+            input.author_class = class.clone();
+            let artifact = Artifact {
+                findings: vec![note()],
+                ..Artifact::default()
+            };
+            let plan = plan_publication(&input, &artifact, "reviewer");
+            assert!(
+                plan.decision == decision
+                    && plan.await_approval == await_approval
+                    && (!plan.notes_to_author || !class.untrusted()),
+                "on_clean={on_clean:?} class={class:?}: {plan:?}"
             );
         }
     }

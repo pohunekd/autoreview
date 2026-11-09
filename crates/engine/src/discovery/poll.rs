@@ -138,7 +138,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             self.step_policy(),
             &self.clock,
             cancel,
-            || self.integration.list_candidates(cancel),
+            || self.list_classified(cancel),
         )
         .await?;
         live(cancel)?;
@@ -236,6 +236,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                         let attempt = decision.record.attempt;
                         let input =
                             self.build_input(candidate, route, scope, prior, handoff, attempt)?;
+                        let author_class = input.author_class.as_str().to_owned();
                         decision.record.workflow_id = pr.workflow_id(attempt);
                         dispatches.push(Dispatch {
                             workflow_id: decision.record.workflow_id.clone(),
@@ -246,6 +247,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                             review_id = %pr.review_id(),
                             rule = %candidate.rule.match_glob,
                             pipeline = %candidate.rule.pipeline.name,
+                            author_class = %author_class,
                             scope = %mode,
                             prior_findings,
                             attempt = attempt.wrapping_add(1),

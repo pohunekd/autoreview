@@ -14,6 +14,9 @@ mod query;
 mod testing;
 mod types;
 
+pub use authors::{
+    AuthorClass, AuthorType, Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview,
+};
 pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};
 pub use types::{
@@ -371,7 +374,10 @@ pub enum Error {
     AuthorsTrusted,
 
     /// A trusted login is malformed or repeated.
-    #[error("authors.trusted.logins: {login:?} must be a lowercase login listed once")]
+    #[error(
+        "authors.trusted.logins: {login:?} must be a lowercase login, or an app's login with \
+         [bot], listed once"
+    )]
     AuthorsLogin {
         /// The rejected login.
         login: String,
@@ -418,10 +424,6 @@ pub enum Error {
     /// The untrusted section sets on_notes.
     #[error("authors.untrusted: on_notes is not allowed")]
     UntrustedOnNotes,
-
-    /// A rule trusts fewer than every author, which this engine does not enforce yet.
-    #[error("authors: only trusted any is accepted until author classes are enforced (#33, #34)")]
-    AuthorsNotEnforced,
 
     /// A rule hands notes off but notes_handoff is absent.
     #[error(

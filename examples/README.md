@@ -45,7 +45,5 @@ default prompts, `prompts/generic.md` and `prompts/verifier.md`.
   [notifiers guide](../docs/knowledge/guides/notifiers.md)).
 - `unmatched: skip` is the only value. A pull request no rule matches is never reviewed.
 - Each `authors` section states who is trusted. No example relies on an implicit default.
-  The loader accepts only `trusted: any` until author classes are enforced (#34), so
-  `validate` refuses every example except `single-repo-comment` until then.
 - Examples use `checkout: base` for every pipeline, so reviewers read repository
   guidance from trusted content.

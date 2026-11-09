@@ -25,10 +25,6 @@ autoreview --config /etc/autoreview/config.yaml validate
 
 Set the keys that [use one](../README.md#use-one) names first.
 
-Until #34, `validate` refuses this policy, because the engine accepts only
-`trusted: any` until author classes are enforced; see
-[policy: authors](../../docs/policy.md#authors).
-
 Install the `autoreview-opus` and `autoreview-sonnet` profiles on the review
 host. Set `approval.timeout_hours` to how long a clean review may wait for you.
 

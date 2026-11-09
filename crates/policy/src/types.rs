@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::authors::Authors;
 use crate::human_review::HumanReview;
 
 /// Largest policy file in bytes.
@@ -527,6 +528,8 @@ impl Rule {
 pub struct Policy {
     /// The repository rules in file order; the first match wins.
     pub(crate) rules: Vec<Rule>,
+    /// The authors section of each rule, in the order of `rules`.
+    pub(crate) authors: Vec<Authors>,
     /// Sorted logins whose draft pull requests are marked ready for review.
     pub(crate) ready_draft_authors: Vec<String>,
     /// The level of every notification event.

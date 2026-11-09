@@ -18,6 +18,7 @@ use crate::integrations::Integrations;
 use crate::model::RejectedCandidate;
 use crate::store::DiscoveryState;
 
+pub(crate) mod authors;
 pub(crate) mod commands;
 pub(crate) mod plan;
 pub(crate) mod poll;

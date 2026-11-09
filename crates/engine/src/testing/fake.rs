@@ -10,7 +10,7 @@ use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
-use autoreview_policy::{Level, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID};
+use autoreview_policy::{Level, Permission, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
@@ -134,6 +134,10 @@ pub(crate) struct FakeState {
     pub(crate) host_fail: BTreeMap<String, String>,
     /// Every host whose project list was asked for, in order.
     pub(crate) route_queries: Vec<String>,
+    /// Repository permission of each author, keyed by `repository login`; absent is below write.
+    pub(crate) permissions: BTreeMap<String, Permission>,
+    /// Every permission read, as `repository login`, in order.
+    pub(crate) permission_reads: Vec<String>,
 }
 
 /// The fake of the [`Integrations`] boundary.
@@ -167,6 +171,7 @@ impl FakeIntegration {
             Candidate {
                 pull_request: pr.clone(),
                 rule,
+                author_class: None,
             },
         );
         state.current.insert(key.clone(), pr);
@@ -369,6 +374,19 @@ impl Integrations for FakeIntegration {
             }
         };
         ready(result)
+    }
+
+    fn author_permission(
+        &self,
+        _cancel: &CancellationToken,
+        repository: &str,
+        login: &str,
+    ) -> impl Future<Output = Result<Option<Permission>, Error>> + Send {
+        let key = format!("{repository} {login}");
+        let mut state = self.lock();
+        let permission = state.permissions.get(&key).copied();
+        state.permission_reads.push(key);
+        ready(Ok(permission))
     }
 
     fn host_routes(

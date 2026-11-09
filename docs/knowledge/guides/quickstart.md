@@ -196,9 +196,9 @@ start.
 Before you leave this setup running, read the
 [threat model](../safety/threat-model.md). Repositories with untrusted
 authors need the rules from [public repositories](public-repositories.md).
-Until #34, the engine accepts only `trusted: any`, which reviews every author,
-forks included, with the rule's outcomes; use it only for a repository without
-outside contributors (see [policy: authors](../../policy.md#authors)).
+`trusted: any` reviews every author, forks included, with the rule's outcomes;
+use it only for a repository without outside contributors (see
+[policy: authors](../../policy.md#authors)).
 
 ## Next steps
 

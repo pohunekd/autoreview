@@ -61,8 +61,10 @@ considered.
 2. **Rule.** The first rule whose `match` fits wins. `match` is lowercase
    `owner/repository` or `owner/*`; a repository in another case does not match.
    A pull request no rule matches is never reviewed (`unmatched: skip`).
-3. **Author class.** An untrusted author with `untrusted: skip` is not reviewed.
-   See [untrusted authors](../safety/untrusted-authors.md).
+3. **Author class.** An untrusted author with `untrusted: skip` is not reviewed;
+   each pass logs `untrusted author skipped` with the `review_id` and `fork`. A
+   fork pull request is untrusted unless its author is in `logins`. See
+   [untrusted authors](../safety/untrusted-authors.md).
 4. **Search limit.** A truncated search fails with `github_search_limit_exceeded`
    and drops nothing silently. See [the next section](#github_search_limit_exceeded).
 5. **Draft.** A draft is not reviewed. A draft by a login in `ready_draft_authors`

@@ -147,17 +147,14 @@ add its label rule.
 
 ```sh
 autoreview --config /etc/autoreview/config.yaml validate
-autoreview --config /etc/autoreview/config.yaml candidates           # labelled pull requests the next pass takes
-autoreview review --repository pohunekd/pohunek.dev 88               # author class and state for PR #88
+autoreview --config /etc/autoreview/config.yaml candidates           # search results, unclassified
+autoreview review --repository pohunekd/pohunek.dev 88               # engine state for PR #88
 autoreview retry --repository pohunekd/pohunek.dev 88 3f2a9c1d0b7e   # after review_stopped, same head only
 ```
 
-Until #34, `validate` refuses the policy of this guide, because the engine accepts only
-`trusted: any` until author classes are enforced; see
-[policy: authors](../../policy.md#authors).
-
-`review` shows the author class the review was given. Check it on the first
-fork pull request you review.
+The `review scheduled` log line carries the `author_class` each review was given,
+and `untrusted author skipped` names a pull request that `skip` left out. Check
+them on the first fork pull request you review.
 
 ## Variations
 

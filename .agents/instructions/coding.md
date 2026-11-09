@@ -249,12 +249,22 @@ What is not compatible, by decision:
   `pohunek_base_fetch_timeout` and `pohunek_base_fetch_authentication_failed`
   name the SSH agent; Go's do not (`schedule/diagnostic.go:65-68`). The
   regression test is `lost_runtime_at_start_is_a_retryable_session_loss`.
-- **Authors section (#32):** every repository rule must carry an `authors`
-  section (`authors is required`), and the engine accepts only `trusted: any`
-  until #33 and #34 resolve and enforce author classes. Go refuses the key
+- **Authors section (#32, #33, #34):** every repository rule must carry an
+  `authors` section (`authors is required`). Discovery resolves the author class
+  of each candidate, reviews an untrusted author under the untrusted section's
+  rule (base checkout, never an automatic approval, no notes hand-off) or skips
+  them, and stores that rule and `author_class` with the review. A login matches
+  by author type (`User` for a plain login, `Bot` for `name[bot]`, from the
+  GraphQL `__typename` the pull request read already fetches); a missing or other
+  type is untrusted. Go has no author classes, so nothing is compared with Go.
+  The stored rule is the protection; `validate_input` and `plan_publication`
+  check the class as well, and a Go engine that ignores `author_class` still runs
+  the stored rule.
+  Go refuses the key
   (`field authors not found`, `policy.go:311`), so a policy that runs on Rust does
-  not load on Go: a rollback before #111 needs the policy file without the
-  sections. `trusted: any` adds nothing to the digest, so the Go digest goldens
+  not load on Go. A rollback to a binary built before #33 needs a policy whose
+  rules all say `trusted: any`, and one built before #32 needs no `authors`.
+  `trusted: any` adds nothing to the digest, so the Go digest goldens
   hold. `testdata/review-policy.yaml` stays without the section for the Go tests;
   the Rust tests add `trusted: any` to its rules before parsing, and the golden
   case `fixture_via_load` loads such a copy from a temporary directory.

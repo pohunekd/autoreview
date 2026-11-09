@@ -8,6 +8,7 @@
 mod candidates;
 mod discussion;
 mod files;
+mod permission;
 mod pull_request;
 mod reviews;
 
@@ -27,7 +28,8 @@ use crate::process::{child_environment, run};
 
 /// Fields of a pull request in the GraphQL selection, in Go's order.
 const PULL_REQUEST_FIELDS: &str = concat!(
-    "id number title url state isDraft headRefOid headRefName baseRefOid baseRefName\n",
+    "id number title url state isDraft isCrossRepository\n",
+    "      headRefOid headRefName baseRefOid baseRefName\n",
     "      author { __typename login }\n",
     "      labels(first: 100) { nodes { name } }\n",
     "      reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }\n",

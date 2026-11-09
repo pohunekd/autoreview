@@ -71,7 +71,7 @@ repositories:
     on_clean: await                  # a person approves agent work too
     authors:
       trusted:
-        logins: [devin-ai-integration, copilot-swe-agent]
+        logins: ["devin-ai-integration[bot]", "copilot-swe-agent[bot]"]
         permission: write
       untrusted:
         pipeline: light
@@ -91,20 +91,22 @@ Key lines:
 - `ready_draft_authors` lists plain lowercase logins. GitHub search names an app
   author with the `app/` prefix, but the policy takes the plain login. The list
   must be lowercase and each login listed once.
+- The trusted `logins` list the same agents as `name[bot]`, so only the apps are
+  trusted, never a user account that takes their names.
 - A draft is marked ready only if it requests a review from the `login` of the
   credential that serves the repository. The trigger is therefore `review-requested`,
   not a label.
 - `on_clean: await` keeps the agent's work behind a person's approval.
 - The untrusted section gives anyone else a comment from the base checkout.
 
-## Caveat: how the author login is matched
+## How the agent's login is matched
 
-The reference says `authors.trusted.logins` takes lowercase logins, and that
-`ready_draft_authors` takes plain logins. It does not say how a pull request
-opened by an app is matched against those lists. Before you rely on the trusted
-side for an agent, run `autoreview candidates` and `autoreview review` on one of
-its pull requests and check which author class it was given. If it lands in the
-untrusted section, the agent's pull requests get a comment only.
+`authors.trusted.logins` lists an app as `name[bot]`, which matches only the app
+that GitHub reports as a bot with that name. A user account with the same name
+is not trusted by it. `ready_draft_authors` takes the plain login, because it
+compares the search results, not the author type. The `review scheduled` log
+line carries the `author_class` each review was given; check it on the agent's
+first pull request.
 
 ## Walk-through of one agent draft
 

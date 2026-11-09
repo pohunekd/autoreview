@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::types::{Event, Level, Policy, Reviewer, Rule};
+use crate::authors::{Authors, Untrusted};
+use crate::types::{Event, Level, Pipeline, Policy, Reviewer, Rule};
 
 impl Policy {
     /// Returns the hex SHA-256 digest that identifies the effective policy.
@@ -21,8 +22,11 @@ impl Policy {
 /// Returns the hex SHA-256 digest that identifies the effective policy.
 ///
 /// The bytes hashed match Go's `digestOf` exactly, because review inputs and logs store the digest.
+/// A rule with `trusted: any` adds nothing, so only a restricted authors section extends Go's
+/// bytes; `authors` holds the section of each rule, in the order of `rules`.
 pub(crate) fn digest_of(
     rules: &[Rule],
+    authors: &[Authors],
     notifications: &BTreeMap<Event, Level>,
     timeout_hours: i64,
     reminder_hours: i64,
@@ -34,7 +38,7 @@ pub(crate) fn digest_of(
     }
     events.sort();
     let mut hasher = Sha256::new();
-    for rule in rules {
+    for (index, rule) in rules.iter().enumerate() {
         let pipeline = &rule.pipeline;
         hasher.update(format!(
             "rule\x00{}\x00{}\x00{}\x00{}\x00{}\x00{}\x00{}\x00{}\x00",
@@ -47,37 +51,37 @@ pub(crate) fn digest_of(
             rule.on_notes.as_str(),
             pipeline.project_sources.join(",")
         ));
-        for group in [&pipeline.reviewers, &pipeline.incremental_reviewers] {
-            for reviewer in group {
-                hasher.update(reviewer_text(reviewer));
-            }
-            hasher.update(b"\x00");
-        }
-        hasher.update(format!(
-            "prompt\x00{}\x00{}",
-            pipeline.prompt.len(),
-            pipeline.prompt
-        ));
-        if let Some(verifier) = &pipeline.verifier {
-            let reviewer = &verifier.reviewer;
-            hasher.update(format!(
-                "verifier\x00{}\x00{}\x00{}\x00{}\x00{}\x00{}\x00prompt\x00{}\x00{}",
-                reviewer.id,
-                reviewer.label,
-                reviewer.protocol.as_str(),
-                reviewer.agent_profile,
-                verifier.escalate_severities.join(","),
-                verifier.escalate_count,
-                verifier.prompt.len(),
-                verifier.prompt
-            ));
-        }
+        hash_pipeline_body(&mut hasher, pipeline);
         if let Some(human) = &rule.human_review {
             hasher.update(format!(
                 "human_review\x00{}\x00{}\x00",
                 human.labels.join(","),
                 human.deleted_tests.join(",")
             ));
+        }
+        if let Some(Authors::Restricted { trusted, untrusted }) = authors.get(index) {
+            hasher.update(format!(
+                "authors\x00{}\x00{}\x00",
+                trusted.logins.join(","),
+                trusted
+                    .permission
+                    .map_or("", |permission| permission.as_str())
+            ));
+            match untrusted {
+                Untrusted::Skip => hasher.update(b"untrusted\x00skip\x00"),
+                Untrusted::Review(review) => {
+                    let pipeline = &review.pipeline;
+                    hasher.update(format!(
+                        "untrusted\x00{}\x00{}\x00{}\x00{}\x00{}\x00",
+                        pipeline.name,
+                        pipeline.checkout.as_str(),
+                        review.on_findings.as_str(),
+                        review.on_clean.as_str(),
+                        pipeline.project_sources.join(",")
+                    ));
+                    hash_pipeline_body(&mut hasher, pipeline);
+                }
+            }
         }
         hasher.update(b"\x00");
     }
@@ -89,6 +93,35 @@ pub(crate) fn digest_of(
         ready_draft_authors.join(",")
     ));
     hex::encode(hasher.finalize())
+}
+
+/// Hashes the reviewers, the prompt and the verifier of a pipeline, as Go's `digestOf` does.
+fn hash_pipeline_body(hasher: &mut Sha256, pipeline: &Pipeline) {
+    for group in [&pipeline.reviewers, &pipeline.incremental_reviewers] {
+        for reviewer in group {
+            hasher.update(reviewer_text(reviewer));
+        }
+        hasher.update(b"\x00");
+    }
+    hasher.update(format!(
+        "prompt\x00{}\x00{}",
+        pipeline.prompt.len(),
+        pipeline.prompt
+    ));
+    if let Some(verifier) = &pipeline.verifier {
+        let reviewer = &verifier.reviewer;
+        hasher.update(format!(
+            "verifier\x00{}\x00{}\x00{}\x00{}\x00{}\x00{}\x00prompt\x00{}\x00{}",
+            reviewer.id,
+            reviewer.label,
+            reviewer.protocol.as_str(),
+            reviewer.agent_profile,
+            verifier.escalate_severities.join(","),
+            verifier.escalate_count,
+            verifier.prompt.len(),
+            verifier.prompt
+        ));
+    }
 }
 
 /// Returns the digest text of one pipeline reviewer.
@@ -164,6 +197,42 @@ mod tests {
             std::fs::copy(&path, target).expect("the prompt copy");
         }
         load(&copy).expect("the fixture loads")
+    }
+
+    #[test]
+    fn restricted_authors_change_the_digest() {
+        let path = repository_root().join("testdata/review-policy.yaml");
+        let document =
+            with_trusted_any(&std::fs::read_to_string(&path).expect("the fixture is readable"));
+        let directory = path.parent().expect("the fixture has a directory");
+        let digest = |document: &str| {
+            parse(document.as_bytes(), |relative| {
+                std::fs::read(directory.join(relative))
+            })
+            .expect("the policy parses")
+            .digest()
+            .to_owned()
+        };
+        let restricted = |value: &str| {
+            let trusted = "    authors:\n      trusted: {logins: [maintainer]}\n";
+            document.replacen(
+                "    authors:\n      trusted: any\n",
+                &format!("{trusted}      untrusted: {value}\n"),
+                1,
+            )
+        };
+        let base = digest(&document);
+        let skip = digest(&restricted("skip"));
+        let review = digest(&restricted(
+            "{pipeline: generic, on_findings: comment, on_clean: comment}",
+        ));
+        let other = digest(&restricted(
+            "{pipeline: generic, on_findings: comment, on_clean: await}",
+        ));
+        assert!(
+            base != skip && skip != review && review != other && base != review,
+            "every authors change must change the digest: {base} {skip} {review} {other}"
+        );
     }
 
     // Every rule gets `trusted: any`, which adds nothing to the digest, so Go's digests hold.

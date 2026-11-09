@@ -19,13 +19,8 @@ names, or nothing. The keys are in the [policy reference](../../policy.md#author
 There is no default. A rule without `authors` is an error, so a public
 repository cannot be opened to strangers by leaving the key out.
 
-Until author classes are resolved and enforced (#33, #34), the engine validates the
-whole section but accepts only `trusted: any`; a rule that trusts only some authors is
-refused at load with
-`authors: only trusted any is accepted until author classes are enforced (#33, #34)`.
 `trusted: any` reviews every author, forks included, with the rule's outcomes, approval
-too, so until #34 use it only for a repository without outside contributors, and remove a
-rule for any other repository. The rest of this page describes the behaviour after #34.
+too, so use it only for a repository without outside contributors.
 
 ## The two classes
 
@@ -39,6 +34,11 @@ authors:
 
 - `trusted` is `any`, or a mapping with `logins`, `permission`, or both. An author
   matching either one is trusted. `permission` takes `write`, `maintain` or `admin`.
+- `logins` matches by author type. A plain login, such as `zajca`, matches only a
+  user. An app or bot is listed as `name[bot]`, quoted in YAML, such as
+  `"devin-ai-integration[bot]"`, and matches only the app. A user account that
+  takes an app's name is not trusted by the app's entry. An author whose type
+  GitHub does not report as a user or a bot is untrusted.
 - `trusted: any` means every author is trusted. Such a rule has no `untrusted`
   section; adding one is an error.
 - `untrusted` is required unless `trusted: any`. It is `skip`, or a mapping with

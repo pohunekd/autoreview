@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
-use autoreview_policy::{Checkout, Level, Protocol, Reviewer, Trigger};
+use autoreview_policy::{Checkout, Level, Permission, Protocol, Reviewer, Trigger};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -140,6 +140,17 @@ pub trait Integrations {
         repository: &str,
         number: i64,
     ) -> impl Future<Output = Result<PullRequestState, Error>> + Send;
+
+    /// Returns the repository permission of a pull request author, `None` below write.
+    ///
+    /// It reads with the credential that serves the repository; a failure is never a
+    /// permission.
+    fn author_permission(
+        &self,
+        cancel: &CancellationToken,
+        repository: &str,
+        login: &str,
+    ) -> impl Future<Output = Result<Option<Permission>, Error>> + Send;
 
     /// Returns the routes of one pohunek host's projects that serve a repository.
     ///
