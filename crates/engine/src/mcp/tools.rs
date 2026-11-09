@@ -243,3 +243,145 @@ impl From<Error> for Failure {
         }
     }
 }
+
+impl<I, C> Tools<I, C>
+where
+    I: Integrations + Send + Sync + 'static,
+    C: Clock + 'static,
+{
+    /// Checks the scope of `caller`, then runs the tool `name`.
+    async fn run(
+        &self,
+        caller: &Caller,
+        name: &str,
+        arguments: &Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value, Failure> {
+        let Some(spec) = TOOLS.iter().find(|spec| spec.name == name) else {
+            return Err(Failure::code(TOOL_UNKNOWN));
+        };
+        if !caller.scope.allows(spec.scope) {
+            return Err(Failure::code(SCOPE_DENIED));
+        }
+        let engine = &self.engine;
+        match spec.name {
+            "list_reviews" => {
+                let parsed: ListArguments = parse(arguments)?;
+                let filter = list_filter(&parsed)?;
+                let limit = list_limit(parsed.limit, engine.config.review_list_limit)?;
+                crate::discovery::poll::live(cancel)?;
+                encode(&engine.store.list_reviews(&filter, limit)?)
+            }
+            "review_detail" => {
+                let parsed: DetailArguments = parse(arguments)?;
+                if !identifier_valid(&parsed.workflow_id) {
+                    return Err(Failure::code(COMMAND_INVALID));
+                }
+                encode(&engine.review_detail(cancel, &parsed.workflow_id)?)
+            }
+            "list_awaiting" => {
+                let _: NoArguments = parse(arguments)?;
+                encode(&engine.list_awaiting(cancel)?)
+            }
+            "pull_request_status" => {
+                let parsed: PullRequestArguments = parse(arguments)?;
+                if !repository_valid(&parsed.repository) || parsed.number <= 0 {
+                    return Err(Failure::code(COMMAND_INVALID));
+                }
+                let status = engine.pull_request_status(cancel, &parsed.repository, parsed.number);
+                encode(&status?)
+            }
+            "review_queue" => {
+                let _: NoArguments = parse(arguments)?;
+                let (entries, truncated) = engine.queue_snapshot(cancel).await?;
+                encode(&queue_view(entries, truncated))
+            }
+            _ => Err(Failure::code(TOOL_UNKNOWN)),
+        }
+    }
+}
+
+/// Reads the arguments of a tool; unknown or mistyped fields are refused.
+fn parse<T: DeserializeOwned>(arguments: &Value) -> Result<T, Failure> {
+    T::deserialize(arguments).map_err(|_| Failure::code(COMMAND_INVALID))
+}
+
+/// Encodes a tool result as JSON.
+fn encode<T: Serialize>(value: &T) -> Result<Value, Failure> {
+    serde_json::to_value(value).map_err(|_| Failure::code(RESULT_INVALID))
+}
+
+/// Returns the store filter of `list_reviews`.
+fn list_filter(arguments: &ListArguments) -> Result<ReviewFilter, Failure> {
+    let status_valid = arguments
+        .status
+        .as_deref()
+        .is_none_or(|status| STATUSES.contains(&status));
+    let repository_ok = arguments.repository.as_deref().is_none_or(repository_valid);
+    if !status_valid || !repository_ok {
+        return Err(Failure::code(COMMAND_INVALID));
+    }
+    Ok(ReviewFilter::Matching {
+        status: arguments.status.clone(),
+        repository: arguments.repository.clone(),
+    })
+}
+
+/// Returns the `list_reviews` limit: `limit` when given, otherwise `maximum`, as the CLI does.
+fn list_limit(limit: Option<i64>, maximum: i64) -> Result<i64, Failure> {
+    match limit {
+        None => Ok(maximum),
+        Some(value) if value > 0 && value <= maximum => Ok(value),
+        Some(_) => Err(Failure::code(COMMAND_INVALID)),
+    }
+}
+
+/// Returns the MCP description of `spec`, with its input schema and hints.
+fn tool(spec: &ToolSpec) -> Tool {
+    let read_only = spec.scope == Scope::Read;
+    Tool::new(spec.name, spec.description, input_schema(spec.name)).with_annotations(
+        ToolAnnotations::new()
+            .read_only(read_only)
+            .destructive(false)
+            .open_world(spec.name == "review_queue"),
+    )
+}
+
+/// Returns the JSON schema of the arguments of the tool `name`.
+fn input_schema(name: &str) -> JsonObject {
+    let repository = json!({ "type": "string", "description": "Repository as owner/name." });
+    let number = json!({ "type": "integer", "minimum": 1, "description": "Pull request number." });
+    match name {
+        "list_reviews" => object(
+            &[
+                ("status", json!({ "type": "string", "enum": STATUSES })),
+                ("repository", repository),
+                ("limit", json!({ "type": "integer", "minimum": 1 })),
+            ],
+            &[],
+        ),
+        "review_detail" => object(
+            &[("workflow_id", json!({ "type": "string" }))],
+            &["workflow_id"],
+        ),
+        "pull_request_status" => object(
+            &[("repository", repository), ("number", number)],
+            &["repository", "number"],
+        ),
+        _ => object(&[], &[]),
+    }
+}
+
+/// Builds an object schema that refuses properties it does not list.
+fn object(properties: &[(&str, Value)], required: &[&str]) -> JsonObject {
+    let mut listed = JsonObject::new();
+    for (name, schema) in properties {
+        listed.insert((*name).to_owned(), schema.clone());
+    }
+    let mut schema = JsonObject::new();
+    schema.insert("type".to_owned(), json!("object"));
+    schema.insert("properties".to_owned(), Value::Object(listed));
+    schema.insert("required".to_owned(), json!(required));
+    schema.insert("additionalProperties".to_owned(), json!(false));
+    schema
+}
