@@ -191,20 +191,20 @@ Not available yet: the repository contains no workflow plugin. Planned in #41.
 
 ## First configuration
 
-Copy `examples/config.yaml`, a policy from the
-[examples](../examples/README.md) and the prompts of `prompts/` from a checkout
-of this repository. `autoreview init` is planned in #8.
+Write the configuration, a policy from the [examples](../examples/README.md)
+and its prompts with [`autoreview init`](cli.md#autoreview-init). It never
+overwrites a file.
 
 ```sh
-sudo install -d /etc/autoreview/prompts
-sudo cp examples/config.yaml /etc/autoreview/config.yaml
-sudo cp examples/single-repo-comment/policy.yaml /etc/autoreview/policy.yaml
-sudo cp prompts/generic.md prompts/verifier.md /etc/autoreview/prompts/
+sudo autoreview init --dir /etc/autoreview --login <login> \
+  --pohunek-host <host> --example single-repo-comment
 ```
 
-In `config.yaml`, set the `login` of the credential, `pohunek.hosts`, and the
-homeserver, room and mentioned user of the placeholder `matrix` backend in
-`notify`, see [notifiers](knowledge/guides/notifiers.md).
+The written `config.yaml` is the complete file of the
+[configuration reference](configuration.md#complete-file), with the `login`
+of the credential and `pohunek.hosts` set. Set the homeserver, room and
+mentioned user of its placeholder `matrix` backend in `notify`, see
+[notifiers](knowledge/guides/notifiers.md).
 
 The agent profile named as `reviewers.<id>.agent_profile` in `policy.yaml` must
 exist on the review host; autoreview does not create it. `autoreview profiles

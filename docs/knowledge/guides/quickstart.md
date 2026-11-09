@@ -53,20 +53,18 @@ export AUTOREVIEW_HOME="$HOME/autoreview"
 
 ## 4. Write the starting files
 
-Copy the example configuration, the policy of the example and the two prompts
-from a checkout of this repository. `autoreview init` is planned in #8.
+Write the configuration, the policy of the example and its prompts with
+[`autoreview init`](../../cli.md#autoreview-init). Use your GitHub login and
+the host name from step 1:
 
 ```sh
-mkdir -p "$AUTOREVIEW_HOME/prompts"
-cp examples/config.yaml "$AUTOREVIEW_HOME/config.yaml"
-cp examples/single-repo-comment/policy.yaml "$AUTOREVIEW_HOME/policy.yaml"
-cp prompts/generic.md prompts/verifier.md "$AUTOREVIEW_HOME/prompts/"
+autoreview init --dir "$AUTOREVIEW_HOME" --login <your-login> \
+  --pohunek-host <host> --example single-repo-comment
 ```
 
-In `$AUTOREVIEW_HOME/config.yaml`, set `policy_file` to the absolute path of
-`$AUTOREVIEW_HOME/policy.yaml`, `store.path` to a file under `$AUTOREVIEW_HOME`,
-the `login` of the credential to your GitHub login and `pohunek.hosts` to the
-host name from step 1.
+`init` sets `policy_file`, the `login` of the credential and `pohunek.hosts`. In
+`$AUTOREVIEW_HOME/config.yaml`, set `store.path` to a file under
+`$AUTOREVIEW_HOME`.
 
 ## 5. Point the policy at your repository
 
