@@ -228,3 +228,69 @@ pub(crate) fn render(arguments: &InitArguments, directory: &str) -> Result<Vec<S
     }
     Ok(files)
 }
+
+/// Renders `config.yaml`: the reference file with the policy path, the login and the host.
+///
+/// Each value is written as a JSON string, which YAML reads as a double-quoted scalar.
+///
+/// # Errors
+///
+/// Returns `workflow_failed` when the template lacks a line that `init` replaces.
+pub(crate) fn render_config(directory: &str, login: &str, host: &str) -> Result<String, Error> {
+    let policy_path = format!("{directory}/{POLICY_NAME}");
+    let policy_line = format!("policy_file: {}\n", quoted(&policy_path)?);
+    let mut text = replace_once(CONFIG_TEMPLATE, POLICY_LINE, &policy_line)?;
+    let login_line = format!("      login: {}\n", quoted(login)?);
+    text = replace_once(&text, LOGIN_LINE, &login_line)?;
+    let hosts_line = format!("  hosts: [{}]\n", quoted(host)?);
+    replace_once(&text, HOSTS_LINE, &hosts_line)
+}
+
+/// Returns `value` as a JSON string.
+fn quoted(value: &str) -> Result<String, Error> {
+    go_json(value).map_err(failed)
+}
+
+/// Replaces the one occurrence of `old` in `text` with `new`.
+///
+/// # Errors
+///
+/// Returns `workflow_failed` when `old` does not occur exactly once.
+fn replace_once(text: &str, old: &str, new: &str) -> Result<String, Error> {
+    if text.matches(old).count() != 1 {
+        return Err(failed(format!(
+            "the config template must hold {old:?} exactly once"
+        )));
+    }
+    Ok(text.replacen(old, new, 1))
+}
+
+/// Loads the rendered policy with its prompts and returns the agent profiles it needs.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` naming `policy_file` when the policy loader refuses it.
+pub(crate) fn agent_profiles(files: &[SetupFile]) -> Result<Vec<String>, Error> {
+    let read = |relative: &str| {
+        files
+            .iter()
+            .find(|file| file.relative == relative)
+            .map(|file| file.contents.clone())
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))
+    };
+    let policy = read(POLICY_NAME).map_err(failed)?;
+    let loaded = autoreview_policy::parse(&policy, read).map_err(|error| {
+        Error::config(CONFIGURATION_INVALID, "policy_file", Some(Box::new(error)))
+    })?;
+    Ok(loaded.agent_profiles())
+}
+
+/// Returns the configuration error of a flag value that `init` refuses.
+fn invalid_flag(flag: &str, reason: &'static str) -> Error {
+    Error::config(CONFIGURATION_INVALID, flag, Some(reason.into()))
+}
+
+/// Returns the error that names `path`, which is in the way of `init`.
+fn in_the_way(path: &Path) -> Error {
+    Error::config(INIT_FILE_EXISTS, path.to_string_lossy(), None)
+}
