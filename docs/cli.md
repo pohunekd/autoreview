@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - serve, mcp, validate, poll, candidates, reviews, review, awaiting, approve, resolve, retry, review-queue and backup-db - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, approve, resolve, retry, review-queue and backup-db - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -17,15 +17,54 @@ autoreview [--config <path>] <command> [arguments]
 
 Secrets come only from the variables named by the `*_env` keys of the configuration.
 
-Every command reads the configuration from `--config` or `AUTOREVIEW_CONFIG`
-and validates it together with the policy before doing anything. Output is
+Every command except `init` reads the configuration from `--config` or
+`AUTOREVIEW_CONFIG` and validates it together with the policy before doing
+anything. Output is
 one JSON object (or array) on stdout; logs are JSON lines on stderr. A failed
 command prints `{"error": "<code>", ...}` with a stable error code and exits
 with status 1, so scripts and agents can branch on the code.
 
 ## Setup
 
-`autoreview init` is planned in #8, and `autoreview profiles install` in #25.
+`autoreview profiles install` is planned in #25.
+
+### `autoreview init`
+
+```
+autoreview init --dir <DIR> --login <LOGIN> --pohunek-host <HOST> --example <NAME>
+```
+
+Writes a new configuration directory from one of the [examples](../examples/README.md).
+It asks nothing and reads no configuration; `--config` is refused. Every flag is
+required:
+
+| Flag | Meaning |
+|---|---|
+| `--dir` | Clean absolute directory; it and `prompts/` are created when absent |
+| `--login` | Lowercase GitHub login of the one credential |
+| `--pohunek-host` | The pohunek host that runs the reviewers |
+| `--example` | The example directory under `examples/`, for example `single-repo-comment` |
+
+It writes `config.yaml`, `policy.yaml`, `prompts/generic.md`, `prompts/verifier.md`
+and the prompts the example adds. `config.yaml` is `examples/config.yaml`, the
+complete file of the [configuration reference](configuration.md#complete-file),
+with `policy_file`, the credential `login` and `pohunek.hosts` set from the flags.
+Edit its paths and its placeholder `matrix` backend before the first start.
+
+`init` loads the example's policy before it writes anything, and never
+overwrites. When a file of the set exists, or a directory of the set is a file,
+it writes nothing and fails with `init_file_exists`, whose `configuration` field
+names the path. Prints:
+
+```json
+{
+  "directory": "/home/you/autoreview",
+  "files": ["/home/you/autoreview/config.yaml", "..."],
+  "agent_profiles": ["autoreview-codex"]
+}
+```
+
+`agent_profiles` lists the profiles the policy needs, as `validate` prints them.
 
 ### `autoreview validate`
 
@@ -136,6 +175,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 |---|---|
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it |
 | `command_invalid` | Wrong arguments |
+| `init_file_exists` | `init` found a file in the way; the `configuration` field names it |
 | `repository_not_allowed`, `review_identity_invalid` | Malformed repository, number or head |
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for an approval |
 | `review_superseded`, `approval_expired` | The wait ended without a publication |
