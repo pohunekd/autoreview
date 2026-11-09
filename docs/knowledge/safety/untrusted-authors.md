@@ -19,6 +19,10 @@ names, or nothing. The keys are in the [policy reference](../../policy.md#author
 There is no default. A rule without `authors` is an error, so a public
 repository cannot be opened to strangers by leaving the key out.
 
+Until author classes are resolved and enforced (#33, #34), the engine validates the
+whole section but accepts only `trusted: any`; a rule that trusts only some authors is
+refused at load. The rest of this page describes the behaviour after #34.
+
 ## The two classes
 
 ```yaml
@@ -108,10 +112,11 @@ repositories:
     authors:
       trusted:
         permission: write
+      untrusted: skip
 ```
 
-No `untrusted` section is needed when every author is trusted by permission.
-Use `trusted: any` only when the repository really has no outside contributors.
+An author without write access, such as a fork contributor, is not reviewed. Use
+`trusted: any` only when the repository really has no outside contributors.
 
 ### Public repository with a team
 

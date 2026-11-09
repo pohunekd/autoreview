@@ -111,6 +111,7 @@ mod tests {
 
     use serde::Deserialize;
 
+    use crate::testing::with_trusted_any;
     use crate::{load, parse};
 
     /// Go-written policy digests, shared with the Go reference tests.
@@ -144,6 +145,28 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
+    /// Loads the fixture with `trusted: any` on every rule from a copy in a temporary directory.
+    ///
+    /// The fixture itself has no authors sections, which Go refuses (#32).
+    fn load_with_trusted_any(policy_path: &Path) -> crate::Policy {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let source = std::fs::read_to_string(policy_path).expect("the fixture is readable");
+        let copy = directory.path().join("review-policy.yaml");
+        std::fs::write(&copy, with_trusted_any(&source)).expect("the fixture copy");
+        let prompts = policy_path.with_file_name("prompts");
+        std::fs::create_dir(directory.path().join("prompts")).expect("the prompts directory");
+        for entry in std::fs::read_dir(&prompts).expect("the prompts are readable") {
+            let path = entry.expect("a prompts entry").path();
+            let target = directory
+                .path()
+                .join("prompts")
+                .join(path.file_name().expect("a name"));
+            std::fs::copy(&path, target).expect("the prompt copy");
+        }
+        load(&copy).expect("the fixture loads")
+    }
+
+    // Every rule gets `trusted: any`, which adds nothing to the digest, so Go's digests hold.
     #[test]
     fn digest_matches_go_golden() {
         let cases: Vec<Case> = serde_json::from_str(GOLDEN).expect("golden is JSON");
@@ -153,10 +176,11 @@ mod tests {
             let name = &case.name;
             let policy_path = root.join(&case.input.policy_file);
             let policy = if case.input.loader.as_deref() == Some("policy.Load") {
-                load(&policy_path).expect("the fixture loads")
+                load_with_trusted_any(&policy_path)
             } else {
-                let mut document =
-                    std::fs::read_to_string(&policy_path).expect("the fixture is readable");
+                let mut document = with_trusted_any(
+                    &std::fs::read_to_string(&policy_path).expect("the fixture is readable"),
+                );
                 for (target, replacement) in case.input.replacements.iter().flatten() {
                     assert!(
                         document.contains(target.as_str()),

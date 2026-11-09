@@ -5,10 +5,13 @@
 use std::io;
 use std::path::PathBuf;
 
+mod authors;
 mod digest;
 mod human_review;
 mod parse;
 mod query;
+#[cfg(test)]
+mod testing;
 mod types;
 
 pub use human_review::{HumanReview, match_glob};
@@ -358,6 +361,67 @@ pub enum Error {
     /// A rule hands notes off without a manual approval after a review request.
     #[error("on_notes comment needs on_clean await and trigger review-requested")]
     RuleOnNotesNeedsAwait,
+
+    /// A rule has no authors section.
+    #[error("authors is required")]
+    AuthorsMissing,
+
+    /// The trusted value of a rule's authors is not any or a usable mapping.
+    #[error("authors.trusted must be any or a mapping with logins or permission")]
+    AuthorsTrusted,
+
+    /// A trusted login is malformed or repeated.
+    #[error("authors.trusted.logins: {login:?} must be a lowercase login listed once")]
+    AuthorsLogin {
+        /// The rejected login.
+        login: String,
+    },
+
+    /// The trusted permission is unknown.
+    #[error("authors.trusted.permission must be write, maintain or admin")]
+    AuthorsPermission,
+
+    /// A rule that trusts every author also sets an untrusted section.
+    #[error("authors.untrusted is not allowed with trusted any")]
+    AuthorsUntrustedWithAny,
+
+    /// A rule that trusts only some authors sets no untrusted section.
+    #[error("authors.untrusted is required unless trusted is any")]
+    AuthorsUntrustedMissing,
+
+    /// The untrusted value is neither skip nor a mapping.
+    #[error("authors.untrusted must be skip or a mapping with pipeline, on_findings and on_clean")]
+    AuthorsUntrusted,
+
+    /// The untrusted section names an unknown pipeline.
+    #[error("authors.untrusted: unknown pipeline {name:?}")]
+    UntrustedUnknownPipeline {
+        /// The rejected pipeline name.
+        name: String,
+    },
+
+    /// The untrusted pipeline does not start from the base branch.
+    #[error("untrusted pipeline must use checkout base: {pipeline}")]
+    UntrustedCheckout {
+        /// The pipeline name.
+        pipeline: String,
+    },
+
+    /// The untrusted on_findings value is unknown.
+    #[error("authors.untrusted.on_findings must be request_changes or comment")]
+    UntrustedOnFindings,
+
+    /// The untrusted on_clean value is unknown or approve.
+    #[error("authors.untrusted.on_clean must be comment or await, never approve")]
+    UntrustedOnClean,
+
+    /// The untrusted section sets on_notes.
+    #[error("authors.untrusted: on_notes is not allowed")]
+    UntrustedOnNotes,
+
+    /// A rule trusts fewer than every author, which this engine does not enforce yet.
+    #[error("authors: only trusted any is accepted until author classes are enforced (#33, #34)")]
+    AuthorsNotEnforced,
 
     /// A rule hands notes off but notes_handoff is absent.
     #[error(

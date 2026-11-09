@@ -14,6 +14,7 @@ use serde::de::{self, Deserializer, Unexpected, Visitor};
 use serde_saphyr::granit_parser::{Event as YamlEvent, Parser, ScalarStyle, Tag};
 
 use crate::Error;
+use crate::authors::{FileAuthors, trusts_any, validate_authors};
 use crate::digest::digest_of;
 use crate::human_review::{FileHumanReview, parse_human_review};
 use crate::types::{
@@ -148,6 +149,8 @@ struct FileRule {
     on_notes: String,
     /// Human review section, absent when the rule has none.
     human_review: Option<FileHumanReview>,
+    /// Authors section; absent or null is refused, because no rule trusts by default.
+    authors: Option<FileAuthors>,
 }
 
 /// The approval section of the policy file.
@@ -329,6 +332,7 @@ pub fn parse(
         authors.push(author.clone());
     }
     authors.sort();
+    refuse_restricted_authors(&document.repositories)?;
     let digest = digest_of(
         &rules,
         &notifications,
@@ -836,12 +840,33 @@ fn parse_rules(
     let mut rules = Vec::new();
     for (index, value) in raw.iter().enumerate() {
         let rule = parse_rule(value, &rules, pipelines).map_err(|source| Error::Rule {
-            position: format!("repositories[{index}] ({})", value.match_glob),
+            position: rule_position(index, value),
             source: Box::new(source),
         })?;
         rules.push(rule);
     }
     Ok(rules)
+}
+
+/// Returns the position of a rule in errors, as repositories[index] (match).
+fn rule_position(index: usize, value: &FileRule) -> String {
+    format!("repositories[{index}] ({})", value.match_glob)
+}
+
+/// Refuses the first rule whose authors section trusts fewer than every author.
+///
+/// The engine resolves no author class yet (#33, #34), so it would review an untrusted author
+/// like a trusted one. It runs after every other check, so the section is already valid.
+fn refuse_restricted_authors(raw: &[FileRule]) -> Result<(), Error> {
+    for (index, value) in raw.iter().enumerate() {
+        if !trusts_any(value.authors.as_ref()) {
+            return Err(Error::Rule {
+                position: rule_position(index, value),
+                source: Box::new(Error::AuthorsNotEnforced),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Validates one repository rule against the rules before it.
@@ -906,6 +931,7 @@ fn parse_rule(
         return Err(Error::RuleOnNotesNeedsAwait);
     }
     let human_review = parse_human_review(value.human_review.as_ref(), on_clean.clone())?;
+    validate_authors(value.authors.as_ref(), pipelines)?;
     Ok(Rule {
         match_glob: value.match_glob.clone(),
         trigger,
@@ -1047,6 +1073,9 @@ mod tests {
     use crate::Error;
     use crate::types::{MAX_PROMPT_BYTES, OnClean, OnNotes};
 
+    /// The authors section of the acme/special rule in the valid policy.
+    const SPECIAL_AUTHORS: &str = "{match: acme/special, authors: {trusted: any},";
+
     const VALID_POLICY: &str = "version: 1
 reviewers:
   opus: {protocol: claude-structured, agent_profile: claude-profile, label: Opus, finding_prefix: O}
@@ -1055,9 +1084,9 @@ pipelines:
   main: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompts/main.md, checkout: base, verifier: {reviewer: opus, prompt: prompts/verifier.md, escalate_severities: [critical], escalate_count: 2}, project_sources: [manual]}
   side: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompts/side.md, checkout: head, project_sources: [manual, auto]}
 repositories:
-  - {match: acme/special, trigger: review-requested, pipeline: main, on_findings: request_changes, on_clean: await}
-  - {match: acme/*, trigger: review-requested, pipeline: main, on_findings: request_changes, on_clean: approve}
-  - {match: solo/*, trigger: \"label:ai:review\", pipeline: side, on_findings: comment, on_clean: comment}
+  - {match: acme/special, authors: {trusted: any}, trigger: review-requested, pipeline: main, on_findings: request_changes, on_clean: await}
+  - {match: acme/*, authors: {trusted: any}, trigger: review-requested, pipeline: main, on_findings: request_changes, on_clean: approve}
+  - {match: solo/*, authors: {trusted: any}, trigger: \"label:ai:review\", pipeline: side, on_findings: comment, on_clean: comment}
 unmatched: skip
 approval: {timeout_hours: 24}
 notifications:
@@ -1105,6 +1134,23 @@ notifications:
             &format!("on_findings: request_changes, on_clean: approve, human_review: {value}}}"),
             1,
         )
+    }
+
+    /// Replaces the authors section of the acme/special rule with value.
+    fn with_authors(document: &str, value: &str) -> String {
+        document.replacen(
+            SPECIAL_AUTHORS,
+            &format!("{{match: acme/special, authors: {value},"),
+            1,
+        )
+    }
+
+    /// Reports whether error is the refusal of a rule that trusts fewer than every author.
+    fn is_not_enforced(error: &Error) -> bool {
+        let Error::Rule { source, .. } = error else {
+            return false;
+        };
+        matches!(**source, Error::AuthorsNotEnforced)
     }
 
     /// Reports whether a cause in the chain of error is an I/O not-found error.
@@ -1257,7 +1303,7 @@ notifications:
             ("unknown field", valid.replacen("unmatched: skip", "unmatched: skip\nauto_approve: true", 1), "field auto_approve not found"),
             ("version", valid.replacen("version: 1", "version: 2", 1), "version must be 1"),
             ("unmatched", valid.replacen("unmatched: skip", "unmatched: review", 1), "unmatched must be skip"),
-            ("shadowed rule", valid.replacen("  - {match: acme/special,", "  - {match: acme/*, trigger: review-requested, pipeline: main, on_findings: comment, on_clean: comment}\n  - {match: acme/special,", 1), "unreachable"),
+            ("shadowed rule", valid.replacen("  - {match: acme/special,", "  - {match: acme/*, authors: {trusted: any}, trigger: review-requested, pipeline: main, on_findings: comment, on_clean: comment}\n  - {match: acme/special,", 1), "unreachable"),
             ("duplicate rule", valid.replacen("  - {match: solo/*,", "  - {match: acme/special, trigger: review-requested, pipeline: main, on_findings: comment, on_clean: comment}\n  - {match: solo/*,", 1), "unreachable"),
             ("uppercase match", valid.replacen("match: acme/special", "match: Acme/special", 1), "lowercase"),
             ("bad trigger", valid.replacen("trigger: \"label:ai:review\"", "trigger: assigned", 1), "trigger"),
@@ -1328,6 +1374,181 @@ notifications:
                 "reviewer codex: finding_prefix P is reserved for republished findings"
             ),
         }
+    }
+
+    #[test]
+    fn authors_section_is_validated() {
+        let authors_cases = [
+            ("~", "authors is required"),
+            (
+                "{untrusted: skip}",
+                "authors.trusted must be any or a mapping",
+            ),
+            (
+                "{trusted: ~, untrusted: skip}",
+                "authors.trusted must be any",
+            ),
+            (
+                "{trusted: everyone, untrusted: skip}",
+                "authors.trusted must be any",
+            ),
+            (
+                "{trusted: {}, untrusted: skip}",
+                "authors.trusted must be any",
+            ),
+            (
+                "{trusted: {logins: []}, untrusted: skip}",
+                "authors.trusted must be any",
+            ),
+            (
+                "{trusted: {teams: [core]}, untrusted: skip}",
+                "field teams not found",
+            ),
+            (
+                "{trusted: {logins: [app/devin]}, untrusted: skip}",
+                "logins: \"app/devin\"",
+            ),
+            (
+                "{trusted: {logins: [\"devin[bot]\"]}, untrusted: skip}",
+                "logins: \"devin[bot]\"",
+            ),
+            (
+                "{trusted: {logins: [Maintainer]}, untrusted: skip}",
+                "logins: \"Maintainer\"",
+            ),
+            (
+                "{trusted: {logins: [ab, ab]}, untrusted: skip}",
+                "logins: \"ab\" must be",
+            ),
+            (
+                "{trusted: {permission: read}, untrusted: skip}",
+                "authors.trusted.permission",
+            ),
+            (
+                "{trusted: any, untrusted: skip}",
+                "not allowed with trusted any",
+            ),
+            (
+                "{trusted: {permission: write}}",
+                "authors.untrusted is required",
+            ),
+            ("{trusted: any, forks: trusted}", "field forks not found"),
+        ];
+        let untrusted_cases = [
+            ("ignore", "authors.untrusted must be skip or a mapping"),
+            (
+                "{pipeline: light, on_findings: comment, on_clean: comment}",
+                "unknown pipeline",
+            ),
+            (
+                "{pipeline: side, on_findings: comment, on_clean: comment}",
+                "checkout base",
+            ),
+            (
+                "{pipeline: main, on_findings: comment, on_clean: approve}",
+                "on_clean must be",
+            ),
+            (
+                "{pipeline: main, on_findings: ignore, on_clean: comment}",
+                "on_findings must be",
+            ),
+            (
+                "{pipeline: main, on_findings: comment, on_clean: await, on_notes: comment}",
+                "on_notes",
+            ),
+            (
+                "{pipeline: main, on_findings: comment, on_clean: comment, prompt: x.md}",
+                "field prompt",
+            ),
+        ];
+        let mut cases = vec![(
+            VALID_POLICY.replacen(SPECIAL_AUTHORS, "{match: acme/special,", 1),
+            "no authors".to_owned(),
+            "repositories[0] (acme/special): authors is required",
+        )];
+        for (value, want) in authors_cases {
+            cases.push((with_authors(VALID_POLICY, value), value.to_owned(), want));
+        }
+        for (value, want) in untrusted_cases {
+            let authors = format!("{{trusted: {{permission: write}}, untrusted: {value}}}");
+            cases.push((with_authors(VALID_POLICY, &authors), authors, want));
+        }
+        for (document, name, want) in cases {
+            assert_ne!(
+                document, VALID_POLICY,
+                "{name}: mutation did not change the policy"
+            );
+            match parse(document.as_bytes(), prompts) {
+                Ok(_) => panic!("{name}: parse succeeded, want an error mentioning {want:?}"),
+                Err(error) => assert!(
+                    error.to_string().contains(want),
+                    "{name}: error = {error}, want it to mention {want:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn restricted_authors_are_refused_after_every_other_check() {
+        let review = "{pipeline: main, on_findings: comment, on_clean: await}";
+        let restricted = [
+            "{trusted: {logins: [maintainer]}, untrusted: skip}".to_owned(),
+            format!("{{trusted: {{permission: maintain}}, untrusted: {review}}}"),
+            format!("{{trusted: {{logins: [ab, cd], permission: admin}}, untrusted: {review}}}"),
+        ];
+        for value in &restricted {
+            let document = with_authors(VALID_POLICY, value);
+            assert_ne!(
+                document, VALID_POLICY,
+                "{value}: mutation did not change the policy"
+            );
+            match parse(document.as_bytes(), prompts) {
+                Ok(_) => panic!("{value}: a rule that trusts only some authors must be refused"),
+                Err(error) => assert!(is_not_enforced(&error), "{value}: error = {error}"),
+            }
+        }
+        // A later error wins over the refusal, so a refused policy is otherwise valid.
+        let document =
+            with_authors(VALID_POLICY, &restricted[0]).replacen("  superseded: log\n", "", 1);
+        match parse(document.as_bytes(), prompts) {
+            Ok(_) => panic!("a policy without the superseded level must be refused"),
+            Err(error) => assert!(
+                error.to_string().contains("event superseded needs a level"),
+                "error = {error}"
+            ),
+        }
+    }
+
+    #[test]
+    fn every_example_policy_is_valid_up_to_the_authors_refusal() {
+        let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(&examples).expect("the examples directory is readable") {
+            let path = entry.expect("an examples entry").path().join("policy.yaml");
+            if path.is_file() {
+                names.push(path);
+            }
+        }
+        names.sort();
+        assert!(!names.is_empty(), "no example policy found");
+        let mut parsed = Vec::new();
+        for path in &names {
+            let document = std::fs::read(path).expect("the example policy is readable");
+            // Most examples ship no prompt files, so every prompt path reads as one line.
+            match parse(&document, |_| Ok(b"Review the pull request.".to_vec())) {
+                Ok(_) => parsed.push(path.parent().and_then(|dir| dir.file_name())),
+                Err(error) => assert!(
+                    is_not_enforced(&error),
+                    "{}: error = {error}",
+                    path.display()
+                ),
+            }
+        }
+        assert_eq!(
+            parsed,
+            vec![Some(std::ffi::OsStr::new("single-repo-comment"))],
+            "only the example that trusts every author parses before #34"
+        );
     }
 
     #[test]
