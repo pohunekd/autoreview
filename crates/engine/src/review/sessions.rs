@@ -18,8 +18,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::input::{NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, SlotState, still_wanted};
-use crate::discovery::notification_span;
 use crate::discovery::poll::live;
+use crate::discovery::{SHUTDOWN, notification_span};
 use crate::engine::{Clock, Engine, StepRetryPolicy, retry_step};
 use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
 use crate::integrations::{Integrations, SessionRequest};
@@ -268,8 +268,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Sends `message` at the level of `event` once per review, under the step `name`.
     ///
-    /// An event without a level fails with `review_input_invalid`. A failure before shutdown is
-    /// logged with the event, the review key and the level.
+    /// The message gets one attempt, bounded by the notifier's request timeout. A failure is
+    /// logged and stored as handled, so the review goes on and never sends the message again.
+    /// An event without a level fails with `review_input_invalid`. After a shutdown nothing is
+    /// stored, so the resumed review makes the attempt again.
     pub(crate) async fn notify(
         &self,
         name: &str,
@@ -280,33 +282,41 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let Some(level) = self.input.level(event.clone()) else {
             return Err(Error::workflow("review_input_invalid", true, None));
         };
+        let stored = live(&self.cancel).and_then(|()| {
+            self.engine
+                .store
+                .load_step::<bool>(&self.workflow_id, &step_name)
+        })?;
+        if stored.is_some() {
+            return Ok(());
+        }
         let review_key = self.input.pull_request.key();
         let span = notification_span(&event, &review_key, &level);
         let sent = self
-            .once::<bool, _>(&step_name, || {
-                let integration = &*self.engine.integration;
-                let cancel = &self.cancel;
-                let level = level.clone();
-                async move {
-                    integration.notify(cancel, level, message).await?;
-                    Ok(true)
-                }
-            })
+            .engine
+            .integration
+            .notify(&self.cancel, level.clone(), message)
             .instrument(span)
             .await;
-        if let Err(err) = sent {
-            if !is_shutdown(&err) && !self.cancel.is_cancelled() {
-                tracing::warn!(
-                    event = event.as_str(),
-                    review_key = %review_key,
-                    level = level.as_str(),
-                    error_code = error_code(&err),
-                    "notification failed"
-                );
-            }
-            return Err(err);
+        let shutdown = self.cancel.is_cancelled();
+        if let Err(err) = &sent {
+            // The notifier fails at once on a cancelled token, so the shutdown is the cause.
+            let code = if shutdown { SHUTDOWN } else { error_code(err) };
+            tracing::warn!(
+                event = event.as_str(),
+                review_key = %review_key,
+                level = level.as_str(),
+                error_code = code,
+                "review notification dropped"
+            );
         }
-        Ok(())
+        if shutdown {
+            return Err(shutdown_error());
+        }
+        // `false` marks a dropped message; Go's `notify` reads any stored value as handled.
+        self.engine
+            .store
+            .save_step(&self.workflow_id, &step_name, &sent.is_ok())
     }
 
     /// Returns the slot that `id` names, or `None` when the review has no such slot.
