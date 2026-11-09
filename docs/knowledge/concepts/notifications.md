@@ -94,8 +94,11 @@ level and error code. At the `digest` and `log` levels the notifier itself drops
 a message the homeserver does not take and logs `matrix notification dropped`
 instead. The review then goes on as if the message had
 been sent, and a resumed review does not send it again. When the service shuts
-down during the attempt, the warning carries the code `shutdown`, and the
-resumed review makes one more attempt. A waiting review stays visible without
+down during the attempt of an `action` message, the warning carries the code
+`shutdown`, and the resumed review makes one more attempt. At the `digest` and
+`log` levels the notifier logs `matrix notification dropped` with the code
+`matrix_unavailable` instead, and the resumed review also sends the message
+again. A waiting review stays visible without
 its `approval_requested` message: `autoreview awaiting` and the review queue
 list the wait until it is approved or its deadline passes.
 

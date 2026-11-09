@@ -99,10 +99,10 @@ When you see a notification failure after a publication:
 2. Check the store with `autoreview review --repository <owner/repo> <number>`.
    A published decision shows `publication_status: published` and a
    `github_review_id`.
-3. Do not retry or re-run a review only to resend a notice. A dropped notice
-   is never resent, so a blind retry could publish a second decision on a
-   changed head. If the publication is missing on GitHub, check the
-   `review_stopped` event first.
+3. Do not retry or re-run a review only to resend a notice. A re-run does not
+   help with a dropped notice, because the same review never resends it. A
+   re-run could publish a second decision on a changed head. If the
+   publication is missing on GitHub, check the `review_stopped` event first.
 4. Fix the notifier (see [notifier failures](troubleshooting.md#notifier-failures)).
    Then tell the people concerned about the decision by hand, if they need it.
 
