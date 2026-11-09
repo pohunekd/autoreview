@@ -235,3 +235,153 @@ fn client(entry: &McpClientEntry) -> Result<McpClient, Error> {
 fn invalid(key: &str, message: &'static str) -> Error {
     Error::config(CONFIGURATION_INVALID, key, Some(Box::from(message)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Returns the digest of `token` as `printf %s TOKEN | sha256sum` prints it.
+    fn digest_hex(token: &str) -> String {
+        hex::encode(Sha256::digest(token.as_bytes()))
+    }
+
+    fn entry(name: &str, scope: &str, token: &str) -> McpClientEntry {
+        McpClientEntry {
+            name: name.to_owned(),
+            scope: scope.to_owned(),
+            token_sha256: digest_hex(token),
+        }
+    }
+
+    fn config(entries: &[McpClientEntry]) -> Result<McpConfig, Error> {
+        McpConfig::new(
+            "127.0.0.1:8787",
+            vec!["mcp.example.com".to_owned()],
+            entries,
+        )
+    }
+
+    /// A header value and the client name it authorizes, or the refusal.
+    type Case<'a> = (Option<&'a [u8]>, Result<&'a str, Refusal>);
+
+    fn refused_key(result: Result<McpConfig, Error>) -> String {
+        match result {
+            Err(Error::Config { code, name, .. }) if code == CONFIGURATION_INVALID => name,
+            other => panic!("expected configuration_invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authorize_finds_the_client_of_the_token_and_refuses_the_rest() {
+        let config = config(&[
+            entry("reader", "read", "alpha-token"),
+            entry("writer", "write", "beta-token"),
+        ])
+        .expect("the clients are valid");
+        let cases: [Case<'_>; 9] = [
+            (Some(b"Bearer alpha-token"), Ok("reader")),
+            (Some(b"bearer beta-token"), Ok("writer")),
+            (Some(b"BEARER beta-token"), Ok("writer")),
+            (None, Err(Refusal::MissingToken)),
+            (Some(b"Bearer "), Err(Refusal::MissingToken)),
+            (Some(b"Basic alpha-token"), Err(Refusal::MissingToken)),
+            (
+                Some(b"Bearer alpha-token extra"),
+                Err(Refusal::MissingToken),
+            ),
+            (Some(b"Bearer\xffalpha"), Err(Refusal::MissingToken)),
+            (Some(b"Bearer gamma-token"), Err(Refusal::UnknownToken)),
+        ];
+        for (header, expected) in cases {
+            let found = authorize(&config.clients, header).map(|client| client.name.as_str());
+            assert_eq!(found, expected, "header {header:?}");
+        }
+    }
+
+    #[test]
+    fn scope_allows_writes_only_to_write_clients() {
+        assert!(Scope::Read.allows(Scope::Read));
+        assert!(!Scope::Read.allows(Scope::Write));
+        assert!(Scope::Write.allows(Scope::Read));
+        assert!(Scope::Write.allows(Scope::Write));
+    }
+
+    #[test]
+    fn mcp_config_refuses_every_invalid_value_by_key() {
+        let valid = entry("reader", "read", "alpha-token");
+        let mut upper = valid.clone();
+        upper.token_sha256 = upper.token_sha256.to_uppercase();
+        let mut short = valid.clone();
+        short.token_sha256.truncate(62);
+        let cases: [(&str, Vec<String>, Vec<McpClientEntry>, &str); 9] = [
+            (
+                "localhost:8787",
+                vec!["h".to_owned()],
+                vec![valid.clone()],
+                "mcp.listen",
+            ),
+            (
+                "127.0.0.1:8787",
+                Vec::new(),
+                vec![valid.clone()],
+                "mcp.allowed_hosts",
+            ),
+            (
+                "127.0.0.1:8787",
+                vec![String::new()],
+                vec![valid.clone()],
+                "mcp.allowed_hosts",
+            ),
+            (
+                "127.0.0.1:8787",
+                vec!["a b".to_owned()],
+                vec![valid.clone()],
+                "mcp.allowed_hosts",
+            ),
+            (
+                "127.0.0.1:8787",
+                vec!["h".to_owned()],
+                Vec::new(),
+                "mcp.clients",
+            ),
+            (
+                "127.0.0.1:8787",
+                vec!["h".to_owned()],
+                vec![entry("Reader", "read", "x")],
+                "mcp.clients",
+            ),
+            (
+                "127.0.0.1:8787",
+                vec!["h".to_owned()],
+                vec![entry("reader", "admin", "x")],
+                "mcp.clients",
+            ),
+            (
+                "127.0.0.1:8787",
+                vec!["h".to_owned()],
+                vec![upper],
+                "mcp.clients",
+            ),
+            (
+                "127.0.0.1:8787",
+                vec!["h".to_owned()],
+                vec![short],
+                "mcp.clients",
+            ),
+        ];
+        for (listen, hosts, entries, key) in cases {
+            let result = McpConfig::new(listen, hosts, &entries);
+            assert_eq!(
+                refused_key(result),
+                key,
+                "listen {listen}, entries {entries:?}"
+            );
+        }
+        let same_name = [valid.clone(), entry("reader", "write", "beta-token")];
+        assert_eq!(refused_key(config(&same_name)), "mcp.clients");
+        let same_token = [valid.clone(), entry("writer", "write", "alpha-token")];
+        assert_eq!(refused_key(config(&same_token)), "mcp.clients");
+        let loaded = config(&[valid]).expect("one valid client");
+        assert_eq!(loaded.clients[0].scope, Scope::Read);
+    }
+}
