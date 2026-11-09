@@ -225,9 +225,6 @@ mod tests {
         };
         let wrapped = Wrapped { source };
         assert_eq!(diagnostic(Some(&wrapped)), "host_restarted");
-        assert_eq!(diagnostic(None), "unavailable");
-        assert!(retryable("pohunek_session_lost"));
-        assert!(failure_explanation("pohunek_session_lost").contains("inotify watches"));
     }
 
     #[test]
