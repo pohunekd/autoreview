@@ -194,6 +194,22 @@ What is not compatible, by decision:
   accepts with `P` needs another letter before it runs on Rust. The regression
   test is `reserved_finding_prefix_is_rejected_naming_the_reviewer`.
 
+- **Lost session runtime (#213):** a session whose runtime pohunek reports as
+  lost (`runtime.state` `lost`, or state `failed` with a `loss_reason`) fails its
+  start with `pohunek_session_lost`, not permanent and retried by the
+  scheduler. Its log `diagnostic` is pohunek's `loss_cause`, else its
+  `loss_reason`, when it matches `^[a-z][a-z0-9_]{0,63}$`. When the removal of
+  that session fails too, the code stays `pohunek_session_lost`; the orphan pass
+  of the start removes it again and raises `cleanup_manual` if it stays. Go
+  reports `session_identity_invalid` (permanent, `pohunek.go:178-179`) or, after
+  a failed removal, `pohunek_session_cleanup_failed` (`pohunek.go:209`). Go never
+  writes the code; a row with it stays readable after a rollback, but Go's
+  `Retryable` (`schedule/scheduler.go:173`) and explanation do not know it. The
+  explanations of
+  `pohunek_base_fetch_timeout` and `pohunek_base_fetch_authentication_failed`
+  name the SSH agent; Go's do not (`schedule/diagnostic.go:65-68`). The
+  regression test is `lost_runtime_at_start_is_a_retryable_session_loss`.
+
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):
 
