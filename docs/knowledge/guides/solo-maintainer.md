@@ -166,6 +166,10 @@ autoreview review --repository zajca/pohunek-work 12
 autoreview reviews 20                               # newest reviews across repositories
 ```
 
+Until #34, `validate` refuses the policy of this guide, because the engine accepts only
+`trusted: any` until author classes are enforced; see
+[policy: authors](../../policy.md#authors).
+
 The reference has no command that withdraws a published review. A new commit
 starts a new review of the new head, and that review is published on its own.
 

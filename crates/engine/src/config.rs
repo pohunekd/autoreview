@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn published_retention_must_exceed_the_notes_handoff_reminder() {
-        let document = include_str!("../../../testdata/review-policy.yaml").replacen(
+        let document = crate::testing::deployed_policy_document().replacen(
             "    on_clean: approve\n",
             "    on_clean: await\n    on_notes: comment\n",
             1,

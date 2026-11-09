@@ -15,18 +15,19 @@ pipelines:
     project_sources: [manual]
     verifier: {reviewer: opus, prompt: verifier.md, escalate_severities: [critical], escalate_count: 2}
 repositories:
-  - {match: acme/manual, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await}
-  - {match: acme/notes, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await, on_notes: comment}
-  - {match: acme/*, trigger: review-requested, pipeline: dual, on_findings: request_changes, on_clean: approve}
+  - {match: acme/manual, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await, authors: {trusted: any}}
+  - {match: acme/notes, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await, on_notes: comment, authors: {trusted: any}}
+  - {match: acme/*, trigger: review-requested, pipeline: dual, on_findings: request_changes, on_clean: approve, authors: {trusted: any}}
   - match: risky/*
     trigger: review-requested
     pipeline: dual
     on_findings: request_changes
     on_clean: approve
     human_review: {labels: [needs-human], deleted_tests: ["tests/**", "**/tests/**"]}
-  - {match: solo/*, trigger: "label:ai:review", pipeline: solo, on_findings: comment, on_clean: comment}
-  - {match: checked/manual, trigger: review-requested, pipeline: checked, on_findings: request_changes, on_clean: await}
-  - {match: checked/*, trigger: review-requested, pipeline: checked, on_findings: request_changes, on_clean: approve}
+    authors: {trusted: any}
+  - {match: solo/*, trigger: "label:ai:review", pipeline: solo, on_findings: comment, on_clean: comment, authors: {trusted: any}}
+  - {match: checked/manual, trigger: review-requested, pipeline: checked, on_findings: request_changes, on_clean: await, authors: {trusted: any}}
+  - {match: checked/*, trigger: review-requested, pipeline: checked, on_findings: request_changes, on_clean: approve, authors: {trusted: any}}
 unmatched: skip
 approval: {timeout_hours: 1}
 notes_handoff: {reminder_hours: 24}

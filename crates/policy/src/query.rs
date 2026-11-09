@@ -124,7 +124,8 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use crate::load;
+    use crate::parse;
+    use crate::testing::with_trusted_any;
     use crate::types::{
         Checkout, Event, Level, OnClean, OnFindings, OnNotes, Policy, Protocol, Rule,
     };
@@ -153,7 +154,13 @@ mod tests {
 
     #[test]
     fn deployed_policy_resolves_the_configured_repositories() {
-        let loaded = load(&deployed_policy_path()).expect("the deployed policy loads");
+        let path = deployed_policy_path();
+        let document = std::fs::read_to_string(&path).expect("the deployed policy is readable");
+        let directory = path.parent().expect("the fixture has a directory");
+        let loaded = parse(with_trusted_any(&document).as_bytes(), |relative| {
+            std::fs::read(directory.join(relative))
+        })
+        .expect("the deployed policy parses");
         let cases = [
             Case {
                 repository: "example-org/example-repo",

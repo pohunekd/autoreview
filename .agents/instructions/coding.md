@@ -249,6 +249,15 @@ What is not compatible, by decision:
   `pohunek_base_fetch_timeout` and `pohunek_base_fetch_authentication_failed`
   name the SSH agent; Go's do not (`schedule/diagnostic.go:65-68`). The
   regression test is `lost_runtime_at_start_is_a_retryable_session_loss`.
+- **Authors section (#32):** every repository rule must carry an `authors`
+  section (`authors is required`), and the engine accepts only `trusted: any`
+  until #33 and #34 resolve and enforce author classes. Go refuses the key
+  (`field authors not found`, `policy.go:311`), so a policy that runs on Rust does
+  not load on Go: a rollback before #111 needs the policy file without the
+  sections. `trusted: any` adds nothing to the digest, so the Go digest goldens
+  hold. `testdata/review-policy.yaml` stays without the section for the Go tests;
+  the Rust tests add `trusted: any` to its rules before parsing, and the golden
+  case `fixture_via_load` loads such a copy from a temporary directory.
 
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):

@@ -560,11 +560,15 @@ repositories:
     pipeline: main
     on_findings: request_changes
     on_clean: await
+    authors:
+      trusted: any
   - match: example-owner/tool
     trigger: label:ai:review
     pipeline: main
     on_findings: comment
     on_clean: comment
+    authors:
+      trusted: any
 unmatched: skip
 approval:
   timeout_hours: 24
@@ -929,7 +933,7 @@ notifications:
 
     /// The deployed test configuration: `testdata/review.env` and `testdata/review-policy.yaml`.
     fn queue_config() -> Config {
-        let document = include_str!("../../../testdata/review-policy.yaml");
+        let document = crate::testing::deployed_policy_document();
         let policy = autoreview_policy::parse(document.as_bytes(), |relative| {
             std::fs::read(
                 Path::new(env!("CARGO_MANIFEST_DIR"))

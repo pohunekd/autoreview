@@ -108,6 +108,9 @@ notifications:
   superseded: log
 ```
 
+Until #34, the engine refuses the `pohunekd/*` rule of this example, because it trusts by
+permission; see the note under [authors](#authors).
+
 The rules above span two owners, `zajca` and `pohunekd`; both are served by the
 one [credential](configuration.md#credentials) in `config.yaml`. A credential
 per owner is planned in #13.
@@ -216,6 +219,15 @@ Every rule states who it trusts. There is no implicit default: a rule without
 `authors` is an error, so a public repository cannot be opened to strangers by
 omission. See [untrusted authors](knowledge/safety/untrusted-authors.md).
 
+The engine validates the whole section, but it accepts only `trusted: any` until it
+resolves and enforces author classes (#33, #34). A rule that trusts only some authors
+is refused at load with
+`authors: only trusted any is accepted until author classes are enforced (#33, #34)`, so no
+untrusted author is ever reviewed as a trusted one.
+`trusted: any` reviews every author, forks included, with the rule's outcomes, approval
+too. Until #34, use it only for a repository without outside contributors, and remove a
+rule for any other repository.
+
 ```yaml
 authors:
   trusted: any                 # every author is trusted; no untrusted section allowed
@@ -320,5 +332,8 @@ request content itself is always untrusted input. See
 | `notifications: event X needs a level` | List every event |
 | `needs notes_handoff.reminder_hours because a rule sets on_notes comment` | Add the section, or drop `on_notes` |
 | `notes_handoff is set but no rule sets on_notes comment` | Remove the section, or set `on_notes` on a rule |
-| `authors is required` | State who the rule trusts |
+| `authors is required` | State who the rule trusts; `trusted: any` reviews every author, forks included, with the rule's outcomes |
 | `untrusted pipeline must use checkout base` | Use a base-checkout pipeline for untrusted authors |
+| `authors.untrusted is required unless trusted is any` | Add `untrusted: skip` or an untrusted mapping |
+| `authors.untrusted.on_clean must be comment or await, never approve` | Use `comment` or `await` |
+| `authors: only trusted any is accepted until author classes are enforced (#33, #34)` | Until #34, keep the rule only for a repository without outside contributors, with `trusted: any`, or remove it; `trusted: any` reviews every author, forks included, with the rule's outcomes |
