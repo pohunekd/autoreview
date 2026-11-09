@@ -118,9 +118,8 @@ Planned in #27.
 ## Review queue
 
 `autoreview review-queue` lists every open pull request that requests a review
-from the login of one of its credentials and whose engine state is known, including
-those that wait on the author. The list is grouped by account when the credentials
-have different logins. It sends the list to `review_queue.backends` and prints it. The
+from the login of the credential and whose engine state is known, including
+those that wait on the author. It sends the list to `review_queue.backends` and prints it. The
 list holds at most `review_queue.max_items` pull requests.
 
 The queue is a quiet notice, not an event: when no request waits, nothing is

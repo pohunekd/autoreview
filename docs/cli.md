@@ -69,7 +69,7 @@ per rule and trigger.
 | `autoreview reviews [LIMIT]` | The newest reviews, at most `cli.review_list_limit` |
 | `autoreview review --repository OWNER/REPO NUMBER` | Everything the engine knows about one pull request: current head, reviews, published decisions, waits, hand-offs |
 | `autoreview awaiting` | Reviews that wait for a human approval |
-| `autoreview review-queue` | Sends the review queue to `notify.review_queue.backends` and prints it, grouped by account when credentials have different logins. Run it from a timer |
+| `autoreview review-queue` | Sends the review queue to `notify.review_queue.backends` and prints it. Run it from a timer |
 
 ## Act
 

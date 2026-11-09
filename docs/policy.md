@@ -108,9 +108,9 @@ notifications:
   superseded: log
 ```
 
-The rules above span two owners, `zajca` and `pohunekd`; each is served by a
-[credential](configuration.md#credentials) in `config.yaml`, which may be a
-different account per owner.
+The rules above span two owners, `zajca` and `pohunekd`; both are served by the
+one [credential](configuration.md#credentials) in `config.yaml`. A credential
+per owner is planned in #13.
 
 ## Top-level keys
 

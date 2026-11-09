@@ -86,9 +86,9 @@ repositories:
 ## Requirements (planned)
 
 - pohunek daemon on one or more review hosts with the repositories registered
-- `gh` CLI and one or more GitHub tokens (per owner or repository, optionally a different account per owner)
+- `gh` CLI and one GitHub token (tokens per owner or repository are planned in #13)
 - Claude Code and/or Codex CLI on the review hosts
-- Linux with systemd, a container runtime, or pohunek's workflow plugin store
+- Linux with systemd or a container runtime (the workflow plugin is planned in #41)
 
 ## Security model (planned)
 
@@ -103,8 +103,9 @@ review them from a base checkout, and never auto-approve them.
   and written out in full by `autoreview init` (planned in #8); secrets only in `AUTOREVIEW_*`
   environment variables.
 - GitHub tokens as a list of credentials: one token, fine-grained tokens per
-  owner or per repository, and a different account per owner if wanted.
-  Failing or expiring tokens are reported and stop only their repositories.
+  owner or per repository, and a different account per owner if wanted
+  (planned in #13). Failing or expiring tokens are reported and stop only their
+  repositories (planned in #19).
 - Claude Code and Codex reviewers share one result contract.
 - Clean reviews that wait for a human are approved through the CLI, with an
   optional Hermes Agent integration; approval by GitHub comment and a GitHub
@@ -112,5 +113,5 @@ review them from a base checkout, and never auto-approve them.
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
 - Distributed as release binaries with systemd units, as a container image,
-  and as a pohunek workflow plugin.
+  and as a pohunek workflow plugin (planned in #41).
 - MIT license.

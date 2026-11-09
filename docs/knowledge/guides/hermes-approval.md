@@ -15,8 +15,9 @@ A rule with `on_clean: await` waits for a person before its clean review is
 approved on GitHub. The person can approve from the CLI with
 `autoreview approve`, or from a chat with this optional integration. It uses
 [Hermes Agent](https://github.com/NousResearch/hermes-agent) as the chat agent,
-with a skill and a gateway guard plugin shipped in `integrations/hermes/`.
-Nothing else in autoreview depends on Hermes.
+with a skill and a gateway guard plugin in `integrations/hermes/`.
+Nothing else in autoreview depends on Hermes. The repository does not contain
+`integrations/hermes/` yet; planned in #43.
 
 The integration does one thing: turn a reply `approve` to an approval
 notification into the two commands the CLI already has. It does not review,

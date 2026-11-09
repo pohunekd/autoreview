@@ -179,7 +179,7 @@ credentials:
 
 | Key | Meaning |
 |---|---|
-| `name` | `[a-z0-9][a-z0-9_-]{0,31}`; shown in logs |
+| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; not used yet |
 | `login` | The account the token belongs to. Reviews are requested from, published by, and approved as this account |
 | `token_env` | Environment variable that holds the token; it must start with `AUTOREVIEW_` |
 | `match` | `["*"]` |

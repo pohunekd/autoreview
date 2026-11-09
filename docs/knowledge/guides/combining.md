@@ -2,7 +2,7 @@
 type: Guide
 id: guide/combining
 title: Combining patterns
-description: Recipes that layer several autoreview scenarios in one policy - human approval, auto-approve and a wildcard, trusted and untrusted authors in one repository, cheap and strict pipelines, notes hand-off with coding-agent drafts, experiments, notification routing, two review hosts and a credential per owner - and the validation rules that interact.
+description: Recipes that layer several autoreview scenarios in one policy - human approval, auto-approve and a wildcard, trusted and untrusted authors in one repository, cheap and strict pipelines, notes hand-off with coding-agent drafts, experiments, notification routing, two review hosts - and the validation rules that interact.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -207,36 +207,7 @@ Install the profiles on both hosts ([multihost guide](multihost.md)).
 
 ## Recipe h: different accounts per owner
 
-Reviews of `zajca/*` are requested from your own account and approved as it, and
-reviews of `pohunekd/*` are requested from a machine user. Only `config.yaml`
-changes: each account gets its own credential, and the policy rules stay as they
-are. The [complete example](../../policy.md#a-complete-example) of the policy
-reference works unchanged with these credentials:
-
-```yaml
-# config.yaml
-github:
-  credentials:
-    - name: personal                # your account, for your own repositories
-      login: zajca
-      token_env: AUTOREVIEW_GH_TOKEN_ZAJCA
-      match: [zajca/*]
-    - name: pohunekd-bot            # machine user of the organization
-      login: pohunekd-review
-      token_env: AUTOREVIEW_GH_TOKEN_POHUNEKD
-      match: [pohunekd/*]
-```
-
-- A `review-requested` rule is served only by a request for the login of the
-  credential that covers its repository. Request the review from `zajca` for
-  `zajca/*` and from `pohunekd-review` for `pohunekd/*`; a request to the other
-  account starts nothing.
-- A pull request authored by the login of its credential gets a comment, as on every
-  rule. Pull requests of `zajca` in `zajca/*` are therefore comment-only.
-- The machine user needs access to the repositories of `pohunekd/*`; see
-  [GitHub identity](../concepts/github-identity.md).
-- Several credentials are planned in #13; until then the loader accepts one
-  credential with `match: ["*"]`.
+Planned in #13.
 
 ## Rules that interact
 

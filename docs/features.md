@@ -71,10 +71,9 @@ routed to Matrix rooms; `none` and webhook backends are planned in #29. An hourl
 lists every pull request waiting on you or on its author.
 [Notifications](knowledge/concepts/notifications.md)
 
-**Uses the right account per repository.** Each owner or repository can have
-its own token and even its own GitHub account; tokens never mix, a failing
-token stops only its own repositories, and expiring tokens are reported in
-time. [Configuration: credentials](configuration.md#credentials)
+**Acts as one GitHub account.** One token and its login serve every
+repository, and only `gh` sees the token. A token or account per owner or
+repository is planned in #13. [Configuration: credentials](configuration.md#credentials)
 
 **Survives failure.** All state is in one SQLite file. Reviews resume after a
 restart, transient failures are retried with backoff, and sessions it cannot
@@ -85,10 +84,10 @@ clean up are reported. [State and recovery](knowledge/concepts/state-and-recover
 - A pohunek daemon on one or more review hosts, with the repositories
   registered as pohunek projects and the official Claude Code and/or Codex
   runtime packages installed.
-- The GitHub CLI and one or more tokens: a single token, fine-grained tokens per
-  owner or per repository, and a different account per owner if you want one
-  (your own, or a machine user). [GitHub identity](knowledge/concepts/github-identity.md)
-- Linux with systemd, a container runtime, or pohunek's workflow plugin store.
+- The GitHub CLI and one token, of your own account or a machine user; several
+  tokens are planned in #13. [GitHub identity](knowledge/concepts/github-identity.md)
+- Linux with systemd or a container runtime; the pohunek workflow plugin is
+  planned in #41.
 
 ## Documentation map
 

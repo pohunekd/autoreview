@@ -2,7 +2,7 @@
 type: Reference
 id: reference/install
 title: Install autoreview
-description: Prerequisites, the four install paths (release binary, systemd units, container image, pohunek workflow plugin), first configuration, the first review and where to go for upgrades.
+description: Prerequisites, the four install paths (release binary, systemd units, container image, pohunek workflow plugin planned in #41), first configuration, the first review and where to go for upgrades.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -17,16 +17,17 @@ pohunek daemon runs and the repositories are registered.
 
 ## Prerequisites
 
-- **pohunek daemon on each review host**, at a version `autoreview validate` accepts
-  (the minimum version is not published yet).
+- **pohunek daemon on each review host** (the minimum version is not published
+  yet; a version check in `validate` is planned in #9).
 - **Runtime packages** `claude` and/or `codex`, installed on each review host per the
   [pohunek runtime packages guide](https://pohunek.dev/docs/guides/runtime-packages/).
 - **Repositories registered** with `pohunek project add` on exactly one review host,
   unless pinned with `pohunek.route_overrides` ([multiple hosts](knowledge/guides/multihost.md)).
 - **GitHub CLI (`gh`)** on the autoreview host (the container image bundles it).
-- **GitHub tokens** of the accounts autoreview acts as: one token per credential in
-  `github.credentials`, held in the variable named by its `token_env` (for a single
-  credential, `AUTOREVIEW_GH_TOKEN`). Each token belongs to its credential's `login`.
+- **GitHub token** of the account autoreview acts as, held in the variable named
+  by the `token_env` of the one credential (`AUTOREVIEW_GH_TOKEN` in the
+  example). It belongs to the credential's `login`; several credentials are
+  planned in #13.
   A personal token or a machine user works; see [credentials](configuration.md#credentials)
   and [GitHub identity](knowledge/concepts/github-identity.md).
 - **Git access on each review host.** The review hosts fetch the code with their own
@@ -66,8 +67,8 @@ sudo useradd --system --home-dir /var/lib/autoreview --shell /usr/sbin/nologin a
 sudo install -d -o root -g root -m 0755 /etc/autoreview /etc/autoreview/prompts
 ```
 
-Create the environment file (the `AUTOREVIEW_GH_TOKEN*` variables, one per credential's
-`token_env`, and backend secrets), write the values in an editor, and never on a command line. See [secrets](knowledge/safety/secrets.md).
+Create the environment file (the variable of the credential's `token_env` and the
+backend secrets), write the values in an editor, and never on a command line. See [secrets](knowledge/safety/secrets.md).
 
 ```sh
 sudo install -m 0600 -o root -g root /dev/null /etc/autoreview/autoreview.env

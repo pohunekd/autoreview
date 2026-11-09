@@ -29,7 +29,9 @@ autoreview --config <directory>/config.yaml validate
 ```
 
 In the copy of `config.yaml`, set `policy_file` to the absolute path of the
-policy, the `login` of the credential and `pohunek.hosts`. For examples with
+policy, the `login` of the credential, `pohunek.hosts`, `store.path` and a
+`matrix` backend in `notify` (see the
+[notifiers guide](../docs/knowledge/guides/notifiers.md)). For examples with
 extra prompt files, copy them into `<directory>/prompts/` as well (see the
 README of `org-wildcard`). `autoreview init` is planned in #8.
 Every example references the same two

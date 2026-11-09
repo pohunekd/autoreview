@@ -11,9 +11,9 @@ intents: [setup, help]
 
 > **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
 
-autoreview has two kinds of secrets: the GitHub tokens, one for each
-[credential](../concepts/github-identity.md), and the backend secrets (for example
-a Matrix token or a webhook URL). Both come from environment variables. The
+autoreview has two kinds of secrets: the GitHub token of the
+[credential](../concepts/github-identity.md) and the Matrix token of the
+notifier. Both come from environment variables. The
 configuration files never contain a secret value, only the names of the variables
 that hold them.
 
@@ -21,17 +21,17 @@ that hold them.
 
 | Secret | Variable | Read by | Never given to |
 |---|---|---|---|
-| GitHub token of a credential | The name in its `token_env` | `gh`, for the repositories that credential serves | Reviewer sessions, the pohunek CLI, notifier backends, and any call for another credential's repositories |
+| GitHub token of the credential | The name in its `token_env` | `gh` | Reviewer sessions, the pohunek CLI, notifier backends |
 | Backend secret | A name in an `*_env` key, for example `access_token_env` | That notifier backend | GitHub calls, reviewer sessions, other backends |
 
-Each `gh` child gets only the token of its credential, as `GH_TOKEN` in its own
+Each `gh` child gets the token as `GH_TOKEN` in its own
 environment, and no other process that autoreview starts receives a GitHub token.
 
 Every name in an `*_env` key, including `token_env`, must start with `AUTOREVIEW_`.
 The `gh` and `pohunek` processes that autoreview starts inherit no variable that
 starts with `AUTOREVIEW_` or that an `*_env` key names, no `GH_TOKEN` or
 `MATRIX_ACCESS_TOKEN`, and no pohunek session identity variables. The `gh` child
-gets the token of its credential set explicitly as `GH_TOKEN`.
+gets the token set explicitly as `GH_TOKEN`.
 
 The review agents are started by the pohunek daemon, not by autoreview, and run
 with the daemon's environment, which autoreview does not control. Keep secrets
@@ -39,14 +39,11 @@ out of the daemon's environment and out of the pohunek profile.
 
 ## Blast radius of a token
 
-A token reaches only the repositories of its credential's `match`, and each `gh`
-call gets only the one token that serves its repository. A leaked token therefore
-exposes the repositories of its credential, not every repository the service
-reviews. What the token can do on GitHub is still set by the token's own scope,
-which the `match` does not change (see
+The one token reaches what its own scope allows on GitHub; a leaked token
+exposes every repository that scope covers (see
 [GitHub identity](../concepts/github-identity.md#token-kinds-and-organization-approval)).
-Keep one variable per credential, so that a rotation touches only the token that
-leaked.
+A token per owner or repository, which limits a leak to its repositories, is
+planned in #13.
 
 ## The environment file
 
@@ -96,10 +93,10 @@ content. Keep the reviewer's environment free of secrets:
 ## Check that a variable is set
 
 Check without printing the value. Use `test`, never `echo` or `env`. Use the
-`token_env` name of each credential from `config.yaml`:
+`token_env` name of the credential from `config.yaml`:
 
 ```sh
-test -n "$AUTOREVIEW_GH_TOKEN_ZAJCA" && echo set
+test -n "$AUTOREVIEW_GH_TOKEN" && echo set
 test -n "$AUTOREVIEW_MATRIX_TOKEN" && echo set
 ```
 
@@ -108,7 +105,7 @@ nothing, then test the variable:
 
 ```sh
 set -a; . /etc/autoreview/autoreview.env; set +a
-test -n "$AUTOREVIEW_GH_TOKEN_ZAJCA" && echo set
+test -n "$AUTOREVIEW_GH_TOKEN" && echo set
 ```
 
 Do not paste the file's content into a ticket, a chat or a shell transcript.
@@ -119,13 +116,11 @@ Treat a secret as leaked when it was printed, committed, pasted or sent to a
 place outside the host, or when you cannot tell who saw it.
 
 1. Revoke the old value at its source: the GitHub token in the settings of the
-   account that the credential names, the Matrix token on the homeserver, the
-   webhook URL in the chat service.
+   account that the credential names, the Matrix token on the homeserver.
 2. Create a new value with the same scopes. Use the narrowest scopes the engine
    needs; see [GitHub identity](../concepts/github-identity.md).
 3. Replace the value in `/etc/autoreview/autoreview.env`, keep mode `0600`, and
-   restart the service: `sudo systemctl restart autoreview.service`. Rotating one
-   credential's token leaves the other credentials and their tokens unchanged.
+   restart the service: `sudo systemctl restart autoreview.service`.
 4. Run `validate` and check the variable with `test -n` as above.
 5. If the leak came from a file under version control, remove it from the
    history of that repository. Rotation comes first; history rewriting does not

@@ -85,7 +85,7 @@ one value per dimension for each repository rule.
 | Notifications | Level per event, routes to backends | `notifications`, `notify.routes` | [notifications](../concepts/notifications.md) |
 | Hosts | pohunek hosts that run reviewers, route overrides | `pohunek.hosts`, `pohunek.route_overrides` | [multihost](multihost.md) |
 
-Two dimensions are not in a policy: the GitHub accounts (one `login` per credential in
+Two dimensions are not in a policy: the GitHub account (the `login` of the credential in
 `github.credentials` of [config.yaml](../../configuration.md)) and the review prompt text
 ([writing prompts](writing-prompts.md)).
 

@@ -390,8 +390,6 @@ A check of `pohunek --version` in `validate` is planned in #9. The engine uses
 `project list` and `session new|output|rm`, so a pohunek upgrade is an upgrade
 of autoreview's dependency too:
 
-- After a pohunek upgrade on a review host, run `validate` on the autoreview
-  host. A version outside the range is refused.
 - The minimum version is raised after an upstream fix. Two issues drive the
   workarounds: [zajca/pohunek#1437](https://github.com/zajca/pohunek/issues/1437)
   (base fetch lock) and [zajca/pohunek#1438](https://github.com/zajca/pohunek/issues/1438)
