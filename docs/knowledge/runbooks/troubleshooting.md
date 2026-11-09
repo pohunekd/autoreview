@@ -25,6 +25,8 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `project_route_not_found` | Repository is not registered on a host in `pohunek.hosts` | [Route errors](#project_route_not_found) |
 | `project_route_ambiguous` | Registered on two hosts, no `route_overrides` entry | [Route errors](#project_route_ambiguous) |
 | `pohunek_session_start_failed` | Review host could not start the session | [Session start failures](#session-start-failures) |
+| `pohunek_session_lost` | The session worker was lost while the session started | [Review host checks](#review-host-checks) |
+| `pohunek_base_fetch_timeout`, `pohunek_base_fetch_authentication_failed` | Git on the review host could not fetch the base: no network, a hung SSH agent or a locked credential helper | [Review host checks](#review-host-checks) |
 | `pohunek_base_fetch_ref_locked`, `pohunek_session_warning` | Base fetch on a locked ref, or a session warning | [Session start failures](#session-start-failures) |
 | `pohunek_request_failed`, `pohunek_request_timeout` | Review host did not answer | [Session start failures](#session-start-failures) |
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
@@ -113,9 +115,68 @@ A route override pins one repository to one host. See
 | `pohunek_base_fetch_ref_locked` | The base fetch hit a locked ref (pohunek [#1437](https://github.com/zajca/pohunek/issues/1437)). The engine retries on a fresh `-startN` branch. Repeated failures: see [stale sessions and branches](stale-sessions-and-branches.md). |
 | `pohunek_session_warning` | The session reported a warning. The engine retries on a fresh branch. Read the warning on the review host before you change the policy. |
 | `pohunek_request_failed`, `pohunek_request_timeout` | The pohunek call failed or passed `pohunek.timeout_seconds`. A session start includes the base fetch, so 45 seconds is the recommended minimum. |
+| `pohunek_session_lost` | Pohunek reports the session's runtime as lost during the start. The log line `reviewer session start failed` names pohunek's loss cause as the `diagnostic`, for example `host_restarted`. The engine retries on a fresh branch. A leftover session that cannot be removed raises `cleanup_manual`, see [when a session cannot be removed](stale-sessions-and-branches.md#when-a-session-cannot-be-removed). Check the review host's resources and the pohunek journal, see [review host checks](#review-host-checks). |
+| `pohunek_base_fetch_timeout` | Git on the review host did not finish the base fetch within pohunek's Git timeout. The engine retries. Check the network, then the SSH agent and the credential helper, see [review host checks](#review-host-checks). |
+| `pohunek_base_fetch_authentication_failed` | Git on the review host could not authenticate to GitHub. It is not retried. Check the SSH agent and the credentials, see [review host checks](#review-host-checks). |
 
 When all start attempts fail, the review reaches `review_stopped`. See
 [retry and recovery](retry-and-recovery.md).
+
+### Review host checks
+
+Run these on the review host, as the user that runs the pohunek daemon.
+
+**inotify watches.** systemd watches every new session worker. When another
+process holds almost all of `fs.inotify.max_user_watches`, the worker is stopped
+seconds after it starts, and the start fails with `pohunek_session_lost`,
+`pohunek_session_cleanup_failed` or a fetch timeout. Compare the limit with the
+watches in use, which the second command lists per process (count, name, PID),
+then stop the process that holds them or raise the limit:
+
+```sh
+sysctl fs.inotify.max_user_watches
+for p in /proc/[0-9]*; do
+  n=$(cat "$p"/fdinfo/* 2>/dev/null | grep -c '^inotify')
+  [ "$n" -gt 0 ] && echo "$n $(cat "$p/comm" 2>/dev/null) ${p#/proc/}"
+done | sort -rn | head
+```
+
+Without root, the count covers only your own processes. Also check free memory
+and the pohunek daemon journal for stopped workers.
+
+**Git access without a prompt.** The daemon fetches the base branch with the
+project's `origin` remote and nothing can answer a prompt. Run in the project's
+repository:
+
+```sh
+GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes' \
+  timeout 30 git ls-remote origin HEAD
+```
+
+It must print a commit within the 30 seconds that pohunek gives Git. A hang
+means an SSH agent that waits for an unlock or a confirmation, or a credential
+helper that waits for a locked keyring. `Permission denied (publickey)` means
+the agent holds no key that GitHub accepts, or it refused to sign.
+
+**HTTPS with a credential helper.** Reviews then do not depend on an unlocked
+SSH agent. Give the daemon its own Git configuration file that includes the
+user's configuration and rewrites the GitHub SSH URL, and point the daemon's
+`GIT_CONFIG_GLOBAL` at it, for example in a systemd drop-in of its unit:
+
+```ini
+# <daemon-git-config>, the file GIT_CONFIG_GLOBAL names
+[include]
+    path = <home>/.gitconfig
+[url "https://github.com/"]
+    insteadOf = git@github.com:
+[credential "https://github.com"]
+    helper = <a helper that answers without a prompt>
+```
+
+Pohunek removes `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_*` and `GIT_CONFIG_VALUE_*`
+from the environment of its Git children, so a rewrite passed in those variables
+has no effect; `GIT_CONFIG_GLOBAL` is kept. Run the `git ls-remote` check
+again with `GIT_CONFIG_GLOBAL` set to the file.
 
 ## Reviewer output
 

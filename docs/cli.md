@@ -137,12 +137,13 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `engine_already_running` | Another `serve` uses the same database |
 | `discovery_busy` | Another discovery pass held the lock past `schedule.discovery_lock_timeout_seconds` |
 | `pull_request_not_open`, `pull_request_draft`, `review_label_removed`, `review_request_not_active` | The pull request no longer asks for a review: closed, back in draft, label removed or review request withdrawn |
-| `pohunek_base_fetch_failed`, `pohunek_base_fetch_timeout`, `pohunek_base_fetch_dns_failed` | The review host could not fetch the base branch from GitHub |
+| `pohunek_base_fetch_failed`, `pohunek_base_fetch_timeout`, `pohunek_base_fetch_dns_failed`, `pohunek_base_fetch_authentication_failed` | The review host could not fetch the base branch from GitHub |
 | `state_entry_limit_exceeded` | The discovery state hit `schedule.state_entry_limit` |
 | `store_unavailable` | The SQLite store could not be opened or written |
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
 | `project_route_not_found`, `project_route_ambiguous` | The repository is registered on no review host, or on several without a route override |
 | `pohunek_request_failed`, `pohunek_request_timeout`, `pohunek_session_start_failed` | The review host did not answer or could not start a session |
+| `pohunek_session_lost` | The review host lost the session's worker while the session started; retried on a fresh branch. A leftover session that cannot be removed raises `cleanup_manual`, see [stale sessions](knowledge/runbooks/stale-sessions-and-branches.md#when-a-session-cannot-be-removed) |
 | `pohunek_base_fetch_ref_locked`, `pohunek_session_warning` | The session start hit a locked base fetch or reported a warning; retried on a fresh branch |
 | `pohunek_session_cleanup_failed` | A session could not be removed, see `cleanup_manual` |
 | `review_output_timeout`, `review_output_invalid`, `review_result_invalid` | A reviewer did not return a usable result in time |

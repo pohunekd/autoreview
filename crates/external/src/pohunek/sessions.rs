@@ -10,13 +10,13 @@
 use std::error::Error as StdError;
 use std::fmt;
 
-use autoreview_engine::Error;
 use autoreview_engine::config::Config;
 use autoreview_engine::error::BoxError;
 use autoreview_engine::integrations::SessionRequest;
 use autoreview_engine::model::SessionIdentity;
+use autoreview_engine::{Error, error_code};
 use autoreview_go_compat::{null_default, null_entries};
-use autoreview_schedule::diagnostic::fetch_failure;
+use autoreview_schedule::diagnostic::{SessionLoss, fetch_failure};
 use autoreview_schedule::metadata::{WorkSession, metadata_args};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -29,6 +29,12 @@ use crate::process::run;
 
 /// Name of the configuration key that holds the pohunek request timeout.
 const POHUNEK_TIMEOUT_KEY: &str = "pohunek_timeout";
+
+/// Error code of a reviewer session whose runtime pohunek reports as lost.
+const SESSION_LOST: &str = "pohunek_session_lost";
+
+/// Error code of a rejected session whose removal failed.
+const SESSION_CLEANUP_FAILED: &str = "pohunek_session_cleanup_failed";
 
 /// One session of `pohunek session list --json`.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -95,6 +101,12 @@ pub(crate) struct PohunekRuntime {
     /// Generation of the runtime, as decimal text.
     #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) runtime_generation: String,
+    /// Why the runtime was lost, for example `host_restarted`; empty when not reported.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    pub(crate) loss_cause: String,
+    /// What was lost, for example `runtime_lost`; empty when not reported.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    pub(crate) loss_reason: String,
 }
 
 autoreview_go_compat::object_only_serde!(PohunekRuntime);
@@ -213,6 +225,14 @@ pub(crate) fn lookup_from_output(output: &str, request: &SessionRequest) -> Resu
         runtime_generation: session.runtime.runtime_generation.clone(),
         reviewer_id: request.reviewer.id.clone(),
     };
+    if runtime_lost(&session) {
+        let loss = SessionLoss::new(&session.runtime.loss_cause, &session.runtime.loss_reason);
+        let cause = loss.map(|loss| Box::new(loss) as BoxError);
+        return Ok(Lookup::Unhealthy(
+            identity,
+            Error::workflow(SESSION_LOST, false, cause),
+        ));
+    }
     if session.state != "running" || !session.is_linked_worktree || session.runtime.state != "live"
     {
         return Ok(Lookup::Unhealthy(
@@ -246,6 +266,14 @@ pub(crate) fn lookup_from_output(output: &str, request: &SessionRequest) -> Resu
         identity,
         Error::workflow(code, permanent, None),
     ))
+}
+
+/// Reports whether pohunek says that the worker runtime of `session` is lost.
+///
+/// The runtime state is `lost`, or the session failed and names a loss reason.
+fn runtime_lost(session: &PohunekSession) -> bool {
+    session.runtime.state == "lost"
+        || (session.state == "failed" && !session.runtime.loss_reason.is_empty())
 }
 
 /// Returns the session of `request` as the session list reports it.
@@ -334,6 +362,10 @@ where
 }
 
 /// Returns the error of a failed request: `cause`, or the failed removal of an owned session.
+///
+/// A failed removal is `pohunek_session_cleanup_failed`, except after `pohunek_session_lost`,
+/// which keeps its code: the lost runtime is the cause the operator has to fix. The start
+/// path removes the sessions of failed starts again and reports any that stays.
 async fn reject<R, F>(remove: &R, session: Option<SessionIdentity>, cause: Error) -> Error
 where
     R: Fn(SessionIdentity) -> F,
@@ -344,11 +376,14 @@ where
     };
     match remove(session).await {
         Ok(()) => cause,
-        Err(cleanup) => Error::workflow(
-            "pohunek_session_cleanup_failed",
-            false,
-            Some(Box::new(JoinedError { cause, cleanup })),
-        ),
+        Err(cleanup) => {
+            let code = if error_code(&cause) == SESSION_LOST {
+                SESSION_LOST
+            } else {
+                SESSION_CLEANUP_FAILED
+            };
+            Error::workflow(code, false, Some(Box::new(JoinedError { cause, cleanup })))
+        }
     }
 }
 
@@ -375,11 +410,89 @@ impl StdError for JoinedError {
 
 #[cfg(test)]
 mod tests {
-    use autoreview_engine::integrations::SessionRequest;
-    use autoreview_engine::model::{ProjectRoute, PullRequest};
-    use autoreview_policy::{Checkout, Protocol, Reviewer};
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
 
-    use super::start_arguments;
+    use autoreview_engine::integrations::SessionRequest;
+    use autoreview_engine::model::{ProjectRoute, PullRequest, SessionIdentity};
+    use autoreview_engine::{Error, error_code};
+    use autoreview_policy::{Checkout, Protocol, Reviewer};
+    use autoreview_schedule::diagnostic::diagnostic;
+
+    use super::{Lookup, lookup_from_output, reject, start_arguments};
+
+    /// `pohunek session inspect --json` of a review session lost to a host restart.
+    ///
+    /// Captured from pohunek 0.40.1; ids, paths and names are synthetic.
+    const INSPECT_LOST: &str = include_str!("../../testdata/pohunek/session-inspect-lost.json");
+
+    /// Polls `future` once; the futures of these tests never wait.
+    fn finish<T>(future: impl Future<Output = T>) -> T {
+        let mut future = pin!(future);
+        let mut context = Context::from_waker(Waker::noop());
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => value,
+            Poll::Pending => panic!("the future waits"),
+        }
+    }
+
+    #[test]
+    fn lost_runtime_at_start_is_a_retryable_session_loss() {
+        let inspect: serde_json::Value =
+            serde_json::from_str(INSPECT_LOST).expect("captured inspect output is JSON");
+        let list = serde_json::json!({ "ok": [inspect["ok"].clone()] }).to_string();
+        let request = SessionRequest {
+            route: ProjectRoute {
+                host: "review-host".to_owned(),
+                project_id: "p-00000000".to_owned(),
+            },
+            reviewer: Reviewer {
+                id: "opus".to_owned(),
+                label: "Opus".to_owned(),
+                protocol: Protocol::ClaudeStructured,
+                agent_profile: "claude-reviewer-profile".to_owned(),
+                finding_prefix: "O".to_owned(),
+            },
+            workflow_id: format!("prr-v2-{}1", "0".repeat(63)),
+            run: 1,
+            start: 2,
+            name_prefix: "github-review-".to_owned(),
+            branch_prefix: "autoreview/review/".to_owned(),
+            ..SessionRequest::default()
+        };
+        let lookup = lookup_from_output(&list, &request).expect("session list decodes");
+        let Lookup::Unhealthy(identity, err) = lookup else {
+            panic!("lost session must be unhealthy, got {lookup:?}");
+        };
+        assert_eq!(identity.session_id, "s-01EXAMPLE0000000000000000LOST");
+        let lost_error = || match lookup_from_output(&list, &request) {
+            Ok(Lookup::Unhealthy(_, err)) => err,
+            other => panic!("lost session must be unhealthy, got {other:?}"),
+        };
+        let failing_removal = |_: SessionIdentity| async {
+            Err::<(), Error>(Error::workflow("pohunek_request_timeout", false, None))
+        };
+        let other = Error::workflow("session_identity_invalid", true, None);
+        let other = finish(reject(&failing_removal, Some(identity.clone()), other));
+        assert_eq!(error_code(&other), "pohunek_session_cleanup_failed");
+        for err in [
+            err,
+            finish(reject(&failing_removal, Some(identity), lost_error())),
+        ] {
+            assert_eq!(error_code(&err), "pohunek_session_lost");
+            let Error::Workflow {
+                permanent, cause, ..
+            } = &err
+            else {
+                panic!("session loss must be a workflow failure, got {err:?}");
+            };
+            assert!(!permanent, "a lost runtime is retried");
+            assert_eq!(
+                diagnostic(cause.as_ref().map(|cause| &**cause)),
+                "host_restarted"
+            );
+        }
+    }
 
     #[test]
     fn review_sessions_start_in_the_companion_group() {
