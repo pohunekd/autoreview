@@ -135,3 +135,111 @@ struct PullRequestArguments {
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NoArguments {}
+
+/// The MCP handler of one request; it calls the engine the CLI commands call.
+pub(crate) struct Tools<I, C> {
+    /// The engine on the shared store.
+    engine: Arc<Engine<I, C>>,
+}
+
+impl<I, C> Tools<I, C> {
+    /// Creates the handler on `engine`.
+    pub(crate) fn new(engine: Arc<Engine<I, C>>) -> Self {
+        Self { engine }
+    }
+}
+
+impl<I, C> ServerHandler for Tools<I, C>
+where
+    I: Integrations + Send + Sync + 'static,
+    C: Clock + 'static,
+{
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(SERVER_NAME, env!("CARGO_PKG_VERSION")))
+            .with_instructions(super::results::UNTRUSTED_NOTICE)
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        Ok(ListToolsResult::with_all_items(
+            TOOLS.iter().map(tool).collect(),
+        ))
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        let caller = context
+            .extensions
+            .get::<http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<Caller>())
+            .cloned();
+        let arguments = Value::Object(request.arguments.unwrap_or_default());
+        let outcome = match &caller {
+            Some(caller) => {
+                self.run(caller, &request.name, &arguments, &context.ct)
+                    .await
+            }
+            None => Err(Failure::code(CLIENT_MISSING)),
+        };
+        let client = caller.as_ref().map_or("", |caller| caller.name.as_str());
+        let logged = arguments.to_string();
+        let result = match outcome {
+            Ok(value) => {
+                tracing::info!(
+                    client,
+                    tool = %request.name,
+                    arguments = %logged,
+                    outcome = "ok",
+                    "mcp tool call"
+                );
+                CallToolResult::structured(envelope(value))
+            }
+            Err(failure) => {
+                tracing::warn!(
+                    client,
+                    tool = %request.name,
+                    arguments = %logged,
+                    outcome = %failure.code,
+                    error = failure.error.as_ref().map(ToString::to_string),
+                    "mcp tool call"
+                );
+                CallToolResult::structured_error(json!({ "error_code": failure.code }))
+            }
+        };
+        Ok(result.into())
+    }
+}
+
+/// A failed tool call: its error code and the engine error behind it, which only the log shows.
+struct Failure {
+    /// Error code that the result carries.
+    code: String,
+    /// The engine error, if any.
+    error: Option<Error>,
+}
+
+impl Failure {
+    /// Returns a failure with `code` and no engine error.
+    fn code(code: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            error: None,
+        }
+    }
+}
+
+impl From<Error> for Failure {
+    fn from(error: Error) -> Self {
+        Self {
+            code: error_code(&error).to_owned(),
+            error: Some(error),
+        }
+    }
+}
