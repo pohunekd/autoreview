@@ -16,7 +16,7 @@ pub(crate) const COMMAND_INVALID: &str = "command_invalid";
 const DISCOVERY_BUSY: &str = "discovery_busy";
 
 /// Commands and arguments that the message of `command_invalid` lists.
-const USAGE: &str = "usage: autoreview [--config PATH] serve | validate | poll | \
+const USAGE: &str = "usage: autoreview [--config PATH] serve | mcp | validate | poll | \
 retry|resolve|approve --repository OWNER/REPO NUMBER HEAD | review --repository OWNER/REPO \
 NUMBER | reviews [LIMIT] | candidates | awaiting | review-queue | backup-db PATH";
 

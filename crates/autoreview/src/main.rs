@@ -7,6 +7,7 @@
 mod config_file;
 mod error_response;
 mod logging;
+mod mcp_server;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -16,6 +17,7 @@ use std::sync::Arc;
 
 use autoreview_engine::config::Config;
 use autoreview_engine::integrations::Integrations;
+use autoreview_engine::mcp::McpConfig;
 use autoreview_engine::model::{
     ApproveRequest, ResolveRequest, RetryRequest, head_prefix_valid, repository_valid, sha_valid,
 };
@@ -60,6 +62,12 @@ const REVIEW_IDENTITY_INVALID: &str = "review_identity_invalid";
 /// Error code of a configuration value that the command refuses.
 const CONFIGURATION_INVALID: &str = "configuration_invalid";
 
+/// Error code of a configuration key that the command needs and the file lacks.
+const CONFIGURATION_MISSING: &str = "configuration_missing";
+
+/// Configuration section that `autoreview mcp` needs.
+const MCP_KEY: &str = "mcp";
+
 /// Command line of `autoreview`.
 #[derive(Debug, Parser)]
 #[command(name = "autoreview", version, disable_help_subcommand = true)]
@@ -89,6 +97,8 @@ enum Command {
 enum EngineCommand {
     /// Runs discovery and reviews until SIGINT or SIGTERM.
     Serve,
+    /// Serves the MCP tools over Streamable HTTP until SIGINT or SIGTERM.
+    Mcp,
     /// Runs one discovery pass and prints what it queued.
     Poll,
     /// Starts a new attempt of a stopped review.
@@ -206,14 +216,14 @@ fn report(error: &Error) {
 async fn run(cli: Cli) -> Result<(), Error> {
     let environment = std::env::var_os(CONFIG_ENV);
     let path = config_file::resolve_path(cli.config.as_deref(), environment.as_deref())?;
-    let (config, _mcp) = config_file::load(&path)?;
+    let (config, mcp) = config_file::load(&path)?;
     let external = Arc::new(External::new(config.clone())?);
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;
     match cli.command {
         Command::Validate => validate(&config),
         Command::Candidates => print_json(&external.list_candidates(&cancel).await?),
-        Command::Engine(command) => run_engine(command, config, external, &cancel).await,
+        Command::Engine(command) => run_engine(command, config, mcp, external, &cancel).await,
     }
 }
 
@@ -221,6 +231,7 @@ async fn run(cli: Cli) -> Result<(), Error> {
 async fn run_engine(
     command: EngineCommand,
     config: Config,
+    mcp: Option<McpConfig>,
     external: Arc<External>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
@@ -238,6 +249,12 @@ async fn run_engine(
     ));
     match command {
         EngineCommand::Serve => serve(&engine, &external, &github_login, cancel).await,
+        EngineCommand::Mcp => {
+            let Some(mcp) = mcp else {
+                return Err(Error::config(CONFIGURATION_MISSING, MCP_KEY, None));
+            };
+            mcp_server::serve(engine, &mcp, cancel).await
+        }
         EngineCommand::Poll => print_json(&engine.poll(cancel).await?),
         EngineCommand::Retry(arguments) => {
             let (repository, number, head_sha) = review_arguments(&arguments.arguments, true)?;
