@@ -1703,6 +1703,8 @@ fn signature_valid(signature: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use autoreview_engine::config::NotifyRoute;
+    use autoreview_policy::Level;
 
     /// The example config, read by the loader tests so that they cover the shipped file.
     const EXAMPLE: &str = include_str!("../../../examples/config.yaml");
@@ -2080,6 +2082,90 @@ mod tests {
                 "must name at most one Matrix backend until M3"
             )
         );
+    }
+
+    /// Returns the four shared backends plus `approved`, with `route` added to
+    /// `notify.routes`.
+    fn with_event_route(route: &str) -> String {
+        let mut entries = shared_backends();
+        entries[3].push_str(&matrix_backend(
+            "approved",
+            "https://matrix.example.org",
+            "AUTOREVIEW_MATRIX_TOKEN",
+            "@you:example.org",
+        ));
+        four_backends(entries, "[queue]").replacen(
+            "    log: [log]\n",
+            &format!("    log: [log]\n{route}"),
+            1,
+        )
+    }
+
+    #[test]
+    fn an_event_route_takes_its_event_and_leaves_the_others_on_their_levels() {
+        let config = parse(
+            &four_backends(shared_backends(), "[queue]"),
+            secret,
+            example_policy,
+        )
+        .expect("level routes alone load");
+        assert!(config.matrix_rooms.events.is_empty());
+        assert_eq!(
+            config.notify_route(&Event::Approved, Level::Digest),
+            NotifyRoute::Level(Level::Digest)
+        );
+        let text = with_event_route("    approved: [approved]\n");
+        let config = parse(&text, secret, example_policy).expect("an event route loads");
+        assert_eq!(
+            config.matrix_rooms.events,
+            BTreeMap::from([(Event::Approved, "!approved:example.org".to_owned())])
+        );
+        assert_eq!(config.matrix_rooms.digest, "!digest:example.org");
+        assert_eq!(
+            config.notify_route(&Event::Approved, Level::Digest),
+            NotifyRoute::Event(Event::Approved)
+        );
+        assert_eq!(
+            config.notify_route(&Event::ChangesRequested, Level::Digest),
+            NotifyRoute::Level(Level::Digest)
+        );
+    }
+
+    #[test]
+    fn an_event_route_naming_an_unknown_event_or_backend_names_its_key() {
+        let cases = [
+            (
+                "    aproved: [approved]\n",
+                "configuration_invalid: notify.routes.aproved: names no notification event",
+            ),
+            (
+                "    approved: [missing]\n",
+                "configuration_invalid: notify.routes.approved: names no configured backend",
+            ),
+            (
+                "    approved: [approved, digest]\n",
+                concat!(
+                    "configuration_invalid: notify.routes.approved: ",
+                    "must name exactly one backend until M3"
+                ),
+            ),
+            (
+                "    approved: [quiet]\n",
+                "configuration_invalid: config: invalid Matrix approved room",
+            ),
+        ];
+        for (route, expected) in cases {
+            let text = with_event_route(route).replacen(
+                "  routes:\n",
+                "    - name: quiet\n      type: none\n  routes:\n",
+                1,
+            );
+            assert_eq!(
+                error_text(parse(&text, secret, example_policy)),
+                expected,
+                "{route}"
+            );
+        }
     }
 
     #[test]
