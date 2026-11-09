@@ -294,3 +294,106 @@ fn invalid_flag(flag: &str, reason: &'static str) -> Error {
 fn in_the_way(path: &Path) -> Error {
     Error::config(INIT_FILE_EXISTS, path.to_string_lossy(), None)
 }
+
+/// Writes `files` into `directory`, creating it and its subdirectories when they are absent.
+///
+/// Every target is checked before anything is created, and a file is opened only when it
+/// does not exist, so an existing file is never changed. When a write fails, the files and
+/// the listed directories this call created are removed again; a missing parent of
+/// `directory` that `create_dir_all` made stays.
+///
+/// # Errors
+///
+/// Returns `init_file_exists` naming the first file, or the first directory that is not a
+/// directory, in the way, and `workflow_failed` when a check, a directory or a file fails.
+pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>, Error> {
+    let targets: Vec<PathBuf> = files
+        .iter()
+        .map(|file| directory.join(file.relative))
+        .collect();
+    let mut directories: Vec<PathBuf> = vec![directory.to_path_buf()];
+    for target in &targets {
+        if let Some(parent) = target.parent()
+            && !directories.iter().any(|known| known == parent)
+        {
+            directories.push(parent.to_path_buf());
+        }
+    }
+    let mut missing = Vec::new();
+    for path in &directories {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => return Err(in_the_way(path)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => missing.push(path.clone()),
+            Err(error) => return Err(failed(error)),
+        }
+    }
+    for path in &targets {
+        match fs::symlink_metadata(path) {
+            Ok(_) => return Err(in_the_way(path)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(failed(error)),
+        }
+    }
+    let mut created = Created::default();
+    let result = create_all(&missing, files, &targets, &mut created);
+    if result.is_err() {
+        created.remove();
+    }
+    result
+}
+
+/// Creates the missing directories, then each file, and records what it created.
+fn create_all(
+    missing: &[PathBuf],
+    files: &[SetupFile],
+    targets: &[PathBuf],
+    created: &mut Created,
+) -> Result<Vec<String>, Error> {
+    for path in missing {
+        fs::create_dir_all(path).map_err(failed)?;
+        created.directories.push(path.clone());
+    }
+    let mut written = Vec::with_capacity(files.len());
+    for (file, path) in files.iter().zip(targets) {
+        let mut handle = match OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(handle) => handle,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                return Err(in_the_way(path));
+            }
+            Err(error) => return Err(failed(error)),
+        };
+        created.files.push(path.clone());
+        handle
+            .write_all(&file.contents)
+            .and_then(|()| handle.flush())
+            .map_err(failed)?;
+        written.push(path.to_string_lossy().into_owned());
+    }
+    Ok(written)
+}
+
+/// The files and directories that one `init` call created.
+#[derive(Debug, Default)]
+struct Created {
+    /// Directories, in the order they were created.
+    directories: Vec<PathBuf>,
+    /// Files, in the order they were created.
+    files: Vec<PathBuf>,
+}
+
+impl Created {
+    /// Removes the files, then the directories, newest first; a failure is only logged.
+    fn remove(&self) {
+        for path in self.files.iter().rev() {
+            if let Err(error) = fs::remove_file(path) {
+                tracing::warn!(path = %path.display(), error = %error, "init left a file");
+            }
+        }
+        for path in self.directories.iter().rev() {
+            if let Err(error) = fs::remove_dir(path) {
+                tracing::warn!(path = %path.display(), error = %error, "init left a directory");
+            }
+        }
+    }
+}
