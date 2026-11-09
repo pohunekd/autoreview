@@ -208,20 +208,20 @@ The plugin declares:
 - a **job** that sends the hourly review queue (`review-queue`);
 - an **action** for every other command of the [CLI reference](cli.md): `init`,
   `validate`, `profiles-install`, `poll`, `candidates`, `reviews`, `review`,
-  `awaiting`, `approve`, `resolve`, `retry`, `prune-branches` and `backup-db`.
+  `awaiting`, `approve`, `resolve`, `retry` and `backup-db`.
 
 Every action runs the same `autoreview` binary through the plugin's wrapper,
 which passes the plugin's own files explicitly:
 
 ```
-autoreview --config  "$POHUNEK_PLUGIN_CONFIG_DIR/config.yaml" \
-           --env-file "$POHUNEK_PLUGIN_CONFIG_DIR/secrets.env" <command> ...
+autoreview --config "$POHUNEK_PLUGIN_CONFIG_DIR/config.yaml" <command> ...
 ```
 
 pohunek starts plugin processes with an empty environment: no `PATH` and no
-tokens. That is why the tokens live in `secrets.env` and why `github.gh_bin`
-and `pohunek.bin` are absolute paths; for the plugin, `pohunek.bin` must be the
-CLI pohunek hands the plugin (`validate` checks it). Both files are in the
+tokens. Secrets come only from the variables named by the `*_env` keys. Without
+a `PATH`, `github.gh_bin` and `pohunek.bin` are absolute paths; for the plugin,
+`pohunek.bin` must be the CLI pohunek hands the plugin (`validate` checks it).
+`config.yaml` is in the
 plugin's owner-private configuration directory, which survives uninstall
 (`uninstall --purge` removes it). Find it with:
 
@@ -229,13 +229,10 @@ plugin's owner-private configuration directory, which survives uninstall
 pohunek workflow inspect pohunekd.autoreview
 ```
 
-Set it up with the `init` action, then put the tokens in `secrets.env`
-(mode `0600`, one `AUTOREVIEW_...=...` line per token, edited in a text editor,
-never echoed into a shell history), then validate:
+Set it up with the `init` action, then validate:
 
 ```sh
 pohunek workflow run pohunekd.autoreview init --login <github-login> --pohunek-host <host> --example single-repo-comment
-$EDITOR <plugin config dir>/secrets.env
 pohunek workflow run --json pohunekd.autoreview validate
 pohunek workflow run --json pohunekd.autoreview approve --repository <owner/repo> <number> <head-sha>
 ```

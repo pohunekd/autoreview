@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - serve, validate, init, profiles, poll, candidates, reviews, review, awaiting, approve, resolve, retry, review-queue, prune-branches and backup-db - with arguments and JSON output.
+description: Every autoreview command - serve, validate, init, profiles, poll, candidates, reviews, review, awaiting, approve, resolve, retry, review-queue and backup-db - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -12,15 +12,10 @@ intents: [setup, debug, help]
 > **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change.
 
 ```
-autoreview [--config <path>] [--env-file <path>] <command> [arguments]
+autoreview [--config <path>] <command> [arguments]
 ```
 
-`--env-file` reads `AUTOREVIEW_*` variables from a file instead of the
-process environment: one `NAME=value` per line, the file owned by the current
-user with mode `0600` (otherwise the command refuses with
-`configuration_invalid`). Values from the file win over the environment. The
-workflow plugin uses it, because pohunek starts plugins with an empty
-environment.
+Secrets come only from the variables named by the `*_env` keys of the configuration.
 
 Every command reads the configuration from `--config` or `AUTOREVIEW_CONFIG`
 and validates it together with the policy before doing anything. Output is
@@ -148,18 +143,6 @@ Starts a new attempt of a review that stopped after its retries
 (`review_stopped`). The head must still be the pull request head.
 
 ## Maintenance
-
-### `autoreview prune-branches`
-
-```
-autoreview prune-branches [--host <host>] [--older-than-days N] [--yes]
-```
-
-Lists review branches under `session.branch_prefix` on the review hosts that
-belong to no running review; with `--yes` deletes them and prints a list of
-`branch` and `commit` for recovery. pohunek keeps a session's branch after the
-session is removed, so these accumulate. See
-[stale sessions and branches](knowledge/runbooks/stale-sessions-and-branches.md).
 
 ### `autoreview backup-db`
 
