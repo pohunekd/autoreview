@@ -135,3 +135,111 @@ jobs:
             dist/autoreview-${{ needs.meta.outputs.version }}-${{ matrix.target }}.tar.gz
             dist/autoreview-${{ needs.meta.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
+
+  # The only job that can mint an OIDC token. It runs no repository code and
+  # no build script; it signs exactly the files the build jobs uploaded.
+  attest:
+    name: attest
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: archive-*
+          path: ${{ runner.temp }}/dist
+          merge-multiple: true
+      - name: Check the checksums
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/dist"
+          sha256sum -c -- *.sha256
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/dist/*.tar.gz
+            ${{ runner.temp }}/dist/*.sha256
+
+  # The only job with `contents: write`. It runs no repository code. It creates
+  # a draft for the existing tag (`--verify-tag` never creates one) and removes
+  # only a draft that this run created and could not complete.
+  release:
+    name: release
+    needs: [meta, attest]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      # The commit that meta checked out; the build jobs check out the same ref.
+      COMMIT: ${{ needs.meta.outputs.commit }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: archive-*
+          path: ${{ runner.temp }}/dist
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/notes
+      - name: Check the checksums
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/dist"
+          sha256sum -c -- *.sha256
+      # The releases list includes drafts. A leftover draft of this tag blocks
+      # the run: delete it, then run the workflow again.
+      - name: Refuse a moved tag or an existing release
+        run: |
+          set -euo pipefail
+          tagged="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)"
+          if [ "$tagged" != "$COMMIT" ]; then
+            echo "::error::$TAG points to $tagged, this run built $COMMIT"
+            exit 1
+          fi
+          existing="$(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.tag_name == env.TAG) | .id')"
+          if [ -n "$existing" ]; then
+            echo "::error::a release or draft for $TAG exists; delete it and run again"
+            exit 1
+          fi
+      - name: Create the draft release
+        id: draft
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/dist"
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes/release-notes.md" ./*
+      - name: Check the draft assets
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/dist"
+          want="$(for file in *; do
+            printf '%s sha256:%s\n' "$file" "$(sha256sum -- "$file" | cut -d' ' -f1)"
+          done | LC_ALL=C sort)"
+          have="$(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.tag_name == env.TAG and .draft) | .assets[]
+              | select(.state == "uploaded") | "\(.name) \(.digest)"' | LC_ALL=C sort)"
+          if [ "$want" != "$have" ]; then
+            printf 'expected:\n%s\nfound:\n%s\n' "$want" "$have"
+            echo "::error::the draft assets differ from the built archives"
+            exit 1
+          fi
+      - name: Remove the incomplete draft
+        if: failure() && (steps.draft.outcome == 'success' || steps.draft.outcome == 'failure')
+        run: |
+          set -euo pipefail
+          for id in $(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.tag_name == env.TAG and .draft) | .id'); do
+            gh api -X DELETE "repos/$GH_REPO/releases/$id"
+          done
