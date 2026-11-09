@@ -1,0 +1,60 @@
+#!/bin/sh
+# Packs a release binary into autoreview-<version>-<target>.tar.gz and its .sha256.
+#
+# usage: scripts/release-archive <version> <target> <binary> <output-dir>
+#        with SOURCE_DATE_EPOCH set to a Unix time
+#
+# The archive holds one directory autoreview-<version>-<target>/ with the binary
+# `autoreview`, LICENSE and README.md. Its bytes depend only on the inputs and on
+# the tar and gzip versions: members are sorted, owned by root, stamped with
+# SOURCE_DATE_EPOCH (the release workflow uses the commit time) and compressed
+# without a name or time. The .sha256 line names the archive without a
+# directory, so `sha256sum -c` works next to the downloaded files. Needs GNU tar.
+# Prints the archive file name.
+
+set -eu
+
+fail() {
+    printf 'release-archive: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$#" -eq 4 ] || fail "usage: scripts/release-archive <version> <target> <binary> <output-dir>"
+version=$1
+target=$2
+binary=$3
+output=$4
+
+printf '%s\n' "$version" | grep -Eqx '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' \
+    || fail "version must be X.Y.Z: $version"
+case $target in
+    '' | *[!a-z0-9_-]*) fail "target must be a lowercase target triple: $target" ;;
+esac
+[ -f "$binary" ] || fail "not a file: $binary"
+epoch=${SOURCE_DATE_EPOCH:-}
+case $epoch in
+    '' | *[!0-9]*) fail "SOURCE_DATE_EPOCH must be set to a Unix timestamp" ;;
+esac
+tar --version 2>/dev/null | grep -q 'GNU tar' || fail "GNU tar is required"
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+mkdir -p -- "$output"
+name="autoreview-$version-$target"
+staging=$(mktemp -d "${TMPDIR:-/tmp}/release-archive.XXXXXX")
+trap 'rm -rf -- "$staging"' EXIT
+
+mkdir -- "$staging/$name"
+cp -- "$binary" "$staging/$name/autoreview"
+cp -- "$root/LICENSE" "$root/README.md" "$staging/$name/"
+# Explicit modes, so the umask of the build host never reaches the archive.
+chmod 0755 "$staging/$name" "$staging/$name/autoreview"
+chmod 0644 "$staging/$name/LICENSE" "$staging/$name/README.md"
+
+# No pipe: a failing tar must fail the script, and sh has no pipefail.
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
+    --format=gnu -C "$staging" -cf "$staging/$name.tar" "$name"
+gzip -n -9 < "$staging/$name.tar" > "$staging/$name.tar.gz"
+mv -- "$staging/$name.tar.gz" "$output/$name.tar.gz"
+(cd -- "$output" && sha256sum -- "$name.tar.gz") > "$staging/$name.tar.gz.sha256"
+mv -- "$staging/$name.tar.gz.sha256" "$output/$name.tar.gz.sha256"
+printf '%s\n' "$name.tar.gz"

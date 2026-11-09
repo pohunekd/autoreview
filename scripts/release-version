@@ -1,0 +1,35 @@
+#!/bin/sh
+# Prints the workspace version of Cargo.toml and, given a tag, checks it.
+#
+# usage: scripts/release-version [<tag>]
+#
+# The version must be X.Y.Z. A given tag must be exactly v<version>, so a
+# release always carries the version that its binary reports. Any other tag,
+# including a malformed one, is refused with exit 1.
+
+set -eu
+
+fail() {
+    printf 'release-version: %s\n' "$*" >&2
+    exit 1
+}
+
+[ "$#" -le 1 ] || fail "usage: scripts/release-version [<tag>]"
+
+cd "$(dirname "$0")/.."
+version=$(python3 -I -c '
+import tomllib
+with open("Cargo.toml", "rb") as file:
+    print(tomllib.load(file)["workspace"]["package"]["version"])
+') || fail "cannot read [workspace.package] version from Cargo.toml"
+
+case $version in
+    '' | *[!0-9.]*) fail "workspace version must be X.Y.Z: $version" ;;
+esac
+printf '%s\n' "$version" | grep -Eqx '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' \
+    || fail "workspace version must be X.Y.Z: $version"
+
+if [ "$#" -eq 1 ] && [ "$1" != "v$version" ]; then
+    fail "tag $1 does not match the workspace version $version (expected v$version)"
+fi
+printf '%s\n' "$version"
