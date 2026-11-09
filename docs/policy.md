@@ -108,9 +108,6 @@ notifications:
   superseded: log
 ```
 
-Until #34, the engine refuses the `pohunekd/*` rule of this example, because it trusts by
-permission; see the note under [authors](#authors).
-
 The rules above span two owners, `zajca` and `pohunekd`; both are served by the
 one [credential](configuration.md#credentials) in `config.yaml`. A credential
 per owner is planned in #13.
@@ -219,14 +216,8 @@ Every rule states who it trusts. There is no implicit default: a rule without
 `authors` is an error, so a public repository cannot be opened to strangers by
 omission. See [untrusted authors](knowledge/safety/untrusted-authors.md).
 
-The engine validates the whole section, but it accepts only `trusted: any` until it
-resolves and enforces author classes (#33, #34). A rule that trusts only some authors
-is refused at load with
-`authors: only trusted any is accepted until author classes are enforced (#33, #34)`, so no
-untrusted author is ever reviewed as a trusted one.
 `trusted: any` reviews every author, forks included, with the rule's outcomes, approval
-too. Until #34, use it only for a repository without outside contributors, and remove a
-rule for any other repository.
+too. Use it only for a repository without outside contributors.
 
 ```yaml
 authors:
@@ -253,7 +244,7 @@ authors:
 
 | Key | Value |
 |---|---|
-| `trusted` | `any`, or a mapping with `logins` (lowercase logins; a GitHub App author is written as its plain login without `app/` or `[bot]`, as in `ready_draft_authors`), `permission` (`write`, `maintain` or `admin`), or both. An author matching either is trusted |
+| `trusted` | `any`, or a mapping with `logins` (lowercase logins: a user as `name`, a GitHub App or bot as `name[bot]`, quoted in YAML, such as `"devin-ai-integration[bot]"`), `permission` (`write`, `maintain` or `admin`), or both. An author matching either is trusted |
 | `untrusted` | Required unless `trusted: any`. `skip`, or a mapping with `pipeline`, `on_findings` and `on_clean` |
 
 Rules for the untrusted section:
@@ -264,7 +255,18 @@ Rules for the untrusted section:
   allowed.
 - A pull request from a fork is untrusted unless its author is listed in
   `logins`; repository permission alone does not make a fork trusted.
+- A login matches by author type, as GitHub reports it for the pull request. A
+  plain `name` matches only a user, and `name[bot]` matches only an app or bot
+  named `name`, so a user account that takes an app's name is not trusted by it.
+  An author whose type is missing or neither is untrusted, and so is an app that
+  is not listed: permission trusts only users.
 - The author class is resolved when a review is dispatched and stored with it.
+  The permission is read with the credential that serves the repository, only for
+  an unlisted author of a pull request that is not from a fork, once per author and
+  repository in a discovery pass. When the read fails, that author's pull requests
+  are not started: a `review_stopped` notice names the error code and the read to
+  check, and the next pass reads the permission again. A failed read never counts
+  as trusted.
 
 ## Drafts of coding agents
 
@@ -336,4 +338,3 @@ request content itself is always untrusted input. See
 | `untrusted pipeline must use checkout base` | Use a base-checkout pipeline for untrusted authors |
 | `authors.untrusted is required unless trusted is any` | Add `untrusted: skip` or an untrusted mapping |
 | `authors.untrusted.on_clean must be comment or await, never approve` | Use `comment` or `await` |
-| `authors: only trusted any is accepted until author classes are enforced (#33, #34)` | Until #34, keep the rule only for a repository without outside contributors, with `trusted: any`, or remove it; `trusted: any` reviews every author, forks included, with the rule's outcomes |

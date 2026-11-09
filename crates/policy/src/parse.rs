@@ -14,7 +14,7 @@ use serde::de::{self, Deserializer, Unexpected, Visitor};
 use serde_saphyr::granit_parser::{Event as YamlEvent, Parser, ScalarStyle, Tag};
 
 use crate::Error;
-use crate::authors::{FileAuthors, trusts_any, validate_authors};
+use crate::authors::{Authors, FileAuthors, parse_authors};
 use crate::digest::digest_of;
 use crate::human_review::{FileHumanReview, parse_human_review};
 use crate::types::{
@@ -319,7 +319,7 @@ pub fn parse(
     }
     let reviewers = parse_reviewers(&document.reviewers)?;
     let pipelines = parse_pipelines(&document.pipelines, &reviewers, &read_prompt)?;
-    let rules = parse_rules(&document.repositories, &pipelines)?;
+    let (rules, rule_authors) = parse_rules(&document.repositories, &pipelines)?;
     let notifications = parse_notifications(&document.notifications)?;
     let reminder_hours = parse_notes_handoff(document.notes_handoff.as_ref(), &rules)?;
     let mut authors = Vec::new();
@@ -332,9 +332,9 @@ pub fn parse(
         authors.push(author.clone());
     }
     authors.sort();
-    refuse_restricted_authors(&document.repositories)?;
     let digest = digest_of(
         &rules,
+        &rule_authors,
         &notifications,
         document.approval.timeout_hours,
         reminder_hours,
@@ -342,6 +342,7 @@ pub fn parse(
     );
     Ok(Policy {
         rules,
+        authors: rule_authors,
         ready_draft_authors: authors,
         notifications,
         approval_timeout: Duration::from_hours(document.approval.timeout_hours.unsigned_abs()),
@@ -830,22 +831,27 @@ fn parse_trigger(raw: &str) -> Result<Trigger, Error> {
 }
 
 /// Validates the repository rules in file order and resolves their pipelines.
+///
+/// Returns the rules and the authors section of each rule, in the same order.
 fn parse_rules(
     raw: &[FileRule],
     pipelines: &BTreeMap<String, Pipeline>,
-) -> Result<Vec<Rule>, Error> {
+) -> Result<(Vec<Rule>, Vec<Authors>), Error> {
     if raw.is_empty() || raw.len() > MAX_RULES {
         return Err(Error::RuleCount { max: MAX_RULES });
     }
     let mut rules = Vec::new();
+    let mut authors = Vec::new();
     for (index, value) in raw.iter().enumerate() {
-        let rule = parse_rule(value, &rules, pipelines).map_err(|source| Error::Rule {
-            position: rule_position(index, value),
-            source: Box::new(source),
-        })?;
+        let (rule, rule_authors) =
+            parse_rule(value, &rules, pipelines).map_err(|source| Error::Rule {
+                position: rule_position(index, value),
+                source: Box::new(source),
+            })?;
         rules.push(rule);
+        authors.push(rule_authors);
     }
-    Ok(rules)
+    Ok((rules, authors))
 }
 
 /// Returns the position of a rule in errors, as repositories[index] (match).
@@ -853,28 +859,12 @@ fn rule_position(index: usize, value: &FileRule) -> String {
     format!("repositories[{index}] ({})", value.match_glob)
 }
 
-/// Refuses the first rule whose authors section trusts fewer than every author.
-///
-/// The engine resolves no author class yet (#33, #34), so it would review an untrusted author
-/// like a trusted one. It runs after every other check, so the section is already valid.
-fn refuse_restricted_authors(raw: &[FileRule]) -> Result<(), Error> {
-    for (index, value) in raw.iter().enumerate() {
-        if !trusts_any(value.authors.as_ref()) {
-            return Err(Error::Rule {
-                position: rule_position(index, value),
-                source: Box::new(Error::AuthorsNotEnforced),
-            });
-        }
-    }
-    Ok(())
-}
-
-/// Validates one repository rule against the rules before it.
+/// Validates one repository rule against the rules before it and returns its authors section.
 fn parse_rule(
     value: &FileRule,
     earlier_rules: &[Rule],
     pipelines: &BTreeMap<String, Pipeline>,
-) -> Result<Rule, Error> {
+) -> Result<(Rule, Authors), Error> {
     if !valid_match(&value.match_glob) {
         return Err(Error::RuleMatch);
     }
@@ -931,8 +921,8 @@ fn parse_rule(
         return Err(Error::RuleOnNotesNeedsAwait);
     }
     let human_review = parse_human_review(value.human_review.as_ref(), on_clean.clone())?;
-    validate_authors(value.authors.as_ref(), pipelines)?;
-    Ok(Rule {
+    let authors = parse_authors(value.authors.as_ref(), pipelines)?;
+    let rule = Rule {
         match_glob: value.match_glob.clone(),
         trigger,
         pipeline: pipeline.clone(),
@@ -940,7 +930,8 @@ fn parse_rule(
         on_clean,
         on_notes,
         human_review,
-    })
+    };
+    Ok((rule, authors))
 }
 
 /// Returns the reminder hours of notes handed to an author.
@@ -1071,7 +1062,8 @@ mod tests {
 
     use super::{load, parse};
     use crate::Error;
-    use crate::types::{MAX_PROMPT_BYTES, OnClean, OnNotes};
+    use crate::authors::{Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview};
+    use crate::types::{MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes};
 
     /// The authors section of the acme/special rule in the valid policy.
     const SPECIAL_AUTHORS: &str = "{match: acme/special, authors: {trusted: any},";
@@ -1143,14 +1135,6 @@ notifications:
             &format!("{{match: acme/special, authors: {value},"),
             1,
         )
-    }
-
-    /// Reports whether error is the refusal of a rule that trusts fewer than every author.
-    fn is_not_enforced(error: &Error) -> bool {
-        let Error::Rule { source, .. } = error else {
-            return false;
-        };
-        matches!(**source, Error::AuthorsNotEnforced)
     }
 
     /// Reports whether a cause in the chain of error is an I/O not-found error.
@@ -1409,8 +1393,8 @@ notifications:
                 "logins: \"app/devin\"",
             ),
             (
-                "{trusted: {logins: [\"devin[bot]\"]}, untrusted: skip}",
-                "logins: \"devin[bot]\"",
+                "{trusted: {logins: [\"devin[bot][bot]\"]}, untrusted: skip}",
+                "logins: \"devin[bot][bot]\"",
             ),
             (
                 "{trusted: {logins: [Maintainer]}, untrusted: skip}",
@@ -1489,38 +1473,45 @@ notifications:
     }
 
     #[test]
-    fn restricted_authors_are_refused_after_every_other_check() {
+    fn restricted_authors_parse_into_their_sections() {
         let review = "{pipeline: main, on_findings: comment, on_clean: await}";
-        let restricted = [
-            "{trusted: {logins: [maintainer]}, untrusted: skip}".to_owned(),
-            format!("{{trusted: {{permission: maintain}}, untrusted: {review}}}"),
-            format!("{{trusted: {{logins: [ab, cd], permission: admin}}, untrusted: {review}}}"),
-        ];
-        for value in &restricted {
-            let document = with_authors(VALID_POLICY, value);
-            assert_ne!(
-                document, VALID_POLICY,
-                "{value}: mutation did not change the policy"
-            );
-            match parse(document.as_bytes(), prompts) {
-                Ok(_) => panic!("{value}: a rule that trusts only some authors must be refused"),
-                Err(error) => assert!(is_not_enforced(&error), "{value}: error = {error}"),
-            }
-        }
-        // A later error wins over the refusal, so a refused policy is otherwise valid.
-        let document =
-            with_authors(VALID_POLICY, &restricted[0]).replacen("  superseded: log\n", "", 1);
-        match parse(document.as_bytes(), prompts) {
-            Ok(_) => panic!("a policy without the superseded level must be refused"),
-            Err(error) => assert!(
-                error.to_string().contains("event superseded needs a level"),
-                "error = {error}"
+        let value = format!(
+            "{{trusted: {{logins: [ab, \"cd[bot]\"], permission: admin}}, untrusted: {review}}}"
+        );
+        let document = with_authors(VALID_POLICY, &value);
+        let parsed = parse(document.as_bytes(), prompts).expect("the restricted policy parses");
+        let main = parsed
+            .resolve("acme/special")
+            .map(|rule| rule.pipeline.clone());
+        let want = Authors::Restricted {
+            trusted: TrustedAuthors {
+                logins: vec!["ab".to_owned(), "cd[bot]".to_owned()],
+                permission: Some(Permission::Admin),
+            },
+            untrusted: Untrusted::Review(Box::new(UntrustedReview {
+                pipeline: main.expect("acme/special has a pipeline"),
+                on_findings: OnFindings::Comment,
+                on_clean: OnClean::Await,
+            })),
+        };
+        assert_eq!(parsed.authors("acme/special"), Some(&want));
+        assert_eq!(parsed.authors("acme/other"), Some(&Authors::Any));
+        assert_eq!(parsed.authors("other/repository"), None);
+        let skip = with_authors(VALID_POLICY, "{trusted: {logins: [ab]}, untrusted: skip}");
+        let skipping = parse(skip.as_bytes(), prompts).expect("the skipping policy parses");
+        assert!(
+            matches!(
+                skipping.authors("acme/special"),
+                Some(Authors::Restricted { untrusted: Untrusted::Skip, trusted })
+                    if trusted.permission.is_none()
             ),
-        }
+            "authors = {:?}",
+            skipping.authors("acme/special")
+        );
     }
 
     #[test]
-    fn every_example_policy_is_valid_up_to_the_authors_refusal() {
+    fn every_example_policy_parses() {
         let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
         let mut names = Vec::new();
         for entry in std::fs::read_dir(&examples).expect("the examples directory is readable") {
@@ -1530,25 +1521,18 @@ notifications:
             }
         }
         names.sort();
-        assert!(!names.is_empty(), "no example policy found");
-        let mut parsed = Vec::new();
+        assert!(
+            names.len() >= 8,
+            "found only {} example policies",
+            names.len()
+        );
         for path in &names {
             let document = std::fs::read(path).expect("the example policy is readable");
             // Most examples ship no prompt files, so every prompt path reads as one line.
-            match parse(&document, |_| Ok(b"Review the pull request.".to_vec())) {
-                Ok(_) => parsed.push(path.parent().and_then(|dir| dir.file_name())),
-                Err(error) => assert!(
-                    is_not_enforced(&error),
-                    "{}: error = {error}",
-                    path.display()
-                ),
+            if let Err(error) = parse(&document, |_| Ok(b"Review the pull request.".to_vec())) {
+                panic!("{}: error = {error}", path.display());
             }
         }
-        assert_eq!(
-            parsed,
-            vec![Some(std::ffi::OsStr::new("single-repo-comment"))],
-            "only the example that trusts every author parses before #34"
-        );
     }
 
     #[test]

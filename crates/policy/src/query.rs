@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use crate::authors::Authors;
 use crate::parse::{cut, matches};
 use crate::types::{Event, Level, Policy, Rule, TriggerKind};
 
@@ -17,6 +18,18 @@ impl Policy {
         self.rules
             .iter()
             .find(|rule| matches(&rule.match_glob, repository))
+    }
+
+    /// Returns the authors section of the rule that [`Policy::resolve`] returns.
+    ///
+    /// `None` means no rule covers the repository.
+    #[must_use]
+    pub fn authors(&self, repository: &str) -> Option<&Authors> {
+        let index = self
+            .rules
+            .iter()
+            .position(|rule| matches(&rule.match_glob, repository))?;
+        self.authors.get(index)
     }
 
     /// Returns the distinct labels used by label triggers, sorted.

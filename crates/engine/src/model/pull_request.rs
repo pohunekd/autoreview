@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use autoreview_policy::{Event, Level, Reviewer, Rule};
+use autoreview_policy::{AuthorClass, Event, Level, Reviewer, Rule};
 use serde::{Deserialize, Serialize, Serializer};
 
 /// Scope mode of a review that reads the whole pull request.
@@ -38,6 +38,12 @@ pub struct PullRequest {
     /// Such an author never decides on notes handed to it.
     #[serde(skip_serializing_if = "is_false")]
     pub author_bot: bool,
+    /// GraphQL type name of the author, such as `User` or `Bot`; empty when GitHub gave none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub author_type: String,
+    /// Marks a pull request whose head branch is in another repository, a fork.
+    #[serde(skip_serializing_if = "is_false")]
+    pub fork: bool,
     /// Head branch name.
     pub head_branch: String,
     /// Base branch name.
@@ -59,8 +65,12 @@ autoreview_go_compat::object_only_serde!(PullRequest);
 pub struct Candidate {
     /// The pull request head.
     pub pull_request: PullRequest,
-    /// The policy rule that covers the repository.
+    /// The policy rule that covers the repository; discovery replaces it with the untrusted
+    /// section's rule for an untrusted author.
     pub rule: Rule,
+    /// The author class; `None` until discovery resolves it, and a review needs it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_class: Option<AuthorClass>,
 }
 
 /// A pull request a trigger found but whose data the engine refuses.
@@ -74,6 +84,9 @@ pub struct RejectedCandidate {
     pub number: i64,
     /// Error code of the refusal.
     pub code: String,
+    /// Login of the author whose permission read failed; `None` when GitHub's data was refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_login: Option<String>,
 }
 
 /// The result of one discovery search. A rejected pull request does not hold up the others.
@@ -132,6 +145,11 @@ pub struct ReviewInput {
     pub attempt: i64,
     /// The policy rule the review runs under.
     pub rule: Rule,
+    /// The author class decided at dispatch; the rule is already the one of that class.
+    ///
+    /// Unset only in a review stored before author classes, whose rule trusted every author.
+    #[serde(skip_serializing_if = "is_unset_class")]
+    pub author_class: AuthorClass,
     /// Reviewers that run this review.
     #[serde(
         serialize_with = "nil_when_empty",
@@ -249,6 +267,11 @@ pub struct RunLimits {
 }
 
 autoreview_go_compat::object_only_serde!(RunLimits);
+
+/// Reports whether an author class is unset, which a review stored before classes holds.
+fn is_unset_class(value: &AuthorClass) -> bool {
+    *value == AuthorClass::Unset
+}
 
 /// Reports whether a flag is unset, which Go omits from the JSON.
 fn is_false(value: &bool) -> bool {

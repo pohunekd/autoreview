@@ -15,7 +15,7 @@ use autoreview_engine::model::{
     CandidateList, Discussion, PriorFinding, ProjectRoute, PublishResult, PullRequest,
     SessionIdentity,
 };
-use autoreview_policy::{Level, Policy, Protocol, Trigger};
+use autoreview_policy::{Level, Permission, Policy, Protocol, Trigger};
 use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 
@@ -124,6 +124,17 @@ impl Integrations for External {
     ) -> Result<PullRequestState, Error> {
         self.github
             .read_pull_request_state(cancel, repository, number)
+            .await
+    }
+
+    async fn author_permission(
+        &self,
+        cancel: &CancellationToken,
+        repository: &str,
+        login: &str,
+    ) -> Result<Option<Permission>, Error> {
+        self.github
+            .author_permission(cancel, repository, login)
             .await
     }
 

@@ -25,8 +25,9 @@ gives the guide to start from.
    Start with [single-repo-comment](single-repo-comment.md). It is the
    default example and the safest first run.
 2. **Is the repository public, or can strangers open pull requests on it?**
-   Read [public-repositories](public-repositories.md) first. Untrusted authors
-   and forks are reviewed from the base checkout and never approved.
+   Read [public-repositories](public-repositories.md) first. Untrusted authors,
+   and forks whose author is not listed in `logins`, are reviewed from the base
+   checkout and never approved automatically.
 3. **Do you want a human to approve a clean review before anything is
    approved on GitHub?**
    Use [human-approval](human-approval.md). A clean review waits with

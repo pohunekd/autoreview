@@ -98,6 +98,11 @@ pub(crate) struct GitHubPullRequest {
     /// Whether the pull request is a draft.
     #[serde(rename = "isDraft", deserialize_with = "null_default::deserialize")]
     is_draft: bool,
+    /// Whether the head branch is in another repository; `None` when GitHub left it out.
+    ///
+    /// It is never read as false, which would make a fork a same-repository pull request.
+    #[serde(rename = "isCrossRepository")]
+    is_cross_repository: Option<bool>,
     /// Head commit SHA.
     #[serde(rename = "headRefOid", deserialize_with = "null_default::deserialize")]
     head_sha: String,
@@ -410,14 +415,18 @@ pub(crate) fn decode_pull_request(
     if raw.state != OPEN_STATE {
         return Err(Error::workflow("pull_request_not_open", true, None));
     }
+    let Some(fork) = raw.is_cross_repository else {
+        return Err(response_invalid(None));
+    };
     let repository = raw.repository.name_with_owner.to_ascii_lowercase();
-    let (author, author_bot) = if let Some(author) = &raw.author {
+    let (author, author_bot, author_type) = if let Some(author) = &raw.author {
         (
             author.login.to_ascii_lowercase(),
             author.typename == BOT_TYPENAME,
+            author.typename.clone(),
         )
     } else {
-        (String::new(), false)
+        (String::new(), false, String::new())
     };
     let title = raw.title.trim().to_string();
     let labels = raw
@@ -435,6 +444,8 @@ pub(crate) fn decode_pull_request(
         url: raw.url.clone(),
         author: author.clone(),
         author_bot,
+        author_type,
+        fork,
         head_branch: raw.head_branch.clone(),
         base_branch: raw.base_branch.clone(),
         base_sha: raw.base_sha.clone(),
@@ -658,6 +669,7 @@ impl GitHub {
 
 #[cfg(test)]
 mod tests {
+    use autoreview_engine::error_code;
     use autoreview_engine::integrations::PullRequestState;
     use autoreview_policy::{Trigger, TriggerKind};
 
@@ -673,7 +685,7 @@ mod tests {
     const BOT_RESPONSE: &str = concat!(
         r#"{"data":{"repository":{"pullRequest":{"id":"PR_1","number":3,"#,
         r#""title":"Add widget","url":"https://example.org/acme/widget/pull/3","#,
-        r#""state":"OPEN","isDraft":false,"headRefOid":""#,
+        r#""state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":""#,
         r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","#,
         r#""baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","#,
         r#""baseRefName":"main","author":{"__typename":"Bot","#,
@@ -686,7 +698,7 @@ mod tests {
     const HUMAN_RESPONSE: &str = concat!(
         r#"{"data":{"repository":{"pullRequest":{"id":"PR_1","number":4,"#,
         r#""title":"Add widget","url":"https://example.org/acme/widget/pull/4","#,
-        r#""state":"OPEN","isDraft":false,"headRefOid":""#,
+        r#""state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":""#,
         r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","#,
         r#""baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","#,
         r#""baseRefName":"main","author":{"__typename":"User","#,
@@ -725,5 +737,37 @@ mod tests {
                 head_sha: "a".repeat(40),
             }
         );
+    }
+
+    #[test]
+    fn cross_repository_flag_marks_a_fork_and_is_never_read_as_false() {
+        let trigger = Trigger {
+            kind: TriggerKind::ReviewRequested,
+            label: String::new(),
+        };
+        let flag = r#""isCrossRepository":false,"#;
+        let decode = |response: &str| {
+            decode_pull_request_response(response)
+                .and_then(|raw| decode_pull_request(&raw, HOST, LOGIN, &trigger))
+        };
+        let same = decode(HUMAN_RESPONSE).expect("a same-repository pull request decodes");
+        let fork = decode(&HUMAN_RESPONSE.replacen(flag, r#""isCrossRepository":true,"#, 1))
+            .expect("a fork pull request decodes");
+        assert!(
+            !same.fork && fork.fork,
+            "same={} fork={}",
+            same.fork,
+            fork.fork
+        );
+        for replacement in ["", r#""isCrossRepository":null,"#] {
+            let response = HUMAN_RESPONSE.replacen(flag, replacement, 1);
+            assert_ne!(response, HUMAN_RESPONSE, "the fixture has the flag");
+            let code = decode(&response).map_err(|error| error_code(&error).to_owned());
+            assert_eq!(
+                code.map(|pr| pr.fork),
+                Err("github_response_invalid".to_owned()),
+                "a missing flag must be refused: {replacement:?}"
+            );
+        }
     }
 }

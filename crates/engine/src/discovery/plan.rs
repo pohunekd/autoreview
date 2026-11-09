@@ -226,7 +226,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns `configuration_invalid` when the configuration has no policy.
+    /// Returns `configuration_invalid` when the configuration has no policy, and the permanent
+    /// `review_input_invalid` for a candidate whose author class is not resolved.
     pub(crate) fn build_input(
         &self,
         candidate: &Candidate,
@@ -237,12 +238,17 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         attempt: i64,
     ) -> Result<ReviewInput, Error> {
         let policy = self.policy()?;
+        let Some(author_class) = candidate.author_class.clone() else {
+            // No review runs with a trust that nobody decided.
+            return Err(Error::workflow("review_input_invalid", true, None));
+        };
         let pipeline = &candidate.rule.pipeline;
         Ok(ReviewInput {
             version: INPUT_VERSION,
             pull_request: candidate.pull_request.clone(),
             attempt,
             rule: candidate.rule.clone(),
+            author_class,
             reviewers: if scope.incremental() {
                 pipeline.incremental_reviewers.clone()
             } else {

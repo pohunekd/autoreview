@@ -232,6 +232,7 @@ fn classify(
             list.candidates.push(Candidate {
                 pull_request,
                 rule: rule.clone(),
+                author_class: None,
             });
             Ok(())
         }
@@ -245,6 +246,7 @@ fn classify(
                         repository: repository.to_owned(),
                         number,
                         code: code.to_owned(),
+                        permission_login: None,
                     });
                     Ok(())
                 } else {
@@ -671,7 +673,7 @@ mod tests {
     const DRAFT_RESPONSE: &str = concat!(
         r#"{"data":{"repository":{"pullRequest":{"id":"PR_1","number":1,"#,
         r#""title":"Add widget","url":"https://example.org/acme/widget/pull/1","#,
-        r#""state":"OPEN","isDraft":true,"headRefOid":""#,
+        r#""state":"OPEN","isDraft":true,"isCrossRepository":false,"headRefOid":""#,
         r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","#,
         r#""baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","#,
         r#""baseRefName":"main","author":{"__typename":"User","#,
@@ -684,7 +686,7 @@ mod tests {
     const READY_RESPONSE: &str = concat!(
         r#"{"data":{"repository":{"pullRequest":{"id":"PR_2","number":2,"#,
         r#""title":"Add widget","url":"https://example.org/acme/widget/pull/2","#,
-        r#""state":"OPEN","isDraft":false,"headRefOid":""#,
+        r#""state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":""#,
         r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","#,
         r#""baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","#,
         r#""baseRefName":"main","author":{"__typename":"User","#,
@@ -697,7 +699,7 @@ mod tests {
     const AGENT_DRAFT_RESPONSE: &str = concat!(
         r#"{"data":{"repository":{"pullRequest":{"id":"PR_1","number":1,"#,
         r#""title":"Fix","url":"https://example.org/acme/widget/pull/1","#,
-        r#""state":"OPEN","isDraft":true,"headRefOid":""#,
+        r#""state":"OPEN","isDraft":true,"isCrossRepository":false,"headRefOid":""#,
         r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"example/fix","#,
         r#""baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","#,
         r#""baseRefName":"main","author":{"__typename":"Bot","#,
@@ -710,7 +712,7 @@ mod tests {
     const AGENT_NO_REQUEST_RESPONSE: &str = concat!(
         r#"{"data":{"repository":{"pullRequest":{"id":"PR_2","number":2,"#,
         r#""title":"Fix","url":"https://example.org/acme/widget/pull/2","#,
-        r#""state":"OPEN","isDraft":true,"headRefOid":""#,
+        r#""state":"OPEN","isDraft":true,"isCrossRepository":false,"headRefOid":""#,
         r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"example/fix","#,
         r#""baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","#,
         r#""baseRefName":"main","author":{"__typename":"Bot","#,
@@ -723,7 +725,7 @@ mod tests {
     const HUMAN_DRAFT_RESPONSE: &str = concat!(
         r#"{"data":{"repository":{"pullRequest":{"id":"PR_3","number":3,"#,
         r#""title":"Fix","url":"https://example.org/acme/widget/pull/3","#,
-        r#""state":"OPEN","isDraft":true,"headRefOid":""#,
+        r#""state":"OPEN","isDraft":true,"isCrossRepository":false,"headRefOid":""#,
         r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"fix","#,
         r#""baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","#,
         r#""baseRefName":"main","author":{"__typename":"User","#,
@@ -756,7 +758,8 @@ mod tests {
     const NULL_NODE_LABEL_SEARCH_RESPONSE: &str = concat!(
         r#"{"data":{"search":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":["#,
         r#"null,{"id":"PR_3","number":3,"title":"Add widget","url":"https://github.com/ac"#,
-        r#"me/widget/pull/3","state":"OPEN","isDraft":false,"headRefOid":"aaaaaaaaaaaaaaa"#,
+        r#"me/widget/pull/3","state":"OPEN","isDraft":false,"isCrossRepository":false,"#,
+        r#""headRefOid":"aaaaaaaaaaaaaaa"#,
         r#"aaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","baseRefOid":"bbbbbbbbbbbbb"#,
         r#"bbbbbbbbbbbbbbbbbbbbbbbbbbb","baseRefName":"main","author":{"__typename":"User"#,
         r#"","login":"colleague"},"labels":{"nodes":[null,{"name":"ai:review"}]},"reviewR"#,

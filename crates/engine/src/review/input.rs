@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use autoreview_policy::{Protocol, WORKFLOW_EVENTS};
+use autoreview_policy::{Checkout, OnClean, OnNotes, Protocol, Rule, WORKFLOW_EVENTS};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{github_login_valid, identifier_valid};
@@ -75,6 +75,9 @@ pub(crate) fn validate_input(input: &ReviewInput) -> Result<(), BoxError> {
     }
     if input.rule.match_glob.is_empty() || input.reviewers.is_empty() {
         return Err(BoxError::from("review rule is missing"));
+    }
+    if input.author_class.untrusted() && !untrusted_rule_valid(&input.rule) {
+        return Err(BoxError::from("untrusted review rule is invalid"));
     }
     for reviewer in &input.reviewers {
         let member = input
@@ -229,13 +232,24 @@ fn is_zero(value: &i64) -> bool {
     *value == 0
 }
 
+/// Reports whether a rule is one that an untrusted author's review may run under.
+///
+/// Discovery gives such a review the untrusted section's rule; this check keeps a stored input
+/// from checking out the head or approving without the user.
+fn untrusted_rule_valid(rule: &Rule) -> bool {
+    rule.pipeline.checkout == Checkout::Base
+        && matches!(rule.on_clean, OnClean::Comment | OnClean::Await)
+        && rule.on_notes == OnNotes::Unset
+        && rule.human_review.is_none()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
     use autoreview_policy::{
-        Checkout, EVENTS, Event, Level, OnClean, OnFindings, Pipeline, Protocol, Reviewer, Rule,
-        Trigger, TriggerKind,
+        AuthorClass, Checkout, EVENTS, Event, HumanReview, Level, OnClean, OnFindings, OnNotes,
+        Pipeline, Protocol, Reviewer, Rule, Trigger, TriggerKind,
     };
 
     use super::validate_input;
@@ -404,6 +418,47 @@ mod tests {
                 "{name}: invalid input accepted"
             );
         }
+    }
+
+    #[test]
+    fn untrusted_input_needs_a_base_checkout_and_no_approval() {
+        let rule = test_rule(opus(), OnFindings::Comment, OnClean::Comment);
+        let mut valid = test_input(rule, test_pull_request(3));
+        valid.author_class = AuthorClass::Untrusted;
+        if let Err(err) = validate_input(&valid) {
+            panic!("{err}");
+        }
+        let mutations: [(&str, Mutation); 4] = [
+            ("approval", |input| input.rule.on_clean = OnClean::Approve),
+            ("head checkout", |input| {
+                input.rule.pipeline.checkout = Checkout::Head;
+            }),
+            ("notes hand-off", |input| {
+                input.rule.on_notes = OnNotes::Comment
+            }),
+            ("human review", |input| {
+                input.rule.human_review = Some(HumanReview::default());
+            }),
+        ];
+        for (name, mutate) in mutations {
+            for class in [AuthorClass::Untrusted, AuthorClass::Other("x".to_owned())] {
+                let mut input = valid.clone();
+                input.author_class = class.clone();
+                mutate(&mut input);
+                assert!(
+                    validate_input(&input).is_err(),
+                    "{name} of a {class:?} review accepted"
+                );
+            }
+        }
+        let mut older = valid.clone();
+        older.author_class = AuthorClass::Unset;
+        older.rule.on_clean = OnClean::Approve;
+        older.rule.pipeline.checkout = Checkout::Head;
+        assert!(
+            validate_input(&older).is_ok(),
+            "a review stored before author classes keeps its rule"
+        );
     }
 
     #[test]

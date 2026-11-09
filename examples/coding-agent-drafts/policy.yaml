@@ -35,7 +35,7 @@ repositories:
     on_clean: await
     authors:
       trusted:
-        logins: [devin-ai-integration, copilot-swe-agent]
+        logins: ["devin-ai-integration[bot]", "copilot-swe-agent[bot]"]
         permission: write
       untrusted:
         pipeline: light

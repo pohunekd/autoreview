@@ -18,6 +18,7 @@ use crate::integrations::Integrations;
 use crate::model::RejectedCandidate;
 use crate::store::DiscoveryState;
 
+pub(crate) mod authors;
 pub(crate) mod commands;
 pub(crate) mod plan;
 pub(crate) mod poll;
@@ -167,7 +168,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             if reported == item.code {
                 continue;
             }
-            let message = rejected_message(&key, &item.code);
+            let message = match &item.permission_login {
+                Some(login) => permission_message(&key, &item.code, &item.repository, login),
+                None => rejected_message(&key, &item.code),
+            };
             notices.push(self.notice(Event::ReviewStopped, &key, message)?);
         }
         state.rejected = current;
@@ -224,5 +228,17 @@ fn rejected_message(key: &str, code: &str) -> String {
     format!(
         "Review for {key} is not started: GitHub returned data the review service refuses \
          ({code}). Check the pull request; it is reviewed once the data is valid."
+    )
+}
+
+/// Returns the stop notice of a pull request whose author's permission could not be read.
+///
+/// It names the read to check with the engine's credential and holds no `gh` output.
+fn permission_message(key: &str, code: &str, repository: &str, login: &str) -> String {
+    format!(
+        "Review for {key} is not started: reading the repository permission of its author \
+         {login} failed ({code}). Check that the engine's GitHub token can read \
+         gh api repos/{repository}/collaborators/{login}/permission; the permission is read \
+         again on the next pass."
     )
 }

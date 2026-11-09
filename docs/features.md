@@ -63,8 +63,9 @@ commit. An approval policy can escalate to a human when the verifier demoted
 serious findings. [Human approval](knowledge/guides/human-approval.md)
 
 **Treats strangers differently.** Each rule states which authors are trusted.
-Untrusted authors and forks are reviewed from the base checkout and are never
-approved automatically. [Untrusted authors](knowledge/safety/untrusted-authors.md)
+Untrusted authors, and forks whose author is not listed in `logins`, are reviewed
+from the base checkout and are never approved automatically.
+[Untrusted authors](knowledge/safety/untrusted-authors.md)
 
 **Tells the right person.** Events have three levels (act now, digest, log)
 routed to Matrix rooms, and a single event can have its own room; `none` and

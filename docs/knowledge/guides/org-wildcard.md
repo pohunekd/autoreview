@@ -166,10 +166,6 @@ cp examples/org-wildcard/prompts/companion.md examples/org-wildcard/prompts/andr
 autoreview --config /etc/autoreview/config.yaml validate
 ```
 
-Until #34, `validate` refuses the policy of this guide, because the engine accepts only
-`trusted: any` until author classes are enforced; see
-[policy: authors](../../policy.md#authors).
-
 Prompt paths are relative to the policy file. The two example prompts state the
 read-only and untrusted-content rules; [writing prompts](writing-prompts.md)
 explains how to adapt them.

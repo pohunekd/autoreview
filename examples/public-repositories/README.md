@@ -25,10 +25,6 @@ autoreview --config /etc/autoreview/config.yaml validate
 
 Set the keys that [use one](../README.md#use-one) names first.
 
-Until #34, `validate` refuses this policy, because the engine accepts only
-`trusted: any` until author classes are enforced; see
-[policy: authors](../../docs/policy.md#authors).
-
 Install the `autoreview-sonnet` and `autoreview-codex` profiles on the review
 host. Projects must be registered with `pohunek project add` on the review host,
 because `project_sources: [manual]` only serves registered repositories.
