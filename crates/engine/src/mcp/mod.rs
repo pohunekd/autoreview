@@ -5,10 +5,12 @@
 
 // Rust guideline compliant 2026-06-26
 
-#[expect(dead_code, reason = "the MCP server of round 11 checks the tokens")]
 pub(crate) mod access;
-#[expect(dead_code, reason = "the tools of round 11 return these results")]
 pub(crate) mod results;
+pub(crate) mod service;
+pub(crate) mod tools;
 
 #[doc(inline)]
 pub use access::{McpClient, McpClientEntry, McpConfig, Scope};
+#[doc(inline)]
+pub use service::{MCP_PATH, McpServer, ResponseBody};
