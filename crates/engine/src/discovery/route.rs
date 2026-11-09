@@ -7,10 +7,11 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
+use autoreview_schedule::scheduler::retryable;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::RouteOverride;
-use crate::engine::{Clock, Engine};
+use crate::engine::{Clock, Engine, is_permanent};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::model::ProjectRoute;
@@ -21,8 +22,17 @@ const PROJECT_ROUTE_NOT_FOUND: &str = "project_route_not_found";
 /// Error code of a repository that two projects of one host serve.
 const PROJECT_ROUTE_AMBIGUOUS: &str = "project_route_ambiguous";
 
-/// Error codes of the hosts that failed in one discovery pass, keyed by host.
-pub(crate) type HostFailures = BTreeMap<String, String>;
+/// The failure of one host's project list, kept for the rest of a discovery pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HostFailure {
+    /// Error code of the failure.
+    pub(crate) code: String,
+    /// Whether the failure was marked permanent.
+    pub(crate) permanent: bool,
+}
+
+/// The hosts that failed in one discovery pass, keyed by host.
+pub(crate) type HostFailures = BTreeMap<String, HostFailure>;
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the pohunek host and project that run the reviews of `repository`.
@@ -59,7 +69,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 ///
 /// # Errors
 ///
-/// Returns the error of the first skipped host when no later host serves the repository,
+/// When no later host serves the repository, returns the first skipped host's failure whose
+/// code the scheduler retries, else the first skipped host's failure; returns
 /// `project_route_not_found` when every host answered and none serves it,
 /// `project_route_ambiguous` when two projects of the chosen host serve it, and the error of
 /// `list` at once when `cancel` is cancelled.
@@ -77,11 +88,12 @@ where
 {
     let pinned = overrides.get(repository);
     let mut first_failure = None;
+    let mut first_retryable = None;
     for host in route_hosts(hosts, pinned) {
         let earlier = failures.get(host).cloned();
         let skipped_after_failure = earlier.is_some();
         let answer = match earlier {
-            Some(code) => Err(Error::workflow(code, false, None)),
+            Some(failure) => Err(Error::workflow(failure.code, failure.permanent, None)),
             None => list(host).await,
         };
         let routes = match answer {
@@ -96,8 +108,16 @@ where
                     skipped_after_failure,
                     "review host skipped"
                 );
-                failures.insert(host.to_owned(), code);
-                first_failure.get_or_insert(err);
+                let failure = HostFailure {
+                    code,
+                    permanent: is_permanent(&err),
+                };
+                failures.insert(host.to_owned(), failure);
+                if first_retryable.is_none() && retryable(error_code(&err)) {
+                    first_retryable = Some(err);
+                } else {
+                    first_failure.get_or_insert(err);
+                }
                 continue;
             }
         };
@@ -105,7 +125,9 @@ where
             return Ok(route);
         }
     }
-    Err(first_failure.unwrap_or_else(|| Error::workflow(PROJECT_ROUTE_NOT_FOUND, true, None)))
+    Err(first_retryable
+        .or(first_failure)
+        .unwrap_or_else(|| Error::workflow(PROJECT_ROUTE_NOT_FOUND, true, None)))
 }
 
 /// Returns the hosts to try, in order: the pinned host alone, or every configured host.
@@ -146,8 +168,11 @@ mod tests {
 
     use tokio_util::sync::CancellationToken;
 
-    use super::{HostFailures, search_route};
+    use autoreview_schedule::scheduler::retryable;
+
+    use super::{HostFailure, HostFailures, search_route};
     use crate::config::RouteOverride;
+    use crate::engine::is_permanent;
     use crate::error::{Error, error_code};
     use crate::model::ProjectRoute;
 
@@ -155,6 +180,8 @@ mod tests {
     const REPOSITORY: &str = "acme/widget";
 
     /// The answer of one host: its project ids, or the code its call fails with.
+    ///
+    /// A failure is permanent when the scheduler does not retry its code.
     type Answer = Result<&'static [&'static str], &'static str>;
 
     /// The answers of the hosts of one case, keyed by host.
@@ -195,7 +222,7 @@ mod tests {
             let answer = answers.get(host).copied().unwrap_or(Ok(&[]));
             ready(match answer {
                 Ok(projects) => Ok(projects.iter().map(|id| route(host, id)).collect()),
-                Err(code) => Err(Error::workflow(code, false, None)),
+                Err(code) => Err(Error::workflow(code, !retryable(code), None)),
             })
         })
         .await;
@@ -254,6 +281,21 @@ mod tests {
                 &["a", "b"],
             ),
             (
+                &["a", "b", "c"],
+                vec![
+                    ("a", Err("pohunek_response_invalid")),
+                    ("b", Err("pohunek_request_timeout")),
+                ],
+                Err("pohunek_request_timeout".to_owned()),
+                &["a", "b", "c"],
+            ),
+            (
+                &["a", "b"],
+                vec![("a", Err("pohunek_response_invalid")), ("b", Ok(&[]))],
+                Err("pohunek_response_invalid".to_owned()),
+                &["a", "b"],
+            ),
+            (
                 &["a", "b"],
                 vec![],
                 Err("project_route_not_found".to_owned()),
@@ -291,14 +333,24 @@ mod tests {
         let none = BTreeMap::new();
         let cancel = CancellationToken::new();
         let mut failures = HostFailures::new();
-        failures.insert("a".to_owned(), "pohunek_request_timeout".to_owned());
+        failures.insert(
+            "a".to_owned(),
+            HostFailure {
+                code: "pohunek_response_invalid".to_owned(),
+                permanent: true,
+            },
+        );
         let answers = [("a", Ok(&["p1"][..])), ("b", Ok(&["p2"][..]))];
         let (result, called) = search(&["a", "b"], &answers, &none, &mut failures, &cancel).await;
         assert_eq!(outcome(&result), Ok(route("b", "p2")));
         assert_eq!(called, ["b"]);
         let answers = [("a", Ok(&["p1"][..])), ("b", Ok(&[][..]))];
         let (result, called) = search(&["a", "b"], &answers, &none, &mut failures, &cancel).await;
-        assert_eq!(outcome(&result), Err("pohunek_request_timeout".to_owned()));
+        assert_eq!(outcome(&result), Err("pohunek_response_invalid".to_owned()));
+        assert!(
+            result.as_ref().is_err_and(is_permanent),
+            "a replayed failure keeps its permanence: {result:?}"
+        );
         assert_eq!(called, ["b"]);
     }
 

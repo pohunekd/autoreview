@@ -221,8 +221,9 @@ origin URL and the pipeline's `project_sources`. A host that fails (unreachable,
 a pohunek error, a timeout) is skipped with the warning `review host skipped`
 and is not asked again in the same discovery pass. Two matching projects on the
 chosen host are `project_route_ambiguous`. When no host has the repository the
-review fails with `project_route_not_found`, or with the code of the first
-skipped host when a host failed. A `route_overrides` entry asks only its host.
+review fails with `project_route_not_found`; when a host failed, it fails with the
+code of the first skipped host whose code is retried, or of the first skipped host
+when none is. A `route_overrides` entry asks only its host.
 See [run on several hosts](knowledge/guides/multihost.md).
 
 ## session

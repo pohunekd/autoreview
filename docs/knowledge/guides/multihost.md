@@ -77,8 +77,11 @@ discovery pass (`skipped_after_failure` is then `true`), so a dead host costs on
 
 A failing host never stops the reviews of repositories that other hosts serve.
 When no later host has the repository, the review fails with the code of the
-first skipped host (for example `pohunek_request_timeout`), not with
-`project_route_not_found`, so the route retry policy tries it again.
+first skipped host whose code is retried (for example `pohunek_request_timeout`),
+or of the first skipped host when none is, not with `project_route_not_found`.
+A retried code gets the next attempt after the next of
+[`schedule.retry_delays_seconds`](../../configuration.md#schedule); when the
+delays run out, the review ends `failed`.
 
 ## Register each repository
 
@@ -165,7 +168,9 @@ raise the timeout before you blame the host.
 autoreview service, across all hosts. The example configuration sets 8. Each review
 is a full agent run with its own worktree, so raise the value only when the
 hosts can run that many sessions. If one host receives every review, check the
-registrations: a repository registered on one host only always goes there.
+registrations: a repository registered on one host only always goes there. The
+order of `hosts` is a priority, not load balancing: every review of a
+repository goes to the first host that has it while that host answers.
 
 For review limits and session timeouts, see
 [configuration](../../configuration.md#schedule) and
