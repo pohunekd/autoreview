@@ -16,6 +16,15 @@ walk-through.
 ## Use it
 
 ```sh
+autoreview init --dir /etc/autoreview --login <login> --pohunek-host <host> \
+  --example coding-agent-drafts
+autoreview --config /etc/autoreview/config.yaml validate
+```
+
+`init` writes the config, this policy and its prompts, and never overwrites a
+file. To copy them by hand instead:
+
+```sh
 mkdir -p /etc/autoreview/prompts
 cp examples/config.yaml /etc/autoreview/config.yaml
 cp examples/coding-agent-drafts/policy.yaml /etc/autoreview/policy.yaml

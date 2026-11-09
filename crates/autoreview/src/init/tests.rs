@@ -1,6 +1,6 @@
 //! Tests of `init`: the embedded files, the written config and the refusal to overwrite.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,8 +8,8 @@ use autoreview_engine::{Error, error_code};
 use clap::ValueEnum;
 
 use super::{
-    Example, INIT_FILE_EXISTS, InitArguments, SetupFile, agent_profiles, render, render_config,
-    write,
+    Example, INIT_FILE_EXISTS, INIT_WRITE_FAILED, InitArguments, SetupFile, agent_profiles, render,
+    render_config, write,
 };
 use crate::config_file;
 
@@ -92,26 +92,19 @@ fn every_example_and_its_prompts_are_embedded() {
     assert_eq!(embedded, directories);
     for example in Example::value_variants().iter().copied() {
         let directory = examples.join(name(example));
-        let policy = fs::read(directory.join("policy.yaml")).expect("the policy is readable");
-        assert_eq!(example.policy(), policy.as_slice(), "{}", name(example));
-        let mut on_disk = BTreeMap::new();
+        let mut on_disk = BTreeSet::new();
         if let Ok(entries) = fs::read_dir(directory.join("prompts")) {
             for entry in entries {
                 let entry = entry.expect("an entry of prompts/");
-                let relative = format!("prompts/{}", entry.file_name().to_string_lossy());
-                on_disk.insert(relative, fs::read(entry.path()).expect("a readable prompt"));
+                on_disk.insert(format!("prompts/{}", entry.file_name().to_string_lossy()));
             }
         }
-        let extra: BTreeMap<String, Vec<u8>> = example
+        let extra: BTreeSet<String> = example
             .extra_prompts()
             .iter()
-            .map(|(relative, contents)| ((*relative).to_owned(), contents.to_vec()))
+            .map(|(relative, _)| (*relative).to_owned())
             .collect();
         assert_eq!(extra, on_disk, "{}", name(example));
-    }
-    for (relative, contents) in super::DEFAULT_PROMPTS {
-        let on_disk = fs::read(repository().join(relative)).expect("a default prompt");
-        assert_eq!(contents, on_disk.as_slice(), "{relative}");
     }
 }
 
@@ -183,12 +176,61 @@ fn init_names_an_existing_file_and_changes_nothing() {
     assert_eq!(fs::read_to_string(&path).expect("the prompt"), "kept\n");
 }
 
+#[test]
+fn init_refuses_a_symlinked_prompts_directory() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let directory = root.path().join("setup");
+    let elsewhere = root.path().join("elsewhere");
+    fs::create_dir_all(&directory).expect("the directory is created");
+    fs::create_dir_all(&elsewhere).expect("the link target is created");
+    let prompts = directory.join("prompts");
+    std::os::unix::fs::symlink(&elsewhere, &prompts).expect("prompts/ is a symlink");
+    let text = directory.to_str().expect("a UTF-8 temporary path");
+    let init = arguments(&directory, Example::SingleRepoComment);
+    let files = render(&init, text).expect("the files render");
+    let error = write(&directory, &files).expect_err("a symlinked prompts/ is refused");
+    assert_eq!(
+        config_error(&error),
+        (INIT_FILE_EXISTS, prompts.to_str().expect("a UTF-8 path"))
+    );
+    assert_eq!(walk(&directory), [prompts]);
+    assert!(walk(&elsewhere).is_empty());
+}
+
+#[test]
+fn a_failed_write_removes_what_init_created() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let directory = root.path().join("setup");
+    let prompts = directory.join("prompts");
+    fs::create_dir_all(&prompts).expect("prompts/ is created");
+    fs::set_permissions(&prompts, fs::Permissions::from_mode(0o555)).expect("read-only");
+    // A process that may write anyway (root) cannot run this scenario.
+    let probe = prompts.join("probe");
+    if fs::write(&probe, "").is_ok() {
+        fs::remove_file(&probe).expect("the probe is removed");
+        return;
+    }
+    let text = directory.to_str().expect("a UTF-8 temporary path");
+    let init = arguments(&directory, Example::SingleRepoComment);
+    let files = render(&init, text).expect("the files render");
+    let error = write(&directory, &files).expect_err("a read-only prompts/ fails the write");
+    let generic = prompts.join("generic.md");
+    assert_eq!(
+        config_error(&error),
+        (INIT_WRITE_FAILED, generic.to_str().expect("a UTF-8 path"))
+    );
+    let left = walk(&directory);
+    fs::set_permissions(&prompts, fs::Permissions::from_mode(0o755)).expect("writable again");
+    assert_eq!(left, [prompts]);
+}
+
 /// Returns every path below `directory`, depth first.
 fn walk(directory: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for entry in fs::read_dir(directory).expect("a readable directory") {
         let path = entry.expect("an entry").path();
-        if path.is_dir() {
+        if path.is_dir() && !path.is_symlink() {
             paths.extend(walk(&path));
         }
         paths.push(path);

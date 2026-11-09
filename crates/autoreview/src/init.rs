@@ -19,6 +19,9 @@ use crate::{CONFIGURATION_INVALID, command_invalid, failed};
 /// Error code of a file or directory that is in the way of `init`.
 pub(crate) const INIT_FILE_EXISTS: &str = "init_file_exists";
 
+/// Error code of a path that `init` cannot check, create or write.
+pub(crate) const INIT_WRITE_FAILED: &str = "init_write_failed";
+
 /// The configuration that all examples share: the complete file of the configuration reference.
 const CONFIG_TEMPLATE: &str = include_str!("../../../examples/config.yaml");
 
@@ -157,7 +160,7 @@ pub(crate) struct SetupFile {
 ///
 /// Returns `command_invalid` when `--config` is given, `configuration_invalid` naming a flag
 /// or `policy_file`, `init_file_exists` naming the first path in the way, and
-/// `workflow_failed` when a file cannot be written.
+/// `init_write_failed` naming the path that cannot be checked, created or written.
 pub(crate) fn run(
     config_path: Option<&Path>,
     arguments: &InitArguments,
@@ -295,18 +298,40 @@ fn in_the_way(path: &Path) -> Error {
     Error::config(INIT_FILE_EXISTS, path.to_string_lossy(), None)
 }
 
-/// Writes `files` into `directory`, creating it and its subdirectories when they are absent.
+/// Returns the error that names `path`, which `init` cannot check, create or write.
+fn write_failed(path: &Path, cause: io::Error) -> Error {
+    Error::config(
+        INIT_WRITE_FAILED,
+        path.to_string_lossy(),
+        Some(Box::new(cause)),
+    )
+}
+
+/// Writes `files` into `directory`, creating it and `prompts/` when they are absent.
 ///
-/// Every target is checked before anything is created, and a file is opened only when it
-/// does not exist, so an existing file is never changed. When a write fails, the files and
-/// the listed directories this call created are removed again; a missing parent of
-/// `directory` that `create_dir_all` made stays.
+/// The parent of `directory` must exist. Every target is checked before anything is created:
+/// `directory` and `prompts/` must be real directories (a symlink is in the way), and no file
+/// of the set may exist. Directories are created one level at a time and files are opened
+/// only when they do not exist, so nothing is ever overwritten. When a step fails, the files
+/// and directories that this call created are removed again.
 ///
 /// # Errors
 ///
-/// Returns `init_file_exists` naming the first file, or the first directory that is not a
-/// directory, in the way, and `workflow_failed` when a check, a directory or a file fails.
+/// Returns `configuration_invalid` naming `--dir` when the parent of `directory` is not a
+/// directory, `init_file_exists` naming the first path in the way, and `init_write_failed`
+/// naming the path that cannot be checked, created or written.
 pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>, Error> {
+    let parent = directory
+        .parent()
+        .ok_or_else(|| invalid_flag("--dir", "must have a parent directory"))?;
+    match fs::metadata(parent) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Err(invalid_flag("--dir", "its parent must be a directory")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(invalid_flag("--dir", "its parent directory must exist"));
+        }
+        Err(error) => return Err(write_failed(parent, error)),
+    }
     let targets: Vec<PathBuf> = files
         .iter()
         .map(|file| directory.join(file.relative))
@@ -321,18 +346,28 @@ pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>
     }
     let mut missing = Vec::new();
     for path in &directories {
-        match fs::metadata(path) {
+        if missing
+            .iter()
+            .any(|absent: &PathBuf| path.starts_with(absent))
+        {
+            missing.push(path.clone());
+            continue;
+        }
+        match fs::symlink_metadata(path) {
             Ok(metadata) if metadata.is_dir() => {}
             Ok(_) => return Err(in_the_way(path)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => missing.push(path.clone()),
-            Err(error) => return Err(failed(error)),
+            Err(error) => return Err(write_failed(path, error)),
         }
     }
     for path in &targets {
+        if missing.iter().any(|absent| path.starts_with(absent)) {
+            continue;
+        }
         match fs::symlink_metadata(path) {
             Ok(_) => return Err(in_the_way(path)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(failed(error)),
+            Err(error) => return Err(write_failed(path, error)),
         }
     }
     let mut created = Created::default();
@@ -344,6 +379,9 @@ pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>
 }
 
 /// Creates the missing directories, then each file, and records what it created.
+///
+/// A directory that appears between the check and its creation is not recorded, so it is
+/// never removed; it is used only when it is a real directory.
 fn create_all(
     missing: &[PathBuf],
     files: &[SetupFile],
@@ -351,8 +389,17 @@ fn create_all(
     created: &mut Created,
 ) -> Result<Vec<String>, Error> {
     for path in missing {
-        fs::create_dir_all(path).map_err(failed)?;
-        created.directories.push(path.clone());
+        match fs::create_dir(path) {
+            Ok(()) => created.directories.push(path.clone()),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                match fs::symlink_metadata(path) {
+                    Ok(metadata) if metadata.is_dir() => {}
+                    Ok(_) => return Err(in_the_way(path)),
+                    Err(error) => return Err(write_failed(path, error)),
+                }
+            }
+            Err(error) => return Err(write_failed(path, error)),
+        }
     }
     let mut written = Vec::with_capacity(files.len());
     for (file, path) in files.iter().zip(targets) {
@@ -361,13 +408,13 @@ fn create_all(
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 return Err(in_the_way(path));
             }
-            Err(error) => return Err(failed(error)),
+            Err(error) => return Err(write_failed(path, error)),
         };
         created.files.push(path.clone());
         handle
             .write_all(&file.contents)
             .and_then(|()| handle.flush())
-            .map_err(failed)?;
+            .map_err(|error| write_failed(path, error))?;
         written.push(path.to_string_lossy().into_owned());
     }
     Ok(written)

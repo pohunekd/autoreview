@@ -40,7 +40,7 @@ required:
 
 | Flag | Meaning |
 |---|---|
-| `--dir` | Clean absolute directory; it and `prompts/` are created when absent |
+| `--dir` | Clean absolute directory whose parent exists; it and `prompts/` are created when absent |
 | `--login` | Lowercase GitHub login of the one credential |
 | `--pohunek-host` | The pohunek host that runs the reviewers |
 | `--example` | The example directory under `examples/`, for example `single-repo-comment` |
@@ -51,10 +51,22 @@ complete file of the [configuration reference](configuration.md#complete-file),
 with `policy_file`, the credential `login` and `pohunek.hosts` set from the flags.
 Edit its paths and its placeholder `matrix` backend before the first start.
 
-`init` loads the example's policy before it writes anything, and never
-overwrites. When a file of the set exists, or a directory of the set is a file,
-it writes nothing and fails with `init_file_exists`, whose `configuration` field
-names the path. Prints:
+`init` loads the example's policy and checks every path before it writes
+anything, and never overwrites. `--dir` and `prompts/` must be real directories
+or absent: a symlink, a file or any other entry at either path is in the way, as
+is any existing file of the set. `init` creates `--dir` and then `prompts/`, one
+level at a time; it never creates the parent of `--dir`. When a later step
+fails, it removes the files and directories it created in that run, and nothing
+it did not create.
+
+| Failure | Code | `configuration` field |
+|---|---|---|
+| `--config` given, a flag missing, an unknown example | `command_invalid` | none |
+| `--dir` relative or unclean, or its parent missing; `--login` or `--pohunek-host` malformed | `configuration_invalid` | `--dir`, `--login` or `--pohunek-host` |
+| A path of the set is in the way | `init_file_exists` | the path |
+| A path cannot be checked, created or written (permissions, disk full) | `init_write_failed` | the path |
+
+On success it prints:
 
 ```json
 {
@@ -176,6 +188,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it |
 | `command_invalid` | Wrong arguments |
 | `init_file_exists` | `init` found a file in the way; the `configuration` field names it |
+| `init_write_failed` | `init` could not check, create or write a path; the `configuration` field names it |
 | `repository_not_allowed`, `review_identity_invalid` | Malformed repository, number or head |
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for an approval |
 | `review_superseded`, `approval_expired` | The wait ended without a publication |
