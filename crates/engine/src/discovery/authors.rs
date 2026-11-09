@@ -111,6 +111,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                             repository: pr.repository.clone(),
                             number: pr.number,
                             code,
+                            permission_login: Some(pr.author.clone()),
                         });
                         continue;
                     }

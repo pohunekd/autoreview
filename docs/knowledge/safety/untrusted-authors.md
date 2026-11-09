@@ -88,6 +88,11 @@ The author class is resolved when a review is dispatched, and it is stored with
 that review, like the rule itself. A change of the author's permission or of
 the policy applies to the next review, never to one in flight.
 
+The permission is read once per author and repository in a discovery pass. If
+the read fails, the author's pull requests are not started and get a
+`review_stopped` notice with the error code; the next pass reads it again. A
+failed read never makes an author trusted.
+
 ## Never approved automatically
 
 Automatic approval is limited to trusted authors on rules with `on_clean: approve`.

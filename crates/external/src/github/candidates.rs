@@ -246,6 +246,7 @@ fn classify(
                         repository: repository.to_owned(),
                         number,
                         code: code.to_owned(),
+                        permission_login: None,
                     });
                     Ok(())
                 } else {

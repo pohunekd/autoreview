@@ -428,6 +428,7 @@ async fn rejected_pull_request_is_reported_once_and_does_not_block_others() {
         repository: broken.repository.clone(),
         number: broken.number,
         code: "github_response_invalid".to_owned(),
+        permission_login: None,
     }];
     let pr = integration_pull_request("acme/widget", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
@@ -461,6 +462,7 @@ async fn event_routes_carry_their_events_and_the_rest_keep_their_levels() {
         repository: broken.repository.clone(),
         number: broken.number,
         code: "github_response_invalid".to_owned(),
+        permission_login: None,
     }];
     let pr = integration_pull_request("acme/widget", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
@@ -562,6 +564,7 @@ async fn failing_notification_backend_does_not_stall_discovery() {
                 repository: pr.repository.clone(),
                 number: pr.number,
                 code: "github_response_invalid".to_owned(),
+                permission_login: None,
             })
             .collect();
     }
@@ -625,6 +628,7 @@ async fn failing_notification_backend_does_not_stall_discovery() {
             repository: pr.repository.clone(),
             number: pr.number,
             code: "github_response_invalid".to_owned(),
+            permission_login: None,
         }));
     logged
         .poll(&cancel)

@@ -262,8 +262,11 @@ Rules for the untrusted section:
   is not listed: permission trusts only users.
 - The author class is resolved when a review is dispatched and stored with it.
   The permission is read with the credential that serves the repository, only for
-  an unlisted author of a pull request that is not from a fork. A failed read is
-  retried with the candidate search and never counts as trusted.
+  an unlisted author of a pull request that is not from a fork, once per author and
+  repository in a discovery pass. When the read fails, that author's pull requests
+  are not started: a `review_stopped` notice names the error code and the read to
+  check, and the next pass reads the permission again. A failed read never counts
+  as trusted.
 
 ## Drafts of coding agents
 

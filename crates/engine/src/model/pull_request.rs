@@ -84,6 +84,9 @@ pub struct RejectedCandidate {
     pub number: i64,
     /// Error code of the refusal.
     pub code: String,
+    /// Login of the author whose permission read failed; `None` when GitHub's data was refused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_login: Option<String>,
 }
 
 /// The result of one discovery search. A rejected pull request does not hold up the others.

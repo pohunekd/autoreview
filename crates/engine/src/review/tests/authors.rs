@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use autoreview_policy::{Checkout, Permission};
+use autoreview_policy::{Checkout, Level, Permission};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::Engine;
@@ -150,5 +150,12 @@ async fn failing_permission_read_rejects_only_its_pull_requests() {
         h.fake.lock().permission_reads,
         vec!["public/widget member".to_owned()],
         "the failing author is read once in the pass"
+    );
+    assert!(
+        h.fake.has_note(
+            Level::Action,
+            "gh api repos/public/widget/collaborators/member/permission"
+        ) && !h.fake.has_note(Level::Action, "GitHub returned data"),
+        "the stop notice names the permission read to check"
     );
 }
