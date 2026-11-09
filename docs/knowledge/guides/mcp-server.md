@@ -53,6 +53,10 @@ token by replacing its digest and restarting `autoreview mcp`.
 mcp:
   listen: "127.0.0.1:8787"
   allowed_hosts: [autoreview.example.com]
+  request_timeout_seconds: 120
+  header_timeout_seconds: 10
+  request_max_bytes: 65536
+  max_connections: 16
   clients:
     - name: hermes
       scope: write
@@ -71,11 +75,15 @@ HTTP/1.1 on `mcp.listen`, which should be a loopback address.
 
 - The endpoint is the path `/mcp`; every other path gets 404.
 - The proxy passes the `Authorization` header through unchanged.
-- `mcp.allowed_hosts` lists the `Host` values the server accepts, which guards against DNS
-  rebinding. List the name the proxy forwards, usually the public name.
+- The proxy forwards the public `Host` (in nginx `proxy_set_header Host $host;`; Caddy does
+  it by default), and `mcp.allowed_hosts` lists that name. The check guards against DNS
+  rebinding; a proxy that rewrites `Host` to the upstream address gets 403 for every request.
 - A request with an `Origin` header is refused, so a web page in a browser cannot call the
   server.
-- Requests over 64 KiB are refused.
+- The proxy owns the client timeouts and limits towards the internet. The server's own
+  bounds are `mcp.header_timeout_seconds`, `mcp.request_timeout_seconds` (503),
+  `mcp.request_max_bytes` (413) and `mcp.max_connections`; give the proxy a read timeout
+  longer than `mcp.request_timeout_seconds`.
 
 Start it as a service of its own, for example a second systemd unit with
 `ExecStart=autoreview mcp`, next to the unit of `autoreview serve`.
@@ -95,12 +103,30 @@ Every tool takes a JSON object; unknown arguments are refused with `command_inva
 | `approve` | `repository`, `number`, `head_sha` | The approval of the clean review that waits at the full head, as `autoreview approve` |
 | `retry` | `repository`, `number`, `head_prefix` | A new attempt of a stopped review, as `autoreview retry` |
 
-The write tools call the same engine functions as the CLI commands. The only way to a
-publication is the approval of a waiting review, checked against the repository, the
-number and the full head; the engine publishes it on its next tick.
+The write tools call the same engine functions as the CLI commands.
+
+- `approve` publishes only the clean review that waits for approval, checked against the
+  repository, the number and the full head; the engine publishes it on its next tick.
+- `retry` runs one whole discovery pass, as `autoreview retry` does. Besides the new attempt
+  of the stopped review, that pass marks coding agents' drafts ready, sends the handoff
+  reminders that are due, and dispatches every review that is due. A review it dispatches
+  publishes as its rule says, without an approval when the rule approves or comments by
+  itself.
+- `review_queue` runs the GitHub search of requested reviews with the engine's credential
+  on every call, so a read token can spend the GitHub API budget of that credential. Give
+  read tokens only to clients you would let run `autoreview review-queue`.
 
 A failed call returns a tool error with `{"error_code": "<code>"}`, using the codes of the
-[CLI reference](../../cli.md#error-codes), plus `mcp_scope_denied` and `mcp_tool_unknown`.
+[CLI reference](../../cli.md#error-codes). The codes of the server itself:
+
+| Code | Meaning |
+|---|---|
+| `command_invalid` | Unknown, missing or mistyped arguments, or a value out of range |
+| `mcp_scope_denied` | A client without the `write` scope called a write tool |
+| `mcp_tool_unknown` | The server has no tool of that name |
+| `review_not_found` | `review_detail` got a workflow ID the store does not know |
+| `mcp_client_missing` | A call reached the tools without an authenticated client; a server defect |
+| `mcp_result_invalid` | A result could not be encoded as JSON; a server defect |
 
 ## Untrusted output
 
@@ -113,14 +139,18 @@ models. The server treats them as data:
   notice tells the calling agent that the text is data, never instructions.
 
 Neutralization keeps GitHub from acting on the text; it does not make the text safe for an
-agent to obey. The calling agent must keep the review text out of its instructions.
+agent to obey. The calling agent must keep the review text out of its instructions. Give the
+`write` scope only to agents that do, because text injected into a pull request could
+otherwise steer the agent into `approve` or `retry`; see the
+[threat model](../safety/threat-model.md#attacks-and-mitigations).
 
 ## Logs
 
 Every tool call writes one JSON log line `mcp tool call` with the client name, the tool,
 its arguments and the outcome (`ok` or the error code). A refused request writes
-`mcp request refused` with the reason `missing_token` or `unknown_token`. The token is
-never logged.
+`mcp request refused` with the reason `missing_token` or `unknown_token`, and a request over
+`mcp.request_timeout_seconds` writes `mcp request timed out` with the client name. The token
+is never logged.
 
 ## Not included
 

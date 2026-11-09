@@ -4,6 +4,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use autoreview_policy::Level;
 use bytes::Bytes;
@@ -15,7 +16,7 @@ use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{Engine, SystemClock};
-use crate::mcp::{MCP_PATH, McpClientEntry, McpConfig, McpServer};
+use crate::mcp::{MCP_PATH, McpClientEntry, McpConfig, McpLimits, McpServer};
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::protocol::fixtures::sha;
 use crate::store::{REVIEW_AWAITING, Store};
@@ -105,6 +106,12 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
             client("reader", "read", READ_TOKEN),
             client("writer", "write", WRITE_TOKEN),
         ],
+        McpLimits {
+            request_timeout: Duration::from_secs(30),
+            header_timeout: Duration::from_secs(10),
+            request_max_bytes: 65_536,
+            max_connections: 4,
+        },
     )
     .expect("the MCP settings are valid");
     // The server runs as its own process in production: its own store and engine on the file.

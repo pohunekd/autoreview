@@ -235,6 +235,11 @@ What is not compatible, by decision:
   accepts with `P` needs another letter before it runs on Rust. The regression
   test is `reserved_finding_prefix_is_rejected_naming_the_reviewer`.
 
+- **MCP server (#179):** `autoreview mcp` has no Go counterpart. The `mcp`
+  section exists only in `config.yaml`, which Go does not read, and the server
+  writes the store only through the engine functions of the CLI commands
+  (`approve_head`, `retry`), so every row stays readable by Go after a rollback.
+
 - **Lost session runtime (#213):** a session whose runtime pohunek reports as
   lost (`runtime.state` `lost`, or state `failed` with a `loss_reason`) fails its
   start with `pohunek_session_lost`, not permanent and retried by the

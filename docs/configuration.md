@@ -375,20 +375,29 @@ see the [notifications concept](knowledge/concepts/notifications.md).
 
 ## mcp
 
-Optional; only `autoreview mcp` reads it, see the
-[MCP server guide](knowledge/guides/mcp-server.md). Without it every other
-command works as before. When the section is present, every key is required.
+Optional; see the [MCP server guide](knowledge/guides/mcp-server.md). When the
+section is present, every command validates it at load, so a broken section
+stops `serve` and `validate` too; only `autoreview mcp` requires it. Without it
+every other command works as before. When the section is present, every key is
+required.
 
 | Key | Meaning |
 |---|---|
 | `listen` | `IP:PORT` the server listens on, behind the TLS reverse proxy |
 | `allowed_hosts` | `Host` header values the server accepts, at least one |
+| `allowed_hosts` entries | Each a bare `host` or `host:port`; a scheme, a path or a user part is refused |
+| `request_timeout_seconds` | Longest time one request may take, from reading its body to its answer; a slower request gets 503 and its tool call is cancelled. It must cover the longest tool call: `retry` runs a whole discovery pass. On shutdown the server waits this long for requests in flight |
+| `header_timeout_seconds` | Longest time a client may take to send the request headers |
+| `request_max_bytes` | Largest request body; a larger one gets 413 |
+| `max_connections` | Most connections served at once; further connections wait to be accepted |
 | `clients` | List of clients, at least one |
-| `clients[].name` | Name in the logs: 1 to 32 lowercase letters, digits or hyphens, unique |
-| `clients[].scope` | `read` or `write` |
-| `clients[].token_sha256` | SHA-256 digest of the client's token, 64 lowercase hexadecimal characters, unique |
+| `clients[N].name` | Name in the logs: 1 to 32 lowercase letters, digits or hyphens, unique |
+| `clients[N].scope` | `read` or `write` |
+| `clients[N].token_sha256` | SHA-256 digest of the client's token, 64 lowercase hexadecimal characters, unique |
 
-The configuration never holds a token, only its digest.
+The configuration never holds a token, only its digest. A missing or invalid
+client field is reported with its index, for example
+`configuration_missing: mcp.clients[1].scope`.
 
 ## Cross-key rules
 

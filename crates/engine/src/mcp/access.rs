@@ -7,7 +7,9 @@
 // Rust guideline compliant 2026-06-26
 
 use std::net::SocketAddr;
+use std::time::Duration;
 
+use http::uri::Authority;
 use sha2::{Digest, Sha256};
 
 use crate::error::Error;
@@ -73,6 +75,19 @@ pub struct McpClientEntry {
     pub token_sha256: String,
 }
 
+/// Limits of the HTTP server, from the `mcp` section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct McpLimits {
+    /// Longest time one request may take, from reading its body to its answer.
+    pub request_timeout: Duration,
+    /// Longest time a client may take to send the request headers.
+    pub header_timeout: Duration,
+    /// Largest request body in bytes.
+    pub request_max_bytes: usize,
+    /// Most connections served at once; further connections wait to be accepted.
+    pub max_connections: usize,
+}
+
 /// Settings of the `autoreview mcp` command, the `mcp` section of the configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpConfig {
@@ -82,6 +97,8 @@ pub struct McpConfig {
     pub allowed_hosts: Vec<String>,
     /// The clients, each with its own token.
     pub clients: Vec<McpClient>,
+    /// Limits of the HTTP server.
+    pub limits: McpLimits,
 }
 
 impl McpConfig {
@@ -90,40 +107,44 @@ impl McpConfig {
     /// # Errors
     ///
     /// Returns `configuration_invalid` naming `mcp.listen` for an address that does not
-    /// parse, `mcp.allowed_hosts` for an empty list or a blank or spaced host, and
-    /// `mcp.clients` for no client, a repeated name or digest, a bad name, scope or digest.
+    /// parse, `mcp.allowed_hosts` for an empty list or an entry that is not a bare host or
+    /// `host:port`, `mcp.clients` for no client, and `mcp.clients[N].name`, `.scope` or
+    /// `.token_sha256` for a bad or repeated value of client `N`.
     pub fn new(
         listen: &str,
         allowed_hosts: Vec<String>,
         entries: &[McpClientEntry],
+        limits: McpLimits,
     ) -> Result<Self, Error> {
         let listen = listen
             .parse::<SocketAddr>()
             .map_err(|_| invalid("mcp.listen", "must be an IP address and port"))?;
-        if allowed_hosts.is_empty()
-            || allowed_hosts
-                .iter()
-                .any(|host| host.is_empty() || host.chars().any(char::is_whitespace))
-        {
+        if allowed_hosts.is_empty() || !allowed_hosts.iter().all(|host| host_valid(host)) {
             return Err(invalid(
                 "mcp.allowed_hosts",
-                "must list host names without spaces",
+                "must list hosts or host:port, without scheme, path or user",
             ));
         }
         if entries.is_empty() {
             return Err(invalid("mcp.clients", "must list at least one client"));
         }
         let mut clients: Vec<McpClient> = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let client = client(entry)?;
+        for (index, entry) in entries.iter().enumerate() {
+            let client = client(index, entry)?;
             if clients.iter().any(|known| known.name == client.name) {
-                return Err(invalid("mcp.clients", "client names must be unique"));
+                return Err(invalid(
+                    format!("mcp.clients[{index}].name"),
+                    "client names must be unique",
+                ));
             }
             if clients
                 .iter()
                 .any(|known| known.token_sha256 == client.token_sha256)
             {
-                return Err(invalid("mcp.clients", "token digests must be unique"));
+                return Err(invalid(
+                    format!("mcp.clients[{index}].token_sha256"),
+                    "token digests must be unique",
+                ));
             }
             clients.push(client);
         }
@@ -131,6 +152,7 @@ impl McpConfig {
             listen,
             allowed_hosts,
             clients,
+            limits,
         })
     }
 }
@@ -195,8 +217,18 @@ fn digests_equal(left: &[u8; DIGEST_BYTES], right: &[u8; DIGEST_BYTES]) -> bool 
         == 0
 }
 
-/// Validates one client entry.
-fn client(entry: &McpClientEntry) -> Result<McpClient, Error> {
+/// Reports whether `host` is a bare `host` or `host:port` authority, as a `Host` header is.
+fn host_valid(host: &str) -> bool {
+    // `Authority` keeps a port it cannot read as `u16`, so a port must also parse.
+    !host.contains('@')
+        && host.parse::<Authority>().is_ok_and(|authority| {
+            authority.as_str() == host
+                && (authority.host() == host || authority.port_u16().is_some())
+        })
+}
+
+/// Validates the client entry at `index`.
+fn client(index: usize, entry: &McpClientEntry) -> Result<McpClient, Error> {
     let name_valid = !entry.name.is_empty()
         && entry.name.len() <= CLIENT_NAME_MAX
         && entry
@@ -205,12 +237,15 @@ fn client(entry: &McpClientEntry) -> Result<McpClient, Error> {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
     if !name_valid {
         return Err(invalid(
-            "mcp.clients",
+            format!("mcp.clients[{index}].name"),
             "a name has 1 to 32 lowercase letters, digits or hyphens",
         ));
     }
     let Some(scope) = Scope::parse(&entry.scope) else {
-        return Err(invalid("mcp.clients", "a scope is read or write"));
+        return Err(invalid(
+            format!("mcp.clients[{index}].scope"),
+            "a scope is read or write",
+        ));
     };
     let lower = entry
         .token_sha256
@@ -220,7 +255,7 @@ fn client(entry: &McpClientEntry) -> Result<McpClient, Error> {
     let Some(token_sha256) = decoded.and_then(|bytes| <[u8; DIGEST_BYTES]>::try_from(bytes).ok())
     else {
         return Err(invalid(
-            "mcp.clients",
+            format!("mcp.clients[{index}].token_sha256"),
             "token_sha256 is 64 lowercase hexadecimal characters",
         ));
     };
@@ -232,7 +267,7 @@ fn client(entry: &McpClientEntry) -> Result<McpClient, Error> {
 }
 
 /// Builds a `configuration_invalid` error that names `key`.
-fn invalid(key: &str, message: &'static str) -> Error {
+fn invalid(key: impl Into<String>, message: &'static str) -> Error {
     Error::config(CONFIGURATION_INVALID, key, Some(Box::from(message)))
 }
 
@@ -253,12 +288,22 @@ mod tests {
         }
     }
 
+    fn limits() -> McpLimits {
+        McpLimits {
+            request_timeout: Duration::from_secs(60),
+            header_timeout: Duration::from_secs(10),
+            request_max_bytes: 65_536,
+            max_connections: 16,
+        }
+    }
+
     fn config(entries: &[McpClientEntry]) -> Result<McpConfig, Error> {
-        McpConfig::new(
-            "127.0.0.1:8787",
-            vec!["mcp.example.com".to_owned()],
-            entries,
-        )
+        hosts_config(&["mcp.example.com"], entries)
+    }
+
+    fn hosts_config(hosts: &[&str], entries: &[McpClientEntry]) -> Result<McpConfig, Error> {
+        let hosts = hosts.iter().map(|host| (*host).to_owned()).collect();
+        McpConfig::new("127.0.0.1:8787", hosts, entries, limits())
     }
 
     /// A header value and the client name it authorizes, or the refusal.
@@ -313,74 +358,49 @@ mod tests {
         upper.token_sha256 = upper.token_sha256.to_uppercase();
         let mut short = valid.clone();
         short.token_sha256.truncate(62);
-        let cases: [(&str, Vec<String>, Vec<McpClientEntry>, &str); 9] = [
+        let listen = McpConfig::new("localhost:8787", vec!["h".to_owned()], &[], limits());
+        assert_eq!(refused_key(listen), "mcp.listen");
+        let host_cases: [&[&str]; 8] = [
+            &[],
+            &[""],
+            &["a b"],
+            &["https://mcp.example.com"],
+            &["mcp.example.com/mcp"],
+            &["user@mcp.example.com"],
+            &["mcp.example.com:99999"],
+            &["mcp.example.com", "mcp.example.com?x"],
+        ];
+        for hosts in host_cases {
+            let result = hosts_config(hosts, std::slice::from_ref(&valid));
+            assert_eq!(refused_key(result), "mcp.allowed_hosts", "hosts {hosts:?}");
+        }
+        let hosts = ["mcp.example.com", "127.0.0.1:8443", "[::1]:8443"];
+        let accepted = hosts_config(&hosts, std::slice::from_ref(&valid));
+        assert!(
+            accepted.is_ok(),
+            "bare hosts and host:port are accepted: {accepted:?}"
+        );
+        let client_cases = [
+            (Vec::new(), "mcp.clients"),
+            (vec![entry("Reader", "read", "x")], "mcp.clients[0].name"),
             (
-                "localhost:8787",
-                vec!["h".to_owned()],
-                vec![valid.clone()],
-                "mcp.listen",
+                vec![valid.clone(), entry("w", "admin", "x")],
+                "mcp.clients[1].scope",
+            ),
+            (vec![upper], "mcp.clients[0].token_sha256"),
+            (vec![short], "mcp.clients[0].token_sha256"),
+            (
+                vec![valid.clone(), entry("reader", "write", "beta-token")],
+                "mcp.clients[1].name",
             ),
             (
-                "127.0.0.1:8787",
-                Vec::new(),
-                vec![valid.clone()],
-                "mcp.allowed_hosts",
-            ),
-            (
-                "127.0.0.1:8787",
-                vec![String::new()],
-                vec![valid.clone()],
-                "mcp.allowed_hosts",
-            ),
-            (
-                "127.0.0.1:8787",
-                vec!["a b".to_owned()],
-                vec![valid.clone()],
-                "mcp.allowed_hosts",
-            ),
-            (
-                "127.0.0.1:8787",
-                vec!["h".to_owned()],
-                Vec::new(),
-                "mcp.clients",
-            ),
-            (
-                "127.0.0.1:8787",
-                vec!["h".to_owned()],
-                vec![entry("Reader", "read", "x")],
-                "mcp.clients",
-            ),
-            (
-                "127.0.0.1:8787",
-                vec!["h".to_owned()],
-                vec![entry("reader", "admin", "x")],
-                "mcp.clients",
-            ),
-            (
-                "127.0.0.1:8787",
-                vec!["h".to_owned()],
-                vec![upper],
-                "mcp.clients",
-            ),
-            (
-                "127.0.0.1:8787",
-                vec!["h".to_owned()],
-                vec![short],
-                "mcp.clients",
+                vec![valid.clone(), entry("writer", "write", "alpha-token")],
+                "mcp.clients[1].token_sha256",
             ),
         ];
-        for (listen, hosts, entries, key) in cases {
-            let result = McpConfig::new(listen, hosts, &entries);
-            assert_eq!(
-                refused_key(result),
-                key,
-                "listen {listen}, entries {entries:?}"
-            );
+        for (entries, key) in client_cases {
+            assert_eq!(refused_key(config(&entries)), key, "entries {entries:?}");
         }
-        let same_name = [valid.clone(), entry("reader", "write", "beta-token")];
-        assert_eq!(refused_key(config(&same_name)), "mcp.clients");
-        let same_token = [valid.clone(), entry("writer", "write", "alpha-token")];
-        assert_eq!(refused_key(config(&same_token)), "mcp.clients");
         let loaded = config(&[valid]).expect("one valid client");
         assert_eq!(loaded.clients[0].scope, Scope::Read);
     }

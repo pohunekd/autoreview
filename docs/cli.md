@@ -158,6 +158,9 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request |
 | `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message |
 | `mcp_listen_failed` | `autoreview mcp` could not listen on `mcp.listen` |
+| `review_not_found` | The MCP tool `review_detail` got a workflow ID that the store does not know |
+| `mcp_scope_denied`, `mcp_tool_unknown` | An MCP client without the `write` scope called a write tool, or called a tool the server does not have |
+| `mcp_client_missing`, `mcp_result_invalid` | An MCP tool call reached the tools without an authenticated client, or its result could not be encoded; both are server defects to report |
 
 The [troubleshooting runbook](knowledge/runbooks/troubleshooting.md) maps codes
 to fixes.

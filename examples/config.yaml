@@ -114,6 +114,10 @@ notify:
 # mcp:
 #   listen: "127.0.0.1:8787"
 #   allowed_hosts: [autoreview.example.com]
+#   request_timeout_seconds: 120
+#   header_timeout_seconds: 10
+#   request_max_bytes: 65536
+#   max_connections: 16
 #   clients:
 #     - name: hermes
 #       scope: write

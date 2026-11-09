@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, MatrixRooms, RouteOverride, SECRET_ENV_PREFIX};
-use autoreview_engine::mcp::{McpClientEntry, McpConfig};
+use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_policy::{EVENTS, Event, Policy};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -175,6 +175,14 @@ struct McpFile {
     allowed_hosts: Option<Value>,
     /// The clients of the server.
     clients: Option<Vec<McpClientFile>>,
+    /// Longest time one request may take, in seconds.
+    request_timeout_seconds: Option<Value>,
+    /// Longest time a client may take to send the request headers, in seconds.
+    header_timeout_seconds: Option<Value>,
+    /// Largest request body in bytes.
+    request_max_bytes: Option<Value>,
+    /// Most connections served at once.
+    max_connections: Option<Value>,
 }
 
 /// One entry of `mcp.clients`.
@@ -503,14 +511,27 @@ pub(crate) fn mcp_section(file: &FileConfig) -> Result<Option<McpConfig>, Error>
     let listen = text(&mcp.listen, "mcp.listen")?;
     let allowed_hosts = text_list(&mcp.allowed_hosts, "mcp.allowed_hosts")?;
     let mut entries = Vec::new();
-    for client in section(&mcp.clients, "mcp.clients")? {
+    for (index, client) in section(&mcp.clients, "mcp.clients")?.iter().enumerate() {
+        let key = |field: &str| format!("mcp.clients[{index}].{field}");
         entries.push(McpClientEntry {
-            name: text(&client.name, "mcp.clients.name")?,
-            scope: text(&client.scope, "mcp.clients.scope")?,
-            token_sha256: text(&client.token_sha256, "mcp.clients.token_sha256")?,
+            name: text(&client.name, &key("name"))?,
+            scope: text(&client.scope, &key("scope"))?,
+            token_sha256: text(&client.token_sha256, &key("token_sha256"))?,
         });
     }
-    McpConfig::new(&listen, allowed_hosts, &entries).map(Some)
+    let limits = McpLimits {
+        request_timeout: seconds(&mcp.request_timeout_seconds, "mcp.request_timeout_seconds")?,
+        header_timeout: seconds(&mcp.header_timeout_seconds, "mcp.header_timeout_seconds")?,
+        request_max_bytes: count(&mcp.request_max_bytes, "mcp.request_max_bytes")?,
+        max_connections: count(&mcp.max_connections, "mcp.max_connections")?,
+    };
+    McpConfig::new(&listen, allowed_hosts, &entries, limits).map(Some)
+}
+
+/// Reads a positive integer that counts items or bytes.
+fn count(value: &Option<Value>, key: &str) -> Result<usize, Error> {
+    let number = positive(value, key)?;
+    usize::try_from(number).map_err(|_| invalid(key, "must be a positive integer"))
 }
 
 /// Reads a secret from the environment by variable name. Only the value of one variable is read,
@@ -2574,7 +2595,8 @@ mod tests {
         );
         let section = format!(
             "mcp:\n  listen: \"127.0.0.1:8787\"\n  allowed_hosts: [mcp.example.com]\n  \
-             clients:\n{client}"
+             request_timeout_seconds: 120\n  header_timeout_seconds: 10\n  \
+             request_max_bytes: 65536\n  max_connections: 16\n  clients:\n{client}"
         );
         let full = format!("{EXAMPLE}{section}");
         let loaded = mcp_section(&parse_file(&full).expect("valid YAML"))
@@ -2591,8 +2613,16 @@ mod tests {
                 "configuration_missing: mcp.allowed_hosts",
             ),
             (
+                "  max_connections: 16\n",
+                "configuration_missing: mcp.max_connections",
+            ),
+            (
                 "      scope: write\n",
-                "configuration_missing: mcp.clients.scope",
+                "configuration_missing: mcp.clients[0].scope",
+            ),
+            (
+                "  request_max_bytes: 65536\n",
+                "configuration_missing: mcp.request_max_bytes",
             ),
         ];
         for (removed, expected) in cases {

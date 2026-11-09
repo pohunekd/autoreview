@@ -5,6 +5,7 @@
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
@@ -23,9 +24,6 @@ use crate::integrations::Integrations;
 /// The one path the server answers on; every other path is not found.
 pub const MCP_PATH: &str = "/mcp";
 
-/// Largest request body: tool arguments are a few identifiers.
-const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024;
-
 /// The body of every HTTP response of the server.
 pub type ResponseBody = BoxBody<Bytes, Infallible>;
 
@@ -35,6 +33,8 @@ pub struct McpServer<I, C> {
     clients: Arc<[McpClient]>,
     /// The rmcp service that runs the tools.
     inner: StreamableHttpService<Tools<I, C>, NeverSessionManager>,
+    /// Longest time one request may take, from reading its body to its answer.
+    request_timeout: Duration,
 }
 
 impl<I, C> McpServer<I, C>
@@ -54,7 +54,7 @@ where
             .with_sse_keep_alive(None)
             .with_allowed_hosts(config.allowed_hosts.clone())
             .enforce_origin_validation()
-            .with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES)
+            .with_max_request_body_bytes(config.limits.request_max_bytes)
             .with_cancellation_token(cancel);
         let inner = StreamableHttpService::new(
             move || Ok(Tools::new(Arc::clone(&engine))),
@@ -64,13 +64,16 @@ where
         Self {
             clients: config.clients.clone().into(),
             inner,
+            request_timeout: config.limits.request_timeout,
         }
     }
 
     /// Answers one HTTP request.
     ///
     /// A request to another path gets 404. A request without a known bearer token gets 401
-    /// and never reaches a tool. The token is never logged and is removed before rmcp.
+    /// and never reaches a tool. The token is never logged and is removed before rmcp. A
+    /// request that takes longer than `mcp.request_timeout_seconds` gets 503; its tool call
+    /// is cancelled.
     pub async fn handle<B>(&self, mut request: Request<B>) -> Response<ResponseBody>
     where
         B: http_body::Body + Send + 'static,
@@ -101,7 +104,13 @@ where
             name: client.name.clone(),
             scope: client.scope,
         });
-        self.inner.handle(request).await
+        match tokio::time::timeout(self.request_timeout, self.inner.handle(request)).await {
+            Ok(response) => response,
+            Err(_) => {
+                tracing::warn!(client = %client.name, "mcp request timed out");
+                empty(StatusCode::SERVICE_UNAVAILABLE)
+            }
+        }
     }
 }
 

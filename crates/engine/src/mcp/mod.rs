@@ -11,6 +11,6 @@ pub(crate) mod service;
 pub(crate) mod tools;
 
 #[doc(inline)]
-pub use access::{McpClient, McpClientEntry, McpConfig, Scope};
+pub use access::{McpClient, McpClientEntry, McpConfig, McpLimits, Scope};
 #[doc(inline)]
 pub use service::{MCP_PATH, McpServer, ResponseBody};
