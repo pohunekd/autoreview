@@ -292,11 +292,11 @@ Every event gets one of three levels. Where each level goes is configured in
 
 Events for a rejected or an expiring GitHub token are planned in #19.
 
-A `digest` or `log` message the notifier cannot deliver is dropped with a
-warning. An `action` message that cannot be delivered fails the step, because
-nobody would learn that they have to act. The `approval_requested` message is
-the exception: the review is already waiting when it is sent, so a failed
-delivery is logged and `autoreview awaiting` lists the wait.
+A message the notifier cannot deliver is dropped with a warning in the log, at
+every level; neither the review nor discovery waits for it or sends it again
+(see [notifications](knowledge/concepts/notifications.md#delivery-failure)). A
+review that waits for approval stays listed by `autoreview awaiting` without
+its message.
 
 ## Prompts
 

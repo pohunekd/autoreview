@@ -239,8 +239,8 @@ Model text is neutralized before it is rendered:
 ## 10. Notifications
 
 Each event has a level (`action`, `digest` or `log`), and each level goes to the
-backends in `notify.routes`. Delivery failures differ by level, see
-[notifications](notifications.md). The hourly review queue is a separate message.
+backends in `notify.routes`. A message that cannot be delivered is dropped with a
+warning, see [notifications](notifications.md). The hourly review queue is a separate message.
 
 ## 11. Cleanup
 

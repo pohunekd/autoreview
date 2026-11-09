@@ -112,8 +112,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ///
     /// # Errors
     ///
-    /// Returns the shutdown error, or the error of the store, a notification or the discovery
-    /// record.
+    /// Returns the shutdown error, the error of the store or of the discovery record, or
+    /// `review_input_invalid` for an event without a level.
     pub(crate) async fn continue_after_approval(
         &mut self,
         approval: &str,

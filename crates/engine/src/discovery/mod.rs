@@ -31,8 +31,8 @@ const POLICY_KEY: &str = "policy_file";
 /// Schedule phase of a review that waits for its next retry.
 const PHASE_RETRY_WAIT: &str = "retry_wait";
 
-/// Error code logged for a discovery notice that a shutdown left unsent.
-const SHUTDOWN: &str = "shutdown";
+/// Error code logged for a notification that a shutdown left unsent.
+pub(crate) const SHUTDOWN: &str = "shutdown";
 
 /// A notification of a discovery pass, sent once the pass has saved its state.
 #[derive(Debug)]

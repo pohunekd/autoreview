@@ -11,6 +11,7 @@ use autoreview_schedule::scheduler::Record;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::discovery::SHUTDOWN;
 use crate::discovery::poll::{STEP_READ_PULL_REQUEST_STATE, live};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
@@ -42,9 +43,6 @@ const QUEUE_MAX_ITEMS_KEY: &str = "notify.review_queue.max_items";
 
 /// Step name of the review request search in the retry log.
 const STEP_LIST_REVIEW_REQUESTS: &str = "list_review_requests";
-
-/// Step name of the queue digest post in the retry log.
-const STEP_SEND_QUEUE_DIGEST: &str = "send_queue_digest";
 
 /// Position of a queue entry. The derived order puts the requests that need the owner's action
 /// first, and the notes that wait for their author after the requests.
@@ -111,8 +109,9 @@ pub(crate) struct RenderedQueue {
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Posts the review requests and the notes that wait, as one queue digest.
     ///
-    /// Nothing is posted when nothing waits. Every retry of the post reuses one transaction ID,
-    /// so the homeserver keeps one copy, while a later run posts its own digest.
+    /// Nothing is posted when nothing waits. The post gets one attempt, bounded by the
+    /// notifier's request timeout; a failure is logged and returned. Each run has its own
+    /// transaction ID.
     ///
     /// # Errors
     ///
@@ -165,21 +164,24 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow(REVIEW_QUEUE_TOO_LONG, true, None));
         }
         let transaction = queue_transaction_id()?;
-        retry_step(
-            STEP_SEND_QUEUE_DIGEST,
-            self.step_policy(),
-            &self.clock,
-            cancel,
-            || {
-                self.integration.send_queue_digest(
-                    cancel,
-                    &transaction,
-                    &rendered.plain,
-                    &rendered.formatted,
-                )
-            },
-        )
-        .await?;
+        let sent = self
+            .integration
+            .send_queue_digest(cancel, &transaction, &rendered.plain, &rendered.formatted)
+            .await;
+        if let Err(err) = sent {
+            // The notifier fails at once on a cancelled token, so the shutdown is the cause.
+            let code = if cancel.is_cancelled() {
+                SHUTDOWN
+            } else {
+                error_code(&err)
+            };
+            tracing::warn!(
+                count = rendered.shown,
+                error_code = code,
+                "review queue digest dropped"
+            );
+            return Err(err);
+        }
         Ok(QueueResult {
             count: i64::try_from(rendered.shown).unwrap_or(i64::MAX),
             sent: true,
@@ -1032,46 +1034,15 @@ notifications:
         );
     }
 
+    // A failed post gets no retry inside the step budget; the next run posts its own digest
+    // (#212).
     #[tokio::test]
-    async fn review_queue_retries_with_one_transaction_per_run() {
+    async fn review_queue_sends_once_with_one_transaction_per_run() {
         let fake = Arc::new(FakeIntegration::new());
         fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
-        fake.lock().queue_failures = 2;
+        fake.lock().queue_failures = 1;
         let (engine, _dir) =
             new_queue_engine(queue_config(), &fake, datetime!(2026-10-19 14:35 UTC));
-        let result = engine
-            .review_queue(&CancellationToken::new())
-            .await
-            .expect("the queue runs");
-        let sends = fake.lock().queue_sends;
-        assert!(result.sent && sends == 3, "result {result:?} sends {sends}");
-        let transactions = fake.lock().queue_transactions.clone();
-        let first = transactions[0].clone();
-        assert!(queue_transaction_valid(&first), "transaction {first:?}");
-        assert!(
-            transactions.iter().all(|transaction| *transaction == first),
-            "retries used transactions {transactions:?}"
-        );
-        // A second run in the same hour posts its own message.
-        engine
-            .review_queue(&CancellationToken::new())
-            .await
-            .expect("the second run posts");
-        let queued = fake.lock().queued.clone();
-        assert!(
-            queued.len() == 2 && queued[1].transaction != first,
-            "queued {queued:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn review_queue_gives_up_when_the_retry_window_ends() {
-        let mut cfg = queue_config();
-        cfg.step_retry = Duration::ZERO;
-        let fake = Arc::new(FakeIntegration::new());
-        fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
-        fake.lock().queue_failures = 1000;
-        let (engine, _dir) = new_queue_engine(cfg, &fake, datetime!(2026-10-19 14:00 UTC));
         let result = engine.review_queue(&CancellationToken::new()).await;
         assert!(
             result
@@ -1079,11 +1050,22 @@ notifications:
                 .is_err_and(|err| error_code(err) == "matrix_unavailable"),
             "error {result:?}"
         );
-        let (sends, queued) = {
+        let (sends, first) = {
             let state = fake.lock();
-            (state.queue_sends, state.queued.len())
+            (state.queue_sends, state.queue_transactions[0].clone())
         };
-        assert!(sends == 1 && queued == 0, "sends {sends} queued {queued}");
+        assert!(sends == 1, "the failed post was retried: sends {sends}");
+        assert!(queue_transaction_valid(&first), "transaction {first:?}");
+        // A second run in the same hour posts its own message.
+        engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the second run posts");
+        let queued = fake.lock().queued.clone();
+        assert!(
+            queued.len() == 1 && queued[0].transaction != first,
+            "queued {queued:?}"
+        );
     }
 
     /// Records `pr` as notes handed to its author at `published_at`.

@@ -79,21 +79,28 @@ The example levels come from the example policy. Each deployment chooses its own
 
 ## Delivery failure
 
-Delivery can fail when a backend is down or rejects a message. The rule depends
-on the level, because a missed `action` message means that nobody learns that a
-review waits:
+Delivery can fail when a backend is down or rejects a message. No review and no
+discovery pass waits for a backend; only the warning differs by level:
 
 | Level | Delivery fails | What happens |
 |---|---|---|
 | `digest` or `log` | The message cannot be delivered | Dropped with a warning in the log. The review continues. A message of a discovery pass is logged as described below. |
-| `action` | The message cannot be delivered | The step fails, except for `approval_requested` and the messages of a discovery pass. |
+| `action` | The message cannot be delivered | Dropped with a warning in the log. The review continues, see below. |
 
-A failed `action` message fails the step that sent it. The scheduler's own retry
-rules then apply (see [state and recovery](state-and-recovery.md#retry-layers)).
-`approval_requested` is the exception: the review is stored as waiting before the
-request is sent, so a failed request is logged as `approval request failed` and
-the review keeps waiting. `autoreview awaiting` lists the wait until it is
-approved or its deadline passes.
+A message of a review gets one attempt, bounded by the notifier's request
+timeout (`notify.timeout_seconds`), and is never retried. A failed message is
+logged as the warning `review notification dropped` with its event, review key,
+level and error code. At the `digest` and `log` levels the notifier itself drops
+a message the homeserver does not take and logs `matrix notification dropped`
+instead. The review then goes on as if the message had
+been sent, and a resumed review does not send it again. When the service shuts
+down during the attempt of an `action` message, the warning carries the code
+`shutdown`, and the resumed review makes one more attempt. At the `digest` and
+`log` levels the notifier logs `matrix notification dropped` with the code
+`matrix_unavailable` instead, and the resumed review also sends the message
+again. A waiting review stays visible without
+its `approval_requested` message: `autoreview awaiting` and the review queue
+list the wait until it is approved or its deadline passes.
 
 A discovery pass sends its messages after it has saved its state and released
 the discovery lock: a rejected pull request (`review_stopped`), a review that
@@ -110,8 +117,8 @@ later pass repeats it, and the warning is the only record. A pass that fails
 before it saves sends nothing, and the next pass that saves sends those
 messages.
 
-A digest or log message is never retried. A backend that is down during a
-digest loses that digest, and the state of the review is still visible with
+A message that is not delivered is lost. A backend that is down loses the
+messages of that time, and the state of the review is still visible with
 `autoreview review`.
 
 ## Review queue
@@ -145,6 +152,8 @@ Rules for the queue:
   next run includes it again.
 - The message is cut between entries, never inside one, so formatted content stays
   valid.
+- The message gets one attempt. When it fails, the warning
+  `review queue digest dropped` names the code, and the command fails with it.
 
 ## Message contents
 

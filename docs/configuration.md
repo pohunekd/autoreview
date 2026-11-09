@@ -304,9 +304,9 @@ type are fine, for example one Matrix room per level.
 | `review_queue.backends` | Backends that receive the hourly review queue |
 | `review_queue.max_items` | Most pull requests listed in one queue message |
 
-An `action` message that its backend does not accept fails the step, which is
-retried. A `digest` or `log` message that its backend rejects is dropped with a
-warning. `autoreview review-queue` fails with the backend's
+Each message gets one attempt, bounded by `timeout_seconds`. A message that
+its backend does not accept is dropped with a warning, at every level, and
+neither the review nor discovery waits for it. `autoreview review-queue` fails with the backend's
 error code when a queue backend rejects the message, so its timer shows the
 failure. `review_queue.backends` must name one `matrix` backend; a list of
 `none` backends only, or an empty list, is refused at load. Several backends
