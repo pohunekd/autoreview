@@ -547,6 +547,72 @@ async fn failing_notification_backend_does_not_stall_discovery() {
     );
 }
 
+// A notification backend that always fails neither delays nor fails a review: each message
+// gets one attempt and is stored as handled, so a resumed review does not resend it, and the
+// review publishes (#212).
+#[tokio::test]
+async fn failing_notification_backend_does_not_stall_a_review() {
+    let mut h = start_harness(|cfg| {
+        cfg.step_retry = Duration::from_secs(900);
+        cfg.schedule.debounce = time::Duration::ZERO;
+    })
+    .await;
+    h.stop_engine().await;
+    // At the action level the notifier returns the failure instead of muting it.
+    let text = INTEGRATION_POLICY
+        .replace("started: log", "started: action")
+        .replace("approved: digest", "approved: action");
+    let policy =
+        autoreview_policy::parse(
+            text.as_bytes(),
+            |_| Ok(b"Review the pull request.".to_vec()),
+        )
+        .expect("the action-level policy parses");
+    let mut cfg = h.config();
+    cfg.policy = Some(policy);
+    let engine = Arc::new(Engine::new(
+        cfg,
+        Arc::clone(&h.store),
+        Arc::clone(&h.fake),
+        FakeClock::new(),
+    ));
+    h.fake.lock().notify_fail = Some("matrix_unavailable".to_owned());
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    let cancel = CancellationToken::new();
+    let serving = {
+        let engine = Arc::clone(&engine);
+        let cancel = cancel.clone();
+        tokio::spawn(async move { engine.serve(&cancel).await })
+    };
+    let published_step = format!("{NOTIFY_STEP_PREFIX}published");
+    h.wait_for("the publication and its notification step", || {
+        h.publications() == 1 && h.step_recorded(&published_step)
+    })
+    .await;
+    cancel.cancel();
+    let served = serving.await.expect("the engine task finishes");
+    assert!(served.is_ok(), "engine stopped with error: {served:?}");
+    assert_eq!(
+        engine.clock.elapsed(),
+        Duration::ZERO,
+        "the review waited for a notification retry"
+    );
+    assert_eq!(
+        h.fake.lock().notify_attempts,
+        2,
+        "the started and the published notification get one attempt each"
+    );
+    let workflow_id = h.fake.snapshot().2[0].workflow_id.clone();
+    for step in ["started", "published"] {
+        let stored = h
+            .store
+            .load_step::<bool>(&workflow_id, &format!("{NOTIFY_STEP_PREFIX}{step}"))
+            .expect("the notification step loads");
+        assert_eq!(stored, Some(false), "step {step} is not stored as dropped");
+    }
+}
+
 // A transient outage longer than the step retry window ends the step with its own retryable
 // code instead of pausing the review.
 #[tokio::test]
