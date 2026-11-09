@@ -140,13 +140,16 @@ pub trait Integrations {
         number: i64,
     ) -> impl Future<Output = Result<PullRequestState, Error>> + Send;
 
-    /// Returns the pohunek host and project that run the reviews of a repository.
-    fn resolve_project(
+    /// Returns the routes of one pohunek host's projects that serve a repository.
+    ///
+    /// The routes keep the order of the host's project list; an empty list is no match.
+    fn host_routes(
         &self,
         cancel: &CancellationToken,
+        host: &str,
         repository: &str,
         sources: &[String],
-    ) -> impl Future<Output = Result<ProjectRoute, Error>> + Send;
+    ) -> impl Future<Output = Result<Vec<ProjectRoute>, Error>> + Send;
 
     /// Starts the reviewer session, or returns the live session with the same name.
     fn ensure_session(
