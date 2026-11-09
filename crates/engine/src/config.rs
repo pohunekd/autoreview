@@ -7,7 +7,7 @@ use std::fmt;
 use std::net::Ipv6Addr;
 use std::time::Duration;
 
-use autoreview_policy::Policy;
+use autoreview_policy::{Event, Level, Policy};
 use autoreview_schedule::metadata::is_valid_session_group;
 use autoreview_schedule::scheduler;
 use time::Duration as SignedDuration;
@@ -119,7 +119,7 @@ pub struct RouteOverride {
     pub project_id: String,
 }
 
-/// The Matrix rooms that receive the notifications of each level.
+/// The Matrix rooms of each level and of each event with its own route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatrixRooms {
     /// The room of action messages, which mention the user.
@@ -128,6 +128,19 @@ pub struct MatrixRooms {
     pub digest: String,
     /// The room of log messages.
     pub log: String,
+    /// The rooms of the event routes, by event; empty without event routes.
+    pub events: BTreeMap<Event, String>,
+}
+
+/// The route that carries one notification to its backends.
+///
+/// The level of a notification still decides its mention and whether a failure is dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotifyRoute {
+    /// The route of the level, `notify.routes.<level>`.
+    Level(Level),
+    /// The event's own route, `notify.routes.<event>`.
+    Event(Event),
 }
 
 /// The technical settings of the engine. What is reviewed and how it is published lives in the
@@ -289,6 +302,17 @@ impl fmt::Debug for Config {
 }
 
 impl Config {
+    /// Returns the route of a notification of `event` at `level`.
+    ///
+    /// An event with its own room takes its own route; every other event takes its level's.
+    pub fn notify_route(&self, event: &Event, level: Level) -> NotifyRoute {
+        if self.matrix_rooms.events.contains_key(event) {
+            NotifyRoute::Event(event.clone())
+        } else {
+            NotifyRoute::Level(level)
+        }
+    }
+
     /// Validates the configuration.
     ///
     /// The first failing check returns its error.
@@ -384,6 +408,12 @@ impl Config {
         ] {
             if !matrix_room_valid(room) {
                 let message = format!("invalid Matrix {level} room");
+                return Err(invalid(message));
+            }
+        }
+        for (event, room) in &self.matrix_rooms.events {
+            if !matrix_room_valid(room) {
+                let message = format!("invalid Matrix {} room", event.as_str());
                 return Err(invalid(message));
             }
         }
@@ -1040,6 +1070,7 @@ mod tests {
                 action: "!action:example.org".to_owned(),
                 digest: "!digest:example.org".to_owned(),
                 log: "!log:example.org".to_owned(),
+                events: std::collections::BTreeMap::new(),
             },
             queue_matrix_room: "!queue:example.org".to_owned(),
             queue_max_items: 10,

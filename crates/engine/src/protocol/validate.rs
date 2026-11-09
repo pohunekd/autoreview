@@ -295,6 +295,7 @@ pub(crate) mod tests {
                 action: "!action:example.org".to_owned(),
                 digest: "!digest:example.org".to_owned(),
                 log: "!log:example.org".to_owned(),
+                events: std::collections::BTreeMap::new(),
             },
             queue_matrix_room: "!queue:example.org".to_owned(),
             queue_max_items: 10,
