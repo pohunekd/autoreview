@@ -138,3 +138,151 @@ fn pick_route(
     }
     Ok(routes.pop())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::future::ready;
+
+    use tokio_util::sync::CancellationToken;
+
+    use super::{HostFailures, search_route};
+    use crate::config::RouteOverride;
+    use crate::error::{Error, error_code};
+    use crate::model::ProjectRoute;
+
+    /// Repository that every case routes.
+    const REPOSITORY: &str = "acme/widget";
+
+    /// The answer of one host: its project ids, or the code its call fails with.
+    type Answer = Result<&'static [&'static str], &'static str>;
+
+    /// The answers of the hosts of one case, keyed by host.
+    type Answers = Vec<(&'static str, Answer)>;
+
+    /// The route of a search, or its error code.
+    type Outcome = Result<ProjectRoute, String>;
+
+    /// Hosts, their answers, the expected outcome and the expected calls of one case.
+    type Case = (
+        &'static [&'static str],
+        Answers,
+        Outcome,
+        &'static [&'static str],
+    );
+
+    /// Returns the route of `project` on `host`.
+    fn route(host: &str, project: &str) -> ProjectRoute {
+        ProjectRoute {
+            host: host.to_owned(),
+            project_id: project.to_owned(),
+        }
+    }
+
+    /// Searches `hosts` with the given answers and returns the result and the hosts called.
+    async fn search(
+        hosts: &[&str],
+        answers: &[(&str, Answer)],
+        overrides: &BTreeMap<String, RouteOverride>,
+        failures: &mut HostFailures,
+        cancel: &CancellationToken,
+    ) -> (Result<ProjectRoute, Error>, Vec<String>) {
+        let hosts: Vec<String> = hosts.iter().map(|host| (*host).to_owned()).collect();
+        let answers: BTreeMap<&str, Answer> = answers.iter().copied().collect();
+        let mut called = Vec::new();
+        let result = search_route(&hosts, overrides, REPOSITORY, cancel, failures, |host| {
+            called.push(host.to_owned());
+            let answer = answers.get(host).copied().unwrap_or(Ok(&[]));
+            ready(match answer {
+                Ok(projects) => Ok(projects.iter().map(|id| route(host, id)).collect()),
+                Err(code) => Err(Error::workflow(code, false, None)),
+            })
+        })
+        .await;
+        (result, called)
+    }
+
+    /// Returns the route, or the error code, of a search result.
+    fn outcome(result: &Result<ProjectRoute, Error>) -> Outcome {
+        match result {
+            Ok(route) => Ok(route.clone()),
+            Err(err) => Err(error_code(err).to_owned()),
+        }
+    }
+
+    #[tokio::test]
+    async fn hosts_are_tried_in_order_and_a_failing_host_is_skipped() {
+        let none = BTreeMap::new();
+        let cancel = CancellationToken::new();
+        // (hosts, answers, expected outcome, expected calls)
+        let cases: Vec<Case> = vec![
+            (
+                &["a", "b"],
+                vec![("a", Ok(&["p1"])), ("b", Ok(&["p2"]))],
+                Ok(route("a", "p1")),
+                &["a"],
+            ),
+            (
+                &["a", "b", "c"],
+                vec![("a", Err("pohunek_request_timeout")), ("b", Ok(&["p2"]))],
+                Ok(route("b", "p2")),
+                &["a", "b"],
+            ),
+            (
+                &["a", "b", "c"],
+                vec![
+                    ("a", Ok(&[])),
+                    ("b", Err("pohunek_request_failed")),
+                    ("c", Ok(&["p3"])),
+                ],
+                Ok(route("c", "p3")),
+                &["a", "b", "c"],
+            ),
+            (
+                &["a", "b"],
+                vec![("a", Err("pohunek_request_timeout")), ("b", Ok(&[]))],
+                Err("pohunek_request_timeout".to_owned()),
+                &["a", "b"],
+            ),
+            (
+                &["a", "b"],
+                vec![
+                    ("a", Err("pohunek_request_timeout")),
+                    ("b", Err("pohunek_request_failed")),
+                ],
+                Err("pohunek_request_timeout".to_owned()),
+                &["a", "b"],
+            ),
+            (
+                &["a", "b"],
+                vec![],
+                Err("project_route_not_found".to_owned()),
+                &["a", "b"],
+            ),
+            (
+                &["a", "b"],
+                vec![("a", Ok(&["p1", "p2"])), ("b", Ok(&["p3"]))],
+                Err("project_route_ambiguous".to_owned()),
+                &["a"],
+            ),
+        ];
+        for (hosts, answers, want, want_called) in cases {
+            let mut failures = HostFailures::new();
+            let (result, called) = search(hosts, &answers, &none, &mut failures, &cancel).await;
+            assert_eq!(
+                outcome(&result),
+                want,
+                "hosts={hosts:?} answers={answers:?}"
+            );
+            assert_eq!(called, want_called, "hosts={hosts:?} answers={answers:?}");
+            for (host, answer) in &answers {
+                let failed = answer.is_err() && called.iter().any(|item| item == host);
+                assert_eq!(
+                    failures.contains_key(*host),
+                    failed,
+                    "failures={failures:?} hosts={hosts:?} answers={answers:?}"
+                );
+            }
+        }
+    }
+}
