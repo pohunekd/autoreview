@@ -1,0 +1,53 @@
+{
+  "cli_version": "0.40.1",
+  "protocol": {
+    "minimum": 3,
+    "maximum": 4
+  },
+  "ok": {
+    "agent": "claude-reviewer-profile",
+    "agent_base": "claude",
+    "branch": "autoreview/review/prr-v2-0000000000000000000000000000000000000000000000000000000000000001-opus-run1-start2",
+    "capabilities": {
+      "fork": false,
+      "resume": false
+    },
+    "cols": 240,
+    "created_at": "2026-11-06T21:37:57.455705594Z",
+    "cwd": "/srv/review-host/worktrees/s-01EXAMPLE0000000000000000LOST-example-repo",
+    "cwd_source": "procwatch",
+    "external": false,
+    "id": "s-01EXAMPLE0000000000000000LOST",
+    "is_linked_worktree": true,
+    "metadata": {
+      "companion.group": "autoreview",
+      "work.link.branch": "feature/example",
+      "work.link.id": "example-org/example-repo#42",
+      "work.link.kind": "pull_request",
+      "work.link.provider": "github",
+      "work.link.url": "https://github.com/example-org/example-repo/pull/42",
+      "work.rev": "1111111111111111111111111111111111111111",
+      "work.role": "review"
+    },
+    "name": "github-review-prr-v2-0000000000000000000000000000000000000000000000000000000000000001-opus-run1-start2",
+    "pid": 4242,
+    "project_id": "p-00000000",
+    "repo": "/srv/review-host/repos/example-repo",
+    "rows": 200,
+    "runtime": {
+      "last_connected_at": "2026-11-06T21:37:57.573541781Z",
+      "loss_cause": "host_restarted",
+      "loss_reason": "runtime_lost",
+      "runtime_generation": "1",
+      "runtime_id": "runtime-00000000000000000000000000000001",
+      "started_at": "2026-11-06T21:37:57.573541781Z",
+      "state": "lost",
+      "worker_id": "worker-00000000000000000000000000000001",
+      "worker_instance_id": "runtime-00000000000000000000000000000001"
+    },
+    "state": "failed",
+    "state_source": "process",
+    "updated_at": "2026-11-09T00:03:36.70320905Z",
+    "worktree_path": "/srv/review-host/worktrees/s-01EXAMPLE0000000000000000LOST-example-repo"
+  }
+}
