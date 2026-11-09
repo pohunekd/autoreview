@@ -10,11 +10,10 @@ pub(crate) mod output;
 
 pub(crate) mod sessions;
 
-use std::collections::BTreeMap;
 use std::ffi::OsString;
 
 use autoreview_engine::Error;
-use autoreview_engine::config::{Config, RouteOverride};
+use autoreview_engine::config::Config;
 use autoreview_engine::error::BoxError;
 use autoreview_engine::model::{ProjectRoute, repository_valid};
 use serde::de::DeserializeOwned;
@@ -313,45 +312,18 @@ pub(crate) fn route_candidates(
     Ok(routes)
 }
 
-/// Returns the one route that serves `repository`, after the override of the repository.
-pub(crate) fn choose_route(
-    repository: &str,
-    overrides: &BTreeMap<String, RouteOverride>,
-    mut candidates: Vec<ProjectRoute>,
-) -> Result<ProjectRoute, Error> {
-    if let Some(route) = overrides.get(repository) {
-        candidates.retain(|candidate| {
-            candidate.host == route.host && candidate.project_id == route.project_id
-        });
-    }
-    match candidates.len() {
-        0 => Err(Error::workflow("project_route_not_found", true, None)),
-        1 => candidates
-            .pop()
-            .ok_or_else(|| Error::workflow("project_route_not_found", true, None)),
-        _ => Err(Error::workflow("project_route_ambiguous", true, None)),
-    }
-}
-
-/// Returns the pohunek host and project that run the reviews of `repository`.
-pub(crate) async fn resolve_project(
+/// Returns the routes of the projects of `host` that serve `repository`.
+///
+/// One `project list` call; the engine decides which host and route a review uses.
+pub(crate) async fn host_routes(
     config: &Config,
     cancel: &CancellationToken,
+    host: &str,
     repository: &str,
     sources: &[String],
-) -> Result<ProjectRoute, Error> {
-    let mut candidates = Vec::new();
-    for host in &config.pohunek_hosts {
-        let output = pohunek_call(config, cancel, &projects_arguments(host)).await?;
-        candidates.extend(route_candidates(
-            host,
-            &config.github_host,
-            repository,
-            sources,
-            &output,
-        )?);
-    }
-    choose_route(repository, &config.route_overrides, candidates)
+) -> Result<Vec<ProjectRoute>, Error> {
+    let output = pohunek_call(config, cancel, &projects_arguments(host)).await?;
+    route_candidates(host, &config.github_host, repository, sources, &output)
 }
 
 /// Returns the `owner/name` that a project origin URL names on `host`, or an empty string.

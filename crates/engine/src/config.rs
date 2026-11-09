@@ -154,7 +154,7 @@ pub struct Config {
     pub pohunek_state: String,
     /// Absolute path of the pohunek runtime directory.
     pub pohunek_runtime: String,
-    /// The pohunek hosts that serve reviews; never empty.
+    /// The pohunek hosts that serve reviews, in priority order; never empty.
     pub pohunek_hosts: Vec<String>,
     /// Routing overrides keyed by repository.
     pub route_overrides: BTreeMap<String, RouteOverride>,

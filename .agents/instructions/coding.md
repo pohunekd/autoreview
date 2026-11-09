@@ -202,6 +202,22 @@ What is not compatible, by decision:
   `review_queue_sends_once_with_one_transaction_per_run`; the latter replaces
   the Go ports `review_queue_retries_with_one_transaction_per_run` and
   `review_queue_gives_up_when_the_retry_window_ends`.
+- **Review host fallback (#180):** the engine asks the hosts of `pohunek.hosts`
+  in order and takes the first host whose projects serve the repository. A
+  host that fails is skipped with the warning `review host skipped` and is not
+  asked again in that discovery pass (its code and permanence are kept); with
+  no match the route fails with the first skipped host's error whose code is
+  retried, else the first skipped host's error, or `project_route_not_found`
+  when every host answered. Two matches on one host stay
+  `project_route_ambiguous`, but a repository that two hosts serve runs on the
+  first one, which Go refused as ambiguous: with `auto` in `project_sources` an
+  untrusted pipeline can reach a trusted host unless `route_overrides` pins it.
+  A `route_overrides` entry asks only its host. Go asks every host, fails the
+  route when one host fails and reports a repository on two hosts as
+  `project_route_ambiguous` (`pohunek.go:85-125`). The route is stored in the
+  review input as in Go. The tests are
+  `hosts_are_tried_in_order_and_a_failing_host_is_skipped` and
+  `failing_first_host_is_skipped_and_the_review_runs_on_the_second`.
 - **Reserved finding prefix:** a reviewer whose `finding_prefix` is `P` is refused
   when the policy is parsed, with the message `reviewer <id>: finding_prefix P is
   reserved for republished findings`. `P` numbers the prior findings published

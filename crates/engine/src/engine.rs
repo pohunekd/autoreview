@@ -419,7 +419,7 @@ where
 ///
 /// The chain is searched, not only its top, because Go's `errors.As` reads the first workflow
 /// failure.
-fn is_permanent(err: &Error) -> bool {
+pub(crate) fn is_permanent(err: &Error) -> bool {
     let mut current: Option<&dyn std::error::Error> = Some(err);
     while let Some(error) = current {
         if let Some(Error::Workflow { permanent, .. }) = error.downcast_ref::<Error>() {
