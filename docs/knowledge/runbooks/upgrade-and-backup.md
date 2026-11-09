@@ -32,13 +32,14 @@ retention settings (`store.review_retention_seconds`,
 
 ## Upgrade the binary
 
-1. Download and verify the new release as on the [install page](../../install.md#a-release-binary).
+1. Download, verify and unpack the new release archive as on the
+   [install page](../../install.md#a-release-binary), with `version` and `target` set.
 2. Keep the old binary: `sudo cp /usr/local/bin/autoreview /usr/local/bin/autoreview.previous`.
 3. Install the new binary over the old one, then run `validate` with the new
    binary, while the old service still runs:
 
    ```sh
-   sudo install -m 0755 autoreview /usr/local/bin/autoreview
+   sudo install -m 0755 "autoreview-$version-$target/autoreview" /usr/local/bin/autoreview
    sudo -u autoreview autoreview --config /etc/autoreview/config.yaml validate
    ```
 
