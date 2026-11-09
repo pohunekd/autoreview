@@ -1,0 +1,137 @@
+name: Release
+
+# A pushed tag v<version> builds the static musl archives, attests them and
+# creates a draft release; the owner reviews and publishes the draft. A manual
+# run is a dry run: it builds the archives of the selected ref and uploads them
+# as workflow artifacts, and attests and publishes nothing. The workflow never
+# creates, moves or deletes a tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# One run per ref. A release run is never cancelled half way.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  # Reads the version and, for a tag, refuses one that is not v<workspace
+  # version>. A tag push also renders the release notes from CHANGELOG.md, so a
+  # tag without a folded changelog section fails before anything is built.
+  meta:
+    name: meta
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # The event decides, not the ref type: a manual run on a tag is a dry run.
+      - name: Version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "push" ]; then
+            version="$(scripts/release-version "$TAG")"
+          else
+            version="$(scripts/release-version)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Toolchain
+        if: github.event_name == 'push'
+        run: rustup show active-toolchain
+      - name: Release notes
+        if: github.event_name == 'push'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/changelog notes "$VERSION" > "$RUNNER_TEMP/release-notes.md"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: github.event_name == 'push'
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          if-no-files-found: error
+
+  # One native runner per target. rustup reads rust-toolchain.toml, so the
+  # release uses the channel of the gates. No cache is restored: a release
+  # binary is built only from this commit and the locked crates.
+  build:
+    name: build ${{ matrix.target }}
+    needs: meta
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.meta.outputs.version }}
+      # musl-gcc compiles the C code of the bundled SQLite and of ring. cc-rs
+      # finds it by itself only for x86_64, so it is named for every target.
+      TARGET_CC: musl-gcc
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install the musl C compiler
+        run: |
+          set -euo pipefail
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+            install -y --no-install-recommends musl-tools
+      - name: Toolchain
+        run: |
+          set -euo pipefail
+          cargo --version
+          rustup target add "$TARGET"
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET" -p autoreview --bin autoreview
+      # A static binary has no NEEDED entry. The version text must name the
+      # version of the tag.
+      - name: Check the binary
+        run: |
+          set -euo pipefail
+          bin="target/$TARGET/release/autoreview"
+          if readelf -d "$bin" | grep -q '(NEEDED)'; then
+            readelf -d "$bin"
+            echo "::error::$bin is not statically linked"
+            exit 1
+          fi
+          test "$("$bin" --version)" = "autoreview $VERSION"
+      - name: Package
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          scripts/release-archive "$VERSION" "$TARGET" "target/$TARGET/release/autoreview" dist
+          cd dist
+          sha256sum -c -- "autoreview-$VERSION-$TARGET.tar.gz.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archive-${{ matrix.target }}
+          path: |
+            dist/autoreview-${{ needs.meta.outputs.version }}-${{ matrix.target }}.tar.gz
+            dist/autoreview-${{ needs.meta.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
