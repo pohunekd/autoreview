@@ -22,7 +22,7 @@ use crate::config::identifier_valid;
 use crate::engine::{Clock, Engine};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
-use crate::model::repository_valid;
+use crate::model::{ApproveRequest, ResolveRequest, RetryRequest, repository_valid};
 use crate::store::{
     REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED, REVIEW_RUNNING, ReviewFilter,
 };
@@ -73,7 +73,7 @@ struct ToolSpec {
 }
 
 /// Every tool of the server, read tools first.
-const TOOLS: [ToolSpec; 5] = [
+const TOOLS: [ToolSpec; 8] = [
     ToolSpec {
         name: "list_reviews",
         scope: Scope::Read,
@@ -98,6 +98,22 @@ const TOOLS: [ToolSpec; 5] = [
         name: "review_queue",
         scope: Scope::Read,
         description: "Lists the requested reviews with their engine status; sends nothing.",
+    },
+    ToolSpec {
+        name: "resolve",
+        scope: Scope::Write,
+        description: "Finds the review that waits for approval at a head or head prefix.",
+    },
+    ToolSpec {
+        name: "approve",
+        scope: Scope::Write,
+        description: "Approves the clean review that waits at the full head; the engine \
+                      publishes it.",
+    },
+    ToolSpec {
+        name: "retry",
+        scope: Scope::Write,
+        description: "Starts a new attempt of a stopped review at its current head.",
     },
 ];
 
@@ -129,6 +145,30 @@ struct PullRequestArguments {
     repository: String,
     /// Pull request number.
     number: i64,
+}
+
+/// Arguments of `resolve` and `retry`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrefixArguments {
+    /// Repository as `owner/name`.
+    repository: String,
+    /// Pull request number.
+    number: i64,
+    /// Head SHA or a prefix of at least 12 characters.
+    head_prefix: String,
+}
+
+/// Arguments of `approve`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApproveArguments {
+    /// Repository as `owner/name`.
+    repository: String,
+    /// Pull request number.
+    number: i64,
+    /// Full head SHA of the waiting review.
+    head_sha: String,
 }
 
 /// Arguments of the tools that take none.
@@ -296,6 +336,33 @@ where
                 let (entries, truncated) = engine.queue_snapshot(cancel).await?;
                 encode(&queue_view(entries, truncated))
             }
+            "resolve" => {
+                let parsed: PrefixArguments = parse(arguments)?;
+                let request = ResolveRequest {
+                    repository: parsed.repository,
+                    number: parsed.number,
+                    head_prefix: parsed.head_prefix,
+                };
+                encode(&engine.resolve(cancel, &request)?)
+            }
+            "approve" => {
+                let parsed: ApproveArguments = parse(arguments)?;
+                let request = ApproveRequest {
+                    repository: parsed.repository,
+                    number: parsed.number,
+                    head_sha: parsed.head_sha,
+                };
+                encode(&engine.approve_head(cancel, &request)?)
+            }
+            "retry" => {
+                let parsed: PrefixArguments = parse(arguments)?;
+                let request = RetryRequest {
+                    repository: parsed.repository,
+                    number: parsed.number,
+                    head_sha: parsed.head_prefix,
+                };
+                encode(&engine.retry(cancel, &request).await?)
+            }
             _ => Err(Failure::code(TOOL_UNKNOWN)),
         }
     }
@@ -343,7 +410,7 @@ fn tool(spec: &ToolSpec) -> Tool {
         ToolAnnotations::new()
             .read_only(read_only)
             .destructive(false)
-            .open_world(spec.name == "review_queue"),
+            .open_world(spec.name == "review_queue" || spec.name == "retry"),
     )
 }
 
@@ -351,6 +418,10 @@ fn tool(spec: &ToolSpec) -> Tool {
 fn input_schema(name: &str) -> JsonObject {
     let repository = json!({ "type": "string", "description": "Repository as owner/name." });
     let number = json!({ "type": "integer", "minimum": 1, "description": "Pull request number." });
+    let prefix = json!({
+        "type": "string",
+        "description": "Head SHA, or a prefix of at least 12 lowercase hexadecimal characters."
+    });
     match name {
         "list_reviews" => object(
             &[
@@ -367,6 +438,25 @@ fn input_schema(name: &str) -> JsonObject {
         "pull_request_status" => object(
             &[("repository", repository), ("number", number)],
             &["repository", "number"],
+        ),
+        "resolve" | "retry" => object(
+            &[
+                ("repository", repository),
+                ("number", number),
+                ("head_prefix", prefix),
+            ],
+            &["repository", "number", "head_prefix"],
+        ),
+        "approve" => object(
+            &[
+                ("repository", repository),
+                ("number", number),
+                (
+                    "head_sha",
+                    json!({ "type": "string", "description": "Full 40-character head SHA." }),
+                ),
+            ],
+            &["repository", "number", "head_sha"],
         ),
         _ => object(&[], &[]),
     }
