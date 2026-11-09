@@ -17,7 +17,8 @@ head. That review is either **incremental** (only the commits since the last
 published review are reviewed) or **full** (the whole pull request is reviewed).
 An incremental review is cheaper, but it can only be trusted where nothing
 earlier can go unnoticed. The engine therefore chooses the scope with strict
-conditions, and it settles every earlier blocking finding explicitly.
+conditions, and in a `claude-structured` pipeline it settles every earlier
+blocking finding explicitly.
 
 ## Full or incremental
 
@@ -58,9 +59,10 @@ exception is a renewed review request for the same head after a notes hand-off.
 That request adopts the stored result of the hand-off review (see
 [notes hand-off](decisions.md#notes-hand-off)). Neither case is incremental.
 
-The commit history check applies to every pipeline. Prior findings are collected
-only for a `claude-structured` pipeline; for `codex-envelope` they are planned in
-#23.
+Step two and the collection of prior findings apply only to a
+`claude-structured` pipeline. A `codex-envelope` pipeline keeps the scope of step
+one, even after a rebase or a force push; its history check is planned in #237.
+It gets no prior findings; they are planned in #23.
 
 ### Which reviewers run
 

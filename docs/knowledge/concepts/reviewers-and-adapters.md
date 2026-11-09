@@ -147,11 +147,13 @@ Constraints on the mix:
 
 ## Why one pipeline uses one protocol
 
-The engine combines the results of both protocols the same way: the decision,
-incremental re-reviews and the notes hand-off do not depend on the protocol. A
-`codex-envelope` result carries no blocking flag and no verdicts on prior
-findings, so every Codex finding blocks at any severity and a Codex pipeline gets
-no prior findings; both are planned in #23. Two more differences remain:
+The engine combines the results of both protocols the same way: the decision
+and the notes hand-off do not depend on the protocol. A `codex-envelope` result
+carries no blocking flag and no verdicts on prior findings, so every Codex
+finding blocks at any severity and a Codex pipeline gets no prior findings; both
+are planned in #23. A `codex-envelope` pipeline also skips the commit history
+check of an incremental review, so it stays incremental after a rebase or a force
+push; the check is planned in #237. Two more differences remain:
 
 - **One protocol per pipeline.** The pipeline prompt is written for one request
   and one result format, and the engine combines the results of all reviewers of
@@ -180,7 +182,8 @@ and the design below is the outline that such a protocol would have to meet.
 4. **Verdicts, when the protocol supports them.** One verdict per prior finding.
    A protocol without verdicts can run only in a pipeline that has no prior
    findings to settle, or it must add the verdicts first.
-5. **A blocking flag.** The result carries it, as both current protocols do.
+5. **A blocking flag.** The result carries it, as `claude-structured` does; for
+   `codex-envelope` it is planned in #23.
 6. **Environment rules.** No GitHub token, no pohunek identity variables, and
    bounded output.
 7. **A profile installer.** Support for the new runtime in
