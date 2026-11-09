@@ -212,14 +212,18 @@ token needs and when to use a machine user.
 | `state_home` | `XDG_STATE_HOME` for the CLI |
 | `runtime_dir` | `XDG_RUNTIME_DIR` for the CLI |
 | `timeout_seconds` | Timeout of one pohunek call, including a session start with its base fetch |
-| `hosts` | pohunek host names that may run reviewers; one or more |
-| `route_overrides` | Map `owner/repo: {host, project_id}` that pins a repository registered on more than one host |
+| `hosts` | pohunek host names that may run reviewers, in priority order; one or more |
+| `route_overrides` | Map `owner/repo: {host, project_id}` that pins a repository to one host and project |
 
-For each review autoreview finds the repository among the pohunek projects of
-every host in `hosts`, by origin URL and the pipeline's `project_sources`.
-Exactly one project must match; none is `project_route_not_found`, several is
-`project_route_ambiguous` unless `route_overrides` picks one. See
-[run on several hosts](knowledge/guides/multihost.md).
+For each review autoreview asks the hosts in `hosts` in order for their pohunek
+projects and takes the first host with a project that matches the repository, by
+origin URL and the pipeline's `project_sources`. A host that fails (unreachable,
+a pohunek error, a timeout) is skipped with the warning `review host skipped`
+and is not asked again in the same discovery pass. Two matching projects on the
+chosen host are `project_route_ambiguous`. When no host has the repository the
+review fails with `project_route_not_found`, or with the code of the first
+skipped host when a host failed. A `route_overrides` entry asks only its host.
+See [run on several hosts](knowledge/guides/multihost.md).
 
 ## session
 

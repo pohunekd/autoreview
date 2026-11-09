@@ -192,7 +192,8 @@ The [notifiers guide](notifiers.md) has the full backend blocks.
 ## Recipe g: two review hosts with a route override
 
 A repository is registered on both review hosts. Without an override its reviews
-stop with `project_route_ambiguous`, so pin it to the host that should run them:
+run on the first host of `hosts` that answers, so pin it to the host that must
+always run them:
 
 ```yaml
 pohunek:
@@ -203,7 +204,8 @@ pohunek:
       project_id: <project-id-on-review-host-a>
 ```
 
-Install the profiles on both hosts ([multihost guide](multihost.md)).
+A pinned repository has no fallback: when its host fails, the review waits for
+its next retry. Install the profiles on both hosts ([multihost guide](multihost.md)).
 
 ## Recipe h: different accounts per owner
 

@@ -167,7 +167,9 @@ selects the host per repository, not per author:
 
 - `pohunek.route_overrides` pins one repository (`owner/repo`) to one host. All
   its pull requests, from trusted and untrusted authors, run there.
-- Registering a repository only on one review host has the same effect.
+- Registering a repository only on one review host has the same effect. A
+  repository registered on two hosts runs on the second one when the first
+  fails, so pin it or register it once to keep it on the separate host.
 - Choosing a host per author is not in v0.1. Do not split one repository's
   authors across two autoreview instances; the two would process the same pull
   requests.
