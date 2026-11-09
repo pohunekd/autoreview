@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, MatrixRooms, RouteOverride, SECRET_ENV_PREFIX};
-use autoreview_policy::Policy;
+use autoreview_policy::{EVENTS, Event, Policy};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -365,8 +365,8 @@ struct NotifyFile {
     max_characters: Option<Value>,
     /// Named notification backends.
     backends: Option<Vec<BackendFile>>,
-    /// Backend names per notification level.
-    routes: Option<RoutesFile>,
+    /// Backend names per notification level and per event with its own route.
+    routes: Option<BTreeMap<String, Option<Value>>>,
     /// Hourly review queue.
     review_queue: Option<ReviewQueueFile>,
 }
@@ -402,18 +402,6 @@ enum BackendFile {
         /// Body format: `json`, `slack` or `discord`.
         format: Option<Value>,
     },
-}
-
-/// The `notify.routes` mapping.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RoutesFile {
-    /// Backends of action messages.
-    action: Option<Value>,
-    /// Backends of digest messages.
-    digest: Option<Value>,
-    /// Backends of log messages.
-    log: Option<Value>,
 }
 
 /// The `notify.review_queue` section.
@@ -1184,13 +1172,13 @@ fn secret_value(
 
 /// The Matrix values of the engine configuration.
 struct MatrixShape {
-    /// Homeserver base URL, empty when neither a level nor the queue routes to Matrix.
+    /// Homeserver base URL, empty when no route and no queue reaches Matrix.
     homeserver_url: String,
-    /// Access token, empty when neither a level nor the queue routes to Matrix.
+    /// Access token, empty when no route and no queue reaches Matrix.
     access_token: String,
-    /// Mentioned user, empty when neither a level nor the queue routes to Matrix.
+    /// Mentioned user, empty when no route and no queue reaches Matrix.
     mention_user: String,
-    /// The room of each level; empty for a `none` backend.
+    /// The level and event rooms; empty for a `none` backend.
     rooms: MatrixRooms,
     /// The review queue room; `None` when the queue names no Matrix backend.
     queue_room: Option<String>,
@@ -1198,29 +1186,38 @@ struct MatrixShape {
 
 /// Maps the routes and the review queue onto Matrix backends that share one identity.
 ///
+/// The levels are checked first, then the event routes in key order, then the queue.
+///
 /// # Errors
 ///
-/// Returns `configuration_invalid` when a level names other than one backend, names a webhook,
-/// or names a Matrix backend with another identity, or when the queue names two Matrix backends.
+/// Returns `configuration_invalid` when a route key is neither a level nor an event, when a
+/// route names other than one backend, names a webhook, or names a Matrix backend with another
+/// identity, or when the queue names two Matrix backends.
 fn matrix_shape(
     backends: &[Backend],
-    routes: &RoutesFile,
+    routes: &BTreeMap<String, Option<Value>>,
     queue_backends: &[String],
 ) -> Result<MatrixShape, Error> {
     let mut matrix: Option<&Backend> = None;
     let action = level_room(
         backends,
-        &routes.action,
+        &routes.get("action").cloned().flatten(),
         "notify.routes.action",
         &mut matrix,
     )?;
     let digest = level_room(
         backends,
-        &routes.digest,
+        &routes.get("digest").cloned().flatten(),
         "notify.routes.digest",
         &mut matrix,
     )?;
-    let log = level_room(backends, &routes.log, "notify.routes.log", &mut matrix)?;
+    let log = level_room(
+        backends,
+        &routes.get("log").cloned().flatten(),
+        "notify.routes.log",
+        &mut matrix,
+    )?;
+    let events = event_rooms(backends, routes, &mut matrix)?;
     let queue_room = queue_room(backends, queue_backends, &mut matrix)?;
     let (homeserver_url, access_token, mention_user) = match matrix {
         Some(Backend::Matrix {
@@ -1243,16 +1240,46 @@ fn matrix_shape(
             action,
             digest,
             log,
+            events,
         },
         queue_room,
     })
 }
 
-/// Resolves one route level to its room and checks its Matrix backend.
+/// The keys of `notify.routes` that name a level; every other key names an event.
+const LEVEL_ROUTES: [&str; 3] = ["action", "digest", "log"];
+
+/// Resolves every event route of `notify.routes` to its room, in key order.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` when the level does not name exactly one backend, the
+/// Returns `configuration_invalid` naming `notify.routes.<key>` when the key names no event,
+/// and the errors of [`level_room`] for its backends.
+fn event_rooms<'a>(
+    backends: &'a [Backend],
+    routes: &BTreeMap<String, Option<Value>>,
+    matrix: &mut Option<&'a Backend>,
+) -> Result<BTreeMap<Event, String>, Error> {
+    let mut rooms = BTreeMap::new();
+    for (name, names) in routes {
+        if LEVEL_ROUTES.contains(&name.as_str()) {
+            continue;
+        }
+        let key = format!("notify.routes.{name}");
+        let Some(event) = EVENTS.iter().find(|event| event.as_str() == name) else {
+            return Err(invalid(&key, "names no notification event"));
+        };
+        let room = level_room(backends, names, &key, matrix)?;
+        rooms.insert(event.clone(), room);
+    }
+    Ok(rooms)
+}
+
+/// Resolves one level or event route to its room and checks its backend.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` when the route does not name exactly one backend, the
 /// backend is a webhook, or its identity differs from the Matrix backend chosen before.
 fn level_room<'a>(
     backends: &'a [Backend],
@@ -1676,6 +1703,8 @@ fn signature_valid(signature: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use autoreview_engine::config::NotifyRoute;
+    use autoreview_policy::Level;
 
     /// The example config, read by the loader tests so that they cover the shipped file.
     const EXAMPLE: &str = include_str!("../../../examples/config.yaml");
@@ -2053,6 +2082,90 @@ mod tests {
                 "must name at most one Matrix backend until M3"
             )
         );
+    }
+
+    /// Returns the four shared backends plus `approved`, with `route` added to
+    /// `notify.routes`.
+    fn with_event_route(route: &str) -> String {
+        let mut entries = shared_backends();
+        entries[3].push_str(&matrix_backend(
+            "approved",
+            "https://matrix.example.org",
+            "AUTOREVIEW_MATRIX_TOKEN",
+            "@you:example.org",
+        ));
+        four_backends(entries, "[queue]").replacen(
+            "    log: [log]\n",
+            &format!("    log: [log]\n{route}"),
+            1,
+        )
+    }
+
+    #[test]
+    fn an_event_route_takes_its_event_and_leaves_the_others_on_their_levels() {
+        let config = parse(
+            &four_backends(shared_backends(), "[queue]"),
+            secret,
+            example_policy,
+        )
+        .expect("level routes alone load");
+        assert!(config.matrix_rooms.events.is_empty());
+        assert_eq!(
+            config.notify_route(&Event::Approved, Level::Digest),
+            NotifyRoute::Level(Level::Digest)
+        );
+        let text = with_event_route("    approved: [approved]\n");
+        let config = parse(&text, secret, example_policy).expect("an event route loads");
+        assert_eq!(
+            config.matrix_rooms.events,
+            BTreeMap::from([(Event::Approved, "!approved:example.org".to_owned())])
+        );
+        assert_eq!(config.matrix_rooms.digest, "!digest:example.org");
+        assert_eq!(
+            config.notify_route(&Event::Approved, Level::Digest),
+            NotifyRoute::Event(Event::Approved)
+        );
+        assert_eq!(
+            config.notify_route(&Event::ChangesRequested, Level::Digest),
+            NotifyRoute::Level(Level::Digest)
+        );
+    }
+
+    #[test]
+    fn an_event_route_naming_an_unknown_event_or_backend_names_its_key() {
+        let cases = [
+            (
+                "    aproved: [approved]\n",
+                "configuration_invalid: notify.routes.aproved: names no notification event",
+            ),
+            (
+                "    approved: [missing]\n",
+                "configuration_invalid: notify.routes.approved: names no configured backend",
+            ),
+            (
+                "    approved: [approved, digest]\n",
+                concat!(
+                    "configuration_invalid: notify.routes.approved: ",
+                    "must name exactly one backend until M3"
+                ),
+            ),
+            (
+                "    approved: [quiet]\n",
+                "configuration_invalid: config: invalid Matrix approved room",
+            ),
+        ];
+        for (route, expected) in cases {
+            let text = with_event_route(route).replacen(
+                "  routes:\n",
+                "    - name: quiet\n      type: none\n  routes:\n",
+                1,
+            );
+            assert_eq!(
+                error_text(parse(&text, secret, example_policy)),
+                expected,
+                "{route}"
+            );
+        }
     }
 
     #[test]

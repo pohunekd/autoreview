@@ -11,6 +11,7 @@ use autoreview_policy::{Event, Level, Policy};
 use autoreview_schedule::scheduler::Record;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::NotifyRoute;
 use crate::engine::{Clock, Engine};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
@@ -42,8 +43,10 @@ pub(crate) struct Notice {
     pub(crate) event: Event,
     /// Key `repository#number` of the pull request that the notification is about.
     pub(crate) review_key: String,
-    /// Level whose room receives the notification.
+    /// Level of the notification, which decides its mention.
     pub(crate) level: Level,
+    /// Route whose backends receive the notification.
+    pub(crate) route: NotifyRoute,
     /// Text of the notification.
     pub(crate) message: String,
 }
@@ -73,16 +76,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Sends each notice once, after the discovery lock is released.
     ///
     /// A notice gets one attempt, bounded by the notifier's request timeout, and a failure is
-    /// seen at every level. After a failure, the later notices of the same level get no
-    /// attempt, because the notifier routes by level. After `cancel`, no notice gets an
+    /// seen at every level. After a failure, the later notices of the same route get no
+    /// attempt, because they reach the same backends. After `cancel`, no notice gets an
     /// attempt. Every dropped notice is logged, so a notifier outage never fails a pass.
     pub(crate) async fn send_notices(&self, cancel: &CancellationToken, notices: Vec<Notice>) {
-        // The level and error code of each level whose notice failed in this batch.
-        let mut failed: Vec<(Level, String)> = Vec::new();
+        // The route and error code of each route whose notice failed in this batch.
+        let mut failed: Vec<(NotifyRoute, String)> = Vec::new();
         for notice in notices {
             let earlier = failed
                 .iter()
-                .find(|(level, _)| *level == notice.level)
+                .find(|(route, _)| *route == notice.route)
                 .map(|(_, code)| code.clone());
             let (code, skipped) = match earlier {
                 Some(code) => (code, true),
@@ -91,13 +94,18 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 None => {
                     let sent = self
                         .integration
-                        .notify_unmuted(cancel, notice.level.clone(), &notice.message)
+                        .notify_unmuted(
+                            cancel,
+                            notice.route.clone(),
+                            notice.level.clone(),
+                            &notice.message,
+                        )
                         .await;
                     let Err(err) = sent else {
                         continue;
                     };
                     let code = error_code(&err).to_owned();
-                    failed.push((notice.level.clone(), code.clone()));
+                    failed.push((notice.route.clone(), code.clone()));
                     (code, false)
                 }
             };
@@ -114,6 +122,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Returns the notice of `event` about `review_key`, at the level of the policy.
     ///
+    /// The route follows the configuration, see
+    /// [`Config::notify_route`](crate::config::Config::notify_route).
+    ///
     /// # Errors
     ///
     /// Returns `configuration_invalid` when the policy names no level for `event`.
@@ -124,10 +135,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         message: String,
     ) -> Result<Notice, Error> {
         let level = self.level(event.clone())?;
+        let route = self.config.notify_route(&event, level.clone());
         Ok(Notice {
             event,
             review_key: review_key.to_owned(),
             level,
+            route,
             message,
         })
     }

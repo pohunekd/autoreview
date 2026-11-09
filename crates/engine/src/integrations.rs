@@ -12,6 +12,7 @@ use autoreview_policy::{Checkout, Level, Protocol, Reviewer, Trigger};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+use crate::config::NotifyRoute;
 use crate::error::Error;
 use crate::model::{
     CandidateList, Decision, Discussion, PriorFinding, ProjectRoute, PublishResult, PullRequest,
@@ -221,20 +222,24 @@ pub trait Integrations {
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send;
 
-    /// Sends a notification to the room of `level`.
+    /// Sends a notification of `level` to the backends of `route`.
+    ///
+    /// The level decides the mention and whether a failure is dropped.
     fn notify(
         &self,
         cancel: &CancellationToken,
+        route: NotifyRoute,
         level: Level,
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    /// Sends a notification to the room of `level` and returns its failure at every level.
+    /// Sends a notification of `level` along `route` and returns every failure.
     ///
     /// Unlike [`Integrations::notify`], a `digest` or `log` message is never dropped silently.
     fn notify_unmuted(
         &self,
         cancel: &CancellationToken,
+        route: NotifyRoute,
         level: Level,
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send;

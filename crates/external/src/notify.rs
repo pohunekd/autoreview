@@ -9,7 +9,7 @@ use std::fmt;
 use std::io;
 use std::time::Duration;
 
-use autoreview_engine::config::MatrixRooms;
+use autoreview_engine::config::{MatrixRooms, NotifyRoute};
 use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
 use autoreview_policy::Level;
@@ -59,7 +59,7 @@ pub(crate) struct Matrix {
     access_token: String,
     /// The user that action messages mention.
     mention_user: String,
-    /// The room of each notification level.
+    /// The rooms of the levels and of the event routes.
     rooms: MatrixRooms,
     /// The room that receives the review queue digest.
     queue_room: String,
@@ -164,17 +164,19 @@ pub(crate) fn matrix_transaction_id() -> Result<String, Error> {
     Ok(format!("{TRANSACTION_PREFIX}{}", hex::encode(random)))
 }
 
-/// Builds the request that sends a message of `level`, as Go's `sendMatrix` builds it.
+/// Builds the request that sends a message of `level` to the room of `route`.
 ///
-/// Only action messages mention the user. A message longer than the limit is cut to the limit
-/// minus one character, followed by [`TRUNCATION_MARK`].
+/// It is built as Go's `sendMatrix` builds it. Only action messages mention the user. A message
+/// longer than the limit is cut to the limit minus one character, followed by
+/// [`TRUNCATION_MARK`].
 pub(crate) fn matrix_request(
     matrix: &Matrix,
+    route: &NotifyRoute,
     level: Level,
     message: &str,
     transaction: &str,
 ) -> Result<MatrixRequest, Error> {
-    let Some(room) = room_of(matrix, &level) else {
+    let Some(room) = room_of(matrix, route) else {
         return Err(Error::workflow("matrix_level_invalid", true, None));
     };
     if message.trim().is_empty() {
@@ -215,13 +217,16 @@ pub(crate) fn queue_digest_request(
     build_request(&matrix.queue_room, transaction, &content)
 }
 
-/// Returns the room of `level`, or `None` for a level without a room (`notify.go:43-45`).
-fn room_of<'a>(matrix: &'a Matrix, level: &Level) -> Option<&'a str> {
-    match level {
-        Level::Action => Some(&matrix.rooms.action),
-        Level::Digest => Some(&matrix.rooms.digest),
-        Level::Log => Some(&matrix.rooms.log),
-        Level::Other(_) => None,
+/// Returns the room of `route`, or `None` for a route without a room (`notify.go:43-45`).
+///
+/// An event route without a configured room has none; it never falls back to a level room.
+fn room_of<'a>(matrix: &'a Matrix, route: &NotifyRoute) -> Option<&'a str> {
+    match route {
+        NotifyRoute::Level(Level::Action) => Some(&matrix.rooms.action),
+        NotifyRoute::Level(Level::Digest) => Some(&matrix.rooms.digest),
+        NotifyRoute::Level(Level::Log) => Some(&matrix.rooms.log),
+        NotifyRoute::Level(Level::Other(_)) => None,
+        NotifyRoute::Event(event) => matrix.rooms.events.get(event).map(String::as_str),
     }
 }
 
@@ -311,18 +316,19 @@ fn encode<T: Serialize + ?Sized>(content: &T) -> Result<Vec<u8>, Error> {
         .into_bytes())
 }
 
-/// Sends one action, digest or log message, as Go's `sendMatrix` does.
+/// Sends one message to the room of `route`, as Go's `sendMatrix` does.
 ///
 /// Every failure is returned, at every level; [`notify`] drops the muted ones.
 pub(crate) async fn send_matrix(
     client: &Client,
     matrix: &Matrix,
     cancel: &CancellationToken,
+    route: &NotifyRoute,
     level: Level,
     message: &str,
 ) -> Result<(), Error> {
     let transaction = matrix_transaction_id()?;
-    let request = matrix_request(matrix, level, message, &transaction)?;
+    let request = matrix_request(matrix, route, level, message, &transaction)?;
     put_matrix_message(client, matrix, cancel, request).await
 }
 
@@ -378,18 +384,19 @@ fn response_result(status: StatusCode) -> Result<(), Error> {
     Err(Error::workflow("matrix_request_rejected", true, None))
 }
 
-/// Notifies the room of `level`, as Go's `Notify` does.
+/// Notifies the room of `route` at `level`, as Go's `Notify` does.
 ///
-/// A level other than action drops a message the homeserver cannot take.
+/// A level other than action drops a message the homeserver cannot take, whatever its route.
 /// The drop is logged, so a muted notification never fails a review.
 pub(crate) async fn notify(
     client: &Client,
     matrix: &Matrix,
     cancel: &CancellationToken,
+    route: &NotifyRoute,
     level: Level,
     message: &str,
 ) -> Result<(), Error> {
-    match send_matrix(client, matrix, cancel, level.clone(), message).await {
+    match send_matrix(client, matrix, cancel, route, level.clone(), message).await {
         Ok(()) => Ok(()),
         Err(error) => drop_if_muted(level, error),
     }
@@ -438,9 +445,10 @@ fn level_name(level: &Level) -> &str {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use autoreview_engine::config::MatrixRooms;
+    use autoreview_engine::config::{MatrixRooms, NotifyRoute};
     use autoreview_policy::Level;
     use serde_json::{Value, json};
 
@@ -456,6 +464,7 @@ mod tests {
                 action: "!action:example.org".to_owned(),
                 digest: "!digest:example.org".to_owned(),
                 log: "!log:example.org".to_owned(),
+                events: BTreeMap::new(),
             },
             "!queue:example.org".to_owned(),
             32_000,
@@ -484,10 +493,24 @@ mod tests {
     #[test]
     fn send_matrix_still_mentions_only_on_action_level() {
         let matrix = matrix();
-        let action = matrix_request(&matrix, Level::Action, "action", "notify-test")
-            .expect("action request");
-        let digest = matrix_request(&matrix, Level::Digest, "digest", "notify-test")
-            .expect("digest request");
+        let action_route = NotifyRoute::Level(Level::Action);
+        let digest_route = NotifyRoute::Level(Level::Digest);
+        let action = matrix_request(
+            &matrix,
+            &action_route,
+            Level::Action,
+            "action",
+            "notify-test",
+        )
+        .expect("action request");
+        let digest = matrix_request(
+            &matrix,
+            &digest_route,
+            Level::Digest,
+            "digest",
+            "notify-test",
+        )
+        .expect("digest request");
         assert_eq!(action.room, "!action:example.org");
         assert_eq!(digest.room, "!digest:example.org");
         let action_payload: Value =

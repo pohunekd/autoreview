@@ -265,8 +265,8 @@ write the plain login here.
 
 ## Notifications
 
-Every event gets one of three levels. Where each level goes is configured in
-[config.yaml](configuration.md#notify).
+Every event gets one of three levels. Where each level goes, and which single
+events have their own route, is configured in [config.yaml](configuration.md#notify).
 
 | Level | Meaning |
 |---|---|

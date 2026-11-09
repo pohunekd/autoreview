@@ -108,7 +108,8 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
 7. **Notifications.** The start is a `started` event (level `log`). The
    published result is a `commented` event (level `digest`). Both go to the
    `matrix` backends that `notify.routes` names for their levels; see the
-   [notifiers guide](notifiers.md).
+   [notifiers guide](notifiers.md). An event can have its own route instead, see
+   [event routes](../../configuration.md#event-routes).
 8. **A new push is re-reviewed.** After the debounce, Codex reviews only the new
    commits and settles earlier findings, as a Claude reviewer does; see
    [incremental reviews](../concepts/incremental-reviews.md). As in every pipeline,

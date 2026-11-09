@@ -298,14 +298,15 @@ over a bound is rejected and the reviewer gets a fresh session.
 
 Notifications have three levels (see [policy notifications](policy.md#notifications)).
 `routes` sends each level to one named backend. Several backends of the same
-type are fine, for example one Matrix room per level.
+type are fine, for example one Matrix room per level. A single event can have
+its own route next to the levels, see [event routes](#event-routes).
 
 | Key | Meaning |
 |---|---|
 | `timeout_seconds` | Timeout of one delivery |
 | `max_characters` | Longer messages are cut |
 | `backends` | List of named backends, see below |
-| `routes` | `action`, `digest` and `log`, each a list of exactly one backend name |
+| `routes` | `action`, `digest` and `log`, each a list of exactly one backend name; optionally an event name with the same value |
 | `review_queue.backends` | Backends that receive the hourly review queue |
 | `review_queue.max_items` | Most pull requests listed in one queue message |
 
@@ -317,11 +318,36 @@ failure. `review_queue.backends` must name one `matrix` backend; a list of
 `none` backends only, or an empty list, is refused at load. Several backends
 per level are planned in #27.
 
+### Event routes
+
+A key of `routes` that names an event of the
+[policy notifications](policy.md#notifications) gives that event its own route:
+
+```yaml
+routes:
+  action: [matrix-action]
+  digest: [matrix-digest]
+  log: [matrix-digest]
+  approved: [matrix-approvals]   # every other event keeps the route of its level
+```
+
+An event with its own route goes only to the backends of that route; every
+other event goes to the route of its level. The level still decides the rest:
+an `action` event mentions `mention_user` on its own route too, and a failed
+`digest` or `log` message is dropped as on its level route. The value follows
+the level rules: exactly one `matrix` backend until M3, with the same
+`homeserver_url`, `access_token_env` and `mention_user`. A key that names no
+event is refused with `configuration_invalid: notify.routes.<key>: names no
+notification event`, and a backend name that `backends` does not define with
+`configuration_invalid: notify.routes.<key>: names no configured backend`.
+Without event keys, routing is by level only.
+
 ### Backend `none`
 
 A `none` backend writes nothing but the structured log. It is accepted only in
 `review_queue.backends` next to a `matrix` backend. A route that names it is
-refused at load with `configuration_invalid: config: invalid Matrix <level> room`.
+refused at load with `configuration_invalid: config: invalid Matrix <level> room`
+(`<event>` for an event route).
 Running without notifications is planned in #29.
 
 ### Backend `matrix`

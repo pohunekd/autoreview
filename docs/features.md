@@ -67,7 +67,8 @@ Untrusted authors and forks are reviewed from the base checkout and are never
 approved automatically. [Untrusted authors](knowledge/safety/untrusted-authors.md)
 
 **Tells the right person.** Events have three levels (act now, digest, log)
-routed to Matrix rooms; `none` and webhook backends are planned in #29. An hourly queue
+routed to Matrix rooms, and a single event can have its own room; `none` and
+webhook backends are planned in #29. An hourly queue
 lists every pull request waiting on you or on its author.
 [Notifications](knowledge/concepts/notifications.md)
 
@@ -125,7 +126,7 @@ clean up are reported. [State and recovery](knowledge/concepts/state-and-recover
 | [Coding-agent drafts](knowledge/guides/coding-agent-drafts.md) | Review agent pull requests |
 | [Public repositories](knowledge/guides/public-repositories.md) | Forks and strangers |
 | [Several review hosts](knowledge/guides/multihost.md) | Spread reviewers, pin routes |
-| [Notifiers](knowledge/guides/notifiers.md) | Matrix rooms per level, the review queue |
+| [Notifiers](knowledge/guides/notifiers.md) | Matrix rooms per level or per event, the review queue |
 | [Combining patterns](knowledge/guides/combining.md) | Recipes that layer the above |
 | [Writing prompts](knowledge/guides/writing-prompts.md) | Review and verifier prompts |
 | [Approve from chat with Hermes](knowledge/guides/hermes-approval.md) | Optional Hermes Agent integration, planned in #43 |

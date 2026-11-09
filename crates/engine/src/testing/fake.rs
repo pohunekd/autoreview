@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::NotifyRoute;
 use crate::error::{Error, WORKFLOW_FAILED};
 use crate::integrations::{
     CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft, ReviewRequest,
@@ -43,8 +44,10 @@ type StartFailFn = Arc<dyn Fn(&SessionRequest) -> Result<(), Error> + Send + Syn
 /// A notification the engine sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Note {
-    /// Room the notification went to.
+    /// Level of the notification.
     pub(crate) level: Level,
+    /// Route the notification took.
+    pub(crate) route: NotifyRoute,
     /// Text of the notification.
     pub(crate) message: String,
 }
@@ -214,6 +217,7 @@ impl FakeIntegration {
     /// the notifier mutes is dropped, as `notify` drops it, and the note is not recorded.
     fn send_note(
         &self,
+        route: NotifyRoute,
         level: Level,
         message: &str,
         muted: bool,
@@ -233,6 +237,7 @@ impl FakeIntegration {
             if outcome.is_none() {
                 state.notes.push(Note {
                     level,
+                    route,
                     message: message.to_string(),
                 });
             }
@@ -656,19 +661,21 @@ impl Integrations for FakeIntegration {
     fn notify(
         &self,
         _cancel: &CancellationToken,
+        route: NotifyRoute,
         level: Level,
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.send_note(level, message, true)
+        self.send_note(route, level, message, true)
     }
 
     fn notify_unmuted(
         &self,
         _cancel: &CancellationToken,
+        route: NotifyRoute,
         level: Level,
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.send_note(level, message, false)
+        self.send_note(route, level, message, false)
     }
 }
 

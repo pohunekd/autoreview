@@ -280,7 +280,7 @@ which names the event, the review key, the level and the code (`shutdown` when
 the service stopped during the attempt). The review goes on and does not resend
 it; `autoreview awaiting` still lists a review that waits for approval. A message
 of a discovery pass, at any level, gets at most one attempt (none after an
-earlier failure of its level in the same pass, none after a shutdown, which
+earlier failure of its route in the same pass, none after a shutdown, which
 logs the code `shutdown`) and is then dropped with the warning
 `discovery notification dropped`, which names the event, the review key, the
 level, the code and `skipped_after_failure`. It is never resent; send its
