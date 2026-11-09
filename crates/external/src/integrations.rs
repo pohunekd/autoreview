@@ -127,13 +127,14 @@ impl Integrations for External {
             .await
     }
 
-    async fn resolve_project(
+    async fn host_routes(
         &self,
         cancel: &CancellationToken,
+        host: &str,
         repository: &str,
         sources: &[String],
-    ) -> Result<ProjectRoute, Error> {
-        pohunek::resolve_project(&self.config, cancel, repository, sources).await
+    ) -> Result<Vec<ProjectRoute>, Error> {
+        pohunek::host_routes(&self.config, cancel, host, repository, sources).await
     }
 
     async fn ensure_session(

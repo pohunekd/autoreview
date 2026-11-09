@@ -130,6 +130,10 @@ pub(crate) struct FakeState {
     pub(crate) notify_fail: Option<String>,
     /// Number of notification attempts, failed or not.
     pub(crate) notify_attempts: usize,
+    /// Error code that the project list of each host fails with, keyed by host.
+    pub(crate) host_fail: BTreeMap<String, String>,
+    /// Every host whose project list was asked for, in order.
+    pub(crate) route_queries: Vec<String>,
 }
 
 /// The fake of the [`Integrations`] boundary.
@@ -367,16 +371,25 @@ impl Integrations for FakeIntegration {
         ready(result)
     }
 
-    fn resolve_project(
+    fn host_routes(
         &self,
         _cancel: &CancellationToken,
+        host: &str,
         _repository: &str,
         _sources: &[String],
-    ) -> impl Future<Output = Result<ProjectRoute, Error>> + Send {
-        ready(Ok(ProjectRoute {
-            host: "review-host".to_string(),
-            project_id: "project".to_string(),
-        }))
+    ) -> impl Future<Output = Result<Vec<ProjectRoute>, Error>> + Send {
+        let result = {
+            let mut state = self.lock();
+            state.route_queries.push(host.to_owned());
+            match state.host_fail.get(host) {
+                Some(code) => Err(Error::workflow(code.clone(), false, None)),
+                None => Ok(vec![ProjectRoute {
+                    host: host.to_owned(),
+                    project_id: "project".to_owned(),
+                }]),
+            }
+        };
+        ready(result)
     }
 
     fn ensure_session(

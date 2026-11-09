@@ -21,8 +21,9 @@ pohunek daemon runs and the repositories are registered.
   yet; a version check in `validate` is planned in #9).
 - **Runtime packages** `claude` and/or `codex`, installed on each review host per the
   [pohunek runtime packages guide](https://pohunek.dev/docs/guides/runtime-packages/).
-- **Repositories registered** with `pohunek project add` on exactly one review host,
-  unless pinned with `pohunek.route_overrides` ([multiple hosts](knowledge/guides/multihost.md)).
+- **Repositories registered** with `pohunek project add` on a review host. The first
+  host of `pohunek.hosts` that has the repository runs its reviews, unless
+  `pohunek.route_overrides` pins it ([multiple hosts](knowledge/guides/multihost.md)).
 - **GitHub CLI (`gh`)** on the autoreview host (the container image bundles it).
 - **GitHub token** of the account autoreview acts as, held in the variable named
   by the `token_env` of the one credential (`AUTOREVIEW_GH_TOKEN` in the

@@ -90,18 +90,27 @@ decided at dispatch. See [incremental reviews](incremental-reviews.md).
 ## 3. Project routing on pohunek hosts
 
 A review runs on a pohunek host, so the repository must be a registered pohunek
-project there. At dispatch the engine asks every host in `pohunek.hosts` for its
-project list and keeps the projects that:
+project there. At dispatch the engine asks the hosts of `pohunek.hosts` in order
+for their project lists. A project matches when it:
 
-- have the pull request's repository as their origin, compared in canonical form,
-- come from one of the pipeline's `project_sources` (`manual`, `auto`, or both).
+- has the pull request's repository as its origin, compared in canonical form,
+- comes from one of the pipeline's `project_sources` (`manual`, `auto`, or both).
 
-Exactly one match is required. None fails with `project_route_not_found`; more
-than one fails with `project_route_ambiguous`, unless `pohunek.route_overrides`
-pins the repository to one `{host, project_id}` pair. An override that matches
-none of the candidates behaves as no match. Routing failures use their own retry
-policy (see [state and recovery](state-and-recovery.md)). The route is stored in
-the review input, so every session of the review goes to the same project.
+The first host with a match runs the review, and the later hosts are not asked.
+A host that fails is skipped with the warning `review host skipped` (host, code)
+and is not asked again in the same discovery pass. Two matches on one host fail
+with `project_route_ambiguous`. No match on any host fails with
+`project_route_not_found`; when a host failed, it fails with the code of the
+first skipped host whose code is retried, or of the first skipped host when none
+is, so an outage of one host is retried. `pohunek.route_overrides` pins the
+repository to one `{host, project_id}` pair: only that host is asked, and an
+override that matches none of its projects behaves as no match. A routing
+failure with a retried code gets the next attempt after the next of
+[`schedule.retry_delays_seconds`](../../configuration.md#schedule), and the
+review ends `failed` when the delays run out. The route is
+stored in the review input, so every session of the review, also after a
+restart, goes to the same host and project; a retry is a new attempt and routes
+again.
 
 ## 4. Sessions per reviewer
 

@@ -11,6 +11,7 @@ use autoreview_schedule::scheduler::{self, Record, Run};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
+use super::route::HostFailures;
 use super::{Notice, PHASE_RETRY_WAIT, record_event};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
@@ -166,6 +167,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             self.apply_force(&mut state, &present, &history, force, now)?;
         }
         let mut dispatches = Vec::new();
+        // A host that fails once is not asked again in this pass, so it costs one timeout.
+        let mut host_failures = HostFailures::new();
         for (key, candidate) in &present {
             let pr = &candidate.pull_request;
             let entries = i64::try_from(state.schedule.len()).unwrap_or(i64::MAX);
@@ -209,8 +212,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 // not retried here.
                 let sources = &candidate.rule.pipeline.project_sources;
                 match self
-                    .integration
-                    .resolve_project(cancel, &pr.repository, sources)
+                    .resolve_route(cancel, &pr.repository, sources, &mut host_failures)
                     .await
                 {
                     Err(err) if cancel.is_cancelled() => return Err(err),

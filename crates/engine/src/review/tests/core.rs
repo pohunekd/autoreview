@@ -501,6 +501,39 @@ async fn event_routes_carry_their_events_and_the_rest_keep_their_levels() {
     h.stop_engine().await;
 }
 
+// A review host that fails is skipped: the review runs on the next host of `pohunek.hosts`
+// (#180).
+#[tokio::test]
+async fn failing_first_host_is_skipped_and_the_review_runs_on_the_second() {
+    let mut h = start_harness(|cfg| {
+        cfg.pohunek_hosts = vec!["host-a".to_owned(), "host-b".to_owned()];
+    })
+    .await;
+    h.fake
+        .lock()
+        .host_fail
+        .insert("host-a".to_owned(), "pohunek_request_timeout".to_owned());
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the review on the second host", || h.publications() == 1)
+        .await;
+    let (_, _, started, _) = h.fake.snapshot();
+    let queries = h.fake.lock().route_queries.clone();
+    assert!(
+        queries.starts_with(&["host-a".to_owned(), "host-b".to_owned()]),
+        "route queries = {queries:?}"
+    );
+    assert!(
+        !started.is_empty() && started.iter().all(|request| request.route.host == "host-b"),
+        "session hosts = {:?}",
+        started
+            .iter()
+            .map(|request| request.route.host.as_str())
+            .collect::<Vec<_>>()
+    );
+    h.stop_engine().await;
+}
+
 // A notification backend that always fails neither stalls discovery nor keeps it from saving:
 // the first notice gets one attempt after the save, the second one of the same level none, and
 // the due review is queued (#210).
