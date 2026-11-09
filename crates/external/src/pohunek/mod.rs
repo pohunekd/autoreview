@@ -37,7 +37,7 @@ const PAGER_VARIABLE: &str = "PAGER";
 const PAGER_VALUE: &str = "cat";
 
 /// Field names of the pohunek JSON, in lower case; a key that only differs in case is refused.
-const KNOWN_KEYS: [&str; 28] = [
+const KNOWN_KEYS: [&str; 30] = [
     "ok",
     "err",
     "code",
@@ -58,6 +58,8 @@ const KNOWN_KEYS: [&str; 28] = [
     "detail",
     "worker_instance_id",
     "runtime_generation",
+    "loss_cause",
+    "loss_reason",
     "session_id",
     "history_start_offset",
     "start_offset",

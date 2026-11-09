@@ -10,13 +10,13 @@
 use std::error::Error as StdError;
 use std::fmt;
 
-use autoreview_engine::Error;
 use autoreview_engine::config::Config;
 use autoreview_engine::error::BoxError;
 use autoreview_engine::integrations::SessionRequest;
 use autoreview_engine::model::SessionIdentity;
+use autoreview_engine::{Error, error_code};
 use autoreview_go_compat::{null_default, null_entries};
-use autoreview_schedule::diagnostic::fetch_failure;
+use autoreview_schedule::diagnostic::{SessionLoss, fetch_failure};
 use autoreview_schedule::metadata::{WorkSession, metadata_args};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -29,6 +29,12 @@ use crate::process::run;
 
 /// Name of the configuration key that holds the pohunek request timeout.
 const POHUNEK_TIMEOUT_KEY: &str = "pohunek_timeout";
+
+/// Error code of a reviewer session whose runtime pohunek reports as lost.
+const SESSION_LOST: &str = "pohunek_session_lost";
+
+/// Error code of a rejected session whose removal failed.
+const SESSION_CLEANUP_FAILED: &str = "pohunek_session_cleanup_failed";
 
 /// One session of `pohunek session list --json`.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -95,6 +101,12 @@ pub(crate) struct PohunekRuntime {
     /// Generation of the runtime, as decimal text.
     #[serde(deserialize_with = "null_default::deserialize")]
     pub(crate) runtime_generation: String,
+    /// Why the runtime was lost, for example `host_restarted`; empty when not reported.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    pub(crate) loss_cause: String,
+    /// What was lost, for example `runtime_lost`; empty when not reported.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    pub(crate) loss_reason: String,
 }
 
 autoreview_go_compat::object_only_serde!(PohunekRuntime);
@@ -213,6 +225,14 @@ pub(crate) fn lookup_from_output(output: &str, request: &SessionRequest) -> Resu
         runtime_generation: session.runtime.runtime_generation.clone(),
         reviewer_id: request.reviewer.id.clone(),
     };
+    if runtime_lost(&session) {
+        let loss = SessionLoss::new(&session.runtime.loss_cause, &session.runtime.loss_reason);
+        let cause = loss.map(|loss| Box::new(loss) as BoxError);
+        return Ok(Lookup::Unhealthy(
+            identity,
+            Error::workflow(SESSION_LOST, false, cause),
+        ));
+    }
     if session.state != "running" || !session.is_linked_worktree || session.runtime.state != "live"
     {
         return Ok(Lookup::Unhealthy(
@@ -246,6 +266,14 @@ pub(crate) fn lookup_from_output(output: &str, request: &SessionRequest) -> Resu
         identity,
         Error::workflow(code, permanent, None),
     ))
+}
+
+/// Reports whether pohunek says that the worker runtime of `session` is lost.
+///
+/// The runtime state is `lost`, or the session failed and names a loss reason.
+fn runtime_lost(session: &PohunekSession) -> bool {
+    session.runtime.state == "lost"
+        || (session.state == "failed" && !session.runtime.loss_reason.is_empty())
 }
 
 /// Returns the session of `request` as the session list reports it.
@@ -334,6 +362,10 @@ where
 }
 
 /// Returns the error of a failed request: `cause`, or the failed removal of an owned session.
+///
+/// A failed removal is `pohunek_session_cleanup_failed`, except after `pohunek_session_lost`,
+/// which keeps its code: the lost runtime is the cause the operator has to fix. The start
+/// path removes the sessions of failed starts again and reports any that stays.
 async fn reject<R, F>(remove: &R, session: Option<SessionIdentity>, cause: Error) -> Error
 where
     R: Fn(SessionIdentity) -> F,
@@ -344,11 +376,14 @@ where
     };
     match remove(session).await {
         Ok(()) => cause,
-        Err(cleanup) => Error::workflow(
-            "pohunek_session_cleanup_failed",
-            false,
-            Some(Box::new(JoinedError { cause, cleanup })),
-        ),
+        Err(cleanup) => {
+            let code = if error_code(&cause) == SESSION_LOST {
+                SESSION_LOST
+            } else {
+                SESSION_CLEANUP_FAILED
+            };
+            Error::workflow(code, false, Some(Box::new(JoinedError { cause, cleanup })))
+        }
     }
 }
 
