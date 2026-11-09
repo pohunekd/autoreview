@@ -179,13 +179,21 @@ What is not compatible, by decision:
   notifications and sends each once after it has saved its state and released
   the discovery lock. It sees a failure at every level, because it sends with
   `Integrations::notify_unmuted`. After a failure, the later notifications of
-  the same level in that batch get no attempt, and after a shutdown none gets
+  the same route (#187) in that batch get no attempt, and after a shutdown none gets
   one (logged with the code `shutdown`). Each one not delivered is logged as
   `discovery notification dropped` and never resent. Go sends them inside the pass under the step
   retry (`discovery.go:36-41`), so an unreachable `action` backend holds the
   lock for `step_retry_seconds`, fails the pass and repeats the message on the
   next pass. The regression test is
   `failing_notification_backend_does_not_stall_discovery`.
+- **Event routes (#187):** `notify.routes` accepts an event name as a key next
+  to the three levels; that event goes to its own route and every other event
+  to the route of its level. The level still decides the mention and the
+  muting. The engine picks the route (`Config::notify_route`) and passes it to
+  `Integrations::notify` and `notify_unmuted` with the level. Go routes by level
+  only (`notify.go:43-45`), and its environment has no event rooms, so a rollback
+  to Go sends every event by its level. The regression test is
+  `event_routes_carry_their_events_and_the_rest_keep_their_levels`.
 - **Review notifications (#212):** a running review gives each notification one
   attempt, bounded by `notify.timeout_seconds`, without the step retry. A
   failure that the notifier returns is logged as `review notification dropped`

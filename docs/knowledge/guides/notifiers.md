@@ -2,7 +2,7 @@
 type: Guide
 id: guide/notifiers
 title: Notifiers
-description: Configure where autoreview messages go - Matrix rooms per level, the review queue and delivery-failure semantics; no notifier, webhooks and several backends per level are planned.
+description: Configure where autoreview messages go - Matrix rooms per level or per event, the review queue and delivery-failure semantics; no notifier, webhooks and several backends per level are planned.
 source_kind: manual
 intents: [setup, help, debug]
 ---
@@ -46,18 +46,21 @@ notify:
 - `backends` defines named endpoints. Names are used in the routes, and the
   same type may appear several times under different names.
 - `routes` maps each level to a list of exactly one backend name. Several
-  backends per level are planned in #27.
+  backends per level are planned in #27. An event name as a key gives that
+  event its own route, see [one event in its own room](#one-event-in-its-own-room).
 - `review_queue.backends` lists the backends of the review queue, which is a
   separate message and not an event.
 
-A message goes only to the backends of its own level. Keep levels in separate
+A message goes only to the backends of its own route: the event's own route
+when `routes` has one, otherwise the route of its level. Keep levels in separate
 backends when they must not share a room.
 
 ## No notifier
 
 Planned in #29. Until then every route and the review queue need a `matrix`
 backend. A route to a `none` backend is refused at load with
-`configuration_invalid: config: invalid Matrix <level> room`. A
+`configuration_invalid: config: invalid Matrix <level> room` (`<event>` for an
+event route). A
 `review_queue.backends` list of `none` backends only is refused too, see
 [configuration](../../configuration.md#backend-none).
 
@@ -92,7 +95,7 @@ notify:
     max_items: 50
 ```
 
-- Until M3, every Matrix backend that a level or the review queue reaches must
+- Until M3, every Matrix backend that a route or the review queue reaches must
   share `homeserver_url`, `access_token_env` and `mention_user`; only `room`
   differs. Otherwise `config.yaml` is refused with `configuration_invalid` and
   the first route key whose backend differs from an earlier one.
@@ -106,6 +109,39 @@ notify:
 
 Create a bot user for autoreview, invite it to the rooms and give it the
 token. Do not reuse a personal access token for it.
+
+## One event in its own room
+
+Add the event name as a key of `routes`, next to the three levels. Here
+approvals post to their own room and every other event keeps its level route:
+
+```yaml
+notify:
+  backends:
+    # matrix-action and matrix-digest as above
+    - name: matrix-approvals
+      type: matrix
+      homeserver_url: https://matrix.example.org
+      access_token_env: AUTOREVIEW_MATRIX_TOKEN
+      room: "!approvals:example.org"
+      mention_user: "@you:example.org"
+  routes:
+    action: [matrix-action]
+    digest: [matrix-digest]
+    log: [matrix-digest]
+    approved: [matrix-approvals]
+```
+
+- The key is an event of the [policy notifications](../../policy.md#notifications),
+  and the value follows the rules of a level route: exactly one `matrix`
+  backend with the shared identity until M3.
+- The level of the event still decides the rest: an `action` event mentions
+  `mention_user` in its own room, and a failed `digest` or `log` message is
+  dropped with a warning, as on its level route.
+- A key that names no event is refused with
+  `configuration_invalid: notify.routes.<key>: names no notification event`;
+  a backend name that `backends` does not define is refused with
+  `configuration_invalid: notify.routes.<key>: names no configured backend`.
 
 ## Webhook for Slack, Discord or JSON
 
@@ -149,7 +185,7 @@ request requests the review, until it is approved or its deadline passes.
 
 A discovery pass sends its messages (a rejected pull request, a stopped or
 retried review, a hand-off reminder) once, after it has saved its state. After
-one fails, at any level, the rest of that level in the pass get no attempt, and
+one fails, at any level, the rest of that route in the pass get no attempt, and
 after a shutdown no message gets an attempt (code `shutdown`). Each message that
 is not delivered is logged as `discovery notification dropped` with the event,
 the review key, the level, the code and `skipped_after_failure`. It is never
