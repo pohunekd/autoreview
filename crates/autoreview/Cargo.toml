@@ -12,6 +12,8 @@ autoreview-external = { path = "../external" }
 autoreview-policy = { path = "../policy" }
 autoreview-schedule = { path = "../schedule" }
 clap = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 serde = { workspace = true }
 serde-saphyr = { workspace = true }
 time = { workspace = true }
