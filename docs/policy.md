@@ -96,8 +96,6 @@ notifications:
   approval_requested: action
   handoff_reminder: action
   findings_on_own_pr: action
-  credential_invalid: action
-  credential_expiring: action
   review_stopped: action
   cleanup_manual: action
   command_failed: action
@@ -281,8 +279,6 @@ Every event gets one of three levels. Where each level goes is configured in
 | `approval_requested` | A clean review waits for a human approval |
 | `handoff_reminder` | Notes handed to an author got no renewed review request within `notes_handoff.reminder_hours` |
 | `findings_on_own_pr` | A review of the reviewing account's own pull request has blocking findings |
-| `credential_invalid` | A GitHub token was rejected, expired or belongs to another login; its repositories are not reviewed until the token is replaced and the service restarted |
-| `credential_expiring` | A GitHub token expires within `github.expiry_warning_days`; raised once a day |
 | `review_stopped` | A review failed after its retries, or an approved review could not be published |
 | `cleanup_manual` | A reviewer session could not be removed and needs a manual `pohunek session rm` |
 | `command_failed` | An operator command (approve, retry) failed |
@@ -293,6 +289,8 @@ Every event gets one of three levels. Where each level goes is configured in
 | `started` | A review started |
 | `retry_scheduled` | A failed review step is retried later |
 | `superseded` | A newer commit replaced a review, or the pull request stopped asking for one (review request or label removed, closed, back to draft) |
+
+Events for a rejected or an expiring GitHub token are planned in #19.
 
 A `digest` or `log` message the notifier cannot deliver is dropped with a
 warning. An `action` message that cannot be delivered fails the step, because

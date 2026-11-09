@@ -25,8 +25,8 @@ and [configuration: notify](../../configuration.md#notify).
 | `digest` | A quiet record of a result. | The backends of the `digest` route. Nobody is mentioned. |
 | `log` | Muted. | Only the structured log. Backends of the `log` route receive it too, if listed. |
 
-Routes map each level to a list of backend names. Several backends of the same
-type are fine, for example one chat room per level:
+Routes map each level to one backend name. Several backends of the same type
+are fine, for example one chat room per level:
 
 ```yaml
 notify:
@@ -43,16 +43,14 @@ notify:
       access_token_env: AUTOREVIEW_MATRIX_TOKEN
       room: "!digest:example.org"
       mention_user: "@reviewer:example.org"
-    - name: log
-      type: none
   routes:
     action: [matrix-action]
     digest: [matrix-digest]
-    log: [log]
+    log: [matrix-digest]
 ```
 
-The backend types are `none`, `matrix` and `webhook`. See
-[notifiers](../guides/notifiers.md) for setup of each one.
+Routes reach `matrix` backends; `none` and `webhook` backends are planned in
+#29. See [notifiers](../guides/notifiers.md) for the setup.
 
 ## Events
 
@@ -64,8 +62,6 @@ fails validation with `notifications: event X needs a level`.
 | `approval_requested` | A clean review waits for a human approval | `action` |
 | `handoff_reminder` | Notes were handed to an author, who did not ask for a review again within `notes_handoff.reminder_hours` | `action` |
 | `findings_on_own_pr` | A review of the reviewing account's own pull request has blocking findings | `action` |
-| `credential_invalid` | A GitHub token was rejected or belongs to another login, so its repositories are not reviewed until the token is replaced and the service restarted | `action` |
-| `credential_expiring` | A GitHub token expires within `github.expiry_warning_days`; raised once a day | `action` |
 | `review_stopped` | A review failed after its retries, or an approved review could not be published | `action` |
 | `cleanup_manual` | A reviewer session could not be removed and needs `pohunek session rm` | `action` |
 | `command_failed` | An operator command failed, such as `approve` or `retry` | `action` |
@@ -76,6 +72,8 @@ fails validation with `notifications: event X needs a level`.
 | `started` | A review started | `log` |
 | `retry_scheduled` | A failed review is retried later | `log` |
 | `superseded` | A newer head or a changed trigger replaced a review | `log` |
+
+Events for a rejected or an expiring GitHub token are planned in #19.
 
 The example levels come from the example policy. Each deployment chooses its own.
 

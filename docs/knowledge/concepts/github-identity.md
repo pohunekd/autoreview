@@ -110,7 +110,7 @@ expiry date, and then:
 - While the service runs, each token is checked every
   `github.credential_check_hours`, and GitHub may reject a token at any call.
   A failing credential is suspended **alone**: its repositories are not reviewed,
-  reviews in flight wait, the `credential_invalid` event is raised, and every
+  reviews in flight wait, and every
   other credential keeps working. Replacing the token and restarting the service
   resumes the suspended repositories.
 
@@ -123,8 +123,8 @@ does not stop the reviews of another owner.
 GitHub reports a token's expiry date in the
 `GitHub-Authentication-Token-Expiration` response header. The date is shown by
 `autoreview validate` as `expires_at`, and `null` means the token has no expiry
-date. Within `github.expiry_warning_days` of the expiry, the `credential_expiring`
-event is raised once a day, so a token can be rotated before it stops working.
+date. A warning within `github.expiry_warning_days` of the expiry is planned in
+#19.
 
 ## Token kinds and organization approval
 

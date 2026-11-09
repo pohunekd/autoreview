@@ -34,7 +34,6 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `credential_invalid` | A token was rejected, has expired, or its variable is empty; its repositories are not reviewed | [credential_invalid](#credential_invalid) |
 | `credential_login_mismatch` | A token belongs to another account than the `login` of its credential | [credential_login_mismatch](#credential_login_mismatch) |
 | `credential_not_covered`, `credential_unused` | A policy rule has no credential, or a credential serves no rule | [credential_not_covered and credential_unused](#credential_not_covered-and-credential_unused) |
-| Event `credential_expiring` | A token expires within `github.expiry_warning_days` | [credential_expiring](#credential_expiring) |
 | A fine-grained token sees nothing | Organization approval pending, wrong resource owner, or repository not selected | [A fine-grained token sees nothing](#a-fine-grained-token-sees-nothing) |
 | `engine_already_running` | Another `serve` uses the same database | Stop the other process |
 | `matrix_unavailable`, `matrix_request_rejected`, `webhook_unavailable`, `webhook_request_rejected` | A notifier did not accept a message | [Notifier failures](#notifier-failures) |
@@ -169,7 +168,6 @@ credential's `token_env`.
 
 GitHub rejected the token, its expiry has passed, or the variable is empty. At
 startup, `serve` and `validate` refuse with `credential_invalid`. While running, the
-event `credential_invalid` (level `action` in the examples) is raised, and the
 repositories of that credential are not reviewed until the token is replaced. Reviews
 in flight wait. Replace the value of the variable named by `token_env`, then restart
 the service.
@@ -200,16 +198,6 @@ not-covered rule by adding a credential whose `match` covers its repository, pla
 above any broader credential. For an unused credential, remove it or correct its
 `match`. A credential that an earlier credential fully covers is also an error; its
 message names the credential.
-
-### credential_expiring
-
-GitHub reports a token's expiry date in the `GitHub-Authentication-Token-Expiration`
-header. `validate` prints it as `expires_at` for every credential, and `null` means
-the token has no expiry date. Within `github.expiry_warning_days` of that date the
-event `credential_expiring` (level `action` in the examples) is raised once a day.
-Nothing stops before the expiry. Create a new token for the same `login`, replace the
-variable named by `token_env`, and restart the service. An expired token then gives
-`credential_invalid`.
 
 ### A fine-grained token sees nothing
 
