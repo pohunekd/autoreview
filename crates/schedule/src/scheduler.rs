@@ -353,6 +353,7 @@ pub fn retryable(code: &str) -> bool {
     matches!(
         code,
         "pohunek_session_start_failed"
+            | "pohunek_session_lost"
             | "pohunek_request_failed"
             | "pohunek_request_timeout"
             | "pohunek_base_fetch_failed"
