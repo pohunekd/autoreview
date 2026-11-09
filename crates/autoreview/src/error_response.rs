@@ -9,6 +9,8 @@ use std::error::Error as StdError;
 use autoreview_engine::{Error, error_code};
 use serde::Serialize;
 
+use crate::init::{INIT_FILE_EXISTS, INIT_WRITE_FAILED};
+
 /// Error code of a command with unknown or malformed arguments.
 pub(crate) const COMMAND_INVALID: &str = "command_invalid";
 
@@ -18,7 +20,8 @@ const DISCOVERY_BUSY: &str = "discovery_busy";
 /// Commands and arguments that the message of `command_invalid` lists.
 const USAGE: &str = "usage: autoreview [--config PATH] serve | mcp | validate | poll | \
 retry|resolve|approve --repository OWNER/REPO NUMBER HEAD | review --repository OWNER/REPO \
-NUMBER | reviews [LIMIT] | candidates | awaiting | review-queue | backup-db PATH";
+NUMBER | reviews [LIMIT] | candidates | awaiting | review-queue | backup-db PATH; \
+autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME";
 
 /// The JSON a caller reads from a failed command. It carries stable codes, never raw causes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -57,7 +60,13 @@ pub(crate) fn error_response(error: &(dyn StdError + 'static)) -> ErrorResponse 
     if let Some((config_code, name)) = first_config_error(error) {
         response.error = config_code.to_owned();
         response.configuration = name.to_owned();
-        response.message = format!("Configuration is invalid or missing: {name}.");
+        response.message = match config_code {
+            INIT_FILE_EXISTS => format!("{name} is in the way; init never overwrites a file."),
+            INIT_WRITE_FAILED => {
+                format!("{name} cannot be written; init removed what it had created.")
+            }
+            _ => format!("Configuration is invalid or missing: {name}."),
+        };
     }
     response
 }

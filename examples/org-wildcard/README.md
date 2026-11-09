@@ -20,7 +20,15 @@ walk-through.
 
 ## Use it
 
-Copy the two extra prompts of this example next to the default prompts:
+```sh
+autoreview init --dir /etc/autoreview --login <login> --pohunek-host <host> \
+  --example org-wildcard
+autoreview --config /etc/autoreview/config.yaml validate
+```
+
+`init` writes the policy, the two default prompts and the two extra prompts of
+this example, and never overwrites a file. To copy them by hand instead, put the
+extra prompts next to the default prompts:
 
 ```sh
 mkdir -p /etc/autoreview/prompts

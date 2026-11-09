@@ -152,10 +152,18 @@ escalation that add a person back in when a serious finding is demoted.
 
 ## Prompts
 
-The companion and Android prompts are part of this example and must be copied
-next to the default prompts `prompts/generic.md` and
-`prompts/verifier.md`. Without them, validation fails because the policy names prompt files
-that do not exist:
+The companion and Android prompts are part of this example and sit next to the
+default prompts `prompts/generic.md` and `prompts/verifier.md`. Without them,
+validation fails because the policy names prompt files that do not exist.
+[`autoreview init`](../../cli.md#autoreview-init) writes all four:
+
+```sh
+autoreview init --dir /etc/autoreview --login <login> --pohunek-host <host> \
+  --example org-wildcard
+autoreview --config /etc/autoreview/config.yaml validate
+```
+
+To copy them by hand instead:
 
 ```sh
 mkdir -p /etc/autoreview/prompts

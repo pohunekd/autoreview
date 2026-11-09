@@ -21,21 +21,19 @@ configuration shared by all examples.
 ## Use one
 
 ```sh
-mkdir -p <directory>/prompts
-cp examples/config.yaml <directory>/config.yaml
-cp examples/<name>/policy.yaml <directory>/policy.yaml
-cp prompts/generic.md prompts/verifier.md <directory>/prompts/
+autoreview init --dir <directory> --login <login> --pohunek-host <host> --example <name>
 autoreview --config <directory>/config.yaml validate
 ```
 
-In the copy of `config.yaml`, set `policy_file` to the absolute path of the
-policy, the `login` of the credential, `pohunek.hosts`, `store.path`, and the
-homeserver, room and mentioned user of the placeholder `matrix` backend in
-`notify` (see the [notifiers guide](../docs/knowledge/guides/notifiers.md)). For examples with
-extra prompt files, copy them into `<directory>/prompts/` as well (see the
-README of `org-wildcard`). `autoreview init` is planned in #8.
-Every example references the same two
-default prompts, `prompts/generic.md` and `prompts/verifier.md`.
+`init` writes `config.yaml`, the example's `policy.yaml`, the two default
+prompts `prompts/generic.md` and `prompts/verifier.md`, and the prompts the
+example adds (see the [CLI reference](../docs/cli.md#autoreview-init)). It sets
+`policy_file`, the `login` of the credential and `pohunek.hosts`. Set
+`store.path`, and the homeserver, room and mentioned user of the placeholder
+`matrix` backend in `notify` (see the
+[notifiers guide](../docs/knowledge/guides/notifiers.md)). The README of each
+example shows the manual copy instead, which also needs `policy_file`, the
+`login` and `pohunek.hosts` set by hand.
 
 ## Shared choices
 

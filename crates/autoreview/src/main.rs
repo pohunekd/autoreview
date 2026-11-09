@@ -6,6 +6,7 @@
 
 mod config_file;
 mod error_response;
+mod init;
 mod logging;
 mod mcp_server;
 
@@ -77,10 +78,20 @@ struct Cli {
     config: Option<PathBuf>,
     /// The command to run.
     #[command(subcommand)]
-    command: Command,
+    command: Invocation,
 }
 
-/// The commands of `autoreview`, as `cmd/autoreview/main.go:42-152` dispatches them.
+/// The commands of `autoreview`: `init`, and the commands that load the configuration.
+#[derive(Debug, Subcommand)]
+enum Invocation {
+    /// Writes a new configuration directory from an example; it never overwrites a file.
+    Init(init::InitArguments),
+    /// A command that loads the configuration first.
+    #[command(flatten)]
+    Configured(Command),
+}
+
+/// The commands that load the configuration, as `cmd/autoreview/main.go:42-152` dispatches them.
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Validates the configuration and the policy and prints the policy digest.
@@ -156,7 +167,14 @@ struct BackupResult {
 async fn main() -> ExitCode {
     let result = match logging::init() {
         Ok(()) => match parse(std::env::args_os().collect()) {
-            Ok(cli) => run(cli).await,
+            Ok(Cli {
+                config,
+                command: Invocation::Init(arguments),
+            }) => init::run(config.as_deref(), &arguments).and_then(|result| print_json(&result)),
+            Ok(Cli {
+                config,
+                command: Invocation::Configured(command),
+            }) => run(config, command).await,
             Err(error) if is_display(error.kind()) => print_display(&error),
             Err(error) => Err(command_invalid(Some(Box::new(error)))),
         },
@@ -213,14 +231,14 @@ fn report(error: &Error) {
 }
 
 /// Loads the configuration and runs the command in the order of `main.go:31-152`.
-async fn run(cli: Cli) -> Result<(), Error> {
+async fn run(config_path: Option<PathBuf>, command: Command) -> Result<(), Error> {
     let environment = std::env::var_os(CONFIG_ENV);
-    let path = config_file::resolve_path(cli.config.as_deref(), environment.as_deref())?;
+    let path = config_file::resolve_path(config_path.as_deref(), environment.as_deref())?;
     let (config, mcp) = config_file::load(&path)?;
     let external = Arc::new(External::new(config.clone())?);
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;
-    match cli.command {
+    match command {
         Command::Validate => validate(&config),
         Command::Candidates => print_json(&external.list_candidates(&cancel).await?),
         Command::Engine(command) => run_engine(command, config, mcp, external, &cancel).await,

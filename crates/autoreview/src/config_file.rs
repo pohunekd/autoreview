@@ -982,7 +982,7 @@ fn credential_name_valid(name: &str) -> bool {
 }
 
 /// Reports whether a GitHub login matches `[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?`.
-fn github_login_valid(login: &str) -> bool {
+pub(crate) fn github_login_valid(login: &str) -> bool {
     let bytes = login.as_bytes();
     if bytes.is_empty() || bytes.len() > GITHUB_LOGIN_MAX {
         return false;
@@ -1740,7 +1740,7 @@ fn cross_key_rules(file: &FileConfig, config: &Config) -> Result<(), Error> {
 
 /// Reports whether `path` is absolute, has no empty, `.` or `..` part, and has no query or
 /// fragment.
-fn clean_absolute(path: &str) -> bool {
+pub(crate) fn clean_absolute(path: &str) -> bool {
     if path.contains('?') || path.contains('#') {
         return false;
     }
@@ -1774,7 +1774,7 @@ fn signature_valid(signature: &str, pattern: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use autoreview_engine::config::NotifyRoute;
     use autoreview_policy::Level;
@@ -1798,7 +1798,7 @@ mod tests {
     }
 
     /// Secret lookup for the tests; only the token variables they use are set.
-    fn secret(name: &str) -> Option<String> {
+    pub(crate) fn secret(name: &str) -> Option<String> {
         match name {
             "AUTOREVIEW_GH_TOKEN" => Some("synthetic-token".to_owned()),
             "AUTOREVIEW_MATRIX_TOKEN" | "AUTOREVIEW_MATRIX_TOKEN_OTHER" => {

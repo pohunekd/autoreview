@@ -101,7 +101,7 @@ review them from a base checkout, and never auto-approve them.
 ## Decisions so far
 
 - Binary `autoreview`; one YAML configuration file with every key required
-  and written out in full by `autoreview init` (planned in #8); secrets only in `AUTOREVIEW_*`
+  and written out in full by `autoreview init`; secrets only in `AUTOREVIEW_*`
   environment variables.
 - GitHub tokens as a list of credentials: one token, fine-grained tokens per
   owner or per repository, and a different account per owner if wanted
