@@ -83,6 +83,36 @@ After merging, confirm the merge commit is on `origin/main` and its `main` CI
 run is green, then close the issue and set the project status to Done. A red
 `main` is fixed first, before any other work.
 
+## Releases
+
+Releases and tags are owner-only (see "Not covered" above); an agent prepares
+the release pull request only when the owner asks. `.github/workflows/release.yml`
+builds the archives from a pushed tag `v<version>` and creates a draft release.
+It never creates a tag and never publishes.
+
+1. On a branch `release-X.Y.Z`, set `version = "X.Y.Z"` under
+   `[workspace.package]` in `Cargo.toml`, then run `cargo update --workspace`.
+   It updates only the workspace crates in `Cargo.lock`; `--locked` fails
+   without it.
+2. Run `scripts/changelog fold X.Y.Z`. It moves every fragment into a new
+   section of `CHANGELOG.md` and deletes the fragments. Run `scripts/gates`.
+3. Open the pull request with the label `no-changelog` and merge it when `ci`
+   is green.
+4. Tag the merge commit on `main` and push the tag:
+   `git tag -a vX.Y.Z -m "autoreview X.Y.Z" <merge-commit>`, then
+   `git push origin vX.Y.Z`. The workflow refuses a tag that is not `v` plus
+   the workspace version, and a version without a section in `CHANGELOG.md`.
+5. Wait for the `Release` run. It builds one archive per target, attests the
+   archives and their `.sha256` files, and creates a draft release whose body
+   is the `CHANGELOG.md` section. Check the draft (two archives, two `.sha256`
+   files, the notes), then publish it.
+
+A failed run deletes the draft it created and never touches the tag; fix the
+cause and re-run the failed jobs. A leftover draft of the tag blocks the run:
+delete it first. A manual run of the `Release` workflow is a dry run: it builds
+the archives of the selected branch and uploads them as workflow artifacts
+only.
+
 ## Handoff
 
 When you stop before Done, leave one comment on the issue with the branch, head

@@ -2,14 +2,14 @@
 type: Reference
 id: reference/install
 title: Install autoreview
-description: Prerequisites, the four install paths (release binary, systemd units, container image, pohunek workflow plugin planned in #41), first configuration, the first review and where to go for upgrades.
+description: Prerequisites, the four install paths (release archive with checksum and attestation, systemd units, container image, pohunek workflow plugin planned in #41), building from source, first configuration, the first review and where to go for upgrades.
 source_kind: manual
 intents: [setup, help]
 ---
 
 # Install autoreview
 
-> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change. The release archives (`pohunekd/autoreview` GitHub releases) and the container image `ghcr.io/pohunekd/autoreview` are planned for v0.1 and are not published yet.
+> **Status: planned for v0.1.** autoreview is not released yet. This page describes the design the first release implements; commands and keys may still change. The release archives are built by the release workflow of `pohunekd/autoreview` from the first version tag on; no release is published yet. The container image `ghcr.io/pohunekd/autoreview` is planned for v0.1 and is not published yet.
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
 agents run as reviewers in pohunek sessions on the **review hosts**, where a
@@ -39,7 +39,7 @@ pohunek daemon runs and the repositories are registered.
 
 | Path | Use it when | You get |
 |---|---|---|
-| a. Release binary | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
+| a. Release binary (default) | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
 | b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
 | c. Container | You run containers | `ghcr.io/pohunekd/autoreview:<version>` (planned) |
 | d. pohunek workflow plugin | Not available yet | Planned in #41 |
@@ -48,18 +48,59 @@ Paths a and b need the `autoreview` system user that path b creates.
 
 ## a. Release binary
 
-Download the archive for your platform and its `.sha256` file from the release
-of `pohunekd/autoreview`, then check both the checksum and the build attestation:
+The release archive is the default install path. Each release of
+`pohunekd/autoreview` carries a static Linux binary per target,
+`x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, as
+`autoreview-<version>-<target>.tar.gz`, with its `.sha256` file and a build
+provenance attestation. The binary needs no system library.
+
+Download the archive and its checksum file, then check the checksum:
 
 ```sh
-gh release download <tag> --repo pohunekd/autoreview --pattern '<archive-for-your-platform>' --pattern '<archive-for-your-platform>.sha256'
-sha256sum --check <archive-for-your-platform>.sha256
-gh attestation verify <archive-for-your-platform> --repo pohunekd/autoreview
-tar -xzf <archive-for-your-platform>
-sudo install -m 0755 autoreview /usr/local/bin/autoreview
+version=0.1.0                        # the release to install, without the v
+target=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
+archive="autoreview-$version-$target.tar.gz"
+curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"
+curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive.sha256"
+sha256sum --check "$archive.sha256"
 ```
 
-Asset names are not fixed yet; use the names the release page shows.
+With the GitHub CLI, also check the attestation. It proves that the release
+workflow of this repository built the archive:
+
+```sh
+gh attestation verify "$archive" --repo pohunekd/autoreview \
+  --signer-workflow pohunekd/autoreview/.github/workflows/release.yml
+```
+
+Unpack the archive and install the binary:
+
+```sh
+tar -xzf "$archive"
+sudo install -m 0755 "autoreview-$version-$target/autoreview" /usr/local/bin/autoreview
+autoreview --version
+```
+
+### Build from source
+
+Build from a checkout of the release tag when no archive fits your platform.
+rustup installs the toolchain of `rust-toolchain.toml` on the first cargo call.
+
+```sh
+git clone --branch "v$version" https://github.com/pohunekd/autoreview
+cd autoreview
+cargo build --release --locked -p autoreview
+sudo install -m 0755 target/release/autoreview /usr/local/bin/autoreview
+```
+
+This binary links the C library of the build host. The static binary of the
+release needs the musl target and a musl C compiler (`musl-tools` on Debian
+and Ubuntu):
+
+```sh
+rustup target add x86_64-unknown-linux-musl
+TARGET_CC=musl-gcc cargo build --release --locked --target x86_64-unknown-linux-musl -p autoreview
+```
 
 ## b. systemd units
 
