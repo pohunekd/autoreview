@@ -6,7 +6,7 @@
 // Rust guideline compliant 2026-06-26
 
 use autoreview_engine::Error;
-use autoreview_engine::config::Config;
+use autoreview_engine::config::{Config, NotifyRoute};
 use autoreview_engine::integrations::{
     CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft,
     ReviewRequestList, SessionRequest,
@@ -241,19 +241,21 @@ impl Integrations for External {
     async fn notify(
         &self,
         cancel: &CancellationToken,
+        route: NotifyRoute,
         level: Level,
         message: &str,
     ) -> Result<(), Error> {
-        notify::notify(&self.http, &self.matrix, cancel, level, message).await
+        notify::notify(&self.http, &self.matrix, cancel, &route, level, message).await
     }
 
     async fn notify_unmuted(
         &self,
         cancel: &CancellationToken,
+        route: NotifyRoute,
         level: Level,
         message: &str,
     ) -> Result<(), Error> {
-        notify::send_matrix(&self.http, &self.matrix, cancel, level, message).await
+        notify::send_matrix(&self.http, &self.matrix, cancel, &route, level, message).await
     }
 
     async fn list_review_requests(
