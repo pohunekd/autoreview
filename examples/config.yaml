@@ -93,6 +93,8 @@ publish:
   # GitHub accepts at most 65536 characters per review body or comment.
   github_body_max_bytes: 60000
 
+# Until M3 every route and the review queue need a matrix backend, so this
+# none-only block is refused at load. See docs/knowledge/guides/notifiers.md.
 notify:
   timeout_seconds: 30
   max_characters: 8000

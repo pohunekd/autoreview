@@ -1974,6 +1974,22 @@ mod tests {
     }
 
     #[test]
+    fn a_level_routed_to_none_is_refused() {
+        for (index, level) in ["action", "digest", "log"].into_iter().enumerate() {
+            let mut entries = shared_backends();
+            if let Some(entry) = entries.get_mut(index) {
+                *entry = format!("    - name: {level}\n      type: none\n");
+            }
+            let text = four_backends(entries, "[queue]");
+            assert_eq!(
+                error_text(parse(&text, secret, example_policy)),
+                format!("configuration_invalid: config: invalid Matrix {level} room"),
+                "{level} routed to none"
+            );
+        }
+    }
+
+    #[test]
     fn a_matrix_backend_with_another_identity_names_its_route_key() {
         let shared = concat!(
             "Matrix backends must share homeserver_url, access_token_env and ",
