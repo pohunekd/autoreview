@@ -5,6 +5,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+#[expect(dead_code, reason = "the MCP server of round 11 checks the tokens")]
 pub(crate) mod access;
 
 #[doc(inline)]

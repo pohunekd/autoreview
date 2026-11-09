@@ -8,6 +8,8 @@
 
 use std::net::SocketAddr;
 
+use sha2::{Digest, Sha256};
+
 use crate::error::Error;
 
 /// Error code of an `mcp` key whose value the loader refuses.
@@ -18,6 +20,9 @@ const DIGEST_BYTES: usize = 32;
 
 /// Longest client name, so that every log line stays short.
 const CLIENT_NAME_MAX: usize = 32;
+
+/// Scheme of the `Authorization` header, compared without case as RFC 9110 says.
+const BEARER_SCHEME: &str = "bearer";
 
 /// What a client may do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +133,66 @@ impl McpConfig {
             clients,
         })
     }
+}
+
+/// Why a request was refused before any tool ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// No `Authorization` header, or one that is not a bearer token.
+    MissingToken,
+    /// A bearer token whose digest no client has.
+    UnknownToken,
+}
+
+impl Refusal {
+    /// Returns the reason of the refusal, as the logs write it.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingToken => "missing_token",
+            Self::UnknownToken => "unknown_token",
+        }
+    }
+}
+
+/// Returns the client whose token the `Authorization` header carries.
+///
+/// Every digest is compared in full, so the time does not show which client matched.
+pub(crate) fn authorize<'a>(
+    clients: &'a [McpClient],
+    authorization: Option<&[u8]>,
+) -> Result<&'a McpClient, Refusal> {
+    let token = authorization
+        .and_then(bearer_token)
+        .ok_or(Refusal::MissingToken)?;
+    let digest: [u8; DIGEST_BYTES] = Sha256::digest(token).into();
+    let mut found = None;
+    for client in clients {
+        if digests_equal(&client.token_sha256, &digest) {
+            found = Some(client);
+        }
+    }
+    found.ok_or(Refusal::UnknownToken)
+}
+
+/// Returns the token of a `Bearer TOKEN` header value, or `None` for any other value.
+fn bearer_token(value: &[u8]) -> Option<&[u8]> {
+    let text = std::str::from_utf8(value).ok()?;
+    let (scheme, token) = text.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case(BEARER_SCHEME)
+        || token.is_empty()
+        || !token.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return None;
+    }
+    Some(token.as_bytes())
+}
+
+/// Compares two digests without stopping at the first difference.
+fn digests_equal(left: &[u8; DIGEST_BYTES], right: &[u8; DIGEST_BYTES]) -> bool {
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
+        == 0
 }
 
 /// Validates one client entry.
