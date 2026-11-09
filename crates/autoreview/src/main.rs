@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use autoreview_engine::config::{Config, identifier_valid};
+use autoreview_engine::config::Config;
 use autoreview_engine::integrations::Integrations;
 use autoreview_engine::model::{
     ApproveRequest, ResolveRequest, RetryRequest, head_prefix_valid, repository_valid, sha_valid,
@@ -259,21 +259,12 @@ async fn run_engine(
         }
         EngineCommand::Approve(arguments) => {
             let (repository, number, head_sha) = review_arguments(&arguments.arguments, false)?;
-            let resolve = ResolveRequest {
-                repository: repository.clone(),
-                number,
-                head_prefix: head_sha.clone(),
-            };
-            let resolved = engine.resolve(cancel, &resolve)?;
-            if resolved.head_sha != head_sha || !identifier_valid(&resolved.workflow_id) {
-                return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
-            }
             let request = ApproveRequest {
                 repository,
                 number,
                 head_sha,
             };
-            print_json(&engine.approve(cancel, &resolved.workflow_id, &request)?)
+            print_json(&engine.approve_head(cancel, &request)?)
         }
         EngineCommand::Awaiting => print_json(&engine.list_awaiting(cancel)?),
         EngineCommand::ReviewQueue => print_json(&engine.review_queue(cancel).await?),
