@@ -109,56 +109,11 @@ token. Do not reuse a personal access token for it.
 
 ## Webhook for Slack, Discord or JSON
 
-```yaml
-notify:
-  timeout_seconds: 30
-  max_characters: 8000
-  backends:
-    - name: team-chat
-      type: webhook
-      url_env: AUTOREVIEW_WEBHOOK_URL
-      format: slack            # json, slack or discord
-    - name: log
-      type: none
-  routes:
-    action: [team-chat]
-    digest: [team-chat]
-    log: [log]
-  review_queue:
-    backends: [team-chat]
-    max_items: 50
-```
-
-One JSON body is POSTed per message:
-
-- `json` is autoreview's own message object: level, event, title, text,
-  review id and links. Use it for your own receiver.
-- `slack` and `discord` wrap the text in the incoming-webhook format of that
-  service.
-
-The webhook URL is a secret for most services. It comes from the variable
-named in `url_env` and is never written into `config.yaml`. Check that it is
-set without printing it:
-
-```sh
-test -n "$AUTOREVIEW_WEBHOOK_URL" && echo set
-```
+Planned in #29.
 
 ## Several backends for one level
 
-A level may list two backends. For example, `action` can reach a Matrix room
-and a Slack channel, so one unavailable service does not hide a required
-action:
-
-```yaml
-routes:
-  action: [matrix-action, team-chat]
-  digest: [matrix-digest]
-  log: [log]
-```
-
-Every backend in the list gets the message. Each one has its own `timeout_seconds`
-budget, so a slow backend delays only its own delivery.
+Planned in #27.
 
 ## Review queue
 
@@ -201,9 +156,8 @@ the review key, the level, the code and `skipped_after_failure`. It is never
 resent, so the warning is the only record; discovery goes on.
 
 Because a failed `action` delivery fails the step of a review, a broken action
-backend blocks reviews that need a human. Watch for `matrix_unavailable`,
-`matrix_request_rejected`, `webhook_unavailable` and `webhook_request_rejected`
-in the logs; the [CLI error codes](../../cli.md#error-codes) list them.
+backend blocks reviews that need a human. Watch for `matrix_unavailable` and
+`matrix_request_rejected` in the logs; the [CLI error codes](../../cli.md#error-codes) list them.
 
 `autoreview validate` checks the notification configuration, not whether a
 backend is reachable. After you change a backend, confirm delivery with a real
@@ -214,11 +168,7 @@ event, for example a review that reaches `approval_requested` on a
 
 | Need | Layout |
 |---|---|
-| Try it out | `none` for every level |
-| Team chat with a mention | Matrix or Slack for `action`, `digest` in a quiet room |
-| Own dashboard | `webhook` with `format: json` for every level |
-| An action must not be missed | Two backends for `action` |
-| No notifications | `none`, and check `autoreview awaiting` yourself |
+| Team chat with a mention | Matrix for `action`, `digest` in a quiet room |
 
 For how the level of each event is chosen, see
 [policy notifications](../../policy.md#notifications). The model behind

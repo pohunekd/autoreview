@@ -82,7 +82,7 @@ repositories:
 7. `coding-agent-drafts` - drafts of coding agents marked ready and reviewed
 8. `public-repositories` - external authors: label gate, base checkout, comment only
 9. `multihost` - several pohunek hosts and route overrides
-10. `notifiers` - none, Matrix and webhook side by side
+10. `notifiers` - Matrix rooms per level and the review queue
 
 ## Requirements (planned)
 

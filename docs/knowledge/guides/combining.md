@@ -181,10 +181,9 @@ notifications: {approval_requested: action, approved: digest, started: log}
 notify:
   backends:
     - {name: matrix-action, type: matrix, homeserver_url: https://matrix.example.org, access_token_env: AUTOREVIEW_MATRIX_TOKEN, room: "!action:example.org", mention_user: "@you:example.org"}
-    - {name: team-chat, type: webhook, url_env: AUTOREVIEW_WEBHOOK_URL, format: slack}
-    - {name: log, type: none}
-  routes: {action: [matrix-action], digest: [team-chat], log: [log]}   # only action mentions a person
-  review_queue: {backends: [team-chat], max_items: 50}
+    - {name: matrix-digest, type: matrix, homeserver_url: https://matrix.example.org, access_token_env: AUTOREVIEW_MATRIX_TOKEN, room: "!digest:example.org", mention_user: "@you:example.org"}
+  routes: {action: [matrix-action], digest: [matrix-digest], log: [matrix-digest]}   # only action mentions a person
+  review_queue: {backends: [matrix-digest], max_items: 50}
 ```
 
 Change a level in the policy and a channel in the configuration independently.

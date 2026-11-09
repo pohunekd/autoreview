@@ -80,9 +80,8 @@ example is `label:ai:review`, so a review starts when a pull request carries
 the `ai:review` label. Create that label in the repository if it does not
 exist yet.
 
-The configuration `init` writes routes every notification level to the `none`
-backend, so nothing reaches a person yet; the results appear on GitHub and in
-`autoreview reviews`. Add a notifier later with the
+Every notification level and the review queue need a `matrix` backend: a
+route to a `none` backend is refused at load. Set one up with the
 [notifiers guide](notifiers.md).
 
 ## 6. Install the agent profile
