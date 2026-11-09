@@ -41,8 +41,8 @@ github:
   timeout_seconds: 30
   credential_check_hours: 24
   expiry_warning_days: 14
-  # Evaluated top to bottom; the first credential whose match covers a
-  # repository reviews it. Each token must belong to its login.
+  # Exactly one credential with match ["*"] is accepted until #13. Its token
+  # must belong to its login.
   credentials:
     - name: default
       login: review-bot

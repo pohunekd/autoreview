@@ -108,7 +108,7 @@ review them from a base checkout, and never auto-approve them.
   repositories (planned in #19).
 - Claude Code and Codex reviewers share one result contract.
 - Clean reviews that wait for a human are approved through the CLI, with an
-  optional Hermes Agent integration; approval by GitHub comment and a GitHub
+  optional Hermes Agent integration (planned in #43); approval by GitHub comment and a GitHub
   App identity come after v1.
 - Untrusted authors are a policy class of their own and are never
   auto-approved.

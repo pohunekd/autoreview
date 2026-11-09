@@ -98,4 +98,4 @@ Two dimensions are not in a policy: the GitHub account (the `login` of the crede
 - [Writing prompts](writing-prompts.md) explains what a prompt must and must
   not do.
 - [Hermes approval](hermes-approval.md) is an optional chat integration for
-  the approval step.
+  the approval step, planned in #43.

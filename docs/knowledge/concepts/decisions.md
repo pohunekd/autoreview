@@ -145,8 +145,8 @@ engine raises `review_stopped` with a message that says the approved review coul
 not be published, and the review can be retried with `autoreview retry`, see
 [retry and recovery](../runbooks/retry-and-recovery.md).
 
-Approvals from a chat integration use the same CLI commands after
-`autoreview resolve` has found the head. See
+Approvals from a chat integration (planned in #43) are to use the same CLI
+commands after `autoreview resolve` has found the head. See
 [approve from chat](../guides/hermes-approval.md) and
 [human approval](../guides/human-approval.md).
 

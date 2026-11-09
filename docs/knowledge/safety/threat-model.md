@@ -24,7 +24,7 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 
 | Asset | Why it matters | Where it lives |
 |---|---|---|
-| GitHub token of the credential | It lets the service read pull requests and post reviews and approvals as its login, wherever its scope reaches | Environment of the autoreview host, named by `token_env`; passed only to the `gh` calls of those repositories |
+| GitHub token of the credential | It lets the service read pull requests and post reviews and approvals as its login, wherever its scope reaches | Environment of the autoreview host, named by `token_env`; passed only to its `gh` children |
 | Approvals of the credential's account | An approval can satisfy branch protection, so it is the most valuable outcome | GitHub; published by the engine |
 | Review host | Runs reviewer agents in worktrees, with the code and the agent's credentials | Each pohunek review host |
 | Reviewer model accounts | Keys or logins of the models that review code and cost money | The runtime login on the review host, not the pohunek profile |
