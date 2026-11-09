@@ -8,6 +8,7 @@ pub mod discussion;
 pub(crate) mod engine;
 pub mod error;
 pub mod integrations;
+pub mod mcp;
 pub(crate) mod messages;
 pub mod model;
 pub(crate) mod prior;
