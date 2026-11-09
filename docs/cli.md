@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - serve, validate, poll, candidates, reviews, review, awaiting, approve, resolve, retry, review-queue and backup-db - with arguments and JSON output.
+description: Every autoreview command - serve, mcp, validate, poll, candidates, reviews, review, awaiting, approve, resolve, retry, review-queue and backup-db - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -51,6 +51,13 @@ the login of the token and refuses with `configuration_invalid` naming
 `github.credentials.login` when the token belongs to another account, see
 [credentials](configuration.md#credentials). A second `serve` on the same database is refused. Reviews
 running at shutdown resume from their stored steps on the next start.
+
+### `autoreview mcp`
+
+Serves the review tools over MCP Streamable HTTP on `mcp.listen` until stopped,
+see the [MCP server guide](knowledge/guides/mcp-server.md). It runs beside
+`serve` on the same database and needs the `mcp` section of the configuration;
+without it the command fails with `configuration_missing` naming `mcp`.
 
 ### `autoreview poll`
 
@@ -150,6 +157,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `github_search_limit_exceeded` | A search returned more than `schedule.poll_limit`; narrow the rules or raise the limit |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request |
 | `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message |
+| `mcp_listen_failed` | `autoreview mcp` could not listen on `mcp.listen` |
 
 The [troubleshooting runbook](knowledge/runbooks/troubleshooting.md) maps codes
 to fixes.

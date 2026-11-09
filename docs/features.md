@@ -130,6 +130,7 @@ clean up are reported. [State and recovery](knowledge/concepts/state-and-recover
 | [Combining patterns](knowledge/guides/combining.md) | Recipes that layer the above |
 | [Writing prompts](knowledge/guides/writing-prompts.md) | Review and verifier prompts |
 | [Approve from chat with Hermes](knowledge/guides/hermes-approval.md) | Optional Hermes Agent integration, planned in #43 |
+| [MCP server](knowledge/guides/mcp-server.md) | Reviews as MCP tools for any agent |
 
 | Operate | |
 |---|---|

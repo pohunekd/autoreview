@@ -108,3 +108,13 @@ notify:
   review_queue:
     backends: [log]
     max_items: 50
+
+# Optional: the MCP server of `autoreview mcp`. See
+# docs/knowledge/guides/mcp-server.md for the token digests.
+# mcp:
+#   listen: "127.0.0.1:8787"
+#   allowed_hosts: [autoreview.example.com]
+#   clients:
+#     - name: hermes
+#       scope: write
+#       token_sha256: "<sha256 of the token>"

@@ -373,6 +373,23 @@ Planned in #29.
 Other channels can be added as backend types without changing the policy;
 see the [notifications concept](knowledge/concepts/notifications.md).
 
+## mcp
+
+Optional; only `autoreview mcp` reads it, see the
+[MCP server guide](knowledge/guides/mcp-server.md). Without it every other
+command works as before. When the section is present, every key is required.
+
+| Key | Meaning |
+|---|---|
+| `listen` | `IP:PORT` the server listens on, behind the TLS reverse proxy |
+| `allowed_hosts` | `Host` header values the server accepts, at least one |
+| `clients` | List of clients, at least one |
+| `clients[].name` | Name in the logs: 1 to 32 lowercase letters, digits or hyphens, unique |
+| `clients[].scope` | `read` or `write` |
+| `clients[].token_sha256` | SHA-256 digest of the client's token, 64 lowercase hexadecimal characters, unique |
+
+The configuration never holds a token, only its digest.
+
 ## Cross-key rules
 
 Besides each key's own range, `validate` enforces:

@@ -6,7 +6,8 @@
   `schedule`, `engine`, `external` and the `autoreview` binary. The `engine`
   crate reaches side effects (processes, HTTP) only through the `Integrations`
   trait; its `clippy.toml` disallows `std::process::Command`,
-  `tokio::process::Command` and `reqwest::Client`. The imported reference
+  `tokio::process::Command` and `reqwest::Client`. Its `mcp` module answers
+  the HTTP requests that the binary's listener accepts; it binds no socket. The imported reference
   engine lives in `cmd/` and `internal/` until it is deleted. Reviewer
   adapters are Python wrappers under `adapters/`, optional integrations under
   `integrations/`, prompts under `prompts/`, examples under `examples/`, and
