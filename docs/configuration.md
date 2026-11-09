@@ -386,10 +386,10 @@ required.
 | `listen` | `IP:PORT` the server listens on, behind the TLS reverse proxy |
 | `allowed_hosts` | `Host` header values the server accepts, at least one |
 | `allowed_hosts` entries | Each a bare `host` or `host:port`; a scheme, a path or a user part is refused |
-| `request_timeout_seconds` | Longest time one request may take, from reading its body to its answer; a slower request gets 503 and its tool call is cancelled. It must cover the longest tool call: `retry` runs a whole discovery pass. On shutdown the server waits this long for requests in flight |
-| `header_timeout_seconds` | Longest time a client may take to send the request headers |
-| `request_max_bytes` | Largest request body; a larger one gets 413 |
-| `max_connections` | Most connections served at once; further connections wait to be accepted |
+| `request_timeout_seconds` | Longest time one request may take, from reading its body to its answer; a slower request gets 503 and its tool call is cancelled. It must cover the longest tool call: `retry` runs a whole discovery pass. On shutdown the server waits this long for requests in flight. From 1 to 86400 (one day) |
+| `header_timeout_seconds` | Longest time a client may take to send the request headers. From 1 to 86400 (one day) |
+| `request_max_bytes` | Largest request body; a larger one gets 413. From 1 to 16777216 (16 MiB) |
+| `max_connections` | Most connections served at once; further connections wait to be accepted. From 1 to 4096 |
 | `clients` | List of clients, at least one |
 | `clients[N].name` | Name in the logs: 1 to 32 lowercase letters, digits or hyphens, unique |
 | `clients[N].scope` | `read` or `write` |

@@ -23,6 +23,15 @@ const DIGEST_BYTES: usize = 32;
 /// Longest client name, so that every log line stays short.
 const CLIENT_NAME_MAX: usize = 32;
 
+/// Longest request or header timeout: one day, far below the overflow of `Instant`.
+const TIMEOUT_MAX: Duration = Duration::from_secs(86_400);
+
+/// Largest request body: 16 MiB, far above any tool's arguments.
+const REQUEST_MAX_BYTES_LIMIT: usize = 16 << 20;
+
+/// Most connections at once, well below the permit limit of the connection semaphore.
+const MAX_CONNECTIONS_LIMIT: usize = 4096;
+
 /// Scheme of the `Authorization` header, compared without case as RFC 9110 says.
 const BEARER_SCHEME: &str = "bearer";
 
@@ -108,8 +117,9 @@ impl McpConfig {
     ///
     /// Returns `configuration_invalid` naming `mcp.listen` for an address that does not
     /// parse, `mcp.allowed_hosts` for an empty list or an entry that is not a bare host or
-    /// `host:port`, `mcp.clients` for no client, and `mcp.clients[N].name`, `.scope` or
-    /// `.token_sha256` for a bad or repeated value of client `N`.
+    /// `host:port`, `mcp.clients` for no client, `mcp.clients[N].name`, `.scope` or
+    /// `.token_sha256` for a bad or repeated value of client `N`, and the key of a limit that
+    /// is zero or above its bound.
     pub fn new(
         listen: &str,
         allowed_hosts: Vec<String>,
@@ -119,6 +129,7 @@ impl McpConfig {
         let listen = listen
             .parse::<SocketAddr>()
             .map_err(|_| invalid("mcp.listen", "must be an IP address and port"))?;
+        check_limits(&limits)?;
         if allowed_hosts.is_empty() || !allowed_hosts.iter().all(|host| host_valid(host)) {
             return Err(invalid(
                 "mcp.allowed_hosts",
@@ -215,6 +226,29 @@ fn digests_equal(left: &[u8; DIGEST_BYTES], right: &[u8; DIGEST_BYTES]) -> bool 
         .zip(right)
         .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
         == 0
+}
+
+/// Refuses a limit that is zero or above its bound, naming its key.
+fn check_limits(limits: &McpLimits) -> Result<(), Error> {
+    let timeouts = [
+        ("mcp.request_timeout_seconds", limits.request_timeout),
+        ("mcp.header_timeout_seconds", limits.header_timeout),
+    ];
+    for (key, timeout) in timeouts {
+        if timeout.is_zero() || timeout > TIMEOUT_MAX {
+            return Err(invalid(key, "must be from 1 to 86400 seconds"));
+        }
+    }
+    if !(1..=REQUEST_MAX_BYTES_LIMIT).contains(&limits.request_max_bytes) {
+        return Err(invalid(
+            "mcp.request_max_bytes",
+            "must be from 1 to 16777216 bytes",
+        ));
+    }
+    if !(1..=MAX_CONNECTIONS_LIMIT).contains(&limits.max_connections) {
+        return Err(invalid("mcp.max_connections", "must be from 1 to 4096"));
+    }
+    Ok(())
 }
 
 /// Reports whether `host` is a bare `host` or `host:port` authority, as a `Host` header is.
@@ -360,6 +394,73 @@ mod tests {
         short.token_sha256.truncate(62);
         let listen = McpConfig::new("localhost:8787", vec!["h".to_owned()], &[], limits());
         assert_eq!(refused_key(listen), "mcp.listen");
+        let day = Duration::from_secs(86_400);
+        let limit_cases = [
+            (
+                McpLimits {
+                    request_timeout: day + Duration::from_secs(1),
+                    ..limits()
+                },
+                "mcp.request_timeout_seconds",
+            ),
+            (
+                McpLimits {
+                    header_timeout: Duration::from_secs(u64::MAX),
+                    ..limits()
+                },
+                "mcp.header_timeout_seconds",
+            ),
+            (
+                McpLimits {
+                    header_timeout: Duration::ZERO,
+                    ..limits()
+                },
+                "mcp.header_timeout_seconds",
+            ),
+            (
+                McpLimits {
+                    request_max_bytes: (16 << 20) + 1,
+                    ..limits()
+                },
+                "mcp.request_max_bytes",
+            ),
+            (
+                McpLimits {
+                    max_connections: usize::MAX,
+                    ..limits()
+                },
+                "mcp.max_connections",
+            ),
+            (
+                McpLimits {
+                    max_connections: 0,
+                    ..limits()
+                },
+                "mcp.max_connections",
+            ),
+        ];
+        for (bounds, key) in limit_cases {
+            let hosts = vec!["h".to_owned()];
+            let result = McpConfig::new(
+                "127.0.0.1:8787",
+                hosts,
+                std::slice::from_ref(&valid),
+                bounds,
+            );
+            assert_eq!(refused_key(result), key, "limits {bounds:?}");
+        }
+        let edge = McpLimits {
+            request_timeout: day,
+            header_timeout: day,
+            request_max_bytes: 16 << 20,
+            max_connections: 4096,
+        };
+        let hosts = vec!["h".to_owned()];
+        let edges = McpConfig::new("127.0.0.1:8787", hosts, std::slice::from_ref(&valid), edge);
+        assert!(
+            edges.is_ok(),
+            "every limit at its bound is accepted: {edges:?}"
+        );
         let host_cases: [&[&str]; 8] = [
             &[],
             &[""],
