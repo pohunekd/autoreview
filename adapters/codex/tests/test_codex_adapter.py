@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import pty
@@ -479,6 +481,11 @@ class VersionProbeTests(unittest.TestCase):
             '#!/bin/sh\n'
             'if [ "$#" -eq 1 ] && [ "$1" = --version ]; then\n'
             '  echo "codex-cli 1.2.3"\n'
+            # Names only: one dropped token, one dropped prefix, the session identity, one kept.
+            '  for name in ${GH_TOKEN+GH_TOKEN} ${AUTOREVIEW_GH_TOKEN+AUTOREVIEW_GH_TOKEN} \\\n'
+            '    ${POHUNEK_SESSION_ID+POHUNEK_SESSION_ID} ${POHUNEK_HINT+POHUNEK_HINT}; do\n'
+            '    echo "$name" >&2\n'
+            '  done\n'
             '  exit 0\n'
             'fi\n'
             'echo "unexpected arguments: $*" >&2\n'
@@ -497,12 +504,18 @@ class VersionProbeTests(unittest.TestCase):
             file.chmod(mode)
         return script
 
-    def run_wrapper(self, root: Path, script: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    def run_wrapper(
+        self,
+        root: Path,
+        script: Path,
+        arguments: list[str],
+        session: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         home = root / "home"
         home.mkdir(exist_ok=True)
         return subprocess.run(
             [str(script), *arguments],
-            env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+            env={"PATH": "/usr/bin:/bin", "HOME": str(home), **(session or {})},
             cwd=home,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -518,6 +531,23 @@ class VersionProbeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "codex-cli 1.2.3\n")
         self.assertEqual(result.stderr, "")
+
+    def test_bare_version_runs_with_the_environment_of_a_review_run(self) -> None:
+        session = {
+            "GH_TOKEN": "t",
+            "AUTOREVIEW_GH_TOKEN": "t",
+            "POHUNEK_SESSION_ID": "s",
+            "POHUNEK_HINT": "kept",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.install_wrapper(root, "{fake}\n")
+            result = self.run_wrapper(root, script, ["--version"], session)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "codex-cli 1.2.3\n")
+        # The fake prints the names it sees; only the kept one reaches the probe.
+        self.assertEqual(result.stderr, "POHUNEK_HINT\n")
 
     def test_missing_or_insecure_path_file_fails_fast(self) -> None:
         for sidecar, mode, message in (
@@ -692,19 +722,36 @@ class ProfileRendererTests(unittest.TestCase):
         self.assertFalse(profile["resume"]["resumable"])
         self.assertEqual(profile["env"], {})
 
-    def test_copies_the_environment_table_and_the_package_pin(self) -> None:
+    def test_copies_the_allowed_environment_and_the_package_pin(self) -> None:
         digest = "sha256:" + "a" * 64
-        rendered = self.render(
-            'base = "codex"\n'
-            f'package = "pohunek.runtime.codex"\ndigest = "{digest}"\n'
-            '[env]\nOTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4318"\n'
-        )
+        report = io.StringIO()
+        with contextlib.redirect_stderr(report):
+            rendered = self.render(
+                'base = "codex"\n'
+                f'package = "pohunek.runtime.codex"\ndigest = "{digest}"\n'
+                '[env]\nOTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4318"\n'
+                'CODEX_HOME = "/home/review/.codex-second"\n'
+                'CLAUDE_CONFIG_DIR = "/home/review/.claude-second"\n'
+                'CLAUDE_CODE_ENABLE_TELEMETRY = "1"\n'
+                'OPENAI_API_KEY = "k"\n'
+                'OTELCOL_ENDPOINT = "x"\n'
+            )
         profile = tomllib.loads(rendered)
 
         self.assertEqual(profile["package"], "pohunek.runtime.codex")
         self.assertEqual(profile["digest"], digest)
+        # Only telemetry and the config home are copied; the rest is named, never shown.
         self.assertEqual(
-            profile["env"], {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318"}
+            profile["env"],
+            {
+                "CODEX_HOME": "/home/review/.codex-second",
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318",
+            },
+        )
+        self.assertEqual(
+            report.getvalue(),
+            "dropped environment keys of the base profile: CLAUDE_CODE_ENABLE_TELEMETRY, "
+            "CLAUDE_CONFIG_DIR, OPENAI_API_KEY, OTELCOL_ENDPOINT\n",
         )
         self.assertLess(rendered.index("package ="), rendered.index("program ="))
 

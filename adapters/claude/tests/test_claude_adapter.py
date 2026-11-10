@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.util
 import json
 import io
@@ -388,6 +389,11 @@ class VersionProbeTests(unittest.TestCase):
             '#!/bin/sh\n'
             'if [ "$#" -eq 1 ] && [ "$1" = --version ]; then\n'
             '  echo "2.1.296 (Claude Code)"\n'
+            # Names only: one dropped token, one dropped prefix, the session identity, one kept.
+            '  for name in ${GH_TOKEN+GH_TOKEN} ${AUTOREVIEW_GH_TOKEN+AUTOREVIEW_GH_TOKEN} \\\n'
+            '    ${POHUNEK_SESSION_ID+POHUNEK_SESSION_ID} ${POHUNEK_HINT+POHUNEK_HINT}; do\n'
+            '    echo "$name" >&2\n'
+            '  done\n'
             '  exit 0\n'
             'fi\n'
             'echo "unexpected arguments: $*" >&2\n'
@@ -406,12 +412,18 @@ class VersionProbeTests(unittest.TestCase):
             file.chmod(mode)
         return script
 
-    def run_wrapper(self, root: Path, script: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    def run_wrapper(
+        self,
+        root: Path,
+        script: Path,
+        arguments: list[str],
+        session: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         home = root / "home"
         home.mkdir(exist_ok=True)
         return subprocess.run(
             [str(script), *arguments],
-            env={"PATH": os.environ["PATH"], "HOME": str(home)},
+            env={"PATH": os.environ["PATH"], "HOME": str(home), **(session or {})},
             cwd=home,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -427,6 +439,23 @@ class VersionProbeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "2.1.296 (Claude Code)\n")
         self.assertEqual(result.stderr, "")
+
+    def test_bare_version_runs_with_the_environment_of_a_review_run(self) -> None:
+        session = {
+            "GH_TOKEN": "t",
+            "AUTOREVIEW_GH_TOKEN": "t",
+            "POHUNEK_SESSION_ID": "s",
+            "POHUNEK_HINT": "kept",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.install_wrapper(root, "{fake}\n")
+            result = self.run_wrapper(root, script, ["--version"], session)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "2.1.296 (Claude Code)\n")
+        # The fake prints the names it sees; only the kept one reaches the probe.
+        self.assertEqual(result.stderr, "POHUNEK_HINT\n")
 
     def test_missing_or_insecure_path_file_fails_fast(self) -> None:
         for sidecar, mode, message in (
@@ -503,20 +532,27 @@ class ProfileInstallerTests(unittest.TestCase):
                 'args = ["--model", "opus", "--permission-mode", "plan"]\n'
                 "[env]\n"
                 'CLAUDE_CODE_ENABLE_TELEMETRY = "1"\n'
-                'OTEL_EXPORTER_OTLP_ENDPOINT = "https://collector.invalid/otlp"\n',
+                'OTEL_EXPORTER_OTLP_ENDPOINT = "https://collector.invalid/otlp"\n'
+                'CLAUDE_CONFIG_DIR = "/home/review/.claude-second"\n'
+                'GH_TOKEN = "t"\n'
+                'NODE_OPTIONS = "--require=/tmp/hook.js"\n'
+                'OTELCOL_ENDPOINT = "x"\n'
+                'otel_exporter = "x"\n',
                 encoding="utf-8",
             )
             source.chmod(0o600)
 
-            rendered = installer.render_profile(
-                source,
-                Path("/opt/autoreview/bin/claude-adapter"),
-                Path("/usr/bin/claude"),
-                262144,
-                "sonnet",
-                "medium",
-                "no-detection",
-            )
+            report = io.StringIO()
+            with contextlib.redirect_stderr(report):
+                rendered = installer.render_profile(
+                    source,
+                    Path("/opt/autoreview/bin/claude-adapter"),
+                    Path("/usr/bin/claude"),
+                    262144,
+                    "sonnet",
+                    "medium",
+                    "no-detection",
+                )
             profile = tomllib.loads(rendered)
 
             self.assertEqual(profile["base"], "claude")
@@ -526,10 +562,19 @@ class ProfileInstallerTests(unittest.TestCase):
             model_index = profile["args"].index("--model")
             self.assertEqual(profile["args"][model_index + 1], "sonnet")
             self.assertNotIn("opus", profile["args"])
-            self.assertEqual(profile["env"]["CLAUDE_CODE_ENABLE_TELEMETRY"], "1")
+            # Only telemetry and the config home are copied; the rest is named, never shown.
             self.assertEqual(
-                profile["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"],
-                "https://collector.invalid/otlp",
+                profile["env"],
+                {
+                    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+                    "CLAUDE_CONFIG_DIR": "/home/review/.claude-second",
+                    "OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.invalid/otlp",
+                },
+            )
+            self.assertEqual(
+                report.getvalue(),
+                "dropped environment keys of the base profile: "
+                "GH_TOKEN, NODE_OPTIONS, OTELCOL_ENDPOINT, otel_exporter\n",
             )
             self.assertTrue(profile["input_rules"]["bracketed_paste"])
             self.assertFalse(profile["resume"]["resumable"])

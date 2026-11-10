@@ -46,8 +46,9 @@ NO_DAEMON_ARGUMENT = "--no-daemon"
 # The bare --version probe gets no arguments and no profile environment, so the
 # file is the only place both the probe and a launch can read it from.
 SIDECAR_SUFFIX = ".codex-binary"
-# Variables the Codex run must not see: pohunek session identity, GitHub tokens
-# and the Matrix token. Names with the AUTOREVIEW_ prefix are dropped too.
+# Variables that neither the Codex run nor its --version probe may see: pohunek
+# session identity, GitHub tokens and the Matrix token. Names with the
+# AUTOREVIEW_ prefix are dropped too.
 DROPPED_ENVIRONMENT = frozenset(
     {
         "POHUNEK_SESSION_ID",
@@ -476,7 +477,8 @@ def exec_version_probe() -> NoReturn:
         codex_binary = read_codex_binary(sidecar_path())
     except InputFrameError as error:
         fail(str(error))
-    os.execv(codex_binary, [codex_binary, "--version"])
+    # The probe gets the environment of a review run, so it sees no dropped variable.
+    os.execve(codex_binary, [codex_binary, "--version"], codex_environment(dict(os.environ)))
 
 
 def main() -> NoReturn:
