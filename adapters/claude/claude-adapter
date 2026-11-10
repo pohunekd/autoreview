@@ -183,7 +183,15 @@ def parse_request(raw_prompt: str, maximum_bytes: int) -> tuple[str, str | None,
     return prompt, canonical_schema, "structured"
 
 
-def result_envelope(return_code: int, stdout: bytes, stderr: bytes, mode: str) -> bytes:
+def result_envelope(
+    return_code: int, stdout: bytes, stderr: bytes, mode: str, checked_checkout: str
+) -> bytes:
+    """Returns the result line of a Claude Code run on the checkout the adapter checked.
+
+    The engine refuses a result without `checked_checkout`, so a result of an adapter that
+    does not check the checkout is never read. Claude Code's output is only in the base64
+    fields and cannot add a field.
+    """
     return json.dumps(
         {
             "protocol": RESULT_PROTOCOL,
@@ -191,6 +199,7 @@ def result_envelope(return_code: int, stdout: bytes, stderr: bytes, mode: str) -
             "exit_code": return_code,
             "stdout_base64": base64.b64encode(stdout).decode("ascii"),
             "stderr_base64": base64.b64encode(stderr).decode("ascii"),
+            "checked_checkout": checked_checkout,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -340,18 +349,18 @@ def verify_base_checkout(prompt: str, cwd: str | None = None) -> str:
     return checkout_sha
 
 
-def verify_review_checkout(prompt: str, cwd: str | None = None) -> str:
-    """Checks the checkout that the prompt names and returns its HEAD."""
-    if trusted_checkout(prompt) == CHECKOUT_BASE:
+def verify_review_checkout(prompt: str, checkout: str, cwd: str | None = None) -> str:
+    """Checks the review checkout as `checkout` and returns its HEAD."""
+    if checkout == CHECKOUT_BASE:
         return verify_base_checkout(prompt, cwd)
     return verify_checkout_head(prompt, cwd)
 
 
 def verify_review_checkout_after_run(
-    prompt: str, checkout_sha: str, cwd: str | None = None
+    prompt: str, checkout: str, checkout_sha: str, cwd: str | None = None
 ) -> None:
     """Repeats the checkout check after the run and requires the HEAD it recorded."""
-    if verify_review_checkout(prompt, cwd) != checkout_sha:
+    if verify_review_checkout(prompt, checkout, cwd) != checkout_sha:
         raise InputFrameError("review checkout HEAD changed during the review")
 
 
@@ -442,7 +451,8 @@ def main() -> NoReturn:
         termios.tcsetattr(descriptor, termios.TCSANOW, original_attributes)
 
     try:
-        checkout_sha = verify_review_checkout(prompt)
+        checkout = trusted_checkout(prompt)
+        checkout_sha = verify_review_checkout(prompt, checkout)
     except InputFrameError as error:
         refuse(error, mode)
 
@@ -456,11 +466,11 @@ def main() -> NoReturn:
         check=False,
     )
     try:
-        verify_review_checkout_after_run(prompt, checkout_sha)
+        verify_review_checkout_after_run(prompt, checkout, checkout_sha)
     except InputFrameError as error:
         refuse(error, mode)
     sys.stdout.buffer.write(
-        result_envelope(completed.returncode, completed.stdout, completed.stderr, mode)
+        result_envelope(completed.returncode, completed.stdout, completed.stderr, mode, checkout)
     )
     sys.stdout.buffer.flush()
     hold_output()

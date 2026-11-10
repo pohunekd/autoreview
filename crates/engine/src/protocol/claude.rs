@@ -2,13 +2,17 @@
 
 // Rust guideline compliant 2026-06-26
 
+use autoreview_policy::Checkout;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::Error;
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
-use crate::protocol::validate::{review_head_unavailable, reviewer_output_invalid};
+use crate::protocol::request::checkout_name;
+use crate::protocol::validate::{
+    review_adapter_outdated, review_head_unavailable, reviewer_output_invalid,
+};
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
 /// Protocol name of the wrapper around a finished structured Claude session.
@@ -39,6 +43,9 @@ pub(crate) struct ClaudeWrapper {
     pub(crate) stderr_base64: String,
     /// Reason the adapter refused the run; empty when Claude Code ran.
     pub(crate) refusal: String,
+    /// Checkout that the adapter checked before and after the run, `base` or `head`; an older
+    /// adapter leaves it out.
+    pub(crate) checked_checkout: String,
 }
 
 autoreview_go_compat::object_only_serde!(ClaudeWrapper);
@@ -118,16 +125,22 @@ impl ClaudeFinding {
     }
 }
 
-/// Parses the structured output of a finished Claude session into a reviewer result.
+/// Parses the structured output of a finished Claude session on `checkout` into a reviewer
+/// result.
 ///
 /// # Errors
 ///
 /// Returns `review_output_incomplete` for empty output, `review_wrapper_invalid`,
 /// `claude_result_invalid` and `claude_result_mismatch` for a wrapper, outer message or prose
-/// result that the engine refuses, and `review_output_invalid` with a reason for an artifact that
-/// names another pull request or head, has no findings list or has a finding the engine refuses.
-pub(crate) fn parse_claude_output(pr: &PullRequest, raw: &str) -> Result<ReviewerResult, Error> {
-    let artifact: ClaudeArtifact = decode_structured(raw)?;
+/// result that the engine refuses, the codes of `decode_structured` for a refusal or an older
+/// adapter, and `review_output_invalid` with a reason for an artifact that names another pull
+/// request or head, has no findings list or has a finding the engine refuses.
+pub(crate) fn parse_claude_output(
+    pr: &PullRequest,
+    checkout: &Checkout,
+    raw: &str,
+) -> Result<ReviewerResult, Error> {
+    let artifact: ClaudeArtifact = decode_structured(raw, checkout)?;
     if artifact.repository != pr.repository || artifact.number != pr.number {
         return Err(reviewer_output_invalid(
             "the output names another pull request".to_owned(),
@@ -172,12 +185,14 @@ pub(crate) fn parse_claude_output(pr: &PullRequest, raw: &str) -> Result<Reviewe
     })
 }
 
-/// Reads the schema-enforced structured output of a finished Claude session.
+/// Reads the schema-enforced structured output of a finished Claude session on `checkout`.
 ///
 /// The prose result is checked against the structured output by `check_prose_agreement`. A
 /// refusal of the adapter is `review_head_unavailable` for a missing head, and
-/// `review_result_invalid` otherwise.
-pub(crate) fn decode_structured<T>(raw: &str) -> Result<T, Error>
+/// `review_result_invalid` otherwise. A wrapper of the protocol whose `checked_checkout` is not
+/// the name of `checkout` is `review_adapter_outdated`, whatever its exit code: only an adapter
+/// that checked the review checkout writes it, outside the base64 output of the run.
+pub(crate) fn decode_structured<T>(raw: &str, checkout: &Checkout) -> Result<T, Error>
 where
     T: DeserializeOwned + PartialEq + Default,
 {
@@ -188,6 +203,11 @@ where
     let wrapper: ClaudeWrapper = serde_json::from_str(raw).map_err(|_| wrapper_invalid())?;
     if !wrapper.refusal.is_empty() {
         return Err(adapter_refusal(&wrapper));
+    }
+    if wrapper.protocol == CLAUDE_RESULT_PROTOCOL
+        && wrapper.checked_checkout != checkout_name(checkout)
+    {
+        return Err(review_adapter_outdated());
     }
     let stderr = decode_go_base64(&wrapper.stderr_base64);
     if stderr.is_none()
@@ -286,6 +306,7 @@ fn claude_mismatch() -> Error {
 
 #[cfg(test)]
 mod tests {
+    use autoreview_policy::Checkout;
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
     use serde_json::json;
@@ -314,7 +335,7 @@ mod tests {
             ]),
             None,
         );
-        let result = parse_claude_output(&pr, &output).expect("the output parses");
+        let result = parse_claude_output(&pr, &Checkout::Base, &output).expect("the output parses");
         let blocking: Vec<bool> = result
             .findings
             .iter()
@@ -334,19 +355,28 @@ mod tests {
             "summary": "Reviewed the change thoroughly.",
             "findings": []
         });
-        let err = parse_claude_output(&pr, &claude_session(&structured))
+        let err = parse_claude_output(&pr, &Checkout::Base, &claude_session(&structured))
             .expect_err("two keys that differ only in case are refused");
         assert_eq!(error_code(&err), "claude_result_invalid");
     }
 
     // A refusal envelope of the adapter names its reason. A head that is not in the review
     // checkout stops the review; a fresh run on the same repository cannot find it either (#253).
+    // A result without the checkout that the adapter checked comes from an adapter that may not
+    // have checked it, and a fresh run of that adapter would write the same result.
     #[test]
     fn adapter_refusal_of_a_missing_head_is_not_retried() {
         let pr = test_pull_request(3);
         let review = claude_output(&pr, json!([]), None);
         let mut success: serde_json::Value =
             serde_json::from_str(&review).expect("the fixture is JSON");
+        let mut unchecked = success.clone();
+        unchecked
+            .as_object_mut()
+            .expect("the fixture is an object")
+            .remove("checked_checkout");
+        let mut other_checkout = success.clone();
+        other_checkout["checked_checkout"] = json!("head");
         success["refusal"] = json!("head_unavailable");
         let refusal = |reason: &str, exit_code: i64| {
             let stderr = STANDARD.encode("claude-adapter: the head is unavailable\n");
@@ -383,9 +413,19 @@ mod tests {
                 format!("{success}\n"),
                 "review_result_invalid",
             ),
+            (
+                "no checked checkout",
+                format!("{unchecked}\n"),
+                "review_adapter_outdated",
+            ),
+            (
+                "other checked checkout",
+                format!("{other_checkout}\n"),
+                "review_adapter_outdated",
+            ),
         ];
         for (name, output, code) in cases {
-            let err = parse_claude_output(&pr, &output).expect_err(name);
+            let err = parse_claude_output(&pr, &Checkout::Base, &output).expect_err(name);
             assert_eq!(error_code(&err), code, "{name}");
             assert_eq!(
                 reviewer_output_retryable(&err),
@@ -393,5 +433,7 @@ mod tests {
                 "{name}"
             );
         }
+        parse_claude_output(&pr, &Checkout::Head, &format!("{other_checkout}\n"))
+            .expect("a head result is read on a head checkout");
     }
 }

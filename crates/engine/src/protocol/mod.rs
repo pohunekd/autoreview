@@ -39,7 +39,11 @@ pub(crate) fn parse_reviewer_output(
 ) -> Result<ReviewerResult, Error> {
     let mut result = match reviewer.protocol {
         Protocol::ClaudeStructured => {
-            let parsed = claude::parse_claude_output(&input.pull_request, raw)?;
+            let parsed = claude::parse_claude_output(
+                &input.pull_request,
+                &input.rule.pipeline.checkout,
+                raw,
+            )?;
             validate::validate_prior_verdicts(cfg, &input.prior, discussion, &parsed.prior)?;
             parsed
         }
@@ -196,7 +200,8 @@ pub(crate) mod fixtures {
         }
     }
 
-    /// Output of a finished Claude session whose structured output is `structured`.
+    /// Output of a finished Claude session on a base checkout whose structured output is
+    /// `structured`.
     pub(crate) fn claude_session(structured: &Value) -> String {
         let outer = serde_json::json!({
             "type": "result",
@@ -212,7 +217,8 @@ pub(crate) mod fixtures {
             "mode": "structured",
             "exit_code": 0,
             "stdout_base64": encoded,
-            "stderr_base64": ""
+            "stderr_base64": "",
+            "checked_checkout": "base"
         });
         format!("{wrapper}\n")
     }
@@ -648,9 +654,18 @@ mod tests {
             } else {
                 continue;
             };
-            let raw = case["input"]["raw"]
+            let golden_raw = case["input"]["raw"]
                 .as_str()
                 .expect("each case has its raw output");
+            // Go's Claude wrapper names no checked checkout, which Rust requires (#253); each
+            // Claude object gets the base checkout of the input, the rest of it unchanged.
+            let raw = match golden_raw.strip_prefix('{') {
+                Some(rest) if name.starts_with("claude_") => {
+                    format!("{{\"checked_checkout\":\"base\",{rest}")
+                }
+                _ => golden_raw.to_owned(),
+            };
+            let raw = raw.as_str();
             let input = ReviewInput {
                 pull_request: test_pull_request(5),
                 ..ReviewInput::default()

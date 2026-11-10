@@ -153,7 +153,7 @@ Head SHA: {}\nReviewer: {}\nReview scope: {}\n{}\n\n{}\n",
 ///
 /// It follows `SessionRequest::base_ref`, which starts every checkout but `head` at the base
 /// branch, so the prompt never names another checkout than the worktree has.
-fn checkout_name(checkout: &Checkout) -> &'static str {
+pub(crate) fn checkout_name(checkout: &Checkout) -> &'static str {
     if *checkout == Checkout::Head {
         "head"
     } else {

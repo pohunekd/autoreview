@@ -73,7 +73,7 @@ class InputFrameTests(unittest.TestCase):
         stdout = b'{"type":"result","result":"{\\"ok\\":true}"}\n'
         stderr = b"diagnostic\x1b[0m"
 
-        framed = wrapper.result_envelope(7, stdout, stderr, "structured")
+        framed = wrapper.result_envelope(7, stdout, stderr, "structured", "base")
         envelope = json.loads(framed)
 
         self.assertTrue(framed.endswith(b"\n"))
@@ -82,6 +82,7 @@ class InputFrameTests(unittest.TestCase):
         self.assertEqual(envelope["exit_code"], 7)
         self.assertEqual(envelope["stdout_base64"], "eyJ0eXBlIjoicmVzdWx0IiwicmVzdWx0Ijoie1wib2tcIjp0cnVlfSJ9Cg==")
         self.assertEqual(envelope["stderr_base64"], "ZGlhZ25vc3RpYxtbMG0=")
+        self.assertEqual(envelope["checked_checkout"], "base")
 
     def test_parses_a_structured_request_and_canonicalizes_its_schema(self) -> None:
         request = json.dumps(
@@ -317,6 +318,7 @@ class BaseCheckoutTests(unittest.TestCase):
 
         self.assertEqual(result["exit_code"], 0, result)
         self.assertNotIn("refusal", result)
+        self.assertEqual(result["checked_checkout"], "base")
         self.assertEqual(base64.b64decode(result["stdout_base64"]).decode(), CLAUDE_STDOUT)
         self.assertEqual(stderr, "")
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
@@ -374,6 +376,7 @@ class BaseCheckoutTests(unittest.TestCase):
                 result, _ = self.run_adapter(prompt)
                 self.assertEqual(result["exit_code"], 0, result)
                 self.assertNotIn("refusal", result)
+                self.assertEqual(result["checked_checkout"], "head")
 
 
 class VersionProbeTests(unittest.TestCase):

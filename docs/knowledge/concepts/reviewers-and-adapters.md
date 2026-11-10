@@ -35,7 +35,10 @@ blocking flag of each finding and one verdict per prior finding (see
 With `claude-structured` the runtime itself refuses output that does not match
 the schema, and the engine also checks the output against the request. The
 free-text answer of the run may be prose. When it is JSON it has to agree with
-the structured output, or the run is rejected.
+the structured output, or the run is rejected. A result line without the
+checkout that the adapter checked, or with another checkout than the request
+names, comes from an older adapter and is refused with
+`review_adapter_outdated`, without a fresh session.
 
 With `codex-envelope` the engine looks for one result frame at the end of the
 output and decodes it strictly. The frame must not be larger than
@@ -115,7 +118,8 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   pohunek writes into the session, runs Claude Code once in print mode with
   `--setting-sources user`, `--no-session-persistence` and, for a structured
   request, `--json-schema`, and prints one result line that carries the exit
-  code and the output of the run. The Claude Code run gets the session
+  code and the output of the run, and the field `checked_checkout` with the
+  checkout it checked (`base` or `head`). The Claude Code run gets the session
   environment without the pohunek session identity variables, the GitHub token
   variables (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
   `GITHUB_ENTERPRISE_TOKEN`), `MATRIX_ACCESS_TOKEN` and every `AUTOREVIEW_`

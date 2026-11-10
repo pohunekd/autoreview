@@ -32,7 +32,7 @@ use crate::model::{
     RejectedCandidate, SessionIdentity,
 };
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
-use crate::protocol::request::go_json;
+use crate::protocol::request::{checkout_name, go_json};
 use crate::verify::{
     ClaimFinding, ClaimPrior, VERDICT_CONFIRMED, VERDICT_UPHELD, VerificationClaims,
 };
@@ -907,8 +907,11 @@ fn codex_output(
     format!("{prefix}{status_line}")
 }
 
-/// Returns the output of a finished Claude session with `structured` as its structured output.
-fn claude_structured_output(structured: Value) -> String {
+/// Returns the output of a finished Claude session of `request` with `structured` as its
+/// structured output.
+///
+/// Like the adapter in `adapters/claude/`, the wrapper names the checkout of the session.
+fn claude_structured_output(request: &SessionRequest, structured: Value) -> String {
     let outer = go_json(&json!({
         "type": "result",
         "subtype": "success",
@@ -923,6 +926,7 @@ fn claude_structured_output(structured: Value) -> String {
         "exit_code": 0,
         "stdout_base64": STANDARD.encode(outer),
         "stderr_base64": "",
+        "checked_checkout": checkout_name(&request.checkout),
     }))
     .expect("the fake encodes the Claude wrapper");
     format!("{wrapper}\n")
@@ -932,10 +936,11 @@ fn claude_structured_output(structured: Value) -> String {
 ///
 /// The prior verdicts are included only when `prior` is `Some`.
 fn claude_output_with_prior(
-    pull_request: &PullRequest,
+    request: &SessionRequest,
     findings: Vec<Value>,
     prior: Option<Vec<Value>>,
 ) -> String {
+    let pull_request = &request.pull_request;
     let mut structured = json!({
         "repository": pull_request.repository,
         "number": pull_request.number,
@@ -949,7 +954,7 @@ fn claude_output_with_prior(
             .expect("the fake builds the reviewer artifact")
             .insert("prior_findings".to_owned(), Value::Array(prior));
     }
-    claude_structured_output(structured)
+    claude_structured_output(request, structured)
 }
 
 /// Returns a reviewer output that gives every prior finding the verdict `status` picks.
@@ -1006,7 +1011,7 @@ pub(crate) fn settling_output(
                 Value::Object(merged)
             })
             .collect();
-        claude_output_with_prior(&request.pull_request, claude_findings, Some(verdicts))
+        claude_output_with_prior(request, claude_findings, Some(verdicts))
     }
 }
 
@@ -1049,13 +1054,16 @@ fn verifier_output(
             })
         })
         .collect();
-    claude_structured_output(json!({
-        "repository": pr.repository,
-        "number": pr.number,
-        "head_sha": pr.head_sha,
-        "findings": findings,
-        "prior_findings": priors,
-    }))
+    claude_structured_output(
+        request,
+        json!({
+            "repository": pr.repository,
+            "number": pr.number,
+            "head_sha": pr.head_sha,
+            "findings": findings,
+            "prior_findings": priors,
+        }),
+    )
 }
 
 /// Returns a session output that answers verifier requests by the claim verdicts.

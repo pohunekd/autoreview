@@ -284,7 +284,7 @@ pub(crate) fn parse_verifier_output(
     claims: &VerificationClaims,
     raw: &str,
 ) -> Result<VerifierResult, Error> {
-    let artifact: VerifierArtifact = decode_structured(raw)?;
+    let artifact: VerifierArtifact = decode_structured(raw, &input.rule.pipeline.checkout)?;
     let pr = &input.pull_request;
     if artifact.repository != pr.repository
         || artifact.number != pr.number

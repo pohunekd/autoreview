@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::error::Error;
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
-use crate::protocol::validate::{count_over, review_head_unavailable, sort_findings};
+use crate::protocol::validate::{
+    count_over, review_adapter_outdated, review_head_unavailable, sort_findings,
+};
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
 /// Opens the base64 report of a Codex envelope.
@@ -138,10 +140,10 @@ pub(crate) fn parse_codex_output(
     let findings = report.findings.unwrap_or_default();
     let tests = report.tests.unwrap_or_default();
     let Some(verdicts) = report.prior_findings else {
-        return Err(adapter_outdated());
+        return Err(review_adapter_outdated());
     };
     if findings.iter().any(|finding| finding.blocking.is_none()) {
-        return Err(adapter_outdated());
+        return Err(review_adapter_outdated());
     }
     let mut mapped: Vec<Finding> = findings
         .into_iter()
@@ -252,13 +254,6 @@ fn is_base64_char(character: char) -> bool {
 /// The envelope of a Codex session that the engine refuses.
 fn result_invalid() -> Error {
     Error::workflow("review_result_invalid", true, None)
-}
-
-/// The report of a Codex adapter that sends no blocking flag or no verdicts.
-///
-/// It is not retried: a fresh run of the same adapter leaves out the same fields.
-fn adapter_outdated() -> Error {
-    Error::workflow("review_adapter_outdated", true, None)
 }
 
 #[cfg(test)]

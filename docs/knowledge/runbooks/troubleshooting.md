@@ -32,7 +32,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `pohunek_request_failed`, `pohunek_request_timeout` | Review host did not answer | [Session start failures](#session-start-failures) |
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
 | `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
-| `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts | [Reviewer output](#reviewer-output) |
+| `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts, or a Claude profile one that does not name the checkout it checked | [Reviewer output](#reviewer-output) |
 | `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
@@ -293,11 +293,12 @@ A reviewer run ends in one of these codes:
   [Head commit unavailable](#head-commit-unavailable)). The review stops
   without a fresh session.
 - `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
-  finding without `blocking`. It comes from an adapter older than the one in
-  `adapters/codex/`, so the review stops without a fresh session. Write the
-  Codex profile with `autoreview profiles install` on the review host (with
-  `--replace` when the command did not write it), then run `autoreview retry`
-  for the pull request.
+  finding without `blocking`, or a Claude result line has no `checked_checkout`
+  or names another checkout than the pipeline's. It comes from an adapter older
+  than the one in `adapters/codex/` or `adapters/claude/`, so the review stops
+  without a fresh session. Write the profile with `autoreview profiles install`
+  on the review host (with `--replace` when the command did not write it), then
+  run `autoreview retry` for the pull request.
 
 Each other unusable run gets a fresh session, up to `session.reviewer_run_max_attempts`.
 If the same reviewer keeps failing, compare its agent profile and its prompt
