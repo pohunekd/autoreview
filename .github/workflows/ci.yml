@@ -35,6 +35,19 @@ jobs:
       - name: Documentation gates
         run: PATH="$RUNNER_TEMP/docs-venv/bin:$PATH" scripts/gates docs
 
+  # Runs the test suite of every adapter under adapters/. The suites use the
+  # Python standard library only.
+  adapters:
+    name: adapters
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Adapter gates
+        run: scripts/gates adapters
+
   # Runs only the Go gates. Until go.mod exists they report themselves as
   # skipped, so the job stays green and the required check does not block.
   go:
@@ -127,7 +140,7 @@ jobs:
   # skipped or cancelled job cannot pass the merge gate by accident.
   ci:
     name: ci
-    needs: [docs, rust, go, changelog]
+    needs: [docs, adapters, rust, go, changelog]
     if: always()
     runs-on: ubuntu-24.04
     steps:
