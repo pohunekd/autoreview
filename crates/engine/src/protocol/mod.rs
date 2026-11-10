@@ -23,8 +23,8 @@ const REPLACEMENT: char = '\u{FFFD}';
 
 /// Parses and validates the complete output of one reviewer session.
 ///
-/// Claude output is checked against the verdicts on the prior findings before the result is
-/// validated. The reviewer id is set from `reviewer` only after the output parsed.
+/// The output of either protocol is checked against the verdicts on the prior findings before
+/// the result is validated. The reviewer id is set from `reviewer` only after the output parsed.
 ///
 /// # Errors
 ///
@@ -43,7 +43,11 @@ pub(crate) fn parse_reviewer_output(
             validate::validate_prior_verdicts(cfg, &input.prior, discussion, &parsed.prior)?;
             parsed
         }
-        Protocol::CodexEnvelope => codex::parse_codex_output(cfg, &input.pull_request, raw)?,
+        Protocol::CodexEnvelope => {
+            let parsed = codex::parse_codex_output(cfg, &input.pull_request, raw)?;
+            validate::validate_prior_verdicts(cfg, &input.prior, discussion, &parsed.prior)?;
+            parsed
+        }
         Protocol::Unset | Protocol::Other(_) => {
             return Err(Error::workflow("review_protocol_invalid", true, None));
         }
@@ -230,19 +234,42 @@ pub(crate) mod fixtures {
         claude_session(&structured)
     }
 
-    /// Envelope of a finished Codex session for `pr` with `findings` and the exit `status`.
+    /// Envelope of a finished Codex session for `pr` with `findings`, no verdicts and `status`.
     pub(crate) fn codex_output(pr: &PullRequest, findings: Value, status: i64) -> String {
         let report = serde_json::json!({
             "findings": findings,
             "summary": "Full review of the pull request diff; details follow.",
             "tests": ["go test ./..."],
             "status": "completed",
-            "reviewed_head_sha": pr.head_sha
+            "reviewed_head_sha": pr.head_sha,
+            "prior_findings": []
         });
         let encoded = STANDARD.encode(report.to_string().as_bytes());
         let header = "[pohunek-codex-review-result-v1:";
         let footer = format!("[pohunek-codex-review exited with status {status}]");
         format!("{header}{encoded}]\n{footer}\n")
+    }
+
+    /// Envelope of a finished Codex session for `pr` whose report also holds `fields`.
+    ///
+    /// The report has a summary, one test, the status `completed` and the head of `pr`.
+    pub(crate) fn codex_report(pr: &PullRequest, fields: Value) -> String {
+        let mut report = serde_json::json!({
+            "summary": "Full review of the pull request diff; details follow.",
+            "tests": ["go test ./..."],
+            "status": "completed",
+            "reviewed_head_sha": pr.head_sha
+        });
+        if let (Some(map), Some(extra)) = (report.as_object_mut(), fields.as_object()) {
+            for (key, value) in extra {
+                map.insert(key.clone(), value.clone());
+            }
+        }
+        let encoded = STANDARD.encode(report.to_string().as_bytes());
+        format!(
+            "[pohunek-codex-review-result-v1:{encoded}]\n\
+[pohunek-codex-review exited with status 0]\n"
+        )
     }
 }
 
@@ -259,7 +286,7 @@ mod tests {
     };
     use crate::protocol::combine::combine_prior;
     use crate::protocol::fixtures::{
-        claude_output, codex, codex_output, opus, sha, test_pull_request,
+        claude_output, codex, codex_output, codex_report, opus, sha, test_pull_request,
     };
     use crate::protocol::validate::reviewer_output_retryable;
     use crate::protocol::validate::tests::test_config;
@@ -359,10 +386,10 @@ mod tests {
             &codex_output(
                 &pr,
                 json!([
-                    {"severity": "low", "confidence": "low", "path": "z.go", "line": 1,
-                    "title": "Minor", "body": "Minor detail."},
-                    {"severity": "blocker", "confidence": "high", "path": "a.go", "line": 2,
-                    "title": "Blocker", "body": "Breaks the build."}
+                    {"severity": "low", "confidence": "low", "blocking": false, "path": "z.go",
+                    "line": 1, "title": "Minor", "body": "Minor detail."},
+                    {"severity": "blocker", "confidence": "high", "blocking": true,
+                    "path": "a.go", "line": 2, "title": "Blocker", "body": "Breaks the build."}
                 ]),
                 0,
             ),
@@ -560,6 +587,48 @@ mod tests {
         assert_eq!(error_code(&err), "review_output_invalid");
     }
 
+    // A Codex re-review settles the prior findings as a Claude one does: each needs one verdict,
+    // and the verdicts decide the combined outcome (#23).
+    #[test]
+    fn codex_verdicts_settle_the_prior_findings() {
+        let cfg = test_config();
+        let pr = test_pull_request(3);
+        let prior = vec![
+            PriorFinding {
+                key: prior_key(&sha("c"), "X001"),
+                ..PriorFinding::default()
+            },
+            PriorFinding {
+                key: prior_key(&sha("c"), "X002"),
+                ..PriorFinding::default()
+            },
+        ];
+        let input = ReviewInput {
+            pull_request: pr.clone(),
+            prior: prior.clone(),
+            ..ReviewInput::default()
+        };
+        let output = |verdicts: Value| {
+            codex_report(&pr, json!({"findings": [], "prior_findings": verdicts}))
+        };
+        let settling = output(json!([
+            verdict_json(&prior[0].key, PRIOR_FIXED),
+            verdict_json(&prior[1].key, PRIOR_OPEN)
+        ]));
+        let result =
+            parse_reviewer_output(&cfg, &input, &Discussion::default(), &codex(), &settling)
+                .expect("a Codex result that settles every prior finding parses");
+        let settled: Vec<String> = combine_prior(&prior, &[result])
+            .into_iter()
+            .map(|settled| settled.verdict.status)
+            .collect();
+        assert_eq!(settled, [PRIOR_FIXED, PRIOR_OPEN]);
+        let partial = output(json!([verdict_json(&prior[0].key, PRIOR_FIXED)]));
+        let err = parse_reviewer_output(&cfg, &input, &Discussion::default(), &codex(), &partial)
+            .expect_err("a Codex result that leaves a prior finding unsettled is refused");
+        assert_eq!(error_code(&err), "review_output_invalid");
+    }
+
     #[test]
     fn protocol_matches_go_golden() {
         let text = std::fs::read_to_string(concat!(
@@ -586,10 +655,16 @@ mod tests {
                 pull_request: test_pull_request(5),
                 ..ReviewInput::default()
             };
-            let expected = case["rust_expected_error"]
-                .as_str()
-                .or_else(|| case["error"].as_str())
-                .unwrap_or_default();
+            // Go reads a Codex report without `blocking` and `prior_findings`; Rust refuses it
+            // (#23).
+            let expected = if name == "codex_valid_report" {
+                "review_adapter_outdated"
+            } else {
+                case["rust_expected_error"]
+                    .as_str()
+                    .or_else(|| case["error"].as_str())
+                    .unwrap_or_default()
+            };
             match parse_reviewer_output(&cfg, &input, &Discussion::default(), &reviewer, raw) {
                 Err(err) => assert_eq!(error_code(&err), expected, "{name}"),
                 Ok(result) => {

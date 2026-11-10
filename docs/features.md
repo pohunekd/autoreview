@@ -57,7 +57,7 @@ can go to the author first. Your own pull requests always get a comment.
 **Re-reviews only what changed.** After a push, the new commits are reviewed
 against the last published head, and every earlier blocking finding is settled
 as fixed, still open, or answered, taking the pull request discussion into
-account. Settling needs Claude reviewers; for Codex it is planned in #23.
+account. Claude and Codex reviewers settle them the same way.
 [Incremental reviews](knowledge/concepts/incremental-reviews.md)
 
 **Keeps humans in charge where it matters.** A clean review can wait for your

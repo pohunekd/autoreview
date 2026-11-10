@@ -113,11 +113,10 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
    [event routes](../../configuration.md#event-routes).
 8. **A new push is re-reviewed.** After the debounce, Codex reviews only the new
    commits, or the whole pull request after a rebase or a force push; see
-   [incremental reviews](../concepts/incremental-reviews.md). Codex
-   returns no blocking flag and no verdicts on earlier findings, so each Codex
-   finding blocks at any severity and earlier findings are not settled; Codex
-   notes and settling are planned in #23. Here the rule never requests changes,
-   so the outcome stays a comment.
+   [incremental reviews](../concepts/incremental-reviews.md). The re-review
+   settles each earlier blocking finding as fixed, still open or answered, and
+   a Codex note does not block. Here the rule never requests changes, so the
+   outcome stays a comment.
 
 If a review stops after its retries you get a `review_stopped` action event.
 The rule has no approval step, so nothing waits on you otherwise.

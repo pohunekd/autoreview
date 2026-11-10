@@ -237,13 +237,30 @@ What is not compatible, by decision:
 - **History check of Codex pipelines (#237):** the linear history check of an
   incremental review runs for every protocol, so a `codex-envelope` re-review
   whose head does not extend the published head linearly, or whose history
-  cannot be read, is full (`history_not_linear`, `history_unknown`). The
-  stored-result check (`previous_review_not_stored`) and the prior findings stay
-  `claude-structured` only (#23). Go returns before both checks for any other
-  protocol (`discovery.go:90`), so a Codex rule with `on_clean: approve` can
-  approve a rebased head on an incremental review. No stored row changes, and a
-  rollback to Go brings the Go behaviour back. The regression test is
-  `rewritten_history_gets_a_full_review_on_a_codex_pipeline`.
+  cannot be read, is full (`history_not_linear`, `history_unknown`). Go returns
+  before the check for any other protocol (`discovery.go:90`), so a Codex rule
+  with `on_clean: approve` can approve a rebased head on an incremental review.
+  No stored row changes, and a rollback to Go brings the Go behaviour back. The
+  regression test is `rewritten_history_gets_a_full_review_on_a_codex_pipeline`.
+- **Codex results like Claude results (#23):** a `codex-envelope` report must
+  carry `prior_findings` and the `blocking` flag of every finding, as the
+  adapter in `adapters/codex/` writes them. A report without them is refused
+  with `review_adapter_outdated`, which is not retried. A Codex finding blocks
+  only when it is flagged blocking at `blocker`, `critical` or `high`. A Codex
+  pipeline gets the prior findings and the stored-result check
+  (`previous_review_not_stored`) of a Claude pipeline; its prompt carries the
+  prior findings, the discussion and the note limit, and its verdicts pass
+  `validate_prior_verdicts`. Go refuses both fields (`DisallowUnknownFields`,
+  `protocol.go:246`), blocks every Codex finding and gives a Codex pipeline no
+  prior findings (`discovery.go:90`, `review.go:94`). In
+  `protocol_matches_go_golden` the golden case `codex_valid_report`, a report
+  without both fields, expects `review_adapter_outdated`. A rollback to Go
+  needs the older Codex wrapper back, and Go refuses a stored Codex input with
+  prior findings, so a Codex review in flight at the rollback stops. The
+  regression tests are `codex_finding_blocks_only_when_it_says_so`,
+  `codex_report_without_blocking_or_prior_findings_is_refused`,
+  `codex_verdicts_settle_the_prior_findings` and
+  `open_prior_finding_carries_over_until_it_is_fixed_on_a_codex_pipeline`.
 - **Review host outage (#241):** when the route of a due review fails because
   a host failed its project list (a `pohunek_*` host failure code) and no other
   host has the repository, the review waits in `retry_wait` at its due time with

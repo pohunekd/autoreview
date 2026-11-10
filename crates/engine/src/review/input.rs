@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use autoreview_policy::{Checkout, OnClean, OnNotes, Protocol, Rule, WORKFLOW_EVENTS};
+use autoreview_policy::{Checkout, OnClean, OnNotes, Rule, WORKFLOW_EVENTS};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{github_login_valid, identifier_valid};
@@ -140,14 +140,12 @@ pub(crate) fn validate_input(input: &ReviewInput) -> Result<(), BoxError> {
 
 /// Accepts prior findings only from the input version that settles them.
 ///
-/// Only reviewers that can return verdicts may get them.
+/// Reviewers of both protocols return verdicts, so either pipeline may get them.
 fn validate_prior(input: &ReviewInput) -> Result<(), BoxError> {
     if input.prior.is_empty() {
         return Ok(());
     }
-    if input.version < PRIOR_FINDINGS_VERSION
-        || input.rule.pipeline.protocol != Protocol::ClaudeStructured
-    {
+    if input.version < PRIOR_FINDINGS_VERSION {
         return Err(BoxError::from(
             "prior findings are not supported by this input",
         ));

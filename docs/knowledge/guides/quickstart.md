@@ -184,10 +184,8 @@ GitHub does not allow an author to approve their own pull request.
 
 Push a new commit to the pull request. After the debounce period, the review
 runs again. The reviewer of this example is Codex, and it reviews only the new
-commits. Codex returns no blocking flag and no verdicts on earlier findings, so
-each Codex finding blocks at any severity and earlier findings are not settled;
-Codex notes and settling are planned in #23. See
-[incremental reviews](../concepts/incremental-reviews.md).
+commits and settles each earlier blocking finding as fixed, still open or
+answered. See [incremental reviews](../concepts/incremental-reviews.md).
 
 ## 15. Run as a service
 

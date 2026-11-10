@@ -142,9 +142,8 @@ Reviewer sessions never receive a GitHub token ([secrets](../safety/secrets.md))
 
 ## 5. Result parsing and limits
 
-Both protocols return a summary, findings and the tests the reviewer ran. Only a
-`claude-structured` result also carries the blocking flag of each finding and one
-verdict per prior finding; for `codex-envelope` both are planned in #23 (see
+Both protocols return a summary, findings, the tests the reviewer ran, the
+blocking flag of each finding and one verdict per prior finding (see
 [reviewers and adapters](reviewers-and-adapters.md#protocols)). The engine reads
 it with a fixed schema and checks it before anything is combined:
 

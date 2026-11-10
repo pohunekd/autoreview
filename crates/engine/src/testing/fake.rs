@@ -811,14 +811,20 @@ pub(crate) fn request_claims(prompt: &str) -> VerificationClaims {
     }
 }
 
-/// Returns the output of a Codex reviewer run.
-fn codex_output(pull_request: &PullRequest, findings: &[Value], status: i64) -> String {
+/// Returns the output of a Codex reviewer run with `findings` and the verdicts `prior`.
+fn codex_output(
+    pull_request: &PullRequest,
+    findings: &[Value],
+    prior: &[Value],
+    status: i64,
+) -> String {
     let report = go_json(&json!({
         "findings": findings,
         "summary": "Full review of the pull request diff; details follow.",
         "tests": ["go test ./..."],
         "status": "completed",
         "reviewed_head_sha": pull_request.head_sha,
+        "prior_findings": prior,
     }))
     .expect("the fake encodes the Codex report");
     let encoded = STANDARD.encode(report);
@@ -883,9 +889,6 @@ pub(crate) fn settling_output(
         if request.reviewer.id == VERIFIER_REVIEWER_ID {
             return verifier_output(request, |_| VERDICT_CONFIRMED, |_| VERDICT_UPHELD);
         }
-        if request.reviewer.protocol == Protocol::CodexEnvelope {
-            return codex_output(&request.pull_request, &findings, 0);
-        }
         let verdicts: Vec<Value> = request_prior(&request.prompt)
             .iter()
             .map(|prior| {
@@ -897,6 +900,23 @@ pub(crate) fn settling_output(
                 })
             })
             .collect();
+        if request.reviewer.protocol == Protocol::CodexEnvelope {
+            // A finding without the flag blocks, as it does in a Claude result.
+            let codex_findings: Vec<Value> = findings
+                .iter()
+                .map(|finding| {
+                    let mut merged = serde_json::Map::new();
+                    merged.insert("blocking".to_owned(), Value::Bool(true));
+                    if let Some(object) = finding.as_object() {
+                        for (key, value) in object {
+                            merged.insert(key.clone(), value.clone());
+                        }
+                    }
+                    Value::Object(merged)
+                })
+                .collect();
+            return codex_output(&request.pull_request, &codex_findings, &verdicts, 0);
+        }
         let claude_findings: Vec<Value> = findings
             .iter()
             .enumerate()
