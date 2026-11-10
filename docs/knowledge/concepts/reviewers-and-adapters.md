@@ -106,7 +106,13 @@ below:
   The agent runs with the daemon's environment (pohunek's allowlist of session
   variables) and its default config home (`~/.claude`, `~/.codex`); a profile
   for a second subscription or with telemetry settings is written with
-  `render_profile.py` from a base profile instead.
+  `render_profile.py` from a base profile instead. Of the base profile's
+  `[env]`, `render_profile.py` copies only the telemetry keys (names that start
+  with `OTEL_`, and `CLAUDE_CODE_ENABLE_TELEMETRY` for Claude) and the config
+  home of the runtime (`CLAUDE_CONFIG_DIR` for Claude, `CODEX_HOME` for Codex).
+  It drops every other key and prints the dropped names, never their values, on
+  stderr. With `CLAUDE_CONFIG_DIR`, the Claude user settings of the previous
+  bullet (allow rules, `useAutoModeDuringPlan`) are the ones in that directory.
 
 ### The Claude adapter
 
@@ -142,7 +148,8 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   fresh session). Claude Code does not run then. See
   [troubleshooting](../runbooks/troubleshooting.md#head-commit-unavailable).
 - `render_profile.py` writes a profile from a base Claude profile. It copies the
-  runtime package pin, the arguments and the environment of the base profile,
+  runtime package pin, the arguments and the allowed environment keys (see
+  [agent profiles](#agent-profiles)) of the base profile,
   refuses an argument that the adapter controls (`--print`, `--output-format`,
   `--settings`, `--setting-sources`, `--json-schema`, `--resume`, `--continue`
   and their short forms), and sets the model and the effort level of the new
@@ -180,14 +187,15 @@ a default in the code:
 | Input limit | `--maximum-input-bytes` | The largest request, and the largest schema, that the adapter accepts. |
 | Model and effort | `--model`, `--effort` | `--effort` is one of `low`, `medium`, `high`, `xhigh`, `max`. |
 | Detection manifest | `--manifest-name` | Name of the manifest that `render_profile.py` writes next to the profile. |
-| Telemetry | `env` table of the base profile | Optional. Whatever the table holds is copied to the new profile; without a table the run has no telemetry. |
+| Telemetry and config home | `env` table of the base profile | Optional. Only `OTEL_*`, `CLAUDE_CODE_ENABLE_TELEMETRY` and `CLAUDE_CONFIG_DIR` are copied; every other key is dropped and its name printed on stderr. Without them the run has no telemetry and uses `~/.claude`. |
 
 The base profile must use `base = "claude"`. A bare `--version` call, which
 pohunek uses to detect the runtime, gets no profile arguments and no profile
 environment, only the launch `PATH`. The adapter therefore finds the Claude Code
 executable through the file next to itself, never through the home directory,
 the working directory or a `PATH` lookup, and prints the version line of that
-executable.
+executable. It runs the executable with the environment of a review run,
+without the variables listed above.
 
 The tests of the adapter are in `adapters/claude/tests` and run with
 `scripts/gates adapters`. They use fake executables only. The adapter keeps the
@@ -259,7 +267,8 @@ Python standard library (Python 3.11 or newer). It has two parts:
   that: it prints the reason and exits with status 64 at once, without the exit
   line.
 - `render_profile.py` writes a profile from a base Codex profile. It copies the
-  runtime package pin and the environment of the base profile, and turns off
+  runtime package pin and the allowed environment keys (see
+  [agent profiles](#agent-profiles)) of the base profile, and turns off
   resuming.
 
 The report has the fields `findings`, `summary`, `tests`, `status`,
@@ -297,13 +306,14 @@ a default in the code:
 | Result limit | `--maximum-result-bytes` | The largest report that the adapter prints. |
 | Retention | `--maximum-retention-seconds` | How long the adapter stays alive after the result, so that the coordinator can read it. |
 | Model and reasoning effort | `--model`, `--reasoning-effort` | `--reasoning-effort` is one of `low`, `medium`, `high`, `xhigh`. |
-| Telemetry | `env` table of the base profile | Optional. Whatever the table holds is copied to the new profile; without a table the run has no telemetry. |
+| Telemetry and config home | `env` table of the base profile | Optional. Only `OTEL_*` and `CODEX_HOME` are copied; every other key is dropped and its name printed on stderr. Without them the run has no telemetry and uses `~/.codex`. |
 
 The base profile must use `base = "codex"`. A bare `--version` call gets no
 profile arguments and no profile environment, only the launch `PATH`, so the
 adapter finds the Codex executable through the file next to itself, never
 through the home directory, the working directory or a `PATH` lookup, and prints
-the version line of that executable.
+the version line of that executable. It runs the executable with the environment
+of a review run, without the variables that the Claude adapter drops.
 
 The tests of the adapter are in `adapters/codex/tests` and run with
 `scripts/gates adapters`. They use fake executables only. The adapter keeps the

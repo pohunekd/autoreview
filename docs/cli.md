@@ -145,7 +145,11 @@ profile passes `--permission-mode plan`, which blocks the edit tools; what else
 keeps the run read-only is in
 [reviewers and adapters](knowledge/concepts/reviewers-and-adapters.md#agent-profiles). Its
 `[env]` table is empty: the agent runs with the daemon's environment and its
-default config home, and with no telemetry settings. pohunek ignores every
+default config home, and with no telemetry settings. A profile with telemetry
+or a second config home is written with the adapter's `render_profile.py`,
+which copies only those keys of a base profile (`OTEL_*`,
+`CLAUDE_CODE_ENABLE_TELEMETRY`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`) and names
+every dropped key. pohunek ignores every
 profile when `agents` or `agents/manifests` is writable by the group or others,
 so such a directory, like such a `<data>/autoreview`, `<data>/autoreview/adapters`
 or adapter directory, is `profile_write_failed`.

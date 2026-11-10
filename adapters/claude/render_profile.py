@@ -8,12 +8,18 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 import tomllib
 from pathlib import Path
 
 
 ENVIRONMENT_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# The base profile's environment is an allowlist: telemetry settings (OTEL_ names and
+# CLAUDE_CODE_ENABLE_TELEMETRY) and CLAUDE_CONFIG_DIR, which selects the Claude Code
+# login of a second subscription. Every other key is dropped and named on stderr.
+COPIED_ENVIRONMENT = frozenset({"CLAUDE_CODE_ENABLE_TELEMETRY", "CLAUDE_CONFIG_DIR"})
+COPIED_ENVIRONMENT_PREFIX = "OTEL_"
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 PACKAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -87,6 +93,23 @@ def quoted(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def copied_environment(environment: dict[str, str]) -> dict[str, str]:
+    """Returns the allowed entries of a base profile's environment; names the others on stderr."""
+    copied = {
+        key: value
+        for key, value in environment.items()
+        if key in COPIED_ENVIRONMENT or key.startswith(COPIED_ENVIRONMENT_PREFIX)
+    }
+    dropped = sorted(key for key in environment if key not in copied)
+    if dropped:
+        # Names only: a profile environment value may be a secret.
+        print(
+            f"dropped environment keys of the base profile: {', '.join(dropped)}",
+            file=sys.stderr,
+        )
+    return copied
+
+
 def render_profile(
     source: Path,
     wrapper: Path,
@@ -142,8 +165,8 @@ def render_profile(
             "source profile args must set --permission-mode once, to "
             + " or ".join(ALLOWED_PERMISSION_MODES)
         )
-    # The environment table is optional: telemetry settings, when present, are
-    # carried over, and a profile without them runs without telemetry.
+    # The environment table is optional: its allowed keys, when present, are
+    # carried over, and a profile without telemetry settings runs without telemetry.
     environment = data.get("env", {})
     if not isinstance(environment, dict):
         raise ValueError("source profile environment must be a table")
@@ -185,6 +208,8 @@ def render_profile(
         filtered_args.append(argument)
         index += 1
 
+    # After every check, so a refused source reports no dropped key.
+    environment = copied_environment(environment)
     arguments = [
         str(claude_binary),
         str(maximum_input_bytes),
