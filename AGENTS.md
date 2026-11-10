@@ -63,8 +63,9 @@ links to them. Edit only `.agents/skills/`.
 ## Commands
 
 ```bash
-scripts/gates                  # every gate: docs, rust, then the Go reference
+scripts/gates                  # every gate: docs, adapters, rust, then the Go reference
 scripts/gates docs             # documentation and example checks only
+scripts/gates adapters         # the test suite of every adapters/<name>/tests directory
 scripts/gates rust             # fmt, clippy and test of the Cargo workspace
 scripts/gates go               # Go reference gates only (skipped with a reason without go.mod)
 python3 -I scripts/check-docs  # the documentation checker alone

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs the repository gates, reports each gate's own result and exits non-zero
-# when any gate failed. Usage: scripts/gates [all|docs|rust|go]; CI runs the
-# docs, rust and go groups as separate jobs.
+# when any gate failed. Usage: scripts/gates [all|docs|adapters|rust|go]; CI runs
+# the docs, adapters, rust and go groups as separate jobs.
 set -uo pipefail
 # Deliberately no -e: a failing gate must not stop the others from running.
 
@@ -12,9 +12,9 @@ STATICCHECK_VERSION=v0.8.2
 
 group=${1:-all}
 case "$group" in
-    all | docs | rust | go) ;;
+    all | docs | adapters | rust | go) ;;
     *)
-        echo "usage: scripts/gates [all|docs|rust|go]" >&2
+        echo "usage: scripts/gates [all|docs|adapters|rust|go]" >&2
         exit 2
         ;;
 esac
@@ -59,6 +59,21 @@ docs_gates() {
     run_gate check-docs python3 -I scripts/check-docs
 }
 
+# Every adapters/<name>/tests directory is a gate of its own, so a new adapter
+# is picked up without a change here.
+adapters_gates() {
+    local tests found=0
+    for tests in adapters/*/tests; do
+        [ -d "$tests" ] || continue
+        found=1
+        run_gate "adapter-$(basename "$(dirname "$tests")")" \
+            python3 -I -B -m unittest discover -s "$tests" -p 'test_*.py'
+    done
+    if [ "$found" -eq 0 ]; then
+        skip_gate adapters "no adapters/*/tests directory"
+    fi
+}
+
 rust_gates() {
     run_gate rust-fmt cargo fmt --all --check
     run_gate rust-clippy cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -83,10 +98,12 @@ go_gates() {
 case "$group" in
     all)
         docs_gates
+        adapters_gates
         rust_gates
         go_gates
         ;;
     docs) docs_gates ;;
+    adapters) adapters_gates ;;
     rust) rust_gates ;;
     go) go_gates ;;
 esac

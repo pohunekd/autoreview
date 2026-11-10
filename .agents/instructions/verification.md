@@ -3,8 +3,8 @@
 ## Gate set
 
 `scripts/gates` runs each gate, in the order below, and reports its own result.
-With no argument it runs every group; CI runs the `docs`, `rust` and `go` groups
-as three jobs.
+With no argument it runs every group; CI runs the `docs`, `adapters`, `rust` and
+`go` groups as four jobs.
 
 Docs group:
 
@@ -12,6 +12,13 @@ Docs group:
    anchors, YAML code blocks, the status line of each page, forbidden words and
    emoji in `docs/` (never `docs/plan/`), and that every `examples/**/*.yaml`
    parses.
+
+Adapters group:
+
+- `adapter-<name>` (`python3 -I -m unittest discover -s adapters/<name>/tests`):
+  one gate for each `adapters/*/tests` directory, so a new adapter is picked up
+  without a change to `scripts/gates`. The suites use fakes only and never start
+  an agent.
 
 Rust group, on the toolchain pinned in `rust-toolchain.toml`:
 
@@ -114,6 +121,7 @@ text. Describe checks against the owner's own daemons in words only.
 `.github/workflows/ci.yml` finishes in a few minutes:
 
 - `docs` runs `scripts/gates docs` with PyYAML pinned in a virtualenv.
+- `adapters` runs `scripts/gates adapters` with the runner's Python.
 - `rust` runs `scripts/gates rust` on the toolchain pinned in
   `rust-toolchain.toml`, with the dependency cache restored from `main` and
   saved only by runs on `main`.

@@ -1,0 +1,269 @@
+#!/usr/bin/env -S python3 -I
+"""Bridge one Pohunek initial-input frame into Claude Code print mode."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import signal
+import stat
+import subprocess
+import sys
+import termios
+import tty
+from typing import BinaryIO, NoReturn
+
+
+BRACKETED_PASTE_START = b"\x1b[200~"
+BRACKETED_PASTE_END = b"\x1b[201~"
+SUBMIT = b"\r"
+EXIT_USAGE = 64
+REQUEST_PROTOCOL = "claude-otel-noninteractive/request-v1"
+RESULT_PROTOCOL = "claude-otel-noninteractive/v2"
+PROGRAM_NAME = "claude-adapter"
+# The renderer writes the Claude Code path into this file next to the wrapper.
+# The bare --version probe gets no arguments and no profile environment, so the
+# file is the only place both the probe and a launch can read it from.
+SIDECAR_SUFFIX = ".claude-binary"
+# Variables the Claude Code run must not see: pohunek session identity, GitHub
+# tokens and the Matrix token. Names with the AUTOREVIEW_ prefix are dropped too.
+DROPPED_ENVIRONMENT = frozenset(
+    {
+        "POHUNEK_SESSION_ID",
+        "POHUNEK_DAEMON_ID",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "MATRIX_ACCESS_TOKEN",
+    }
+)
+DROPPED_ENVIRONMENT_PREFIX = "AUTOREVIEW_"
+
+
+class InputFrameError(ValueError):
+    """Raised when the initial-input frame is absent or malformed."""
+
+
+def read_exact(stream: BinaryIO, size: int) -> bytes:
+    data = bytearray()
+    while len(data) < size:
+        chunk = stream.read(size - len(data))
+        if not chunk:
+            raise InputFrameError("initial input ended unexpectedly")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def read_framed_prompt(stream: BinaryIO, maximum_bytes: int) -> str:
+    if read_exact(stream, len(BRACKETED_PASTE_START)) != BRACKETED_PASTE_START:
+        raise InputFrameError("initial input is missing the bracketed-paste start marker")
+
+    payload = bytearray()
+    while not payload.endswith(BRACKETED_PASTE_END):
+        payload.extend(read_exact(stream, 1))
+        if len(payload) > maximum_bytes + len(BRACKETED_PASTE_END):
+            raise InputFrameError("initial input exceeds the configured byte limit")
+
+    del payload[-len(BRACKETED_PASTE_END) :]
+    if read_exact(stream, len(SUBMIT)) != SUBMIT:
+        raise InputFrameError("initial input is missing the submit marker")
+    if not payload:
+        raise InputFrameError("initial input must not be empty")
+
+    try:
+        return payload.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise InputFrameError("initial input is not valid UTF-8") from error
+
+
+def validate_executable(path: str) -> None:
+    if not os.path.isabs(path):
+        raise InputFrameError("Claude Code executable must be an absolute path")
+    try:
+        mode = os.stat(path).st_mode
+    except OSError as error:
+        raise InputFrameError("Claude Code executable is unavailable") from error
+    if not stat.S_ISREG(mode) or not os.access(path, os.X_OK):
+        raise InputFrameError("Claude Code executable is not an executable regular file")
+
+
+def secure_regular_file(path: str) -> None:
+    metadata = os.lstat(path)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise InputFrameError("Claude Code path file must be a regular file")
+    if metadata.st_uid != os.geteuid():
+        raise InputFrameError("Claude Code path file must be owned by the current user")
+    if metadata.st_mode & 0o022:
+        raise InputFrameError("Claude Code path file must not be group or world writable")
+
+
+def sidecar_path() -> str:
+    return os.path.realpath(__file__) + SIDECAR_SUFFIX
+
+
+def read_claude_binary(sidecar: str) -> str:
+    try:
+        secure_regular_file(sidecar)
+        with open(sidecar, encoding="utf-8") as stream:
+            content = stream.read()
+    except FileNotFoundError as error:
+        raise InputFrameError(f"Claude Code path file {sidecar} is missing") from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise InputFrameError(f"Claude Code path file {sidecar} is unreadable") from error
+    path = content.removesuffix("\n")
+    if not path or "\n" in path:
+        raise InputFrameError(f"Claude Code path file {sidecar} must hold one path")
+    validate_executable(path)
+    return path
+
+
+def claude_environment(environment: dict[str, str]) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in environment.items()
+        if name not in DROPPED_ENVIRONMENT
+        and not name.startswith(DROPPED_ENVIRONMENT_PREFIX)
+    }
+
+
+def fail(message: str) -> NoReturn:
+    print(f"{PROGRAM_NAME}: {message}", file=sys.stderr)
+    raise SystemExit(EXIT_USAGE)
+
+
+def parse_request(raw_prompt: str, maximum_bytes: int) -> tuple[str, str | None, str]:
+    try:
+        value = json.loads(raw_prompt)
+    except json.JSONDecodeError:
+        return raw_prompt, None, "text"
+    if not isinstance(value, dict):
+        return raw_prompt, None, "text"
+
+    protocol = value.get("protocol")
+    if not isinstance(protocol, str) or not protocol.startswith(
+        "claude-otel-noninteractive/"
+    ):
+        return raw_prompt, None, "text"
+    if protocol != REQUEST_PROTOCOL or set(value) != {
+        "protocol",
+        "prompt",
+        "json_schema",
+    }:
+        raise InputFrameError("structured request envelope is invalid")
+    prompt = value.get("prompt")
+    schema = value.get("json_schema")
+    if not isinstance(prompt, str) or not prompt or not isinstance(schema, dict) or not schema:
+        raise InputFrameError("structured request envelope is invalid")
+    canonical_schema = json.dumps(
+        schema,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    if len(canonical_schema.encode("utf-8")) > maximum_bytes:
+        raise InputFrameError("JSON schema exceeds the configured byte limit")
+    return prompt, canonical_schema, "structured"
+
+
+def result_envelope(return_code: int, stdout: bytes, stderr: bytes, mode: str) -> bytes:
+    return json.dumps(
+        {
+            "protocol": RESULT_PROTOCOL,
+            "mode": mode,
+            "exit_code": return_code,
+            "stdout_base64": base64.b64encode(stdout).decode("ascii"),
+            "stderr_base64": base64.b64encode(stderr).decode("ascii"),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8") + b"\n"
+
+
+def claude_arguments(
+    claude_binary: str,
+    profile_arguments: list[str],
+    json_schema: str | None,
+) -> list[str]:
+    arguments = [
+        claude_binary,
+        *profile_arguments,
+        "--setting-sources",
+        "user",
+        "--print",
+        "--output-format",
+        "json",
+        "--no-session-persistence",
+    ]
+    if json_schema is not None:
+        arguments.extend(["--json-schema", json_schema])
+    return arguments
+
+
+def exec_version_probe() -> NoReturn:
+    try:
+        claude_binary = read_claude_binary(sidecar_path())
+    except InputFrameError as error:
+        fail(str(error))
+    os.execv(claude_binary, [claude_binary, "--version"])
+
+
+def main() -> NoReturn:
+    # Pohunek's runtime version probe runs the profile program with a bare
+    # --version and without the profile args, so answer it for Claude Code.
+    if sys.argv[1:] == ["--version"]:
+        exec_version_probe()
+    if len(sys.argv) < 3:
+        fail("expected Claude Code executable and maximum input size")
+
+    try:
+        claude_binary = read_claude_binary(sidecar_path())
+    except InputFrameError as error:
+        fail(str(error))
+    if sys.argv[1] != claude_binary:
+        fail("Claude Code executable argument differs from the Claude Code path file")
+    try:
+        maximum_bytes = int(sys.argv[2])
+    except ValueError:
+        fail("maximum input size must be an integer")
+    if maximum_bytes <= 0:
+        fail("maximum input size must be positive")
+
+    if not sys.stdin.isatty():
+        fail("stdin must be a Pohunek-managed PTY")
+
+    descriptor = sys.stdin.fileno()
+    original_attributes = termios.tcgetattr(descriptor)
+    try:
+        tty.setraw(descriptor)
+        raw_prompt = read_framed_prompt(sys.stdin.buffer, maximum_bytes)
+        prompt, json_schema, mode = parse_request(raw_prompt, maximum_bytes)
+    except InputFrameError as error:
+        fail(str(error))
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSANOW, original_attributes)
+
+    arguments = claude_arguments(claude_binary, sys.argv[3:], json_schema)
+    completed = subprocess.run(
+        arguments,
+        input=prompt.encode("utf-8"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=claude_environment(dict(os.environ)),
+        check=False,
+    )
+    sys.stdout.buffer.write(
+        result_envelope(completed.returncode, completed.stdout, completed.stderr, mode)
+    )
+    sys.stdout.buffer.flush()
+
+    # Pohunek currently releases retained output when the root PTY process exits.
+    # Keep only this inert wrapper alive so a coordinator can read the exact
+    # completed output and remove the logical session after durable persistence.
+    while True:
+        signal.pause()
+
+
+if __name__ == "__main__":
+    main()
