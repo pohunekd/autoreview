@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """Bridge one Pohunek initial-input frame into Claude Code print mode."""
 
 from __future__ import annotations
@@ -22,9 +22,24 @@ EXIT_USAGE = 64
 REQUEST_PROTOCOL = "claude-otel-noninteractive/request-v1"
 RESULT_PROTOCOL = "claude-otel-noninteractive/v2"
 PROGRAM_NAME = "claude-adapter"
-# The generated profile sets this variable; the bare --version probe has no
-# argument to carry the Claude Code path, so it reads the variable instead.
-CLAUDE_BINARY_VARIABLE = "AUTOREVIEW_CLAUDE_BINARY"
+# The renderer writes the Claude Code path into this file next to the wrapper.
+# The bare --version probe gets no arguments and no profile environment, so the
+# file is the only place both the probe and a launch can read it from.
+SIDECAR_SUFFIX = ".claude-binary"
+# Variables the Claude Code run must not see: pohunek session identity, GitHub
+# tokens and the Matrix token. Names with the AUTOREVIEW_ prefix are dropped too.
+DROPPED_ENVIRONMENT = frozenset(
+    {
+        "POHUNEK_SESSION_ID",
+        "POHUNEK_DAEMON_ID",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "MATRIX_ACCESS_TOKEN",
+    }
+)
+DROPPED_ENVIRONMENT_PREFIX = "AUTOREVIEW_"
 
 
 class InputFrameError(ValueError):
@@ -72,6 +87,45 @@ def validate_executable(path: str) -> None:
         raise InputFrameError("Claude Code executable is unavailable") from error
     if not stat.S_ISREG(mode) or not os.access(path, os.X_OK):
         raise InputFrameError("Claude Code executable is not an executable regular file")
+
+
+def secure_regular_file(path: str) -> None:
+    metadata = os.lstat(path)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise InputFrameError("Claude Code path file must be a regular file")
+    if metadata.st_uid != os.geteuid():
+        raise InputFrameError("Claude Code path file must be owned by the current user")
+    if metadata.st_mode & 0o022:
+        raise InputFrameError("Claude Code path file must not be group or world writable")
+
+
+def sidecar_path() -> str:
+    return os.path.realpath(__file__) + SIDECAR_SUFFIX
+
+
+def read_claude_binary(sidecar: str) -> str:
+    try:
+        secure_regular_file(sidecar)
+        with open(sidecar, encoding="utf-8") as stream:
+            content = stream.read()
+    except FileNotFoundError as error:
+        raise InputFrameError(f"Claude Code path file {sidecar} is missing") from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise InputFrameError(f"Claude Code path file {sidecar} is unreadable") from error
+    path = content.removesuffix("\n")
+    if not path or "\n" in path:
+        raise InputFrameError(f"Claude Code path file {sidecar} must hold one path")
+    validate_executable(path)
+    return path
+
+
+def claude_environment(environment: dict[str, str]) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in environment.items()
+        if name not in DROPPED_ENVIRONMENT
+        and not name.startswith(DROPPED_ENVIRONMENT_PREFIX)
+    }
 
 
 def fail(message: str) -> NoReturn:
@@ -148,11 +202,8 @@ def claude_arguments(
 
 
 def exec_version_probe() -> NoReturn:
-    claude_binary = os.environ.get(CLAUDE_BINARY_VARIABLE)
-    if not claude_binary:
-        fail(f"{CLAUDE_BINARY_VARIABLE} must name the Claude Code executable")
     try:
-        validate_executable(claude_binary)
+        claude_binary = read_claude_binary(sidecar_path())
     except InputFrameError as error:
         fail(str(error))
     os.execv(claude_binary, [claude_binary, "--version"])
@@ -166,7 +217,12 @@ def main() -> NoReturn:
     if len(sys.argv) < 3:
         fail("expected Claude Code executable and maximum input size")
 
-    claude_binary = sys.argv[1]
+    try:
+        claude_binary = read_claude_binary(sidecar_path())
+    except InputFrameError as error:
+        fail(str(error))
+    if sys.argv[1] != claude_binary:
+        fail("Claude Code executable argument differs from the Claude Code path file")
     try:
         maximum_bytes = int(sys.argv[2])
     except ValueError:
@@ -174,10 +230,6 @@ def main() -> NoReturn:
     if maximum_bytes <= 0:
         fail("maximum input size must be positive")
 
-    try:
-        validate_executable(claude_binary)
-    except InputFrameError as error:
-        fail(str(error))
     if not sys.stdin.isatty():
         fail("stdin must be a Pohunek-managed PTY")
 
@@ -198,6 +250,7 @@ def main() -> NoReturn:
         input=prompt.encode("utf-8"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=claude_environment(dict(os.environ)),
         check=False,
     )
     sys.stdout.buffer.write(

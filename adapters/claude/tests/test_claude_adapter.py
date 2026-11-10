@@ -105,26 +105,52 @@ class InputFrameTests(unittest.TestCase):
         with self.assertRaisesRegex(wrapper.InputFrameError, "envelope is invalid"):
             wrapper.parse_request(request, 4096)
 
-    def test_structured_mode_passes_the_canonical_schema_to_claude(self) -> None:
-        arguments = wrapper.claude_arguments(
-            "/usr/bin/claude",
-            ["--model", "opus"],
-            '{"type":"object"}',
-        )
+    def test_claude_arguments_end_with_the_fixed_read_only_tail(self) -> None:
+        tail = [
+            "--setting-sources",
+            "user",
+            "--print",
+            "--output-format",
+            "json",
+            "--no-session-persistence",
+        ]
 
-        self.assertEqual(arguments[:3], ["/usr/bin/claude", "--model", "opus"])
-        self.assertEqual(arguments[-2:], ["--json-schema", '{"type":"object"}'])
-        self.assertIn("--no-session-persistence", arguments)
-        setting_sources_index = arguments.index("--setting-sources")
-        self.assertEqual(arguments[setting_sources_index + 1], "user")
+        structured = wrapper.claude_arguments(
+            "/usr/bin/claude", ["--model", "opus"], '{"type":"object"}'
+        )
+        text = wrapper.claude_arguments("/usr/bin/claude", ["--model", "opus"], None)
+
+        self.assertEqual(
+            structured,
+            ["/usr/bin/claude", "--model", "opus", *tail, "--json-schema", '{"type":"object"}'],
+        )
+        self.assertEqual(text, ["/usr/bin/claude", "--model", "opus", *tail])
+
+    def test_claude_run_drops_session_identity_and_github_tokens(self) -> None:
+        environment = {
+            "PATH": "/usr/bin",
+            "HOME": "/tmp/home",
+            "POHUNEK_SESSION_ID": "s",
+            "POHUNEK_DAEMON_ID": "d",
+            "GH_TOKEN": "t",
+            "GITHUB_TOKEN": "t",
+            "GH_ENTERPRISE_TOKEN": "t",
+            "GITHUB_ENTERPRISE_TOKEN": "t",
+            "MATRIX_ACCESS_TOKEN": "t",
+            "AUTOREVIEW_GH_TOKEN": "t",
+            "POHUNEK_SESSION_ID_HINT": "kept",
+        }
+
+        self.assertEqual(
+            wrapper.claude_environment(environment),
+            {"PATH": "/usr/bin", "HOME": "/tmp/home", "POHUNEK_SESSION_ID_HINT": "kept"},
+        )
 
 
 class VersionProbeTests(unittest.TestCase):
-    """Pohunek probes the profile program with a bare --version."""
+    """Pohunek probes the profile program with a bare --version, a private HOME and only PATH."""
 
-    def run_wrapper(
-        self, root: Path, arguments: list[str], binary_variable: bool = True
-    ) -> subprocess.CompletedProcess[str]:
+    def install_wrapper(self, root: Path, sidecar: str | None, mode: int = 0o600) -> Path:
         fake_binary = root / "fake-claude"
         fake_binary.write_text(
             '#!/bin/sh\n'
@@ -137,14 +163,23 @@ class VersionProbeTests(unittest.TestCase):
             encoding="utf-8",
         )
         fake_binary.chmod(0o755)
+        installed = root / "bin"
+        installed.mkdir(exist_ok=True)
+        script = installed / "claude-adapter"
+        shutil.copy(ROOT / "claude-adapter", script)
+        script.chmod(0o755)
+        if sidecar is not None:
+            file = Path(str(script) + wrapper.SIDECAR_SUFFIX)
+            file.write_text(sidecar.replace("{fake}", str(fake_binary)), encoding="utf-8")
+            file.chmod(mode)
+        return script
+
+    def run_wrapper(self, root: Path, script: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
         home = root / "home"
         home.mkdir(exist_ok=True)
-        environment = {"PATH": os.environ["PATH"], "HOME": str(home), "PYTHONDONTWRITEBYTECODE": "1"}
-        if binary_variable:
-            environment[wrapper.CLAUDE_BINARY_VARIABLE] = str(fake_binary)
         return subprocess.run(
-            [str(ROOT / "claude-adapter"), *arguments],
-            env=environment,
+            [str(script), *arguments],
+            env={"PATH": os.environ["PATH"], "HOME": str(home)},
             cwd=home,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -154,26 +189,76 @@ class VersionProbeTests(unittest.TestCase):
 
     def test_bare_version_prints_the_underlying_binary_version_line(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            result = self.run_wrapper(Path(directory), ["--version"])
+            root = Path(directory)
+            result = self.run_wrapper(root, self.install_wrapper(root, "{fake}\n"), ["--version"])
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "2.1.296 (Claude Code)\n")
         self.assertEqual(result.stderr, "")
 
-    def test_version_without_the_binary_variable_fails_fast(self) -> None:
+    def test_missing_or_insecure_path_file_fails_fast(self) -> None:
+        for sidecar, mode, message in (
+            (None, 0o600, "is missing"),
+            ("{fake}\n", 0o666, "writable"),
+            ("relative/claude\n", 0o600, "absolute"),
+            ("\n", 0o600, "one path"),
+        ):
+            with self.subTest(sidecar=sidecar, mode=mode):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    script = self.install_wrapper(root, sidecar, mode)
+                    result = self.run_wrapper(root, script, ["--version"])
+
+                self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
+                self.assertEqual(result.stdout, "")
+                self.assertIn(message, result.stderr)
+
+    def test_launch_argument_must_equal_the_path_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            result = self.run_wrapper(Path(directory), ["--version"], binary_variable=False)
+            root = Path(directory)
+            script = self.install_wrapper(root, "{fake}\n")
+            result = self.run_wrapper(root, script, ["/bin/true", "262144"])
 
         self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
-        self.assertEqual(result.stdout, "")
-        self.assertIn(wrapper.CLAUDE_BINARY_VARIABLE, result.stderr)
+        self.assertIn("differs", result.stderr)
 
     def test_version_with_other_arguments_keeps_the_wrapper_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            result = self.run_wrapper(Path(directory), ["--version", "262144"])
+            root = Path(directory)
+            result = self.run_wrapper(root, self.install_wrapper(root, "{fake}\n"), ["--version", "262144"])
 
         self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
         self.assertEqual(result.stdout, "")
+
+    def test_rendered_path_file_answers_the_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.install_wrapper(root, None)
+            fake = root / "fake-claude"
+            source = root / "source.toml"
+            source.write_text('base = "claude"\n', encoding="utf-8")
+            source.chmod(0o600)
+            rendered = subprocess.run(
+                [
+                    str(ROOT / "render_profile.py"),
+                    "--source", str(source),
+                    "--target", str(root / "agents" / "profile.toml"),
+                    "--wrapper", str(script),
+                    "--claude-binary", str(fake),
+                    "--maximum-input-bytes", "262144",
+                    "--model", "opus",
+                    "--effort", "medium",
+                    "--manifest-name", "no-detection",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            result = self.run_wrapper(root, script, ["--version"])
+
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "2.1.296 (Claude Code)\n")
 
 
 class ProfileInstallerTests(unittest.TestCase):
@@ -210,7 +295,6 @@ class ProfileInstallerTests(unittest.TestCase):
             self.assertEqual(profile["args"][model_index + 1], "sonnet")
             self.assertNotIn("opus", profile["args"])
             self.assertEqual(profile["env"]["CLAUDE_CODE_ENABLE_TELEMETRY"], "1")
-            self.assertEqual(profile["env"][wrapper.CLAUDE_BINARY_VARIABLE], "/usr/bin/claude")
             self.assertEqual(
                 profile["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"],
                 "https://collector.invalid/otlp",
@@ -235,10 +319,7 @@ class ProfileInstallerTests(unittest.TestCase):
                 "no-detection",
             )
 
-        self.assertEqual(
-            tomllib.loads(rendered)["env"],
-            {wrapper.CLAUDE_BINARY_VARIABLE: "/usr/bin/claude"},
-        )
+        self.assertEqual(tomllib.loads(rendered)["env"], {})
 
     def test_atomic_write_is_idempotent_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -276,6 +357,45 @@ class ProfileInstallerTests(unittest.TestCase):
                             "medium",
                             "no-detection",
                         )
+
+    def render_with_args(self, source_args: list[str]) -> str:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.toml"
+            source.write_text(
+                'base = "claude"\n' f"args = {json.dumps(source_args)}\n", encoding="utf-8"
+            )
+            source.chmod(0o600)
+            return installer.render_profile(
+                source,
+                Path("/opt/autoreview/bin/claude-adapter"),
+                Path("/usr/bin/claude"),
+                262144,
+                "opus",
+                "medium",
+                "no-detection",
+            )
+
+    def test_rejects_every_wrapper_controlled_argument(self) -> None:
+        for argument in sorted(installer.WRAPPER_CONTROLLED_ARGUMENTS):
+            with self.subTest(argument=argument):
+                with self.assertRaisesRegex(ValueError, "wrapper-controlled"):
+                    self.render_with_args([argument])
+        for argument in ("--resume", "--continue", "--print", "--json-schema"):
+            self.assertIn(argument, installer.WRAPPER_CONTROLLED_ARGUMENTS)
+
+    def test_rejects_permission_widening_arguments(self) -> None:
+        for source_args in (
+            ["--dangerously-skip-permissions"],
+            ["--allow-dangerously-skip-permissions"],
+            ["--permission-mode", "bypassPermissions"],
+            ["--permission-mode=bypassPermissions"],
+            ["--add-dir", "/"],
+            ["--add-dir=/"],
+        ):
+            with self.subTest(source_args=source_args):
+                with self.assertRaisesRegex(ValueError, "permission-widening"):
+                    self.render_with_args(source_args)
+        self.render_with_args(["--permission-mode", "plan"])
 
     def render_pinned_source(self, pin_lines: str) -> str:
         with tempfile.TemporaryDirectory() as directory:

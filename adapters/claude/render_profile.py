@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """Generate a noninteractive pohunek Claude profile from a base Claude profile."""
 
 from __future__ import annotations
@@ -30,9 +30,12 @@ MANIFEST_CONTENT = (
     "# prompt box, so the initial input must not wait for one.\n"
     "rules = []\n"
 )
-# The wrapper reads the Claude Code path from this variable for the bare
-# --version probe, which carries no arguments.
-CLAUDE_BINARY_VARIABLE = "AUTOREVIEW_CLAUDE_BINARY"
+# The wrapper reads the Claude Code path from this file next to it; it must
+# match the suffix in the wrapper.
+SIDECAR_SUFFIX = ".claude-binary"
+# Options that widen what a run may do. A review run is read-only, so a base
+# profile cannot carry them.
+PERMISSION_WIDENING_PREFIXES = ("--dangerously-", "--allow-dangerously-", "--add-dir")
 WRAPPER_CONTROLLED_ARGUMENTS = {
     "--continue",
     "--json-schema",
@@ -56,6 +59,11 @@ def secure_regular_file(path: Path) -> None:
         raise ValueError(f"{path} must be owned by the current user")
     if metadata.st_mode & 0o022:
         raise ValueError(f"{path} must not be group or world writable")
+
+
+def sidecar_path(wrapper: Path) -> Path:
+    """The file next to the resolved wrapper that holds the Claude Code path."""
+    return Path(os.path.realpath(wrapper) + SIDECAR_SUFFIX)
 
 
 def quoted(value: str) -> str:
@@ -102,6 +110,17 @@ def render_profile(
         for argument in source_args
     ):
         raise ValueError("source profile args contain a wrapper-controlled option")
+    for index, argument in enumerate(source_args):
+        if argument.startswith(PERMISSION_WIDENING_PREFIXES):
+            raise ValueError("source profile args contain a permission-widening option")
+        if argument == "--permission-mode":
+            mode = source_args[index + 1] if index + 1 < len(source_args) else ""
+        elif argument.startswith("--permission-mode="):
+            mode = argument.removeprefix("--permission-mode=")
+        else:
+            continue
+        if "bypass" in mode.lower():
+            raise ValueError("source profile args contain a permission-widening option")
     # The environment table is optional: telemetry settings, when present, are
     # carried over, and a profile without them runs without telemetry.
     environment = data.get("env", {})
@@ -118,9 +137,6 @@ def render_profile(
         raise ValueError("Claude Code executable must be an absolute path")
     if not wrapper.is_absolute():
         raise ValueError("wrapper must be an absolute path")
-    if CLAUDE_BINARY_VARIABLE in environment:
-        raise ValueError(f"source profile environment must not set {CLAUDE_BINARY_VARIABLE}")
-    environment = {**environment, CLAUDE_BINARY_VARIABLE: str(claude_binary)}
     if maximum_input_bytes <= 0:
         raise ValueError("maximum input size must be positive")
     if MODEL_NAME.fullmatch(model) is None:
@@ -229,9 +245,12 @@ def main() -> None:
         arguments.manifest_name,
     )
     manifest_target = arguments.target.parent / "manifests" / f"{arguments.manifest_name}.toml"
+    sidecar_changed = atomic_write(
+        sidecar_path(arguments.wrapper), f"{arguments.claude_binary}\n"
+    )
     manifest_changed = atomic_write(manifest_target, MANIFEST_CONTENT)
     profile_changed = atomic_write(arguments.target, content)
-    print("changed" if manifest_changed or profile_changed else "unchanged")
+    print("changed" if sidecar_changed or manifest_changed or profile_changed else "unchanged")
 
 
 if __name__ == "__main__":

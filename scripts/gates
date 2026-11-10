@@ -60,15 +60,14 @@ docs_gates() {
 }
 
 # Every adapters/<name>/tests directory is a gate of its own, so a new adapter
-# is picked up without a change here. PYTHONDONTWRITEBYTECODE keeps the
-# checkout free of bytecode caches.
+# is picked up without a change here.
 adapters_gates() {
     local tests found=0
     for tests in adapters/*/tests; do
         [ -d "$tests" ] || continue
         found=1
-        PYTHONDONTWRITEBYTECODE=1 run_gate "adapter-$(basename "$(dirname "$tests")")" \
-            python3 -I -m unittest discover -s "$tests" -p 'test_*.py'
+        run_gate "adapter-$(basename "$(dirname "$tests")")" \
+            python3 -I -B -m unittest discover -s "$tests" -p 'test_*.py'
     done
     if [ "$found" -eq 0 ]; then
         skip_gate adapters "no adapters/*/tests directory"

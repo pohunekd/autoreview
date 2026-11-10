@@ -80,36 +80,45 @@ in #25. `autoreview validate` prints the profiles the policy needs.
 The adapter for `claude-structured` lives in `adapters/claude/` and uses only
 the Python standard library (Python 3.11 or newer). It has two parts:
 
-- `claude-adapter` is the program a profile starts. It reads one request that
+- `claude-adapter` is the program a profile starts. It runs under `python3 -I`
+  (its first line is `#!/usr/bin/env -S python3 -I`). It reads one request that
   pohunek writes into the session, runs Claude Code once in print mode with
   `--setting-sources user`, `--no-session-persistence` and, for a structured
   request, `--json-schema`, and prints one result line that carries the exit
-  code and the output of the run. It then stays alive so that the coordinator
-  can read the result before it removes the session.
+  code and the output of the run. The Claude Code run gets the session
+  environment without the pohunek session identity variables, the GitHub token
+  variables (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
+  `GITHUB_ENTERPRISE_TOKEN`), `MATRIX_ACCESS_TOKEN` and every `AUTOREVIEW_`
+  variable. The adapter then stays alive so that the coordinator can read the
+  result before it removes the session.
 - `render_profile.py` writes a profile from a base Claude profile. It copies the
   runtime package pin, the arguments and the environment of the base profile,
   refuses an argument that the adapter controls (`--print`, `--output-format`,
-  `--settings`, `--setting-sources`, `--json-schema`, `--resume` and similar),
+  `--settings`, `--setting-sources`, `--json-schema`, `--resume` and similar)
+  and an argument that widens permissions (`--dangerously-*`,
+  `--allow-dangerously-*`, `--add-dir`, `--permission-mode` with a bypass value),
   and sets the model and the effort level of the new profile. The base profile
-  carries the read-only settings of the run, such as the permission mode; the
-  adapter does not widen them. The profile also turns off resuming and disables
-  prompt-box detection, because the adapter reads its input without rendering
-  one.
+  carries the read-only settings of the run, such as the permission mode. The
+  profile also turns off resuming and disables prompt-box detection, because the
+  adapter reads its input without rendering one.
 
-Configuration comes from the profile, never from a default in the code:
+Configuration comes from the profile and a file next to the program, never from
+a default in the code:
 
 | Setting | Where | Meaning |
 |---|---|---|
-| Claude Code executable | `--claude-binary` of `render_profile.py`; the profile passes it as the first argument and in the variable `AUTOREVIEW_CLAUDE_BINARY` | Absolute path. A missing, relative or non-executable path stops the run with a message. |
+| Claude Code executable | `--claude-binary` of `render_profile.py`: written to the file `<wrapper>.claude-binary` next to the resolved wrapper, and passed as the first program argument | Absolute path. The file must be a regular file owned by the current user and not writable by the group or others. A missing or invalid file, or a first argument that differs from the file, stops the run with a message. |
 | Input limit | `--maximum-input-bytes` | The largest request, and the largest schema, that the adapter accepts. |
 | Model and effort | `--model`, `--effort` | `--effort` is one of `low`, `medium`, `high`, `xhigh`, `max`. |
 | Detection manifest | `--manifest-name` | Name of the manifest that `render_profile.py` writes next to the profile. |
 | Telemetry | `env` table of the base profile | Optional. Whatever the table holds is copied to the new profile; without a table the run has no telemetry. |
 
-The base profile must use `base = "claude"` and must not set
-`AUTOREVIEW_CLAUDE_BINARY`. A bare `--version` call, which pohunek uses to
-detect the runtime, takes the executable from that variable and fails with a
-message when it is missing.
+The base profile must use `base = "claude"`. A bare `--version` call, which
+pohunek uses to detect the runtime, gets no profile arguments and no profile
+environment, only the launch `PATH`. The adapter therefore finds the Claude Code
+executable through the file next to itself, never through the home directory,
+the working directory or a `PATH` lookup, and prints the version line of that
+executable.
 
 The tests of the adapter are in `adapters/claude/tests` and run with
 `scripts/gates adapters`. They use fake executables only. The adapter keeps the
