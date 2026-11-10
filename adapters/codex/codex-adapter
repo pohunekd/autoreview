@@ -1,0 +1,453 @@
+#!/usr/bin/env -S python3 -I
+"""Bridge one Pohunek input frame into a bounded, read-only Codex review run."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import termios
+import tempfile
+import time
+import tty
+from pathlib import Path
+from typing import BinaryIO, NoReturn
+
+
+BRACKETED_PASTE_START = b"\x1b[200~"
+BRACKETED_PASTE_END = b"\x1b[201~"
+SUBMIT = b"\r"
+EXIT_USAGE = 64
+PROGRAM_NAME = "codex-adapter"
+# The engine reads the result frame and the exit line below by these exact texts.
+RESULT_MARKER_PREFIX = "[pohunek-codex-review-result-v1:"
+EXIT_LINE_FORMAT = "[pohunek-codex-review exited with status {}]"
+REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
+# The renderer writes the Codex path into this file next to the wrapper.
+# The bare --version probe gets no arguments and no profile environment, so the
+# file is the only place both the probe and a launch can read it from.
+SIDECAR_SUFFIX = ".codex-binary"
+# Variables the Codex run must not see: pohunek session identity, GitHub tokens
+# and the Matrix token. Names with the AUTOREVIEW_ prefix are dropped too.
+DROPPED_ENVIRONMENT = frozenset(
+    {
+        "POHUNEK_SESSION_ID",
+        "POHUNEK_DAEMON_ID",
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "MATRIX_ACCESS_TOKEN",
+    }
+)
+DROPPED_ENVIRONMENT_PREFIX = "AUTOREVIEW_"
+PRIOR_STATUSES = ("fixed", "still_open", "answered")
+PRIOR_VERDICT_KEYS = frozenset({"key", "status", "note", "relies_on"})
+TRUSTED_HEAD_PATTERN = re.compile(r"(?m)^- Trusted head SHA: ([0-9a-f]{40})$")
+TRUSTED_BASE_PATTERN = re.compile(r"(?m)^- Trusted base SHA: ([0-9a-f]{40})$")
+RESULT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "findings",
+        "summary",
+        "tests",
+        "status",
+        "reviewed_head_sha",
+        "prior_findings",
+    ],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "severity",
+                    "confidence",
+                    "blocking",
+                    "path",
+                    "line",
+                    "title",
+                    "body",
+                ],
+                "properties": {
+                    "severity": {
+                        "type": "string",
+                        "enum": ["blocker", "critical", "high", "medium", "low"],
+                    },
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    },
+                    "blocking": {"type": "boolean"},
+                    "path": {"type": "string"},
+                    "line": {"type": "integer", "minimum": 1},
+                    "title": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+            },
+        },
+        "summary": {"type": "string"},
+        "status": {"type": "string", "enum": ["completed"]},
+        "reviewed_head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tests": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "prior_findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["key", "status", "note", "relies_on"],
+                "properties": {
+                    "key": {"type": "string", "minLength": 1},
+                    "status": {"type": "string", "enum": list(PRIOR_STATUSES)},
+                    "note": {"type": "string", "minLength": 1},
+                    "relies_on": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+class InputFrameError(ValueError):
+    """Raised when a Pohunek initial-input frame is absent or malformed."""
+
+
+def read_exact(stream: BinaryIO, size: int) -> bytes:
+    data = bytearray()
+    while len(data) < size:
+        chunk = stream.read(size - len(data))
+        if not chunk:
+            raise InputFrameError("initial input ended unexpectedly")
+        data.extend(chunk)
+    return bytes(data)
+
+
+def read_framed_prompt(stream: BinaryIO, maximum_bytes: int) -> str:
+    if read_exact(stream, len(BRACKETED_PASTE_START)) != BRACKETED_PASTE_START:
+        raise InputFrameError("initial input is missing the bracketed-paste start marker")
+
+    payload = bytearray()
+    while not payload.endswith(BRACKETED_PASTE_END):
+        payload.extend(read_exact(stream, 1))
+        if len(payload) > maximum_bytes + len(BRACKETED_PASTE_END):
+            raise InputFrameError("initial input exceeds the configured byte limit")
+
+    del payload[-len(BRACKETED_PASTE_END) :]
+    if read_exact(stream, len(SUBMIT)) != SUBMIT:
+        raise InputFrameError("initial input is missing the submit marker")
+    if not payload:
+        raise InputFrameError("initial input must not be empty")
+    try:
+        return payload.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise InputFrameError("initial input is not valid UTF-8") from error
+
+
+def validate_executable(path: str) -> None:
+    if not os.path.isabs(path):
+        raise InputFrameError("Codex executable must be an absolute path")
+    try:
+        mode = os.stat(path).st_mode
+    except OSError as error:
+        raise InputFrameError("Codex executable is unavailable") from error
+    if not stat.S_ISREG(mode) or not os.access(path, os.X_OK):
+        raise InputFrameError("Codex executable is not an executable regular file")
+
+
+def secure_regular_file(path: str) -> None:
+    metadata = os.lstat(path)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise InputFrameError("Codex path file must be a regular file")
+    if metadata.st_uid != os.geteuid():
+        raise InputFrameError("Codex path file must be owned by the current user")
+    if metadata.st_mode & 0o022:
+        raise InputFrameError("Codex path file must not be group or world writable")
+
+
+def sidecar_path() -> str:
+    return os.path.realpath(__file__) + SIDECAR_SUFFIX
+
+
+def read_codex_binary(sidecar: str) -> str:
+    try:
+        secure_regular_file(sidecar)
+        with open(sidecar, encoding="utf-8") as stream:
+            content = stream.read()
+    except FileNotFoundError as error:
+        raise InputFrameError(f"Codex path file {sidecar} is missing") from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise InputFrameError(f"Codex path file {sidecar} is unreadable") from error
+    path = content.removesuffix("\n")
+    if not path or "\n" in path:
+        raise InputFrameError(f"Codex path file {sidecar} must hold one path")
+    validate_executable(path)
+    return path
+
+
+def codex_environment(environment: dict[str, str]) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in environment.items()
+        if name not in DROPPED_ENVIRONMENT
+        and not name.startswith(DROPPED_ENVIRONMENT_PREFIX)
+    }
+
+
+def fail(message: str) -> NoReturn:
+    print(f"{PROGRAM_NAME}: {message}", file=sys.stderr)
+    raise SystemExit(EXIT_USAGE)
+
+
+def codex_arguments(
+    codex_binary: str,
+    model: str,
+    reasoning_effort: str,
+    schema_path: Path,
+    result_path: Path,
+) -> list[str]:
+    return [
+        codex_binary,
+        "exec",
+        "--model",
+        model,
+        "--config",
+        f'model_reasoning_effort="{reasoning_effort}"',
+        "--config",
+        'approval_policy="never"',
+        "--sandbox",
+        "read-only",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--color",
+        "never",
+        "--output-schema",
+        str(schema_path),
+        "--output-last-message",
+        str(result_path),
+        "-",
+    ]
+
+
+def trusted_head_sha(prompt: str) -> str:
+    matches = TRUSTED_HEAD_PATTERN.findall(prompt)
+    if len(matches) != 1:
+        raise InputFrameError("trusted pull request head is missing or ambiguous")
+    return matches[0]
+
+
+def checkout_head_sha(cwd: Path | None = None) -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=cwd,
+    )
+    head = completed.stdout.strip()
+    if completed.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise InputFrameError("review checkout HEAD is unavailable")
+    return head
+
+
+def verify_checkout_clean(cwd: Path | None = None) -> None:
+    status = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ],
+        capture_output=True,
+        text=True,
+        errors="surrogateescape",
+        check=False,
+        cwd=cwd,
+    )
+    if status.returncode != 0:
+        raise InputFrameError("review checkout status is unavailable")
+    if status.stdout:
+        raise InputFrameError("review checkout is not clean")
+
+
+def verify_checkout_head(prompt: str, cwd: Path | None = None) -> str:
+    expected_head_sha = trusted_head_sha(prompt)
+    if checkout_head_sha(cwd) != expected_head_sha:
+        raise InputFrameError(
+            "review checkout HEAD does not match the trusted pull request head"
+        )
+    verify_checkout_clean(cwd)
+    base_matches = TRUSTED_BASE_PATTERN.findall(prompt)
+    if len(base_matches) != 1:
+        raise InputFrameError("trusted pull request base is missing or ambiguous")
+    base_available = subprocess.run(
+        ["git", "cat-file", "-e", base_matches[0] + "^{commit}"],
+        capture_output=True,
+        check=False,
+        cwd=cwd,
+    )
+    if base_available.returncode != 0:
+        raise InputFrameError("trusted pull request base is unavailable in the review checkout")
+    return expected_head_sha
+
+
+def validate_blocking_and_prior_findings(value: dict) -> None:
+    """Checks the two fields that the Claude result carries as well."""
+    findings = value.get("findings")
+    if isinstance(findings, list) and not all(
+        isinstance(finding, dict) and isinstance(finding.get("blocking"), bool)
+        for finding in findings
+    ):
+        raise InputFrameError("Codex review result has a finding without a blocking flag")
+    prior_findings = value.get("prior_findings")
+    if not isinstance(prior_findings, list) or not all(
+        isinstance(verdict, dict)
+        and set(verdict) == PRIOR_VERDICT_KEYS
+        and isinstance(verdict["key"], str)
+        and verdict["key"]
+        and verdict["status"] in PRIOR_STATUSES
+        and isinstance(verdict["note"], str)
+        and verdict["note"]
+        and isinstance(verdict["relies_on"], str)
+        for verdict in prior_findings
+    ):
+        raise InputFrameError("Codex review result has invalid prior findings")
+
+
+def encoded_result(path: Path, maximum_bytes: int, expected_head_sha: str) -> str:
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise InputFrameError("Codex did not produce a review result") from error
+    if not data or len(data) > maximum_bytes:
+        raise InputFrameError("Codex review result has an invalid size")
+    try:
+        value = json.loads(data.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise InputFrameError("Codex review result is not valid JSON") from error
+    if not isinstance(value, dict):
+        raise InputFrameError("Codex review result must be an object")
+    if value.get("status") != "completed" or value.get("reviewed_head_sha") != expected_head_sha:
+        raise InputFrameError("Codex did not complete a review of the trusted pull request head")
+    validate_blocking_and_prior_findings(value)
+    compact = json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    if len(compact) > maximum_bytes:
+        raise InputFrameError("Codex review result exceeds the configured byte limit")
+    return base64.b64encode(compact).decode("ascii")
+
+
+def exec_version_probe() -> NoReturn:
+    try:
+        codex_binary = read_codex_binary(sidecar_path())
+    except InputFrameError as error:
+        fail(str(error))
+    os.execv(codex_binary, [codex_binary, "--version"])
+
+
+def main() -> NoReturn:
+    # Pohunek's runtime version probe runs the profile program with a bare
+    # --version and without the profile args, so answer it for Codex.
+    if sys.argv[1:] == ["--version"]:
+        exec_version_probe()
+    if len(sys.argv) != 7:
+        fail(
+            "expected Codex executable, maximum input size, maximum result size, "
+            "maximum retention time, model, and reasoning effort"
+        )
+    (
+        codex_binary,
+        maximum_bytes_text,
+        maximum_result_bytes_text,
+        maximum_retention_seconds_text,
+        model,
+        reasoning_effort,
+    ) = sys.argv[1:]
+    try:
+        maximum_bytes = int(maximum_bytes_text)
+        maximum_result_bytes = int(maximum_result_bytes_text)
+        maximum_retention_seconds = int(maximum_retention_seconds_text)
+    except ValueError:
+        fail("maximum sizes and retention time must be integers")
+    if (
+        maximum_bytes <= 0
+        or maximum_result_bytes <= 0
+        or maximum_retention_seconds <= 0
+    ):
+        fail("maximum sizes and retention time must be positive")
+    if reasoning_effort not in REASONING_EFFORTS:
+        fail("reasoning effort is invalid")
+    try:
+        configured_binary = read_codex_binary(sidecar_path())
+    except InputFrameError as error:
+        fail(str(error))
+    if codex_binary != configured_binary:
+        fail("Codex executable argument differs from the Codex path file")
+    if not sys.stdin.isatty():
+        fail("stdin must be a Pohunek-managed PTY")
+
+    descriptor = sys.stdin.fileno()
+    original_attributes = termios.tcgetattr(descriptor)
+    try:
+        tty.setraw(descriptor)
+        prompt = read_framed_prompt(sys.stdin.buffer, maximum_bytes)
+    except InputFrameError as error:
+        fail(str(error))
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSANOW, original_attributes)
+
+    try:
+        expected_head_sha = verify_checkout_head(prompt)
+    except InputFrameError as error:
+        fail(str(error))
+
+    with tempfile.TemporaryDirectory(prefix="codex-adapter-") as directory:
+        temporary_directory = Path(directory)
+        os.chmod(temporary_directory, 0o700)
+        schema_path = temporary_directory / "schema.json"
+        result_path = temporary_directory / "result.json"
+        schema_path.write_text(
+            json.dumps(RESULT_SCHEMA, separators=(",", ":"), sort_keys=True),
+            encoding="utf-8",
+        )
+        os.chmod(schema_path, 0o600)
+        completed = subprocess.run(
+            codex_arguments(
+                codex_binary,
+                model,
+                reasoning_effort,
+                schema_path,
+                result_path,
+            ),
+            input=prompt.encode("utf-8"),
+            env=codex_environment(dict(os.environ)),
+            check=False,
+        )
+        exit_status = completed.returncode
+        if completed.returncode == 0:
+            try:
+                verify_checkout_head(prompt)
+                result = encoded_result(result_path, maximum_result_bytes, expected_head_sha)
+            except InputFrameError as error:
+                print(f"{PROGRAM_NAME}: {error}", file=sys.stderr)
+                exit_status = EXIT_USAGE
+            else:
+                print(f"\n{RESULT_MARKER_PREFIX}{result}]", flush=True)
+        print(f"\n{EXIT_LINE_FORMAT.format(exit_status)}", flush=True)
+        time.sleep(maximum_retention_seconds)
+    raise SystemExit(exit_status)
+
+
+if __name__ == "__main__":
+    main()
