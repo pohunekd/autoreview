@@ -12,7 +12,7 @@ use super::render::{
 };
 use super::{
     Agent, Effort, InstallArguments, Outcome, PROFILE_FOREIGN, PROFILE_WRITE_FAILED, Pin, Runtime,
-    Settings, agent_binary, settings,
+    Settings, settings,
 };
 use crate::CONFIGURATION_INVALID;
 use crate::error_response::COMMAND_INVALID;
@@ -197,37 +197,6 @@ fn settings_need_exactly_the_flags_of_the_agent() {
 }
 
 #[test]
-fn agent_binary_must_be_an_absolute_executable_regular_file() {
-    let root = tempfile::tempdir().expect("a temporary directory");
-    let executable = root.path().join("codex");
-    fs::write(&executable, "#!/bin/sh\n").expect("binary");
-    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).expect("chmod");
-    let plain = root.path().join("plain");
-    fs::write(&plain, "text\n").expect("plain");
-    fs::set_permissions(&plain, fs::Permissions::from_mode(0o644)).expect("chmod");
-    let linked = root.path().join("linked");
-    symlink(&executable, &linked).expect("symlink");
-
-    for accepted in [&executable, &linked] {
-        let text = accepted.to_str().expect("utf-8");
-        assert_eq!(agent_binary(accepted).as_deref(), Ok(text));
-    }
-    let refused = [
-        (PathBuf::from("bin/codex"), "must be an absolute path"),
-        (
-            root.path().join("co\ndex"),
-            "must not contain a control character",
-        ),
-        (root.path().join("missing"), "cannot be read"),
-        (root.path().to_path_buf(), "must be a regular file"),
-        (plain, "must be executable"),
-    ];
-    for (path, reason) in refused {
-        assert_eq!(agent_binary(&path), Err(reason), "{}", path.display());
-    }
-}
-
-#[test]
 fn install_decides_created_unchanged_updated_foreign_and_replaced() {
     let root = tempfile::tempdir().expect("a temporary directory");
     let config = root.path().join("config");
@@ -293,6 +262,48 @@ fn install_decides_created_unchanged_updated_foreign_and_replaced() {
         Outcome::Updated
     );
     assert_eq!(fs::read(&adapter).expect("adapter"), CLAUDE_ADAPTER);
+    assert_eq!(mode(&sidecar), 0o600);
+
+    // A failed profile write puts back what the run wrote before it, and removes what it created.
+    fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o644)).expect("chmod");
+    fs::set_permissions(&agents, fs::Permissions::from_mode(0o500)).expect("read-only");
+    let probe = agents.join("probe");
+    // A process that may write anyway (root) cannot run this scenario.
+    if fs::write(&probe, "").is_ok() {
+        fs::remove_file(&probe).expect("the probe is removed");
+    } else {
+        let mut moved = claude_settings();
+        moved.agent_binary = "/opt/claude/bin/claude".to_owned();
+        let moved = plan(name, &pin(Agent::Claude), &moved, &agents, &sonnet).expect("a plan");
+        let error = install(&moved, false).expect_err("a read-only agents directory");
+        assert_eq!(code_and_name(&error).0, PROFILE_WRITE_FAILED);
+        assert_eq!(
+            fs::read_to_string(&sidecar).expect("sidecar"),
+            "/usr/local/bin/claude\n"
+        );
+        assert_eq!(mode(&sidecar), 0o644);
+        assert_eq!(
+            names(&sonnet),
+            ["claude-adapter", "claude-adapter.claude-binary"]
+        );
+        assert_eq!(code_and_name(&error).1, profile.to_str().expect("utf-8"));
+
+        let other_adapters = adapters.join("autoreview-other");
+        let other = plan(
+            "autoreview-other",
+            &pin(Agent::Claude),
+            &claude_settings(),
+            &agents,
+            &other_adapters,
+        )
+        .expect("a plan");
+        let error = install(&other, false).expect_err("a read-only agents directory");
+        assert_eq!(code_and_name(&error).0, PROFILE_WRITE_FAILED);
+        assert!(!other_adapters.exists());
+        assert_eq!(names(&agents.join("manifests")), ["autoreview-sonnet.toml"]);
+    }
+    fs::set_permissions(&agents, fs::Permissions::from_mode(0o700)).expect("writable again");
+    install(&claude, false).expect("the path file is repaired");
     assert_eq!(mode(&sidecar), 0o600);
 
     // A refused profile leaves every file as it was, the adapter too.

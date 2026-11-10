@@ -79,7 +79,10 @@ pub(crate) fn error_response(error: &(dyn StdError + 'static)) -> ErrorResponse 
                 "{name} was not written by profiles install; move it away, or pass --replace \
 for a regular file."
             ),
-            PROFILE_WRITE_FAILED => format!("{name} cannot be written; the profile is unchanged."),
+            PROFILE_WRITE_FAILED => format!(
+                "{name} cannot be written; profiles install restored the files it had \
+rewritten and removed those it had created, and logged a warning for any it could not."
+            ),
             RUNTIME_PACKAGE_MISSING => format!(
                 "No selected official pohunek package serves {name}. From the extracted pohunek \
 release, run: pohunek plugin install runtime/packages/{name}.tar.zst --catalog \

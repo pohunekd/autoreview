@@ -11,7 +11,7 @@ mod render;
 
 use std::ffi::OsStr;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use autoreview_engine::Error;
@@ -36,8 +36,23 @@ pub(crate) const RUNTIME_PACKAGE_MISSING: &str = "runtime_package_missing";
 /// Error code of a pohunek CLI call that failed or printed an unexpected answer.
 pub(crate) const POHUNEK_COMMAND_FAILED: &str = "pohunek_command_failed";
 
-/// Permission bits that let any execute bit count as executable.
+/// Permission bits that let any execute bit count as executable, as they do for root.
 const EXECUTE_BITS: u32 = 0o111;
+
+/// The execute bit of a file's owner.
+const OWNER_EXECUTE_BIT: u32 = 0o100;
+
+/// The execute bit of a file's group.
+const GROUP_EXECUTE_BIT: u32 = 0o010;
+
+/// The execute bit of every other user.
+const OTHER_EXECUTE_BIT: u32 = 0o001;
+
+/// The user id of root, which may run a file that has any execute bit.
+const ROOT_UID: u32 = 0;
+
+/// The directory of this process; Linux shows it as owned by the effective user and group.
+const PROCESS_DIRECTORY: &str = "/proc/self";
 
 /// The subcommands of `profiles`.
 #[derive(Debug, Subcommand)]
@@ -315,10 +330,15 @@ pub(crate) fn settings(arguments: &InstallArguments) -> Result<Settings, Error> 
     })
 }
 
-/// Returns `path` as text when it names an executable regular file by an absolute path.
+/// Returns `path` as text when it names, by an absolute path, a regular file that this user
+/// may execute.
 ///
 /// The adapter reads the path back from a one-line file, and the profile quotes it, so a
-/// control character is refused. A symbolic link is followed, as the adapter follows it.
+/// control character is refused. A symbolic link is followed, as the adapter follows it. The
+/// execute bit is the one that applies to the effective user, as the adapter's
+/// `os.access(X_OK)` checks it: the owner's bit for an own file, the group's bit when the file's
+/// group is the effective group, else the bit of others. std reads no supplementary groups, so
+/// a file executable only through one is refused.
 ///
 /// # Errors
 ///
@@ -337,8 +357,18 @@ pub(crate) fn agent_binary(path: &Path) -> Result<String, &'static str> {
     if !metadata.is_file() {
         return Err("must be a regular file");
     }
-    if metadata.permissions().mode() & EXECUTE_BITS == 0 {
-        return Err("must be executable");
+    let process = fs::metadata(PROCESS_DIRECTORY).map_err(|_error| "cannot be checked")?;
+    let bit = if process.uid() == ROOT_UID {
+        EXECUTE_BITS
+    } else if metadata.uid() == process.uid() {
+        OWNER_EXECUTE_BIT
+    } else if metadata.gid() == process.gid() {
+        GROUP_EXECUTE_BIT
+    } else {
+        OTHER_EXECUTE_BIT
+    };
+    if metadata.permissions().mode() & bit == 0 {
+        return Err("must be executable by this user");
     }
     Ok(text.to_owned())
 }

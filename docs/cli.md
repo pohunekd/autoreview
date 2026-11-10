@@ -101,9 +101,12 @@ default:
 - `--model`: the model of the review run, `[A-Za-z0-9][A-Za-z0-9._-]*`.
 - `--effort`: `low`, `medium`, `high`, `xhigh` or, for Claude only, `max`.
 - `--agent-binary`: the absolute path of the Claude Code or Codex executable.
-  It must be a regular file with an execute bit, after links are followed, and
-  must not contain a control character. The path is kept as given, so a link
-  that a self-updating agent moves is followed at each run.
+  It must be a regular file that the user running the command may execute,
+  after links are followed, and must not contain a control character. The
+  execute bit is the owner's for an own file, the group's when the file's group
+  is the user's primary group, else the one of others; a file that only a
+  supplementary group may execute is refused. The path is kept as given, so a
+  link that a self-updating agent moves is followed at each run.
 - `--maximum-input-bytes`: the largest request the adapter accepts. A re-review
   request also carries the prior findings and the discussion (bounded by
   `limits.max_discussion_characters`), so the value must cover them.
@@ -118,12 +121,15 @@ default:
 A Codex flag with `--agent claude`, or a missing one with `--agent codex`, is
 `command_invalid`.
 
-It calls the `pohunek` found on `PATH` twice for the host check and once for
-`pohunek plugin list --json`. The base runtime must be served by exactly one
-official package that is enabled, selected and healthy; the profile pins its
-package id and digest. `<config>` is `$XDG_CONFIG_HOME`, or `$HOME/.config`
+It calls the `pohunek` found on `PATH` for the host check, once when `--host`
+is `local` and twice otherwise, and once for `pohunek plugin list --json`. The
+base runtime must be served by exactly one official package that is enabled,
+selected and healthy; the profile pins its package id and digest. `<config>` is `$XDG_CONFIG_HOME`, or `$HOME/.config`
 when that is unset, and `<data>` is `$XDG_DATA_HOME`, or `$HOME/.local/share`.
-It writes these files, and creates their missing directories with mode 0700:
+It writes these files, and creates their missing directories with mode 0700.
+`<config>/pohunek` must exist; the command creates only `agents` and
+`agents/manifests` in it, so a missing one is `profile_write_failed` naming
+the agents directory:
 
 | File | Mode | Content |
 |---|---|---|
@@ -141,7 +147,8 @@ keeps the run read-only is in
 `[env]` table is empty: the agent runs with the daemon's environment and its
 default config home, and with no telemetry settings. pohunek ignores every
 profile when `agents` or `agents/manifests` is writable by the group or others,
-so such a directory, like such an adapter directory, is `profile_write_failed`.
+so such a directory, like such a `<data>/autoreview`, `<data>/autoreview/adapters`
+or adapter directory, is `profile_write_failed`.
 
 The first line of the profile and of the manifest marks the file as written by
 this command and holds the SHA-256 of the rest of the file without its
@@ -159,7 +166,11 @@ before anything is written:
 | a link, a directory or another non-regular file | `profile_foreign` | `profile_foreign` |
 
 A refused file leaves every file as it was. A rewrite goes through a temporary
-file next to it and a rename, so pohunek never reads a partial file. The
+file with a name of its own next to it and a rename, so pohunek never reads a
+partial file and a temporary file left by a killed run does not block the next
+one. When a later step fails, the command gives every file it rewrote its
+earlier bytes and mode back and removes the files and directories it created,
+so a working profile and its path file stay consistent. The
 `result` is `replaced` when `--replace` overwrote a file, `created` when the
 profile was absent, `updated` when another file was written, and `unchanged`
 when every file was kept, so a second run with the same flags prints

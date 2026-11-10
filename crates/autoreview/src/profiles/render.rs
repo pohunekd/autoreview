@@ -64,6 +64,8 @@ pub(super) struct Plan {
 
 /// Returns the plan of profile `name` over `pin`, with the adapter in `adapters`.
 ///
+/// `adapters` is `<data>/autoreview/adapters/<name>`; its two parents are checked as well.
+///
 /// # Errors
 ///
 /// Returns `workflow_failed` when a value cannot be quoted or a path is not UTF-8.
@@ -86,8 +88,15 @@ pub(super) fn plan(
         .to_owned();
     // The adapter reads the agent path from `<its own path>.<agent>-binary`.
     let sidecar = adapters.join(format!("{file_name}.{}-binary", agent.base()));
+    // `<data>/autoreview/adapters` and `<data>/autoreview` are ours too, so they are checked.
+    let (shared, autoreview) = adapters
+        .parent()
+        .and_then(|shared| Some((shared, shared.parent()?)))
+        .ok_or_else(|| failed("the adapter directory has no parent directories"))?;
     let mut directories = vec![
-        Directory::new(adapters.to_path_buf(), true),
+        Directory::new(autoreview.to_path_buf(), true),
+        Directory::new(shared.to_path_buf(), false),
+        Directory::new(adapters.to_path_buf(), false),
         Directory::new(agents.to_path_buf(), false),
     ];
     let mut files = vec![

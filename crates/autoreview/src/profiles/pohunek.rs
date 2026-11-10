@@ -25,11 +25,28 @@ const DIGEST_PREFIX: &str = "sha256:";
 /// Length of the hex text of a SHA-256 digest.
 const DIGEST_HEX_LENGTH: usize = 64;
 
+/// The longest pohunek error code that a failed call may report.
+const ERROR_CODE_MAX_LENGTH: usize = 64;
+
 /// The process envelope of a pohunek `--json` answer; a missing or `null` `ok` is refused.
 #[derive(Debug, Deserialize)]
 struct Envelope<T> {
     /// The result of the call.
     ok: Option<T>,
+}
+
+/// The envelope of a failed pohunek `--json` call.
+#[derive(Debug, Deserialize)]
+struct FailureEnvelope {
+    /// The error of the call.
+    err: FailureDetail,
+}
+
+/// The error object of a failed pohunek call.
+#[derive(Debug, Deserialize)]
+struct FailureDetail {
+    /// The error code that pohunek reports.
+    code: String,
 }
 
 /// The part of `host governance inspect --json` that identifies a daemon.
@@ -141,7 +158,8 @@ fn digest_valid(digest: &str) -> bool {
 /// # Errors
 ///
 /// Returns `pohunek_command_failed` naming the command when it cannot start, exits non-zero or
-/// prints something else than the expected JSON.
+/// prints something else than the expected JSON. After a non-zero exit, the cause carries the
+/// error code of the `err` envelope on stdout when the code is well-formed.
 fn pohunek_json<T: for<'de> Deserialize<'de>>(arguments: &[&str]) -> Result<T, Error> {
     let command = format!("{POHUNEK_PROGRAM} {}", arguments.join(" "));
     let output = Command::new(POHUNEK_PROGRAM)
@@ -151,14 +169,33 @@ fn pohunek_json<T: for<'de> Deserialize<'de>>(arguments: &[&str]) -> Result<T, E
         .output()
         .map_err(|error| pohunek_failed(&command, Some(Box::new(error))))?;
     if !output.status.success() {
-        let cause = format!("exited with {}", output.status);
-        return Err(pohunek_failed(&command, Some(cause.into())));
+        let cause: BoxError = format!("exited with {}", output.status).into();
+        let cause = match failure_code(&output.stdout) {
+            Some(code) => Box::new(Error::pohunek_code(code, cause)),
+            None => cause,
+        };
+        return Err(pohunek_failed(&command, Some(cause)));
     }
     let envelope: Envelope<T> = serde_json::from_slice(&output.stdout)
         .map_err(|error| pohunek_failed(&command, Some(Box::new(error))))?;
     envelope
         .ok
         .ok_or_else(|| pohunek_failed(&command, Some("the answer holds no ok value".into())))
+}
+
+/// Returns the error code of the `err` envelope in `stdout`, when it matches
+/// `^[a-z][a-z0-9_]{0,63}$`.
+///
+/// The rule is the one of the engine's pohunek calls (`failure_code` in the `external` crate),
+/// which that crate keeps private to its runner; this command runs pohunek itself.
+fn failure_code(stdout: &[u8]) -> Option<String> {
+    let envelope: FailureEnvelope = serde_json::from_slice(stdout).ok()?;
+    let code = envelope.err.code;
+    let mut bytes = code.bytes();
+    let well_formed = code.len() <= ERROR_CODE_MAX_LENGTH
+        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
+    well_formed.then_some(code)
 }
 
 /// Returns the error of a pohunek CLI call that failed.
