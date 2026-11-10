@@ -349,7 +349,7 @@ Reviewers:
   `review_adapter_outdated`, and the Go engine refuses the report of the
   adapter. Switch every Codex profile to the adapter in the same maintenance
   window as the upgrade, and switch it back when you roll back.
-- The older Codex wrapper marked every finding blocking. On the first Codex
+- The Go engine treats every Codex finding as blocking. On the first Codex
   re-review after the upgrade, every finding of the last review published
   before it is a prior finding that the reviewer must settle.
 
