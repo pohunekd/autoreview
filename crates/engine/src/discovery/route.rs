@@ -22,6 +22,18 @@ const PROJECT_ROUTE_NOT_FOUND: &str = "project_route_not_found";
 /// Error code of a repository that two projects of one host serve.
 const PROJECT_ROUTE_AMBIGUOUS: &str = "project_route_ambiguous";
 
+/// Reports whether a route error comes from a host that failed.
+///
+/// Every other route error is what the hosts answered: `project_route_not_found` or
+/// `project_route_ambiguous`. After a host failure the review never started on a host, so it
+/// waits for one instead of using its retries.
+pub(crate) fn host_unavailable(err: &Error) -> bool {
+    !matches!(
+        error_code(err),
+        PROJECT_ROUTE_NOT_FOUND | PROJECT_ROUTE_AMBIGUOUS
+    )
+}
+
 /// The failure of one host's project list, kept for the rest of a discovery pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HostFailure {

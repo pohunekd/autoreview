@@ -17,6 +17,11 @@ review that still fails after its retries stops with the event
 `review_stopped`. The commands here inspect and restart such a review. Error
 codes not listed here are in the [troubleshooting runbook](troubleshooting.md).
 
+A review that waits for a review host did not stop. Its `review_stopped` message
+says "Reviews wait for a review host"; fix the host, and the review starts on the
+next discovery pass without `autoreview retry` (see
+[waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host)).
+
 ## Review stopped
 
 `review_stopped` is an action-level event: the notifier asks someone to act.

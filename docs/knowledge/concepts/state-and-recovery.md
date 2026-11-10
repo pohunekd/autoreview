@@ -105,9 +105,34 @@ CLI output:
 |---|---|
 | `waiting` | A head was seen. The review starts after `schedule.debounce_seconds` of quiet time. |
 | `running` | A review of this head is in progress. |
-| `retry_wait` | The last attempt failed with a retryable failure. The next attempt is due at a set time. |
+| `retry_wait` | The last attempt failed with a retryable failure, and the next attempt is due at a set time; or the review waits for a review host and is due on every pass. |
 | `completed` | A published review covers the head, or the review finished. |
 | `failed` | The attempts are used up, or the failure is not retryable. |
+
+### Waiting for a review host
+
+Finding a review host is not one of these layers, because it has no limit. A
+review starts on a host only after a host's project list names its repository.
+When every host the review may use fails that list (unreachable, a pohunek error,
+a timeout), no review started, so the failure is an outage of the hosts and not
+of the review. Each skipped host is still logged as `review host skipped`. The
+review is not given up and uses none of `schedule.retry_delays_seconds`: it stays
+due, keeps its attempt number, and is dispatched on the first discovery pass after
+a host answers again. No `autoreview retry` is needed.
+
+The outage is announced once, with the `review_stopped` event: the message says
+that reviews wait for a review host, names the first waiting review, and ends with
+the host error code (`Diagnostic: pohunek_request_failed.`). The mark of a waiting
+review is stored with its schedule record, so later passes and a restart of the
+service do not announce the same outage again. A new outage, after every waiting
+review has started or left, is announced again.
+
+A failure after a review started on a host (a session that could not start, a
+lost session, a failed base fetch) keeps the retry budget of the scheduler row
+above. A route error that the hosts answered is no outage: no host that answered
+has the repository (`project_route_not_found`), or the host that serves it has it
+twice (`project_route_ambiguous`). It fails through the scheduler and ends
+`failed`.
 
 ## Cleanup of reviewer sessions
 

@@ -294,7 +294,7 @@ events have their own route, is configured in [config.yaml](configuration.md#not
 | `approval_requested` | A clean review waits for a human approval |
 | `handoff_reminder` | Notes handed to an author got no renewed review request within `notes_handoff.reminder_hours` |
 | `findings_on_own_pr` | A review of the reviewing account's own pull request has blocking findings |
-| `review_stopped` | A review failed after its retries, or an approved review could not be published |
+| `review_stopped` | A review failed after its retries, reviews wait for a review host, or an approved review could not be published |
 | `cleanup_manual` | A reviewer session could not be removed and needs a manual `pohunek session rm` |
 | `command_failed` | An operator command (approve, retry) failed |
 | `approved` | An approval was published |

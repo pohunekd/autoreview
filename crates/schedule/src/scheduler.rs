@@ -74,6 +74,9 @@ pub struct Record {
     /// The error code of the last failure.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub error_code: String,
+    /// Marks a record that waits because no review host could start its review.
+    #[serde(skip_serializing_if = "is_false")]
+    pub awaits_host: bool,
 }
 
 autoreview_go_compat::object_only_serde!(Record);
@@ -89,8 +92,21 @@ impl Default for Record {
             workflow_id: String::new(),
             due_at: go_zero_time(),
             error_code: String::new(),
+            awaits_host: false,
         }
     }
+}
+
+impl Record {
+    /// Reports whether the record waits for a review host to answer.
+    pub fn waits_for_host(&self) -> bool {
+        self.awaits_host && self.phase == "retry_wait"
+    }
+}
+
+/// Reports whether a flag is unset; an unset flag is not written.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Go's zero `time.Time`, which Go writes for a record without a due time.
@@ -188,6 +204,7 @@ pub fn plan(
             retries: 0,
             workflow_id: String::new(),
             error_code: String::new(),
+            awaits_host: false,
         }
     } else {
         previous
@@ -309,6 +326,7 @@ pub fn after_failure(
     policy: &Policy,
 ) -> Result<Record, Error> {
     r.error_code = failure_code(code);
+    r.awaits_host = false;
     let index = usize::try_from(r.retries).ok();
     let delay = index.and_then(|i| policy.retry_delays.get(i));
     if retryable(&r.error_code)
@@ -322,6 +340,17 @@ pub fn after_failure(
     }
     r.phase = "failed".to_owned();
     Ok(r)
+}
+
+/// Keeps a dispatched record due while no review host can start its review.
+///
+/// The record waits in `retry_wait` at its due time, so the next pass dispatches it again. The
+/// attempt and the retry budget stay as they are, because no review started.
+pub fn wait_for_host(mut r: Record, code: &str) -> Record {
+    r.phase = "retry_wait".to_owned();
+    r.error_code = failure_code(code);
+    r.awaits_host = true;
+    r
 }
 
 /// Extracts the failure code from the failure text of a run.
@@ -410,6 +439,27 @@ pub fn notification(target: &Target, record: &Record) -> String {
             record.error_code
         )
     }
+}
+
+/// Returns the notice that reviews wait for a review host.
+///
+/// It names the review of `target` as the first one that waits, and the host error code.
+pub fn host_wait_notification(target: &Target, record: &Record) -> String {
+    let description = failure_explanation(&record.error_code);
+    let head: String = target
+        .head_sha
+        .chars()
+        .take(NOTIFICATION_HEAD_CHARS)
+        .collect();
+    format!(
+        "Reviews wait for a review host: no review host could start the review for {} at {}. \
+         {} Each waiting review starts on the first discovery pass after a host answers and \
+         uses no automatic retry. Diagnostic: {}.",
+        target.key(),
+        head,
+        description,
+        record.error_code
+    )
 }
 
 /// Adds `delay` to `now`, failing instead of panicking when the result leaves the range of `time`.

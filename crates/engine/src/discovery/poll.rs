@@ -11,7 +11,7 @@ use autoreview_schedule::scheduler::{self, Record, Run};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
-use super::route::HostFailures;
+use super::route::{HostFailures, host_unavailable};
 use super::{Notice, PHASE_RETRY_WAIT, record_event};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
@@ -169,6 +169,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let mut dispatches = Vec::new();
         // A host that fails once is not asked again in this pass, so it costs one timeout.
         let mut host_failures = HostFailures::new();
+        // An outage of the review hosts is announced once, by the first review that waits.
+        let mut host_wait_announced = state.schedule.values().any(Record::waits_for_host);
         for (key, candidate) in &present {
             let pr = &candidate.pull_request;
             let entries = i64::try_from(state.schedule.len()).unwrap_or(i64::MAX);
@@ -208,14 +210,24 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 notices.push(self.notice(record_event(&decision.record), key, message)?);
             }
             if decision.dispatch {
-                // A route failure is a scheduler failure with its own retry policy, so it is
-                // not retried here.
+                // A route failure is not retried here. A failed host leaves the review due for
+                // the next pass; any other route failure follows the scheduler's retry policy.
                 let sources = &candidate.rule.pipeline.project_sources;
                 match self
                     .resolve_route(cancel, &pr.repository, sources, &mut host_failures)
                     .await
                 {
                     Err(err) if cancel.is_cancelled() => return Err(err),
+                    Err(err) if host_unavailable(&err) => {
+                        decision.record =
+                            scheduler::wait_for_host(decision.record, error_code(&err));
+                        if !host_wait_announced {
+                            host_wait_announced = true;
+                            let message =
+                                scheduler::host_wait_notification(&target, &decision.record);
+                            notices.push(self.notice(Event::ReviewStopped, key, message)?);
+                        }
+                    }
                     Err(err) => {
                         decision.record = scheduler::after_failure(
                             decision.record,
@@ -228,6 +240,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                         notices.push(self.notice(record_event(&decision.record), key, message)?);
                     }
                     Ok(route) => {
+                        decision.record.awaits_host = false;
                         let published = state.published.get(key);
                         let (scope, prior) = self.plan_review(cancel, candidate, published).await?;
                         let handoff = self.notes_handoff(published, pr)?;

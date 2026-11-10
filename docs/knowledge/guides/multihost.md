@@ -77,12 +77,14 @@ discovery pass (`skipped_after_failure` is then `true`), so a dead host costs on
 `pohunek.timeout_seconds` per pass, not one per pull request.
 
 A failing host never stops the reviews of repositories that other hosts serve.
-When no later host has the repository, the review fails with the code of the
-first skipped host whose code is retried (for example `pohunek_request_timeout`),
-or of the first skipped host when none is, not with `project_route_not_found`.
-A retried code gets the next attempt after the next of
-[`schedule.retry_delays_seconds`](../../configuration.md#schedule); when the
-delays run out, the review ends `failed`.
+When no later host has the repository, the review waits for a review host, not
+`project_route_not_found`. It uses no retry of
+[`schedule.retry_delays_seconds`](../../configuration.md#schedule), however long
+the outage lasts, and starts on the first discovery pass after a host answers,
+without `autoreview retry`. One `review_stopped` message per outage says that
+reviews wait for a review host and names the host error code, for example
+`Diagnostic: pohunek_request_timeout.` (see
+[waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host)).
 
 ## Register each repository
 
@@ -184,6 +186,7 @@ For review limits and session timeouts, see
 | `project_route_not_found` | No host that answered has the repository as a project allowed by `project_sources` | Run `pohunek project add` on the host that should review it, or allow the source in the pipeline |
 | `project_route_ambiguous` | The host that serves the repository has it as two or more projects | Remove the extra registration, or add a `route_overrides` entry |
 | `review host skipped` (WARN) | A host did not answer its project list; the next host was asked | Check the host and the overlay |
+| "Reviews wait for a review host" (`review_stopped`) | No host that may serve the repository answered; the review waits and starts once one does | Check the host, the overlay and the pohunek versions; no `autoreview retry` is needed |
 | `pohunek_request_timeout` | A host did not answer in time | Check the host and the overlay; raise `pohunek.timeout_seconds` for slow links |
 | `pohunek_session_start_failed` | The host could not start a session | Check the host's pohunek daemon and the profile installed on it |
 

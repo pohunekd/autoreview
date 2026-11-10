@@ -96,11 +96,15 @@ The repository is not registered as a pohunek project on any host in
 
 A host that does not answer is skipped and logged as `review host skipped` with
 the host and the code (`pohunek_request_failed`, `pohunek_request_timeout`). When
-no later host has the repository, the review fails with that code, not with
-`project_route_not_found`, and gets its next attempt after the next of
-[`schedule.retry_delays_seconds`](../../configuration.md#schedule); when the
-delays run out, the review ends `failed`. Check the tunnel to the host and the
-`pohunek.timeout_seconds` value.
+no later host has the repository, the review waits for a review host, not
+`project_route_not_found`: it uses none of
+[`schedule.retry_delays_seconds`](../../configuration.md#schedule), is tried again
+on every discovery pass, and starts on the first pass after a host answers,
+without `autoreview retry`. One `review_stopped` message announces the outage:
+"Reviews wait for a review host", with the host error code after `Diagnostic:`.
+Check the tunnel to the host, the pohunek versions of the CLI and the daemon, and
+the `pohunek.timeout_seconds` value. See
+[waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host).
 
 ### project_route_ambiguous
 

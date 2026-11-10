@@ -244,6 +244,16 @@ What is not compatible, by decision:
   approve a rebased head on an incremental review. No stored row changes, and a
   rollback to Go brings the Go behaviour back. The regression test is
   `rewritten_history_gets_a_full_review_on_a_codex_pipeline`.
+- **Review host outage (#241):** when every review host fails the project
+  list of a due review, the review waits in `retry_wait` at its due time with
+  its attempt and `retries` unchanged, and the schedule record gets
+  `awaits_host: true`; one `review_stopped` notice per outage says that reviews
+  wait for a review host. Go fails the route through `AfterFailure`
+  (`discovery.go:305`), uses the retry budget and stops the review. Go reads the
+  record and ignores `awaits_host`, so a rollback brings the Go behaviour back.
+  A route error that every host answered (`project_route_not_found`,
+  `project_route_ambiguous`) still fails as in Go. The regression test is
+  `review_waits_through_an_outage_of_every_review_host`.
 
 - **MCP server (#179):** `autoreview mcp` has no Go counterpart. The `mcp`
   section exists only in `config.yaml`, which Go does not read, and the server

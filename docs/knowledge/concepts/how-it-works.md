@@ -101,14 +101,15 @@ The first host with a match runs the review, and the later hosts are not asked.
 A host that fails is skipped with the warning `review host skipped` (host, code)
 and is not asked again in the same discovery pass. Two matches on one host fail
 with `project_route_ambiguous`. No match on any host fails with
-`project_route_not_found`; when a host failed, it fails with the code of the
-first skipped host whose code is retried, or of the first skipped host when none
-is, so an outage of one host is retried. `pohunek.route_overrides` pins the
-repository to one `{host, project_id}` pair: only that host is asked, and an
-override that matches none of its projects behaves as no match. A routing
-failure with a retried code gets the next attempt after the next of
-[`schedule.retry_delays_seconds`](../../configuration.md#schedule), and the
-review ends `failed` when the delays run out. The route is
+`project_route_not_found`. When a host failed and no other host has the
+repository, the review waits for a review host: it stays due, uses no retry of
+[`schedule.retry_delays_seconds`](../../configuration.md#schedule), and starts on
+the first discovery pass after a host answers (see
+[waiting for a review host](state-and-recovery.md#waiting-for-a-review-host)).
+`pohunek.route_overrides` pins the repository to one `{host, project_id}` pair:
+only that host is asked, and an override that matches none of its projects
+behaves as no match. The two route errors fail through the scheduler and end
+`failed`, because they are not retried. The route is
 stored in the review input, so every session of the review, also after a
 restart, goes to the same host and project; a retry is a new attempt and routes
 again.
