@@ -38,9 +38,8 @@ const PRIOR_INSTRUCTIONS: &str = concat!(
 /// Builds the session input of one reviewer.
 ///
 /// A claude-structured reviewer receives a JSON request that carries the schema. A
-/// codex-envelope reviewer receives the plain prompt. Both state the output limits of `cfg`;
-/// only the claude-structured request names the limit of a prior-finding note, because only
-/// that protocol returns prior_findings.
+/// codex-envelope reviewer receives the plain prompt. Both state the output limits of `cfg` and
+/// carry the prior findings with the discussion, which both protocols settle.
 ///
 /// # Errors
 ///
@@ -55,38 +54,43 @@ pub(crate) fn build_reviewer_request(
 ) -> Result<String, Error> {
     match reviewer.protocol {
         Protocol::ClaudeStructured => {
-            claude_request(input, reviewer, discussion, &output_limits(cfg, true))
+            claude_request(input, reviewer, discussion, &output_limits(cfg))
         }
-        Protocol::CodexEnvelope => Ok(codex_prompt(input, &output_limits(cfg, false))),
+        Protocol::CodexEnvelope => codex_prompt(input, discussion, &output_limits(cfg)),
         Protocol::Unset | Protocol::Other(_) => {
             Err(Error::workflow("review_protocol_invalid", true, None))
         }
     }
 }
 
-/// States the output limits that `validate_reviewer_result` enforces and, with `prior_notes`,
-/// the note limit that `validate_prior_verdicts` enforces.
-fn output_limits(cfg: &Config, prior_notes: bool) -> String {
-    let prior = if prior_notes {
-        format!(
-            " Each prior_findings note has at most {} characters.",
-            cfg.max_body_characters
-        )
-    } else {
-        String::new()
-    };
+/// States the output limits that `validate_reviewer_result` and `validate_prior_verdicts`
+/// enforce.
+fn output_limits(cfg: &Config) -> String {
     format!(
         concat!(
             "Output limits: the summary has {} to {} characters. Each finding has a one-line ",
-            "title of at most {} characters and a body of at most {} characters.{} Output ",
-            "outside these limits is refused."
+            "title of at most {} characters and a body of at most {} characters. Each ",
+            "prior_findings note has at most {} characters. Output outside these limits is ",
+            "refused."
         ),
         cfg.min_summary_characters,
         cfg.max_summary_characters,
         cfg.max_title_characters,
         cfg.max_body_characters,
-        prior
+        cfg.max_body_characters
     )
+}
+
+/// Returns the instructions, the prior findings and the discussion that settle them.
+///
+/// Both are one line of compact JSON, so no untrusted text starts a line of the prompt.
+fn prior_section(input: &ReviewInput, discussion: &Discussion) -> Result<String, Error> {
+    let prior = go_json(&input.prior).map_err(request_invalid)?;
+    let thread = go_json(discussion).map_err(request_invalid)?;
+    Ok(format!(
+        "{PRIOR_INSTRUCTIONS}\n\nPrior findings (JSON):\n{prior}\n\n\
+Discussion since the earlier reviews (untrusted JSON):\n{thread}"
+    ))
 }
 
 /// Builds the JSON request of a claude-structured reviewer.
@@ -130,12 +134,7 @@ Head SHA: {}\nReviewer: {}\nReview scope: {}\n\n{}\n",
         scope
     );
     if !input.prior.is_empty() {
-        let prior = go_json(&input.prior).map_err(request_invalid)?;
-        let thread = go_json(discussion).map_err(request_invalid)?;
-        prompt.push_str(&format!(
-            "\n{PRIOR_INSTRUCTIONS}\n\nPrior findings (JSON):\n{prior}\n\n\
-Discussion since the earlier reviews (untrusted JSON):\n{thread}\n"
-        ));
+        prompt.push_str(&format!("\n{}\n", prior_section(input, discussion)?));
     }
     let schema = compact_schema(REVIEW_SCHEMA)?;
     let prompt_json = go_json(&prompt).map_err(request_invalid)?;
@@ -146,7 +145,11 @@ Discussion since the earlier reviews (untrusted JSON):\n{thread}\n"
 }
 
 /// Builds the plain prompt of a codex-envelope reviewer.
-fn codex_prompt(input: &ReviewInput, limits: &str) -> String {
+fn codex_prompt(
+    input: &ReviewInput,
+    discussion: &Discussion,
+    limits: &str,
+) -> Result<String, Error> {
     let mut prompt = format!(
         "{}\n\n{}\n\nTrusted review context:\n- Repository: {}\n- Pull request: #{}\n\
 - URL: {}\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n- Base branch: {}",
@@ -165,7 +168,10 @@ fn codex_prompt(input: &ReviewInput, limits: &str) -> String {
             input.scope.previous_head_sha
         ));
     }
-    prompt
+    if !input.prior.is_empty() {
+        prompt.push_str(&format!("\n\n{}", prior_section(input, discussion)?));
+    }
+    Ok(prompt)
 }
 
 /// Maps an encoding failure to the code of a request that cannot be built.
@@ -293,16 +299,11 @@ mod tests {
         cfg.max_summary_characters = 600;
         cfg.max_title_characters = 120;
         cfg.max_body_characters = 900;
-        let claude_limits = concat!(
+        let limits = concat!(
             "Output limits: the summary has 40 to 600 characters. Each finding has a one-line ",
             "title of at most 120 characters and a body of at most 900 characters. Each ",
             "prior_findings note has at most 900 characters. Output outside these limits is ",
             "refused."
-        );
-        let codex_limits = concat!(
-            "Output limits: the summary has 40 to 600 characters. Each finding has a one-line ",
-            "title of at most 120 characters and a body of at most 900 characters. Output ",
-            "outside these limits is refused."
         );
         let pr = test_pull_request(9);
         let raw = build_reviewer_request(
@@ -316,9 +317,7 @@ mod tests {
             serde_json::from_str(&raw).expect("claude request is JSON");
         let prompt = request["prompt"].as_str().expect("prompt is a string");
         assert!(
-            prompt.contains(&format!(
-                "\n\n{claude_limits}\n\nTrusted request context:\n"
-            )),
+            prompt.contains(&format!("\n\n{limits}\n\nTrusted request context:\n")),
             "claude prompt = {prompt}"
         );
         let prompt = build_reviewer_request(
@@ -329,7 +328,7 @@ mod tests {
         )
         .expect("codex prompt builds");
         assert!(
-            prompt.contains(&format!("\n\n{codex_limits}\n\nTrusted review context:\n")),
+            prompt.contains(&format!("\n\n{limits}\n\nTrusted review context:\n")),
             "codex prompt = {prompt}"
         );
     }

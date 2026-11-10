@@ -28,11 +28,9 @@ reviewer declares exactly one protocol.
 | `claude-structured` | A Claude Code run with a JSON schema that the runtime enforces | The schema-enforced structured output of the run | Reviewers and the verifier |
 | `codex-envelope` | A Codex run that prints a result envelope | A base64 result frame followed by a line that reports exit status 0 | Reviewers only |
 
-Both protocols return a summary, findings and the tests the reviewer ran. A
-`claude-structured` result also carries the blocking flag of each finding and one
-verdict per prior finding. The Codex adapter produces both as well; the engine
-reads them from a `codex-envelope` result with #23 (see
-[the Codex adapter](#the-codex-adapter)).
+Both protocols return a summary, findings, the tests the reviewer ran, the
+blocking flag of each finding and one verdict per prior finding (see
+[the Codex adapter](#the-codex-adapter) for the Codex report).
 
 With `claude-structured` the runtime itself refuses output that does not match
 the schema, and the engine also checks the output against the request. The
@@ -42,7 +40,9 @@ the structured output, or the run is rejected.
 With `codex-envelope` the engine looks for one result frame at the end of the
 output and decodes it strictly. The frame must not be larger than
 `limits.result_max_bytes`, must contain only the known fields, and must name the
-reviewed head SHA.
+reviewed head SHA. A report without `prior_findings`, or with a finding without
+`blocking`, comes from an older adapter and is refused with
+`review_adapter_outdated`, without a fresh session.
 
 ## What the adapter enforces
 
@@ -163,10 +163,8 @@ The report has the fields `findings`, `summary`, `tests`, `status`,
 `reviewed_head_sha` and `prior_findings`. A finding has `severity`,
 `confidence`, `blocking`, `path`, `line`, `title` and `body`. A prior finding
 verdict has `key`, `status` (`fixed`, `still_open` or `answered`), `note` and
-`relies_on`, as in the Claude result. The engine reads `blocking` and
-`prior_findings` of a Codex result with #23; until then it refuses a frame with
-fields it does not know, so a `codex-envelope` reviewer that runs on this
-adapter needs that change.
+`relies_on`, as in the Claude result. The engine reads both fields and refuses
+a report without them (`review_adapter_outdated`).
 
 Read-only is fixed in the adapter: the arguments above are not configurable, and
 the adapter accepts exactly the six arguments that the renderer writes, no
@@ -277,13 +275,10 @@ Constraints on the mix:
 
 ## Why one pipeline uses one protocol
 
-The engine combines the results of both protocols the same way: the decision
-and the notes hand-off do not depend on the protocol. A `codex-envelope` result
-is read without a blocking flag and without verdicts on prior findings, so every
-Codex finding blocks at any severity and a Codex pipeline gets no prior
-findings; reading both is planned in #23. The commit history check of an
-incremental review is the same for both protocols: a rebase or a force push
-widens the review to full. Two more differences remain:
+The engine combines the results of both protocols the same way: the decision,
+the blocking flag, the settling of prior findings, the scope of an incremental
+review and the notes hand-off do not depend on the protocol. Two differences
+remain:
 
 - **One protocol per pipeline.** The pipeline prompt is written for one request
   and one result format, and the engine combines the results of all reviewers of
@@ -312,8 +307,7 @@ and the design below is the outline that such a protocol would have to meet.
 4. **Verdicts, when the protocol supports them.** One verdict per prior finding.
    A protocol without verdicts can run only in a pipeline that has no prior
    findings to settle, or it must add the verdicts first.
-5. **A blocking flag.** The result carries it, as `claude-structured` does; the
-   engine reads it from `codex-envelope` with #23.
+5. **A blocking flag.** The result carries it, as both protocols do.
 6. **Environment rules.** No GitHub token, no pohunek identity variables, and
    bounded output.
 7. **A profile installer.** Support for the new runtime in

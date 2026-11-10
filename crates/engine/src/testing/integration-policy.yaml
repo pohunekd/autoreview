@@ -26,6 +26,7 @@ repositories:
     human_review: {labels: [needs-human], deleted_tests: ["tests/**", "**/tests/**"]}
     authors: {trusted: any}
   - {match: solo/*, trigger: "label:ai:review", pipeline: solo, on_findings: comment, on_clean: comment, authors: {trusted: any}}
+  - {match: codex/manual, trigger: review-requested, pipeline: solo, on_findings: request_changes, on_clean: await, authors: {trusted: any}}
   - {match: checked/manual, trigger: review-requested, pipeline: checked, on_findings: request_changes, on_clean: await, authors: {trusted: any}}
   - {match: checked/*, trigger: review-requested, pipeline: checked, on_findings: request_changes, on_clean: approve, authors: {trusted: any}}
   - match: public/*

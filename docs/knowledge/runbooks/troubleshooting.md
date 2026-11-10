@@ -32,6 +32,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `pohunek_request_failed`, `pohunek_request_timeout` | Review host did not answer | [Session start failures](#session-start-failures) |
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
 | `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
+| `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts | [Reviewer output](#reviewer-output) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
 | `configuration_invalid` naming `github.credentials.login` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
@@ -217,6 +218,11 @@ A reviewer run ends in one of these codes:
 - `review_result_invalid`: a Codex result could not be read, is larger than
   `result_max_bytes`, or reports another head or a status other than
   `completed`.
+- `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
+  finding without `blocking`. It comes from an adapter older than the one in
+  `adapters/codex/`, so the review stops without a fresh session. Point the
+  Codex profile at that adapter, then run `autoreview retry` for the pull
+  request.
 
 Each unusable run gets a fresh session, up to `session.reviewer_run_max_attempts`.
 If the same reviewer keeps failing, compare its agent profile and its prompt

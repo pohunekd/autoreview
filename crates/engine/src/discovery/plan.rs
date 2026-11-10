@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use autoreview_policy::{OnClean, Protocol, Rule};
+use autoreview_policy::{OnClean, Rule};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
@@ -61,10 +61,10 @@ fn full_scope() -> ReviewScope {
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Decides the scope and the prior findings of the review of `candidate`.
     ///
-    /// An incremental scope needs a head that extends the reviewed one linearly; otherwise the
-    /// review is full. A `claude-structured` pipeline also gets the blocking findings of the last
-    /// published review and those it left open, so its incremental scope also needs that
-    /// review's stored result. A `codex-envelope` pipeline gets no prior findings (#23).
+    /// The prior findings are the blocking findings of the last published review and those it
+    /// left open, for a pipeline of either protocol. An incremental scope also needs that
+    /// review's stored result and a head that extends the reviewed one linearly; otherwise the
+    /// review is full and keeps the prior findings.
     ///
     /// # Errors
     ///
@@ -82,13 +82,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Ok((scope, Vec::new()));
         };
         if published.head_sha == pr.head_sha {
-            return Ok((scope, Vec::new()));
-        }
-        if candidate.rule.pipeline.protocol != Protocol::ClaudeStructured {
-            if !scope.incremental() {
-                return Ok((scope, Vec::new()));
-            }
-            let scope = self.linear_scope(cancel, pr, published, scope).await?;
             return Ok((scope, Vec::new()));
         }
         let stored = self.prior_findings(published)?;

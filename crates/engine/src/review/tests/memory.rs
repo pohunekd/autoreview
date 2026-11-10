@@ -169,22 +169,39 @@ async fn new_commits_after_a_notes_handoff_are_reviewed_and_wait_for_the_user() 
 }
 
 // On a rule the user approves, the next review covers only the new commits.
-// It settles the earlier blocking findings.
+// It settles the earlier blocking findings, on a pipeline of either protocol (#23).
 #[tokio::test]
 async fn open_prior_finding_carries_over_until_it_is_fixed() {
+    prior_finding_carries_over_until_it_is_fixed("acme/manual", "O001", 3).await;
+}
+
+#[tokio::test]
+async fn open_prior_finding_carries_over_until_it_is_fixed_on_a_codex_pipeline() {
+    prior_finding_carries_over_until_it_is_fixed("codex/manual", "X001", 2).await;
+}
+
+/// Reviews three heads of a pull request on `repository`, which a rule the user approves covers.
+///
+/// The first review finds `prior_id`, the second keeps it open and the third finds it fixed.
+/// `sessions` counts the reviewer sessions of the first two reviews.
+async fn prior_finding_carries_over_until_it_is_fixed(
+    repository: &str,
+    prior_id: &str,
+    sessions: usize,
+) {
     let mut h = start_harness(|_| {}).await;
     h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
     h.set_output(reviewer_output(vec![json!({
         "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
         "line": 3, "title": "Broken", "body": "It breaks.",
     })]));
-    let pr = integration_pull_request("acme/manual", &sha("a"));
+    let pr = integration_pull_request(repository, &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the request for changes", || h.publications() == 1)
         .await;
 
     h.fake.lock().discussion.threads = vec![DiscussionThread {
-        key: prior_key(&pr.head_sha, "O001"),
+        key: prior_key(&pr.head_sha, prior_id),
         replies: Vec::new(),
         ..DiscussionThread::default()
     }];
@@ -196,7 +213,7 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
         .await;
     let (published, _, started, _) = h.fake.snapshot();
     assert!(
-        started.len() == 3 && published[1].body.contains("incremental review"),
+        started.len() == sessions && published[1].body.contains("incremental review"),
         "the re-review must be incremental with the incremental reviewer only, started {} \
          sessions: {}",
         started.len(),
@@ -213,7 +230,7 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
                 == 1
             && published[1]
                 .body
-                .contains("**Still open, blocking**: O001 HIGH")
+                .contains(&format!("**Still open, blocking**: {prior_id} HIGH"))
             && !published[1].body.contains("S001"),
         "open prior findings must keep blocking without new threads: decision={:?} \
          comments={} marker={} body={}",

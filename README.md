@@ -26,8 +26,8 @@ one GitHub review with inline comments.
   the author as a comment.
 - **Incremental re-review** - a new push is reviewed against the previously
   published head; earlier findings are settled as fixed, still open or
-  answered, taking the PR discussion into account (Claude reviewers; for Codex
-  planned in #23).
+  answered, taking the PR discussion into account, by Claude and Codex
+  reviewers alike.
 - **Durable state** - SQLite store, retries with backoff, approval deadlines,
   session cleanup, an hourly review-queue digest.
 - **Notifications** - action / digest / log levels routed to Matrix rooms per
@@ -117,8 +117,8 @@ keeps untrusted authors behind a maintainer label.
   owner or per repository, and a different account per owner if wanted
   (planned in #13). Failing or expiring tokens are reported and stop only their
   repositories (planned in #19).
-- Claude Code and Codex reviewers share one result contract; the Codex blocking
-  flag and verdicts on prior findings are planned in #23.
+- Claude Code and Codex reviewers share one result contract, with the blocking
+  flag of each finding and the verdicts on prior findings.
 - Clean reviews that wait for a human are approved through the CLI, with an
   optional Hermes Agent integration (planned in #43); approval by GitHub comment and a GitHub
   App identity come after v1 (#46, #47).

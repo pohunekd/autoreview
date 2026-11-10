@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::model::{Finding, PullRequest, ReviewerResult};
+use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
 use crate::protocol::validate::{count_over, sort_findings};
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
@@ -22,6 +22,9 @@ const SEPARATORS: [&str; 6] = ["\n", "\r\n", "\n\n", "\n\r\n", "\r\n\n", "\r\n\r
 /// Line endings that may follow the exit line at the end of the output.
 const ENDINGS: [&str; 4] = ["\r\n", "\n", "\r", ""];
 
+/// Severities that hold the merge back when a finding flags itself as blocking.
+const BLOCKING_SEVERITIES: [&str; 3] = ["blocker", "critical", "high"];
+
 /// Findings; absent or `null` is refused.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, remote = "Self")]
@@ -36,6 +39,8 @@ pub(crate) struct CodexReport {
     pub(crate) status: String,
     /// Head SHA that the review covers.
     pub(crate) reviewed_head_sha: String,
+    /// Verdicts on the prior findings; absent or `null` is refused.
+    pub(crate) prior_findings: Option<Vec<CodexVerdict>>,
 }
 
 autoreview_go_compat::object_only_serde!(CodexReport);
@@ -48,6 +53,8 @@ pub(crate) struct CodexFinding {
     pub(crate) severity: String,
     /// Confidence of the finding.
     pub(crate) confidence: String,
+    /// Whether the reviewer marks the finding as blocking; absent or `null` is refused.
+    pub(crate) blocking: Option<bool>,
     /// Path of the finding.
     pub(crate) path: String,
     /// Line of the finding.
@@ -60,13 +67,43 @@ pub(crate) struct CodexFinding {
 
 autoreview_go_compat::object_only_serde!(CodexFinding);
 
+impl CodexFinding {
+    /// Reports whether the finding is a note: not blocking, or blocking below the severities
+    /// that hold the merge back.
+    fn non_blocking(&self) -> bool {
+        match self.blocking {
+            Some(blocking) => !blocking || !BLOCKING_SEVERITIES.contains(&self.severity.as_str()),
+            None => false,
+        }
+    }
+}
+
+/// Verdict of a Codex reviewer on one prior finding.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields, remote = "Self")]
+pub(crate) struct CodexVerdict {
+    /// Key of the prior finding.
+    pub(crate) key: String,
+    /// Outcome of the verdict.
+    pub(crate) status: String,
+    /// Note explaining the verdict.
+    pub(crate) note: String,
+    /// Login of the comment that an answered verdict rests on, empty when the code alone decides.
+    pub(crate) relies_on: String,
+}
+
+autoreview_go_compat::object_only_serde!(CodexVerdict);
+
 /// Parses the envelope of a finished Codex session into a reviewer result.
 ///
 /// Source identifiers are assigned after the findings are sorted, as `C001`, `C002` and so on.
+/// A finding blocks when it flags itself as blocking at severity blocker, critical or high.
 ///
 /// # Errors
 ///
-/// Returns `review_result_invalid` for an output, report or head that the engine refuses.
+/// Returns `review_result_invalid` for an output, report or head that the engine refuses, and
+/// `review_adapter_outdated` for a report without `prior_findings` or a finding without
+/// `blocking`.
 pub(crate) fn parse_codex_output(
     cfg: &Config,
     pr: &PullRequest,
@@ -91,26 +128,46 @@ pub(crate) fn parse_codex_output(
     }
     let findings = report.findings.unwrap_or_default();
     let tests = report.tests.unwrap_or_default();
+    let Some(verdicts) = report.prior_findings else {
+        return Err(adapter_outdated());
+    };
+    if findings.iter().any(|finding| finding.blocking.is_none()) {
+        return Err(adapter_outdated());
+    }
     let mut mapped: Vec<Finding> = findings
         .into_iter()
-        .map(|source| Finding {
-            severity: source.severity,
-            confidence: source.confidence,
-            path: source.path,
-            line: source.line,
-            title: source.title,
-            body: source.body,
-            ..Finding::default()
+        .map(|source| {
+            let non_blocking = source.non_blocking();
+            Finding {
+                severity: source.severity,
+                confidence: source.confidence,
+                path: source.path,
+                line: source.line,
+                title: source.title,
+                body: source.body,
+                non_blocking,
+                ..Finding::default()
+            }
         })
         .collect();
     sort_findings(&mut mapped);
     for (index, finding) in mapped.iter_mut().enumerate() {
         finding.source_id = format!("C{:03}", index + 1);
     }
+    let prior = verdicts
+        .into_iter()
+        .map(|verdict| PriorVerdict {
+            key: verdict.key,
+            status: verdict.status,
+            note: verdict.note,
+            relies_on: verdict.relies_on,
+        })
+        .collect();
     Ok(ReviewerResult {
         summary: report.summary,
         findings: mapped,
         tests,
+        prior,
         ..ReviewerResult::default()
     })
 }
@@ -167,4 +224,86 @@ fn is_base64_char(character: char) -> bool {
 /// The envelope of a Codex session that the engine refuses.
 fn result_invalid() -> Error {
     Error::workflow("review_result_invalid", true, None)
+}
+
+/// The report of a Codex adapter that sends no blocking flag or no verdicts.
+///
+/// It is not retried: a fresh run of the same adapter leaves out the same fields.
+fn adapter_outdated() -> Error {
+    Error::workflow("review_adapter_outdated", true, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::error::error_code;
+    use crate::protocol::fixtures::{codex_report, test_pull_request};
+    use crate::protocol::validate::reviewer_output_retryable;
+    use crate::protocol::validate::tests::test_config;
+
+    use super::parse_codex_output;
+
+    // A Codex note does not block: a finding blocks only when it says so at a severity that
+    // holds the merge back (#23).
+    #[test]
+    fn codex_finding_blocks_only_when_it_says_so() {
+        let pr = test_pull_request(3);
+        let output = codex_report(
+            &pr,
+            json!({
+                "findings": [
+                    {"severity": "high", "confidence": "high", "blocking": true,
+                     "path": "a.go", "line": 1, "title": "Bug", "body": "Details."},
+                    {"severity": "low", "confidence": "high", "blocking": false,
+                     "path": "a.go", "line": 2, "title": "Note", "body": "Details."},
+                    {"severity": "medium", "confidence": "high", "blocking": true,
+                     "path": "a.go", "line": 3, "title": "Below the floor", "body": "Details."},
+                    {"severity": "blocker", "confidence": "high", "blocking": true,
+                     "path": "a.go", "line": 4, "title": "Blocker", "body": "Details."},
+                    {"severity": "critical", "confidence": "high", "blocking": false,
+                     "path": "a.go", "line": 5, "title": "Accepted", "body": "Details."}
+                ],
+                "prior_findings": []
+            }),
+        );
+        let result = parse_codex_output(&test_config(), &pr, &output).expect("the report parses");
+        let blocking: Vec<(&str, bool)> = result
+            .findings
+            .iter()
+            .map(|finding| (finding.title.as_str(), !finding.non_blocking))
+            .collect();
+        assert_eq!(
+            blocking,
+            [
+                ("Blocker", true),
+                ("Accepted", false),
+                ("Bug", true),
+                ("Below the floor", false),
+                ("Note", false),
+            ]
+        );
+    }
+
+    // The report of an adapter without the blocking flag or the verdicts is refused for good: a
+    // fresh run of the same adapter cannot add them (#23).
+    #[test]
+    fn codex_report_without_blocking_or_prior_findings_is_refused() {
+        let pr = test_pull_request(3);
+        let finding = json!({"severity": "high", "confidence": "high", "path": "a.go", "line": 1,
+                             "title": "Bug", "body": "Details."});
+        let reports = [
+            ("no prior_findings", json!({"findings": []})),
+            (
+                "no blocking flag",
+                json!({"findings": [finding], "prior_findings": []}),
+            ),
+        ];
+        for (name, report) in reports {
+            let err = parse_codex_output(&test_config(), &pr, &codex_report(&pr, report))
+                .expect_err(name);
+            assert_eq!(error_code(&err), "review_adapter_outdated", "{name}");
+            assert!(!reviewer_output_retryable(&err), "{name}");
+        }
+    }
 }

@@ -109,10 +109,10 @@ repositories:
 
 A pipeline cannot mix `codex` and `opus` (`all reviewers must use the same protocol`),
 and the verifier must be a Claude reviewer, so it belongs to `strict`.
-The cheap pass costs less, but each Codex finding blocks at any severity and its
-re-reviews settle no earlier findings (both planned in #23). Like `strict`, it
-reviews the whole pull request again after a rebase or a force push. It has no
-verifier, because a verifier must be a Claude reviewer and therefore sits in `strict`.
+The cheap pass costs less. Like `strict`, its re-reviews settle the earlier
+findings, its notes do not block, and it reviews the whole pull request again
+after a rebase or a force push. It has no verifier, because a verifier must be a
+Claude reviewer and therefore sits in `strict`.
 
 ## Recipe d: notes for humans, drafts of coding agents marked ready
 

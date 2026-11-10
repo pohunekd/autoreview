@@ -163,11 +163,10 @@ passes:
 
 Two consequences follow from the retention periods:
 
-- An incremental review of a `claude-structured` pipeline needs the stored result
-  of the baseline review, which holds its prior findings. If that result has been
-  removed, the review widens to a full review (see
-  [incremental reviews](incremental-reviews.md#full-or-incremental)). A
-  `codex-envelope` pipeline gets no prior findings and needs no stored result.
+- An incremental review needs the stored result of the baseline review, which
+  holds its prior findings. If that result has been removed, the review widens
+  to a full review (see
+  [incremental reviews](incremental-reviews.md#full-or-incremental)).
 - A notes hand-off reminder reads the published decision, so the reminder period
   must be shorter than `store.published_retention_seconds`. The configuration
   validator also checks this, see [configuration](../../configuration.md#store).
