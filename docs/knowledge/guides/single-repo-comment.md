@@ -96,8 +96,8 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
    sets `debounce_seconds: 120`: the review starts after two quiet minutes, so a
    burst of pushes is reviewed once.
 4. **Codex reviews in its own pohunek session.** The adapter runs Codex read-only
-   in a worktree that starts at the base branch. The review cannot push, comment
-   or approve on its own.
+   in a worktree that starts at the base branch, and Codex reads the change
+   through git. The review cannot push, comment or approve on its own.
 5. **Findings are checked and published.** No verifier is configured, so every
    finding is published as it came. Findings on changed lines become inline
    comments; findings elsewhere are listed in the body.

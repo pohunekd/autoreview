@@ -60,6 +60,9 @@ PRIOR_STATUSES = ("fixed", "still_open", "answered")
 PRIOR_VERDICT_KEYS = frozenset({"key", "status", "note", "relies_on"})
 TRUSTED_HEAD_PATTERN = re.compile(r"(?m)^- Trusted head SHA: ([0-9a-f]{40})$")
 TRUSTED_BASE_PATTERN = re.compile(r"(?m)^- Trusted base SHA: ([0-9a-f]{40})$")
+TRUSTED_CHECKOUT_PATTERN = re.compile(r"(?m)^- Trusted checkout: (.*)$")
+CHECKOUT_BASE = "base"
+CHECKOUT_HEAD = "head"
 RESULT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -291,6 +294,47 @@ def verify_checkout_clean(cwd: Path | None = None) -> None:
         raise InputFrameError("review checkout is not clean")
 
 
+def trusted_base_sha(prompt: str) -> str:
+    matches = TRUSTED_BASE_PATTERN.findall(prompt)
+    if len(matches) != 1:
+        raise InputFrameError("trusted pull request base is missing or ambiguous")
+    return matches[0]
+
+
+def trusted_checkout(prompt: str) -> str:
+    """Returns the checkout the engine started the worktree from, `base` or `head`."""
+    matches = TRUSTED_CHECKOUT_PATTERN.findall(prompt)
+    # The Go engine writes no checkout line; its prompt gets the strict head check.
+    if not matches:
+        return CHECKOUT_HEAD
+    if len(matches) != 1 or matches[0] not in (CHECKOUT_BASE, CHECKOUT_HEAD):
+        raise InputFrameError("trusted review checkout is ambiguous or invalid")
+    return matches[0]
+
+
+def commit_available(sha: str, cwd: Path | None = None) -> bool:
+    available = subprocess.run(
+        ["git", "cat-file", "-e", sha + "^{commit}"],
+        capture_output=True,
+        check=False,
+        cwd=cwd,
+    )
+    return available.returncode == 0
+
+
+def is_ancestor(ancestor: str, descendant: str, cwd: Path | None = None) -> bool:
+    """Reports whether `ancestor` is `descendant` or one of its ancestors."""
+    checked = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        capture_output=True,
+        check=False,
+        cwd=cwd,
+    )
+    if checked.returncode not in (0, 1):
+        raise InputFrameError("review checkout history is unavailable")
+    return checked.returncode == 0
+
+
 def verify_checkout_head(prompt: str, cwd: Path | None = None) -> str:
     expected_head_sha = trusted_head_sha(prompt)
     if checkout_head_sha(cwd) != expected_head_sha:
@@ -298,18 +342,52 @@ def verify_checkout_head(prompt: str, cwd: Path | None = None) -> str:
             "review checkout HEAD does not match the trusted pull request head"
         )
     verify_checkout_clean(cwd)
-    base_matches = TRUSTED_BASE_PATTERN.findall(prompt)
-    if len(base_matches) != 1:
-        raise InputFrameError("trusted pull request base is missing or ambiguous")
-    base_available = subprocess.run(
-        ["git", "cat-file", "-e", base_matches[0] + "^{commit}"],
-        capture_output=True,
-        check=False,
-        cwd=cwd,
-    )
-    if base_available.returncode != 0:
+    if not commit_available(trusted_base_sha(prompt), cwd):
         raise InputFrameError("trusted pull request base is unavailable in the review checkout")
     return expected_head_sha
+
+
+def verify_base_checkout(prompt: str, cwd: Path | None = None) -> str:
+    """Checks a base checkout and returns its HEAD; it reads only the local repository.
+
+    Pohunek starts the worktree at the fetched base branch tip, which is the trusted base or
+    a descendant of it unless the base branch was rewritten.
+    """
+    expected_head_sha = trusted_head_sha(prompt)
+    base_sha = trusted_base_sha(prompt)
+    checkout_sha = checkout_head_sha(cwd)
+    verify_checkout_clean(cwd)
+    if not commit_available(base_sha, cwd):
+        raise InputFrameError("trusted pull request base is unavailable in the review checkout")
+    # Pohunek fetches only the base branch; Codex reads the head through git and cannot fetch.
+    if not commit_available(expected_head_sha, cwd):
+        raise InputFrameError("trusted pull request head is unavailable in the review checkout")
+    if is_ancestor(expected_head_sha, checkout_sha, cwd):
+        raise InputFrameError("review checkout HEAD is the pull request head or contains it")
+    if not is_ancestor(base_sha, checkout_sha, cwd):
+        raise InputFrameError(
+            "review checkout HEAD does not descend from the trusted pull request base"
+        )
+    return checkout_sha
+
+
+def verify_review_checkout(prompt: str, cwd: Path | None = None) -> tuple[str, str]:
+    """Checks the checkout before the run; returns the trusted head and the checkout HEAD."""
+    if trusted_checkout(prompt) == CHECKOUT_BASE:
+        return trusted_head_sha(prompt), verify_base_checkout(prompt, cwd)
+    head_sha = verify_checkout_head(prompt, cwd)
+    return head_sha, head_sha
+
+
+def verify_review_checkout_after_run(
+    prompt: str, checkout_sha: str, cwd: Path | None = None
+) -> None:
+    """Repeats the checkout check after the run and requires the HEAD it recorded."""
+    if trusted_checkout(prompt) == CHECKOUT_HEAD:
+        verify_checkout_head(prompt, cwd)
+        return
+    if verify_base_checkout(prompt, cwd) != checkout_sha:
+        raise InputFrameError("review checkout HEAD changed during the review")
 
 
 def validate_blocking_and_prior_findings(value: dict) -> None:
@@ -433,7 +511,7 @@ def main() -> NoReturn:
         termios.tcsetattr(descriptor, termios.TCSANOW, original_attributes)
 
     try:
-        expected_head_sha = verify_checkout_head(prompt)
+        expected_head_sha, checkout_sha = verify_review_checkout(prompt)
     except InputFrameError as error:
         fail(str(error))
 
@@ -462,7 +540,7 @@ def main() -> NoReturn:
         exit_status = completed.returncode
         if completed.returncode == 0:
             try:
-                verify_checkout_head(prompt)
+                verify_review_checkout_after_run(prompt, checkout_sha)
                 result = encoded_result(result_path, maximum_result_bytes, expected_head_sha)
             except InputFrameError as error:
                 print(f"{PROGRAM_NAME}: {error}", file=sys.stderr)

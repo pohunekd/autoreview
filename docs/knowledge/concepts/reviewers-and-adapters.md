@@ -192,9 +192,25 @@ Python standard library (Python 3.11 or newer). It has two parts:
   affect the run, because the engine sends no further input and does not read
   the session state, only the output.
   It reads one request that pohunek writes into the session and checks the
-  review checkout before it starts Codex: `HEAD` must be the trusted head SHA of
-  the request, the work tree must be clean and the trusted base commit must be
-  present. It runs `codex exec` once with `--sandbox read-only`,
+  review checkout before it starts Codex. The request names the checkout in
+  the trusted line `- Trusted checkout: base` or `head`; a request without the
+  line is checked as `head`, and a second line or another value stops the run.
+  - `head`: `HEAD` must be the trusted head SHA of the request, the work tree
+    must be clean and the trusted base commit must be present.
+  - `base`: the work tree must be clean, the trusted base and head commits must
+    be present, `HEAD` must be neither the trusted head nor a commit that
+    contains it, and the trusted base must be `HEAD` or an ancestor of it. Pohunek
+    starts the worktree at the fetched base branch tip, which is the trusted base
+    or a descendant of it; after a force push of the base branch the run is
+    refused.
+    The adapter reads only the local repository: no network, no write. Pohunek
+    fetches only the base branch, and the read-only Codex sandbox cannot fetch,
+    so the head commit must already be in the repository (see
+    [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)). The
+    request tells Codex that the worktree is the base and to read the change
+    with `git diff <base>...<head>` and `git show <head>:<path>`.
+
+  It runs `codex exec` once with `--sandbox read-only`,
   `approval_policy="never"`, `--ignore-user-config`, `--ignore-rules`,
   `--ephemeral` and an output schema. It checks the report (status `completed`,
   the reviewed head, a blocking flag on every finding, well-formed prior
@@ -205,7 +221,11 @@ Python standard library (Python 3.11 or newer). It has two parts:
   The adapter then stays alive for the retention time, so that the coordinator
   can read the output before it removes the session. It exits with the status of
   Codex, or with status 64 when the report or the checkout check fails after
-  the run.
+  the run. After the run the checkout gets the same check again, and a base
+  checkout must still be at the `HEAD` recorded before the run.
+  A refused checkout prints `codex-adapter: <reason>`, no result frame and the
+  exit line with status 64 (see
+  [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)).
 - `render_profile.py` writes a profile from a base Codex profile. It copies the
   runtime package pin and the environment of the base profile, and turns off
   resuming.

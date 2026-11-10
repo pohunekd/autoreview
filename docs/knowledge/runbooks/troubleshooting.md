@@ -33,6 +33,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
 | `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts | [Reviewer output](#reviewer-output) |
+| `codex-adapter: ...` in the session output, exit status 64 | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
 | `configuration_invalid` naming `github.credentials.login` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
@@ -161,6 +162,21 @@ appends to every Codex launch. Run
 `--replace` when the command did not write the profile; it prints `updated`
 when it rewrote only the adapter), then `autoreview retry` for the pull
 request. See [the Codex adapter](../concepts/reviewers-and-adapters.md#the-codex-adapter).
+
+### Codex checkout refused
+
+A Codex review keeps failing, and the session output ends with a
+`codex-adapter: ...` line and `[pohunek-codex-review exited with status 64]`
+without a result frame. The adapter checks the worktree against the trusted
+lines of the request before and after the Codex run:
+
+| Message | Cause | Fix |
+|---|---|---|
+| `review checkout HEAD does not match the trusted pull request head` | A `head` request in a worktree at another commit. A request without the `- Trusted checkout:` line counts as `head`, and the Go engine writes none, so on Go a `checkout: base` pipeline fails here. | Run the Rust engine, or give Codex `checkout: head` while Go runs |
+| `trusted pull request head is unavailable in the review checkout` | A `base` request whose head commit is not in the repository. Pohunek fetches only the base branch for a base checkout, so the head of a fork pull request, or a branch pushed after the project repository last fetched, is missing. | On the review host, `git -C <project repository> fetch origin refs/pull/<n>/head`, then `autoreview retry` |
+| `review checkout HEAD does not descend from the trusted pull request base`, `trusted pull request base is unavailable in the review checkout` | The base branch was force-pushed since GitHub recorded the pull request's base | A push to the pull request (or a rebase) records the new base; then `autoreview retry` |
+| `review checkout HEAD is the pull request head or contains it` | A `base` request in a worktree at the pull request code | Check the pipeline's `checkout` and the session's branch on the review host |
+| `review checkout is not clean`, `review checkout HEAD changed during the review` | Something changed the worktree before or during the run | Find the process that writes into the reviewer worktree |
 
 ### Review host checks
 

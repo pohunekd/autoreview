@@ -2,7 +2,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use autoreview_policy::{Protocol, Reviewer};
+use autoreview_policy::{Checkout, Protocol, Reviewer};
 use serde::Serialize;
 use serde::de::IgnoredAny;
 
@@ -144,28 +144,59 @@ Head SHA: {}\nReviewer: {}\nReview scope: {}\n\n{}\n",
     ))
 }
 
+/// Returns the name of the checkout that the reviewer worktree starts from.
+///
+/// It follows `SessionRequest::base_ref`, which starts every checkout but `head` at the base
+/// branch, so the prompt never names another checkout than the worktree has.
+fn checkout_name(checkout: &Checkout) -> &'static str {
+    if *checkout == Checkout::Head {
+        "head"
+    } else {
+        "base"
+    }
+}
+
 /// Builds the plain prompt of a codex-envelope reviewer.
+///
+/// The adapter reads the trusted lines; each must stay the only line with its prefix.
 fn codex_prompt(
     input: &ReviewInput,
     discussion: &Discussion,
     limits: &str,
 ) -> Result<String, Error> {
+    let pull_request = &input.pull_request;
+    let checkout = checkout_name(&input.rule.pipeline.checkout);
     let mut prompt = format!(
         "{}\n\n{}\n\nTrusted review context:\n- Repository: {}\n- Pull request: #{}\n\
-- URL: {}\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n- Base branch: {}",
+- URL: {}\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n- Base branch: {}\n\
+- Trusted checkout: {}",
         input.rule.pipeline.prompt,
         limits,
-        input.pull_request.repository,
-        input.pull_request.number,
-        input.pull_request.url,
-        input.pull_request.head_sha,
-        input.pull_request.base_sha,
-        input.pull_request.base_branch
+        pull_request.repository,
+        pull_request.number,
+        pull_request.url,
+        pull_request.head_sha,
+        pull_request.base_sha,
+        pull_request.base_branch,
+        checkout
     );
     if input.scope.incremental() {
         prompt.push_str(&format!(
             "\n- Trusted previously reviewed head SHA: {}",
             input.scope.previous_head_sha
+        ));
+    }
+    if input.rule.pipeline.checkout != Checkout::Head {
+        prompt.push_str(&format!(
+            concat!(
+                "\n\nThe review worktree is checked out at the tip of the base branch, not at ",
+                "the pull request head, so its files are trusted base content. Do not check ",
+                "out the head and do not change the worktree. The trusted head commit is in ",
+                "the repository: read the change with `git diff {base}...{head}` and the code ",
+                "at the head with `git show {head}:<path>`. Set reviewed_head_sha to {head}."
+            ),
+            base = pull_request.base_sha,
+            head = pull_request.head_sha
         ));
     }
     if !input.prior.is_empty() {
@@ -242,6 +273,8 @@ pub(crate) fn compact_schema(schema: &[u8]) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
+    use autoreview_policy::Checkout;
+
     use crate::model::{Discussion, ReviewScope};
     use crate::protocol::fixtures::{codex, opus, sha, test_input, test_pull_request};
     use crate::protocol::validate::tests::test_config;
@@ -285,9 +318,29 @@ mod tests {
             prompt
                 .contains("Trusted review context:\n- Repository: acme/widget\n- Pull request: #9")
         );
-        assert!(prompt.contains(&format!("- Trusted base SHA: {}", pr.base_sha)));
+        assert!(prompt.contains(&format!(
+            "- Trusted base SHA: {}\n- Base branch: main\n- Trusted checkout: base\n\
+- Trusted previously reviewed head SHA: {}\n\n",
+            pr.base_sha,
+            sha("c")
+        )));
         assert!(prompt.ends_with(&format!(
-            "- Trusted previously reviewed head SHA: {}",
+            "`git diff {}...{}` and the code at the head with `git show {}:<path>`. Set \
+reviewed_head_sha to {}.",
+            pr.base_sha, pr.head_sha, pr.head_sha, pr.head_sha
+        )));
+
+        codex_input.rule.pipeline.checkout = Checkout::Head;
+        let prompt = build_reviewer_request(
+            &test_config(),
+            &codex_input,
+            &codex(),
+            &Discussion::default(),
+        )
+        .expect("codex prompt builds");
+        assert!(prompt.ends_with(&format!(
+            "- Base branch: main\n- Trusted checkout: head\n\
+- Trusted previously reviewed head SHA: {}",
             sha("c")
         )));
     }

@@ -234,6 +234,15 @@ What is not compatible, by decision:
   can collide with a republished `P001` (`protocol.go:363`). A policy that Go
   accepts with `P` needs another letter before it runs on Rust. The regression
   test is `reserved_finding_prefix_is_rejected_naming_the_reviewer`.
+- **Codex checkout line (#252):** the Codex prompt carries the trusted line
+  `- Trusted checkout: base` or `head`, from the pipeline's `checkout` (any
+  value but `head` is `base`, as the session's worktree), and a base checkout
+  adds how to read the change through git. Go's prompt has neither
+  (`protocol.go:76-80`). The adapter checks a prompt without the line as `head`,
+  so on a rollback to Go a Codex pipeline with `checkout: head` keeps working and
+  one with `checkout: base` fails in the adapter. The regression tests are
+  `test_base_checkout_at_the_base_branch_tip_is_reviewed_and_left_unchanged`
+  (adapter) and `codex_review_of_a_fork_pull_request_runs_on_the_base_checkout`.
 - **History check of Codex pipelines (#237):** the linear history check of an
   incremental review runs for every protocol, so a `codex-envelope` re-review
   whose head does not extend the published head linearly, or whose history
