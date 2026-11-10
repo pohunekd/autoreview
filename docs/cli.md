@@ -103,10 +103,10 @@ default:
 - `--agent-binary`: the absolute path of the Claude Code or Codex executable.
   It must be a regular file that the user running the command may execute,
   after links are followed, and must not contain a control character. The
-  execute bit is the owner's for an own file, the group's when the file's group
-  is the user's primary group, else the one of others; a file that only a
-  supplementary group may execute is refused. The path is kept as given, so a
-  link that a self-updating agent moves is followed at each run.
+  execute check is the same `access(X_OK)` that the adapter makes, so owner,
+  groups (supplementary ones included) and ACLs count as the kernel counts them.
+  The path is kept as given, so a link that a self-updating agent moves is
+  followed at each run.
 - `--maximum-input-bytes`: the largest request the adapter accepts. A re-review
   request also carries the prior findings and the discussion (bounded by
   `limits.max_discussion_characters`), so the value must cover them.

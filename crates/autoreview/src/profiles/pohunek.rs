@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 
 use autoreview_engine::{BoxError, Error};
 use serde::Deserialize;
+use serde_json::error::Category;
 
 use super::{
     Agent, POHUNEK_COMMAND_FAILED, PROFILE_HOST_NOT_LOCAL, Pin, RUNTIME_PACKAGE_MISSING,
@@ -159,7 +160,8 @@ fn digest_valid(digest: &str) -> bool {
 ///
 /// Returns `pohunek_command_failed` naming the command when it cannot start, exits non-zero or
 /// prints something else than the expected JSON. After a non-zero exit, the cause carries the
-/// error code of the `err` envelope on stdout when the code is well-formed.
+/// error code of the `err` envelope on stdout when the code is well-formed; any other cause
+/// holds no stdout text.
 fn pohunek_json<T: for<'de> Deserialize<'de>>(arguments: &[&str]) -> Result<T, Error> {
     let command = format!("{POHUNEK_PROGRAM} {}", arguments.join(" "));
     let output = Command::new(POHUNEK_PROGRAM)
@@ -177,10 +179,29 @@ fn pohunek_json<T: for<'de> Deserialize<'de>>(arguments: &[&str]) -> Result<T, E
         return Err(pohunek_failed(&command, Some(cause)));
     }
     let envelope: Envelope<T> = serde_json::from_slice(&output.stdout)
-        .map_err(|error| pohunek_failed(&command, Some(Box::new(error))))?;
+        .map_err(|error| pohunek_failed(&command, Some(parse_cause(&error))))?;
     envelope
         .ok
         .ok_or_else(|| pohunek_failed(&command, Some("the answer holds no ok value".into())))
+}
+
+/// Returns the cause of an answer that is not the expected JSON, from the kind and position of
+/// `error` only.
+///
+/// A `serde_json` message can quote strings of the parsed text, and the cause is logged.
+fn parse_cause(error: &serde_json::Error) -> BoxError {
+    let kind = match error.classify() {
+        Category::Io => "a read error",
+        Category::Syntax => "invalid JSON",
+        Category::Data => "JSON of an unexpected shape",
+        Category::Eof => "truncated JSON",
+    };
+    format!(
+        "the answer is {kind} at line {}, column {}",
+        error.line(),
+        error.column()
+    )
+    .into()
 }
 
 /// Returns the error code of the `err` envelope in `stdout`, when it matches

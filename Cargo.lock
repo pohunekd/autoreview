@@ -113,6 +113,7 @@ dependencies = [
  "hex",
  "hyper",
  "hyper-util",
+ "rustix",
  "serde",
  "serde-saphyr",
  "serde_json",
