@@ -152,7 +152,7 @@ A pipeline says how a pull request is reviewed.
 | `reviewers` | 1-4 reviewer ids, all with the same protocol (the prompt is written for one request and result contract) |
 | `incremental_reviewers` | 1-4 reviewer ids from `reviewers`; they run when only the new commits are reviewed |
 | `prompt` | Relative path of the review prompt, inside the policy directory, non-empty UTF-8, at most 64 KiB |
-| `checkout` | `base`: the worktree starts at the base branch tip, so repository guidance is read from trusted content; the reviewer reads the change through git (`git diff <base>...<head>`, `git show <head>:<path>`) without checking the head out. Pohunek fetches only the base branch, so the head commit must already be in the repository; the Codex adapter refuses the run otherwise. `head`: the worktree starts at `refs/pull/<n>/head` |
+| `checkout` | `base`: the worktree starts at the base branch tip, so repository guidance is read from trusted content; the reviewer reads the change through git (`git diff <base>...<head>`, `git show <head>:<path>`) without checking the head out. Pohunek fetches only the base branch, so the head commit must already be in the repository; otherwise the Claude and Codex adapters stop the review with `review_head_unavailable` and nothing is published. `head`: the worktree starts at `refs/pull/<n>/head` |
 | `project_sources` | Which pohunek projects may serve the repository: `manual` (registered with `pohunek project add`), `auto` (discovered), or both |
 | `verifier` | Optional, see below |
 

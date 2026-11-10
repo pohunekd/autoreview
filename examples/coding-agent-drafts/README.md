@@ -9,7 +9,7 @@ like any other pull request.
 - **Reviewer:** Sonnet for the agents and other trusted authors; Codex for
   untrusted authors (comment only). Codex needs the pull request head in the
   project repository on the review host (`git fetch origin refs/pull/<n>/head`
-  there, until [#253](https://github.com/pohunekd/autoreview/issues/253)); see
+  there); see
   [Codex checkout refused](../../docs/knowledge/runbooks/troubleshooting.md#codex-checkout-refused)
 - **Outcome:** blocking findings request changes; a clean review waits for `autoreview approve`
 

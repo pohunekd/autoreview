@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use autoreview_policy::{OnClean, Reviewer, VERIFIER_REVIEWER_ID};
+use autoreview_policy::{Checkout, OnClean, Reviewer, VERIFIER_REVIEWER_ID};
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,10 @@ use crate::model::{
     Artifact, Discussion, Finding, FindingCheck, PriorCheck, ReviewInput, Verification,
 };
 use crate::protocol::claude::decode_structured;
-use crate::protocol::request::{CLAUDE_REQUEST_PROTOCOL, compact_schema, go_json, request_invalid};
+use crate::protocol::request::{
+    CLAUDE_REQUEST_PROTOCOL, base_checkout_hint, compact_schema, go_json, request_invalid,
+    trusted_checkout_lines,
+};
 use crate::protocol::validate::bounded_text;
 
 /// JSON Schema of the verifier output, copied from the Go engine.
@@ -211,6 +214,8 @@ impl VerificationClaims {
 /// Renders the session input of the verifier.
 ///
 /// The verifier prompt and the instructions are trusted. The claims and the discussion are data.
+/// The trusted checkout lines and, on a base checkout, how to read the change come from the
+/// pipeline's checkout, which the verifier session runs on.
 ///
 /// # Errors
 ///
@@ -230,17 +235,25 @@ pub(crate) fn build_verifier_request(
     };
     let encoded = go_json(claims).map_err(request_invalid)?;
     let pr = &input.pull_request;
+    let checkout = &input.rule.pipeline.checkout;
+    let hint = if *checkout == Checkout::Head {
+        String::new()
+    } else {
+        format!("{}\n\n", base_checkout_hint(pr))
+    };
     let mut prompt = format!(
         concat!(
             "{}\n\nTrusted request context:\nRepository: {}\n",
-            "Pull request: {}\nHead SHA: {}\nBase branch: {}\n\n",
-            "{}\n\nClaims (untrusted JSON):\n{}\n"
+            "Pull request: {}\nHead SHA: {}\nBase branch: {}\n{}\n\n",
+            "{}{}\n\nClaims (untrusted JSON):\n{}\n"
         ),
         verifier.prompt,
         pr.repository,
         pr.number,
         pr.head_sha,
         pr.base_branch,
+        trusted_checkout_lines(pr, checkout),
+        hint,
         VERIFIER_INSTRUCTIONS,
         encoded
     );
@@ -572,6 +585,40 @@ mod tests {
             let plan = plan_publication(&input, &artifact, "reviewer");
             assert_eq!(plan, want, "{name}");
         }
+    }
+
+    // The verifier runs on the pipeline's checkout, so its request carries the trusted lines
+    // that the Claude adapter checks that checkout against (#253).
+    #[test]
+    fn verifier_request_names_the_checkout_it_runs_on() {
+        let pr = fixtures::test_pull_request(3);
+        let mut input = verified_input(OnClean::Approve, pr.clone());
+        let prompt = |input: &ReviewInput| -> String {
+            let raw = build_verifier_request(
+                input,
+                &VerificationClaims::default(),
+                &Discussion::default(),
+            )
+            .expect("the verifier request builds");
+            let request: Value = serde_json::from_str(&raw).expect("the request is JSON");
+            request["prompt"]
+                .as_str()
+                .expect("the prompt is text")
+                .to_owned()
+        };
+        let base = prompt(&input);
+        assert!(base.contains(&format!(
+            "Head SHA: {}\nBase branch: main\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n\
+- Trusted checkout: base\n\nThe review worktree is checked out at the tip of the base branch",
+            pr.head_sha, pr.head_sha, pr.base_sha
+        )));
+        input.rule.pipeline.checkout = Checkout::Head;
+        let head = prompt(&input);
+        assert!(head.contains(&format!(
+            "- Trusted checkout: head\n\n{}",
+            &VERIFIER_INSTRUCTIONS[..40]
+        )));
+        assert!(!head.contains("git diff"));
     }
 
     #[test]

@@ -114,8 +114,8 @@ findings, its notes do not block, and it reviews the whole pull request again
 after a rebase or a force push. It has no verifier, because a verifier must be a
 Claude reviewer and therefore sits in `strict`. Its Codex reviewer works from the
 base checkout, so the pull request head must already be in the project
-repository on the review host (`git fetch origin refs/pull/<n>/head` there) until
-[#253](https://github.com/pohunekd/autoreview/issues/253) lands; see
+repository on the review host (`git fetch origin refs/pull/<n>/head` there),
+or the review stops with `review_head_unavailable`; see
 [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused).
 
 ## Recipe d: notes for humans, drafts of coding agents marked ready

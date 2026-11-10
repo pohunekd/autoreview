@@ -243,6 +243,21 @@ What is not compatible, by decision:
   one with `checkout: base` fails in the adapter. The regression tests are
   `test_base_checkout_at_the_base_branch_tip_is_reviewed_and_left_unchanged`
   (adapter) and `codex_review_of_a_fork_pull_request_runs_on_the_base_checkout`.
+- **Claude checkout check (#253):** the Claude reviewer and verifier prompts
+  carry the trusted lines `- Trusted head SHA:`, `- Trusted base SHA:` and
+  `- Trusted checkout: base` or `head`, and a base checkout adds how to read the
+  change through git. Go's prompts have none of them (`protocol.go`,
+  `verify.go`). The Claude adapter checks a prompt without the checkout line
+  as `head`: `HEAD` must be the SHA of its `Head SHA:` line. On a rollback to
+  Go a Claude pipeline with `checkout: head` keeps working, and one with
+  `checkout: base` fails in the adapter unless the older Claude wrapper is put
+  back. Either adapter refuses a base checkout whose head commit is not in the
+  repository; the engine reads that refusal as `review_head_unavailable`, which
+  neither the reviewer run nor the scheduler retries. Go reads it as an
+  unusable output. The regression tests are
+  `test_base_checkout_without_the_head_is_refused_before_claude_runs` (adapter),
+  `adapter_refusal_of_a_missing_head_is_not_retried` (Claude and Codex parsers)
+  and `base_checkout_review_of_a_missing_head_stops_without_publishing`.
 - **History check of Codex pipelines (#237):** the linear history check of an
   incremental review runs for every protocol, so a `codex-envelope` re-review
   whose head does not extend the published head linearly, or whose history

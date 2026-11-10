@@ -121,6 +121,22 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   `GITHUB_ENTERPRISE_TOKEN`), `MATRIX_ACCESS_TOKEN` and every `AUTOREVIEW_`
   variable. The adapter then stays alive so that the coordinator can read the
   result before it removes the session.
+  Before and after the run it checks the review checkout against the trusted
+  lines of the request (`- Trusted head SHA:`, `- Trusted base SHA:`,
+  `- Trusted checkout:`), as the [Codex adapter](#the-codex-adapter) does, with
+  local read-only git calls only. A `base` checkout gets the Codex base checks:
+  clean work tree, both trusted commits present, `HEAD` neither the head nor a
+  commit that contains it, the trusted base `HEAD` or an ancestor of it, and the
+  same `HEAD` after the run. A `head` checkout needs `HEAD` to be the trusted
+  head. A request without the checkout line comes from the Go engine; it is
+  checked as `head`, with the head SHA of its `Head SHA:` line. A refused
+  checkout prints only one result line, with exit code 64, no Claude Code
+  output, the reason in `stderr_base64` and the field `refusal`:
+  `head_unavailable` when the head commit is not in the repository (the engine
+  stops the review with `review_head_unavailable`, without a fresh session), or
+  `checkout_invalid` (the engine reads `review_result_invalid` and starts a
+  fresh session). Claude Code does not run then. See
+  [troubleshooting](../runbooks/troubleshooting.md#head-commit-unavailable).
 - `render_profile.py` writes a profile from a base Claude profile. It copies the
   runtime package pin, the arguments and the environment of the base profile,
   refuses an argument that the adapter controls (`--print`, `--output-format`,
@@ -231,6 +247,10 @@ Python standard library (Python 3.11 or newer). It has two parts:
   as after a run. The engine reads that output at once as
   `review_result_invalid` (see
   [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)).
+  When the head commit is not in the repository, the line
+  `[pohunek-codex-review-refused-v1:head_unavailable]` comes right before the
+  exit line, and the engine stops the review with `review_head_unavailable`
+  without a fresh session.
   An invalid argument, Codex path file or input frame stops the adapter before
   that: it prints the reason and exits with status 64 at once, without the exit
   line.

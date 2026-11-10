@@ -119,7 +119,6 @@ A stranger opens PR #88 in `pohunekd/pohunek.dev` from a fork.
    already be in the project repository on the review host: run
    `git fetch origin refs/pull/88/head` there before the review starts, or the
    adapter refuses the run (see [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
-   [#253](https://github.com/pohunekd/autoreview/issues/253) tracks an engine fetch.
 4. **The outcome is a comment.** Whatever the findings, the review is published as
    COMMENT, with the findings as inline comments where they anchor. No review
    requests changes and nothing is approved.

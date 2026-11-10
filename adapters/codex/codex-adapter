@@ -26,6 +26,10 @@ PROGRAM_NAME = "codex-adapter"
 # The engine reads the result frame and the exit line below by these exact texts.
 RESULT_MARKER_PREFIX = "[pohunek-codex-review-result-v1:"
 EXIT_LINE_FORMAT = "[pohunek-codex-review exited with status {}]"
+# Right before the exit line with status 64, it names the reason of a refusal that the
+# engine does not retry.
+REFUSAL_MARKER_FORMAT = "[pohunek-codex-review-refused-v1:{}]"
+REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
 # Codex runtimes declare pohunek's `manifest_idle` input readiness: the initial
 # input is written only once the detection manifest reads idle, and any
 # non-blank terminal title without a leading spinner glyph reads idle. The
@@ -135,6 +139,10 @@ class InputFrameError(ValueError):
     """Raised when a Pohunek initial-input frame is absent or malformed."""
 
 
+class HeadUnavailableError(InputFrameError):
+    """Raised when the trusted pull request head is not in the review checkout."""
+
+
 def read_exact(stream: BinaryIO, size: int) -> bytes:
     data = bytearray()
     while len(data) < size:
@@ -221,17 +229,22 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(EXIT_USAGE)
 
 
-def exit_after_retention(exit_status: int, retention_seconds: int) -> NoReturn:
-    """Prints the exit line that ends the output for the engine, then keeps it readable."""
-    print(f"\n{EXIT_LINE_FORMAT.format(exit_status)}", flush=True)
+def exit_after_retention(exit_status: int, retention_seconds: int, refusal: str = "") -> NoReturn:
+    """Prints the exit line that ends the output for the engine, then keeps it readable.
+
+    A `refusal` marker goes into the same write, on the line right before the exit line.
+    """
+    marker = f"\n{REFUSAL_MARKER_FORMAT.format(refusal)}" if refusal else ""
+    print(f"{marker}\n{EXIT_LINE_FORMAT.format(exit_status)}", flush=True)
     time.sleep(retention_seconds)
     raise SystemExit(exit_status)
 
 
-def refuse(message: str, retention_seconds: int) -> NoReturn:
+def refuse(error: InputFrameError, retention_seconds: int) -> NoReturn:
     """Ends a run whose request or checkout the adapter refuses, with the exit line."""
-    print(f"{PROGRAM_NAME}: {message}", file=sys.stderr, flush=True)
-    exit_after_retention(EXIT_USAGE, retention_seconds)
+    print(f"{PROGRAM_NAME}: {error}", file=sys.stderr, flush=True)
+    refusal = REFUSAL_HEAD_UNAVAILABLE if isinstance(error, HeadUnavailableError) else ""
+    exit_after_retention(EXIT_USAGE, retention_seconds, refusal)
 
 
 def codex_arguments(
@@ -378,7 +391,9 @@ def verify_base_checkout(prompt: str, cwd: Path | None = None) -> str:
         raise InputFrameError("trusted pull request base is unavailable in the review checkout")
     # Pohunek fetches only the base branch; Codex reads the head through git and cannot fetch.
     if not commit_available(expected_head_sha, cwd):
-        raise InputFrameError("trusted pull request head is unavailable in the review checkout")
+        raise HeadUnavailableError(
+            "trusted pull request head is unavailable in the review checkout"
+        )
     if is_ancestor(expected_head_sha, checkout_sha, cwd):
         raise InputFrameError("review checkout HEAD is the pull request head or contains it")
     if not is_ancestor(base_sha, checkout_sha, cwd):
@@ -530,7 +545,7 @@ def main() -> NoReturn:
     try:
         expected_head_sha, checkout_sha = verify_review_checkout(prompt)
     except InputFrameError as error:
-        refuse(str(error), maximum_retention_seconds)
+        refuse(error, maximum_retention_seconds)
 
     with tempfile.TemporaryDirectory(prefix="codex-adapter-") as directory:
         temporary_directory = Path(directory)
@@ -560,7 +575,7 @@ def main() -> NoReturn:
             verify_review_checkout_after_run(prompt, checkout_sha)
             result = encoded_result(result_path, maximum_result_bytes, expected_head_sha)
         except InputFrameError as error:
-            refuse(str(error), maximum_retention_seconds)
+            refuse(error, maximum_retention_seconds)
         print(f"\n{RESULT_MARKER_PREFIX}{result}]", flush=True)
         exit_after_retention(0, maximum_retention_seconds)
 

@@ -8,7 +8,7 @@ use serde::de::IgnoredAny;
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::model::{Discussion, ReviewInput};
+use crate::model::{Discussion, PullRequest, ReviewInput};
 
 /// Protocol name that the request of a claude-structured reviewer carries.
 pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "claude-otel-noninteractive/request-v1";
@@ -121,9 +121,10 @@ fn claude_request(
             input.pull_request.head_sha
         )
     };
+    let checkout = &input.rule.pipeline.checkout;
     let mut prompt = format!(
         "{}\n\n{}\n\nTrusted request context:\nRepository: {}\nPull request: {}\n\
-Head SHA: {}\nReviewer: {}\nReview scope: {}\n\n{}\n",
+Head SHA: {}\nReviewer: {}\nReview scope: {}\n{}\n\n{}\n",
         input.rule.pipeline.prompt,
         limits,
         input.pull_request.repository,
@@ -131,8 +132,12 @@ Head SHA: {}\nReviewer: {}\nReview scope: {}\n\n{}\n",
         input.pull_request.head_sha,
         reviewer.label,
         input.scope.mode,
+        trusted_checkout_lines(&input.pull_request, checkout),
         scope
     );
+    if *checkout != Checkout::Head {
+        prompt.push_str(&format!("\n{}\n", base_checkout_hint(&input.pull_request)));
+    }
     if !input.prior.is_empty() {
         prompt.push_str(&format!("\n{}\n", prior_section(input, discussion)?));
     }
@@ -154,6 +159,35 @@ fn checkout_name(checkout: &Checkout) -> &'static str {
     } else {
         "base"
     }
+}
+
+/// Returns the trusted lines that the Claude adapter checks the review checkout against.
+///
+/// Each must stay the only line with its prefix, as in the Codex prompt.
+pub(crate) fn trusted_checkout_lines(pull_request: &PullRequest, checkout: &Checkout) -> String {
+    format!(
+        "- Trusted head SHA: {}\n- Trusted base SHA: {}\n- Trusted checkout: {}",
+        pull_request.head_sha,
+        pull_request.base_sha,
+        checkout_name(checkout)
+    )
+}
+
+/// Returns how a reviewer on a base checkout reads the change of `pull_request`.
+///
+/// The adapters check that the head commit is in the repository before the run.
+pub(crate) fn base_checkout_hint(pull_request: &PullRequest) -> String {
+    format!(
+        concat!(
+            "The review worktree is checked out at the tip of the base branch, not at ",
+            "the pull request head, so its files are trusted base content. Do not check ",
+            "out the head and do not change the worktree. The trusted head commit is in ",
+            "the repository: read the change with `git diff {base}...{head}` and the code ",
+            "at the head with `git show {head}:<path>`."
+        ),
+        base = pull_request.base_sha,
+        head = pull_request.head_sha
+    )
 }
 
 /// Builds the plain prompt of a codex-envelope reviewer.
@@ -188,15 +222,9 @@ fn codex_prompt(
     }
     if input.rule.pipeline.checkout != Checkout::Head {
         prompt.push_str(&format!(
-            concat!(
-                "\n\nThe review worktree is checked out at the tip of the base branch, not at ",
-                "the pull request head, so its files are trusted base content. Do not check ",
-                "out the head and do not change the worktree. The trusted head commit is in ",
-                "the repository: read the change with `git diff {base}...{head}` and the code ",
-                "at the head with `git show {head}:<path>`. Set reviewed_head_sha to {head}."
-            ),
-            base = pull_request.base_sha,
-            head = pull_request.head_sha
+            "\n\n{} Set reviewed_head_sha to {}.",
+            base_checkout_hint(pull_request),
+            pull_request.head_sha
         ));
     }
     if !input.prior.is_empty() {
@@ -301,6 +329,26 @@ mod tests {
             "Trusted request context:\nRepository: acme/widget\nPull request: 9\nHead SHA: {}",
             pr.head_sha
         )));
+        // The fixture's checkout is unset, which starts the worktree at the base branch.
+        assert!(prompt.contains(&format!(
+            "Review scope: full\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n\
+- Trusted checkout: base\n\n",
+            pr.head_sha, pr.base_sha
+        )));
+        assert!(prompt.ends_with(&format!(
+            "`git diff {}...{}` and the code at the head with `git show {}:<path>`.\n",
+            pr.base_sha, pr.head_sha, pr.head_sha
+        )));
+        let mut head_input = claude_input.clone();
+        head_input.rule.pipeline.checkout = Checkout::Head;
+        let raw =
+            build_reviewer_request(&test_config(), &head_input, &opus(), &Discussion::default())
+                .expect("claude request builds");
+        let request: serde_json::Value =
+            serde_json::from_str(&raw).expect("claude request is JSON");
+        let prompt = request["prompt"].as_str().expect("prompt is a string");
+        assert!(prompt.contains("\n- Trusted checkout: head\n\n"));
+        assert!(!prompt.contains("git diff"));
 
         let mut codex_input = test_input(&codex(), pr.clone());
         codex_input.scope = ReviewScope {

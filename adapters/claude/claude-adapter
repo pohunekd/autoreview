@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -40,10 +41,25 @@ DROPPED_ENVIRONMENT = frozenset(
     }
 )
 DROPPED_ENVIRONMENT_PREFIX = "AUTOREVIEW_"
+# The engine writes these trusted lines; untrusted text never starts a line of its prompt.
+TRUSTED_HEAD_PATTERN = re.compile(r"(?m)^- Trusted head SHA: ([0-9a-f]{40})$")
+TRUSTED_BASE_PATTERN = re.compile(r"(?m)^- Trusted base SHA: ([0-9a-f]{40})$")
+TRUSTED_CHECKOUT_PATTERN = re.compile(r"(?m)^- Trusted checkout: (.*)$")
+# The Go engine's prompt names the head only in this line and has no checkout line.
+GO_HEAD_PATTERN = re.compile(r"(?m)^Head SHA: ([0-9a-f]{40})$")
+CHECKOUT_BASE = "base"
+CHECKOUT_HEAD = "head"
+# The engine reads the refusal field of the result envelope by these exact values.
+REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
+REFUSAL_CHECKOUT_INVALID = "checkout_invalid"
 
 
 class InputFrameError(ValueError):
     """Raised when the initial-input frame is absent or malformed."""
+
+
+class HeadUnavailableError(InputFrameError):
+    """Raised when the trusted pull request head is not in the review checkout."""
 
 
 def read_exact(stream: BinaryIO, size: int) -> bytes:
@@ -181,6 +197,164 @@ def result_envelope(return_code: int, stdout: bytes, stderr: bytes, mode: str) -
     ).encode("utf-8") + b"\n"
 
 
+def refusal_envelope(refusal: str, message: str, mode: str) -> bytes:
+    """Returns the result line of a run that the adapter refused before or after Claude Code."""
+    return json.dumps(
+        {
+            "protocol": RESULT_PROTOCOL,
+            "mode": mode,
+            "exit_code": EXIT_USAGE,
+            "stdout_base64": "",
+            "stderr_base64": base64.b64encode(
+                f"{PROGRAM_NAME}: {message}\n".encode("utf-8")
+            ).decode("ascii"),
+            "refusal": refusal,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8") + b"\n"
+
+
+def trusted_head_sha(prompt: str) -> str:
+    matches = TRUSTED_HEAD_PATTERN.findall(prompt)
+    if not matches and not TRUSTED_CHECKOUT_PATTERN.search(prompt):
+        matches = GO_HEAD_PATTERN.findall(prompt)
+    if len(matches) != 1:
+        raise InputFrameError("trusted pull request head is missing or ambiguous")
+    return matches[0]
+
+
+def git_command(*arguments: str) -> list[str]:
+    """Returns git `arguments` without optional locks, so `git status` leaves the index alone."""
+    return ["git", "--no-optional-locks", *arguments]
+
+
+def checkout_head_sha(cwd: str | None = None) -> str:
+    completed = subprocess.run(
+        git_command("rev-parse", "--verify", "HEAD^{commit}"),
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=cwd,
+    )
+    head = completed.stdout.strip()
+    if completed.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise InputFrameError("review checkout HEAD is unavailable")
+    return head
+
+
+def verify_checkout_clean(cwd: str | None = None) -> None:
+    status = subprocess.run(
+        git_command(
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ),
+        capture_output=True,
+        text=True,
+        errors="surrogateescape",
+        check=False,
+        cwd=cwd,
+    )
+    if status.returncode != 0:
+        raise InputFrameError("review checkout status is unavailable")
+    if status.stdout:
+        raise InputFrameError("review checkout is not clean")
+
+
+def trusted_base_sha(prompt: str) -> str:
+    matches = TRUSTED_BASE_PATTERN.findall(prompt)
+    if len(matches) != 1:
+        raise InputFrameError("trusted pull request base is missing or ambiguous")
+    return matches[0]
+
+
+def trusted_checkout(prompt: str) -> str:
+    """Returns the checkout the engine started the worktree from, `base` or `head`."""
+    matches = TRUSTED_CHECKOUT_PATTERN.findall(prompt)
+    # The Go engine writes no checkout line; its prompt gets the strict head check.
+    if not matches:
+        return CHECKOUT_HEAD
+    if len(matches) != 1 or matches[0] not in (CHECKOUT_BASE, CHECKOUT_HEAD):
+        raise InputFrameError("trusted review checkout is ambiguous or invalid")
+    return matches[0]
+
+
+def commit_available(sha: str, cwd: str | None = None) -> bool:
+    available = subprocess.run(
+        git_command("cat-file", "-e", sha + "^{commit}"),
+        capture_output=True,
+        check=False,
+        cwd=cwd,
+    )
+    return available.returncode == 0
+
+
+def is_ancestor(ancestor: str, descendant: str, cwd: str | None = None) -> bool:
+    """Reports whether `ancestor` is `descendant` or one of its ancestors."""
+    checked = subprocess.run(
+        git_command("merge-base", "--is-ancestor", ancestor, descendant),
+        capture_output=True,
+        check=False,
+        cwd=cwd,
+    )
+    if checked.returncode not in (0, 1):
+        raise InputFrameError("review checkout history is unavailable")
+    return checked.returncode == 0
+
+
+def verify_checkout_head(prompt: str, cwd: str | None = None) -> str:
+    """Checks a head checkout and returns its HEAD, which must be the trusted head."""
+    expected_head_sha = trusted_head_sha(prompt)
+    if checkout_head_sha(cwd) != expected_head_sha:
+        raise InputFrameError(
+            "review checkout HEAD does not match the trusted pull request head"
+        )
+    return expected_head_sha
+
+
+def verify_base_checkout(prompt: str, cwd: str | None = None) -> str:
+    """Checks a base checkout and returns its HEAD; it reads only the local repository.
+
+    Pohunek starts the worktree at the fetched base branch tip, which is the trusted base or
+    a descendant of it unless the base branch was rewritten.
+    """
+    expected_head_sha = trusted_head_sha(prompt)
+    base_sha = trusted_base_sha(prompt)
+    checkout_sha = checkout_head_sha(cwd)
+    verify_checkout_clean(cwd)
+    if not commit_available(base_sha, cwd):
+        raise InputFrameError("trusted pull request base is unavailable in the review checkout")
+    # Pohunek fetches only the base branch; Claude reads the head through git and must not fetch.
+    if not commit_available(expected_head_sha, cwd):
+        raise HeadUnavailableError(
+            "trusted pull request head is unavailable in the review checkout"
+        )
+    if is_ancestor(expected_head_sha, checkout_sha, cwd):
+        raise InputFrameError("review checkout HEAD is the pull request head or contains it")
+    if not is_ancestor(base_sha, checkout_sha, cwd):
+        raise InputFrameError(
+            "review checkout HEAD does not descend from the trusted pull request base"
+        )
+    return checkout_sha
+
+
+def verify_review_checkout(prompt: str, cwd: str | None = None) -> str:
+    """Checks the checkout that the prompt names and returns its HEAD."""
+    if trusted_checkout(prompt) == CHECKOUT_BASE:
+        return verify_base_checkout(prompt, cwd)
+    return verify_checkout_head(prompt, cwd)
+
+
+def verify_review_checkout_after_run(
+    prompt: str, checkout_sha: str, cwd: str | None = None
+) -> None:
+    """Repeats the checkout check after the run and requires the HEAD it recorded."""
+    if verify_review_checkout(prompt, cwd) != checkout_sha:
+        raise InputFrameError("review checkout HEAD changed during the review")
+
+
 def claude_arguments(
     claude_binary: str,
     profile_arguments: list[str],
@@ -207,6 +381,29 @@ def exec_version_probe() -> NoReturn:
     except InputFrameError as error:
         fail(str(error))
     os.execv(claude_binary, [claude_binary, "--version"])
+
+
+def hold_output() -> NoReturn:
+    """Keeps the wrapper alive after its result line, so the output stays readable."""
+    # Pohunek currently releases retained output when the root PTY process exits.
+    # Keep only this inert wrapper alive so a coordinator can read the exact
+    # completed output and remove the logical session after durable persistence.
+    while True:
+        signal.pause()
+
+
+def refuse(error: InputFrameError, mode: str) -> NoReturn:
+    """Ends a run whose checkout the adapter refuses with a refusal envelope.
+
+    The envelope is the only output, because pohunek reads stderr from the same terminal.
+    """
+    if isinstance(error, HeadUnavailableError):
+        refusal = REFUSAL_HEAD_UNAVAILABLE
+    else:
+        refusal = REFUSAL_CHECKOUT_INVALID
+    sys.stdout.buffer.write(refusal_envelope(refusal, str(error), mode))
+    sys.stdout.buffer.flush()
+    hold_output()
 
 
 def main() -> NoReturn:
@@ -244,6 +441,11 @@ def main() -> NoReturn:
     finally:
         termios.tcsetattr(descriptor, termios.TCSANOW, original_attributes)
 
+    try:
+        checkout_sha = verify_review_checkout(prompt)
+    except InputFrameError as error:
+        refuse(error, mode)
+
     arguments = claude_arguments(claude_binary, sys.argv[3:], json_schema)
     completed = subprocess.run(
         arguments,
@@ -253,16 +455,15 @@ def main() -> NoReturn:
         env=claude_environment(dict(os.environ)),
         check=False,
     )
+    try:
+        verify_review_checkout_after_run(prompt, checkout_sha)
+    except InputFrameError as error:
+        refuse(error, mode)
     sys.stdout.buffer.write(
         result_envelope(completed.returncode, completed.stdout, completed.stderr, mode)
     )
     sys.stdout.buffer.flush()
-
-    # Pohunek currently releases retained output when the root PTY process exits.
-    # Keep only this inert wrapper alive so a coordinator can read the exact
-    # completed output and remove the logical session after durable persistence.
-    while True:
-        signal.pause()
+    hold_output()
 
 
 if __name__ == "__main__":

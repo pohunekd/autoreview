@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import io
 import os
+import pty
+import select
 import shutil
 import stat
 import subprocess
 import tempfile
+import termios
+import time
 import tomllib
 import unittest
 from importlib.machinery import SourceFileLoader
@@ -18,6 +23,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 READ_ONLY_SOURCE = 'base = "claude"\nargs = ["--permission-mode", "plan"]\n'
+COMMITTER = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
+UNSIGNED = ["-c", "commit.gpgsign=false"]
+# The structured output that the fake Claude Code prints.
+CLAUDE_STDOUT = '{"type":"result","subtype":"success"}'
 
 
 def load_module(name: str, path: Path):
@@ -146,6 +155,225 @@ class InputFrameTests(unittest.TestCase):
             wrapper.claude_environment(environment),
             {"PATH": "/usr/bin", "HOME": "/tmp/home", "POHUNEK_SESSION_ID_HINT": "kept"},
         )
+
+
+class BaseCheckoutTests(unittest.TestCase):
+    """A base checkout starts at the base branch tip; Claude reads the head through git."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        (self.root / "home").mkdir()
+        self.environment = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(self.root / "home"),
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+        source = self.root / "source"
+        self.git(self.root, "init", "--quiet", "--initial-branch=main", str(source))
+        start_sha = self.commit(source, "start")
+        # The trusted base SHA is the base when the pull request was opened; main moved on.
+        self.base_sha = self.commit(source, "base")
+        self.git(source, "checkout", "--quiet", "-b", "feature")
+        self.head_sha = self.commit(source, "pull request")
+        self.git(source, "checkout", "--quiet", "main")
+        self.tip_sha = self.commit(source, "base moves on")
+        # A force push of main replaces the base with this commit.
+        self.git(source, "checkout", "--quiet", "-b", "rewritten", start_sha)
+        self.rewritten_sha = self.commit(source, "rewritten base")
+        origin = self.root / "origin.git"
+        self.git(self.root, "init", "--quiet", "--bare", str(origin))
+        self.git(
+            source, "push", "--quiet", str(origin), "main", "rewritten",
+            "feature:refs/pull/9/head",
+        )
+        # Pohunek fetches only the base branch for a base checkout.
+        self.checkout = self.root / "checkout"
+        self.git(self.root, "init", "--quiet", str(self.checkout))
+        self.git(self.checkout, "remote", "add", "origin", origin.as_uri())
+        self.git(self.checkout, "fetch", "--quiet", "origin", "main")
+        self.git(self.checkout, "checkout", "--quiet", "--detach", self.tip_sha)
+
+    def fetch_head(self) -> None:
+        """Puts the head in the repository, as an earlier head checkout or fetch does."""
+        self.git(self.checkout, "fetch", "--quiet", "origin", "refs/pull/9/head")
+
+    def git(self, cwd: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            env=self.environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def commit(self, cwd: Path, message: str) -> str:
+        self.git(cwd, *COMMITTER, *UNSIGNED, "commit", "--quiet", "--allow-empty", "-m", message)
+        return self.git(cwd, "rev-parse", "HEAD")
+
+    def prompt(self, checkout: str = "base") -> str:
+        """Returns the trusted context of the Rust engine's prompt; `go` gives the Go one."""
+        context = (
+            "Review the pull request.\n\nTrusted request context:\n"
+            "Repository: acme/widget\nPull request: 9\n"
+            f"Head SHA: {self.head_sha}\nReviewer: Opus\nReview scope: full\n"
+        )
+        if checkout == "go":
+            return context
+        return (
+            f"{context}- Trusted head SHA: {self.head_sha}\n"
+            f"- Trusted base SHA: {self.base_sha}\n- Trusted checkout: {checkout}\n"
+        )
+
+    def install(self, during_run: str = "") -> tuple[Path, Path]:
+        """Installs the adapter with a fake Claude Code that runs `during_run` and answers."""
+        fake = self.root / "fake-claude"
+        fake.write_text(
+            "#!/bin/sh\n"
+            "cat >/dev/null\n"
+            f": >{self.root / 'claude-ran'}\n"
+            f"{during_run}\n"
+            f"printf '%s' '{CLAUDE_STDOUT}'\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        (self.root / "bin").mkdir(exist_ok=True)
+        script = self.root / "bin" / "claude-adapter"
+        shutil.copy(ROOT / "claude-adapter", script)
+        script.chmod(0o755)
+        sidecar = Path(str(script) + wrapper.SIDECAR_SUFFIX)
+        sidecar.write_text(f"{fake}\n", encoding="utf-8")
+        sidecar.chmod(0o600)
+        return script, fake
+
+    def run_adapter(self, prompt: str, during_run: str = "") -> tuple[dict, str]:
+        """Runs the adapter on a structured request; returns its result line and stderr."""
+        script, fake = self.install(during_run)
+        request = json.dumps(
+            {
+                "protocol": wrapper.REQUEST_PROTOCOL,
+                "prompt": prompt,
+                "json_schema": {"type": "object"},
+            }
+        )
+        primary, secondary = pty.openpty()
+        process = subprocess.Popen(
+            [str(script), str(fake), "262144"],
+            env=self.environment,
+            cwd=self.checkout,
+            stdin=secondary,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        os.close(secondary)
+        line = b""
+        try:
+            # The adapter flushes pending input when it switches the terminal to raw mode.
+            deadline = time.monotonic() + 10
+            while termios.tcgetattr(primary)[3] & termios.ICANON:
+                self.assertLess(time.monotonic(), deadline, "the adapter never read its input")
+                time.sleep(0.01)
+            frame = wrapper.BRACKETED_PASTE_START + request.encode("utf-8")
+            os.write(primary, frame + wrapper.BRACKETED_PASTE_END + wrapper.SUBMIT)
+            # The adapter keeps running after its one result line, so read only that line.
+            deadline = time.monotonic() + 30
+            while not line.endswith(b"\n"):
+                remaining = deadline - time.monotonic()
+                self.assertGreater(remaining, 0, f"no result line, read {line!r}")
+                ready, _, _ = select.select([process.stdout], [], [], remaining)
+                if ready:
+                    chunk = os.read(process.stdout.fileno(), 65536)
+                    self.assertTrue(chunk, f"the adapter exited after {line!r}")
+                    line += chunk
+        finally:
+            process.kill()
+            _, stderr = process.communicate()
+            os.close(primary)
+        return json.loads(line), stderr.decode("utf-8")
+
+    def claude_ran(self) -> bool:
+        return (self.root / "claude-ran").exists()
+
+    def assert_refused(self, result: dict, refusal: str, message: str) -> None:
+        self.assertEqual(
+            set(result),
+            {"protocol", "mode", "exit_code", "stdout_base64", "stderr_base64", "refusal"},
+        )
+        self.assertEqual(result["refusal"], refusal)
+        self.assertEqual(result["exit_code"], wrapper.EXIT_USAGE)
+        self.assertEqual(result["stdout_base64"], "")
+        self.assertIn(message, base64.b64decode(result["stderr_base64"]).decode("utf-8"))
+
+    def test_base_checkout_with_the_head_present_runs_claude_and_leaves_the_checkout_unchanged(
+        self,
+    ) -> None:
+        self.fetch_head()
+        refs = self.git(self.checkout, "for-each-ref")
+
+        result, stderr = self.run_adapter(self.prompt())
+
+        self.assertEqual(result["exit_code"], 0, result)
+        self.assertNotIn("refusal", result)
+        self.assertEqual(base64.b64decode(result["stdout_base64"]).decode(), CLAUDE_STDOUT)
+        self.assertEqual(stderr, "")
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
+        self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
+        self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
+
+    def test_base_checkout_without_the_head_is_refused_before_claude_runs(self) -> None:
+        result, stderr = self.run_adapter(self.prompt())
+
+        self.assertEqual(
+            result,
+            {
+                "protocol": wrapper.RESULT_PROTOCOL,
+                "mode": "structured",
+                "exit_code": wrapper.EXIT_USAGE,
+                "stdout_base64": "",
+                "stderr_base64": base64.b64encode(
+                    b"claude-adapter: trusted pull request head is unavailable in the review "
+                    b"checkout\n"
+                ).decode("ascii"),
+                "refusal": "head_unavailable",
+            },
+        )
+        # The refusal is the only output: pohunek reads stderr from the same terminal.
+        self.assertEqual(stderr, "")
+        self.assertFalse(self.claude_ran())
+
+    def test_base_checkout_refuses_any_other_head(self) -> None:
+        moved = "git checkout --quiet --detach HEAD~1"
+        for name, start, during_run, message in (
+            ("pull request head", self.head_sha, "", "is the pull request head or contains it"),
+            ("rewritten base", self.rewritten_sha, "", "does not descend from the trusted"),
+            ("moved by the run", self.tip_sha, moved, "HEAD changed during the review"),
+        ):
+            with self.subTest(name=name):
+                self.fetch_head()
+                self.git(self.checkout, "fetch", "--quiet", "origin", "rewritten")
+                self.git(self.checkout, "checkout", "--quiet", "--detach", start)
+
+                result, stderr = self.run_adapter(self.prompt(), during_run)
+
+                self.assert_refused(result, "checkout_invalid", message)
+                self.assertEqual(stderr, "")
+
+    def test_prompt_without_a_checkout_line_needs_the_head_checked_out(self) -> None:
+        # The Go engine writes only `Head SHA:`; its prompt gets the strict head check.
+        self.fetch_head()
+        result, _ = self.run_adapter(self.prompt("go"))
+        self.assert_refused(result, "checkout_invalid", "does not match the trusted pull request")
+        self.assertFalse(self.claude_ran())
+
+        self.git(self.checkout, "checkout", "--quiet", "--detach", self.head_sha)
+        for prompt in (self.prompt("go"), self.prompt("head")):
+            with self.subTest(prompt=prompt):
+                result, _ = self.run_adapter(prompt)
+                self.assertEqual(result["exit_code"], 0, result)
+                self.assertNotIn("refusal", result)
 
 
 class VersionProbeTests(unittest.TestCase):

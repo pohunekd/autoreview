@@ -34,6 +34,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts | [Reviewer output](#reviewer-output) |
 | `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
+| `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
 | `configuration_invalid` naming `github.credentials.login` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
@@ -171,15 +172,41 @@ output ends with a `codex-adapter: ...` line and
 engine reads that output at once, starts a fresh session up to
 `session.reviewer_run_max_attempts`, then records the failure. The adapter
 checks the worktree against the trusted lines of the request before and after
-the Codex run:
+the Codex run. The Claude adapter runs the same `base` checks with the same
+messages, and on a `head` checkout only the `HEAD` check; its refusal is one
+result line whose `stderr_base64` holds the message. Every refusal but a
+missing head is `review_result_invalid`:
 
 | Message | Cause | Fix |
 |---|---|---|
 | `review checkout HEAD does not match the trusted pull request head` | A `head` request in a worktree at another commit. A request without the `- Trusted checkout:` line counts as `head`, and the Go engine writes none, so on Go a `checkout: base` pipeline fails here. | Run the Rust engine, or give Codex `checkout: head` while Go runs |
-| `trusted pull request head is unavailable in the review checkout` | A `base` request whose head commit is not in the repository. Pohunek fetches only the base branch for a base checkout, so the head of a fork pull request, or a branch pushed after the project repository last fetched, is missing. | On the review host, `git -C <project repository> fetch origin refs/pull/<n>/head`, then `autoreview retry` |
+| `trusted pull request head is unavailable in the review checkout` | A `base` request whose head commit is not in the repository; the review stops with `review_head_unavailable` | See [Head commit unavailable](#head-commit-unavailable) |
 | `review checkout HEAD does not descend from the trusted pull request base`, `trusted pull request base is unavailable in the review checkout` | The base branch was force-pushed since GitHub recorded the pull request's base | A push to the pull request (or a rebase) records the new base; then `autoreview retry` |
 | `review checkout HEAD is the pull request head or contains it` | A `base` request in a worktree at the pull request code | Check the pipeline's `checkout` and the session's branch on the review host |
 | `review checkout is not clean`, `review checkout HEAD changed during the review` | Something changed the worktree before or during the run | Find the process that writes into the reviewer worktree |
+
+### Head commit unavailable
+
+A review stops with `review_head_unavailable` and publishes nothing. A
+reviewer on a `checkout: base` pipeline, Claude or Codex, reads the change
+through git, so the pull request head commit must be in the project repository
+on the review host. Pohunek fetches only the base branch for a base checkout,
+so the head of a fork pull request, or of a branch pushed after the project
+repository last fetched, is missing. The adapter refuses the run before the
+reviewer starts: the Claude adapter with a result line whose `refusal` is
+`head_unavailable`, the Codex adapter with the line
+`[pohunek-codex-review-refused-v1:head_unavailable]` right before its exit
+line. Neither a fresh session nor the scheduler tries again, because the next
+run would find the same repository. Fetch the head on the review host, then
+retry the pull request:
+
+```sh
+git -C <project repository> fetch origin refs/pull/<n>/head
+autoreview retry --repository <owner>/<repo> <n> <head prefix>
+```
+
+A new push to the pull request starts a new review, which stops the same way
+until its head is in the repository.
 
 ### Review host checks
 
@@ -261,6 +288,10 @@ A reviewer run ends in one of these codes:
   `result_max_bytes`, or reports another head or a status other than
   `completed`, or the adapter printed no result frame, as when it refuses the
   checkout (see [Codex checkout refused](#codex-checkout-refused)).
+- `review_head_unavailable`: the adapter refused a base checkout run because
+  the pull request head commit is not in the review host's repository (see
+  [Head commit unavailable](#head-commit-unavailable)). The review stops
+  without a fresh session.
 - `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
   finding without `blocking`. It comes from an adapter older than the one in
   `adapters/codex/`, so the review stops without a fresh session. Write the

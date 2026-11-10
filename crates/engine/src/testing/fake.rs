@@ -37,6 +37,10 @@ use crate::verify::{
     ClaimFinding, ClaimPrior, VERDICT_CONFIRMED, VERDICT_UPHELD, VerificationClaims,
 };
 
+/// Message of both adapters when the pull request head is not in the review checkout.
+const HEAD_UNAVAILABLE_MESSAGE: &str =
+    "trusted pull request head is unavailable in the review checkout";
+
 /// Produces the output of a reviewer session from its request.
 type OutputFn = Arc<dyn Fn(&SessionRequest) -> String + Send + Sync>;
 
@@ -102,6 +106,8 @@ pub(crate) struct FakeState {
     pub(crate) discussion_reads: Vec<Vec<PriorFinding>>,
     /// Pull requests whose newer head is a rewritten history, by head SHA.
     pub(crate) rewritten: BTreeSet<String>,
+    /// Head SHAs that the review host's repository lacks, so base checkout runs are refused.
+    pub(crate) missing_heads: BTreeSet<String>,
     /// Error code that every publication fails with; `None` lets publications succeed.
     pub(crate) publish_fail: Option<String>,
     /// Until this instant, reads and searches fail transiently; `None` never fails them.
@@ -504,15 +510,16 @@ impl Integrations for FakeIntegration {
                         .output
                         .clone()
                         .expect("a test sets the fake's output before a session runs");
-                    Ok((request, output))
+                    let refusal = adapter_refusal(&request, &state.missing_heads);
+                    Ok((request, output, refusal))
                 }
             }
         };
         let result = match outcome {
             Err(error) => Err(error),
             // An empty output stands for Go's nil output: the session has not finished yet.
-            Ok((request, output)) => {
-                let text = codex_checkout_refusal(&request).unwrap_or_else(|| output(&request));
+            Ok((request, output, refusal)) => {
+                let text = refusal.unwrap_or_else(|| output(&request));
                 Ok(Some(text.into_bytes()).filter(|bytes: &Vec<u8>| !bytes.is_empty()))
             }
         };
@@ -814,16 +821,48 @@ pub(crate) fn request_claims(prompt: &str) -> VerificationClaims {
     }
 }
 
+/// Returns the output of the adapter when it refuses the checkout of `request`.
+///
+/// Like the adapters in `adapters/`, both protocols refuse a base checkout whose head is in
+/// `missing_heads` as `head_unavailable`. The Codex adapter also reads the checkout from the
+/// one trusted checkout line of the prompt, `head` when there is none, and refuses one that
+/// differs from the session's: no result frame, the exit line with status 64.
+fn adapter_refusal(request: &SessionRequest, missing_heads: &BTreeSet<String>) -> Option<String> {
+    let session = if request.checkout == Checkout::Head {
+        "head"
+    } else {
+        "base"
+    };
+    let missing = session == "base" && missing_heads.contains(&request.pull_request.head_sha);
+    match request.reviewer.protocol {
+        Protocol::ClaudeStructured => missing.then(claude_head_refusal),
+        Protocol::CodexEnvelope => codex_checkout_refusal(request, session, missing),
+        Protocol::Unset | Protocol::Other(_) => None,
+    }
+}
+
+/// Returns the refusal envelope of the Claude adapter for a head that is not in the repository.
+fn claude_head_refusal() -> String {
+    let wrapper = go_json(&json!({
+        "protocol": CLAUDE_RESULT_PROTOCOL,
+        "mode": "structured",
+        "exit_code": 64,
+        "stdout_base64": "",
+        "stderr_base64": STANDARD.encode(format!("claude-adapter: {HEAD_UNAVAILABLE_MESSAGE}\n")),
+        "refusal": "head_unavailable",
+    }))
+    .expect("the fake encodes the Claude refusal");
+    format!("{wrapper}\n")
+}
+
 /// Returns the output of the Codex adapter when it refuses the checkout of `request`.
 ///
-/// Like `adapters/codex/codex-adapter`, it reads the checkout from the one trusted checkout
-/// line of the prompt, `head` when there is none, and refuses one that differs from the
-/// session's: it prints no result frame and the exit line with status 64, which the engine
-/// reads as `review_result_invalid`.
-fn codex_checkout_refusal(request: &SessionRequest) -> Option<String> {
-    if request.reviewer.protocol != Protocol::CodexEnvelope {
-        return None;
-    }
+/// `session` names the worktree's checkout; `missing` says its head is not in the repository.
+fn codex_checkout_refusal(
+    request: &SessionRequest,
+    session: &str,
+    missing: bool,
+) -> Option<String> {
     let lines: Vec<&str> = request
         .prompt
         .lines()
@@ -834,12 +873,16 @@ fn codex_checkout_refusal(request: &SessionRequest) -> Option<String> {
         [line] => Some(*line),
         _ => None,
     };
-    let session = if request.checkout == Checkout::Head {
-        "head"
-    } else {
-        "base"
-    };
-    (named != Some(session)).then(|| "[pohunek-codex-review exited with status 64]\n".to_owned())
+    if named != Some(session) {
+        return Some("[pohunek-codex-review exited with status 64]\n".to_owned());
+    }
+    missing.then(|| {
+        format!(
+            "codex-adapter: {HEAD_UNAVAILABLE_MESSAGE}\n\n\
+[pohunek-codex-review-refused-v1:head_unavailable]\n\
+[pohunek-codex-review exited with status 64]\n"
+        )
+    })
 }
 
 /// Returns the output of a Codex reviewer run with `findings` and the verdicts `prior`.

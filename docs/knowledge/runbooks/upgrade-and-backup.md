@@ -336,7 +336,11 @@ autoreview inside it.
    so they start the older Codex wrapper again. The Go engine refuses the report of the
    adapter in `adapters/codex/`, because it carries `blocking` and
    `prior_findings`. A Codex review that is in flight with prior findings
-   stops; retry it after the Go engine runs.
+   stops; retry it after the Go engine runs. Put the copy of each Claude
+   adapter that you kept back in place too (see the known differences), so the
+   Claude profiles start the older Claude wrapper: the adapter in
+   `adapters/claude/` checks a Go request as a head checkout, so every Claude
+   reviewer and verifier on a `checkout: base` pipeline would be refused.
 4. Start the Go engine on the same environment files:
    `systemctl enable --now <go-unit> <go-timer>`. With the drop-ins of step 1
    of the preparation, both units run `<go-binary>`, not autoreview.
@@ -357,6 +361,14 @@ Reviewers:
   `autoreview profiles install --agent codex --name <profile> ... --replace`
   ([the CLI](../../cli.md#autoreview-profiles-install)); `--replace` is needed
   because the command did not write the old profile.
+- The Claude adapter in `adapters/claude/` checks the review checkout against
+  trusted lines that only autoreview writes, and a Go request without them is
+  checked as a head checkout. On the Go engine it refuses every Claude run on
+  a `checkout: base` pipeline, so a rollback needs the older Claude wrapper as
+  well as the older Codex one. `autoreview profiles install` rewrites the
+  adapter in place, so before you run it for a Claude profile, copy
+  `<data>/autoreview/adapters/<NAME>/claude-adapter` aside on each review host
+  ([the CLI](../../cli.md#autoreview-profiles-install)).
 - The Go engine treats every Codex finding as blocking. On the first Codex
   re-review after the upgrade, every finding of the last review published
   before it is a prior finding that the reviewer must settle.

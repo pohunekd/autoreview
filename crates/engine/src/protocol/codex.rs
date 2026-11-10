@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::error::Error;
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
-use crate::protocol::validate::{count_over, sort_findings};
+use crate::protocol::validate::{count_over, review_head_unavailable, sort_findings};
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
 /// Opens the base64 report of a Codex envelope.
@@ -15,6 +15,12 @@ const ENVELOPE_MARKER: &str = "[pohunek-codex-review-result-v1:";
 
 /// Exit line of a Codex session that finished with status 0.
 const EXIT_LINE: &str = "[pohunek-codex-review exited with status 0]";
+
+/// Exit line of a Codex session that the adapter refused.
+const REFUSED_EXIT_LINE: &str = "[pohunek-codex-review exited with status 64]";
+
+/// Line of the adapter, right before its exit line, when the pull request head is missing.
+const HEAD_UNAVAILABLE_MARKER: &str = "[pohunek-codex-review-refused-v1:head_unavailable]";
 
 /// Line breaks that may separate the report from the exit line.
 const SEPARATORS: [&str; 6] = ["\n", "\r\n", "\n\n", "\n\r\n", "\r\n\n", "\r\n\r\n"];
@@ -101,14 +107,17 @@ autoreview_go_compat::object_only_serde!(CodexVerdict);
 ///
 /// # Errors
 ///
-/// Returns `review_result_invalid` for an output, report or head that the engine refuses, and
+/// Returns `review_result_invalid` for an output, report or head that the engine refuses,
 /// `review_adapter_outdated` for a report without `prior_findings` or a finding without
-/// `blocking`.
+/// `blocking`, and `review_head_unavailable` when the adapter refused a missing head.
 pub(crate) fn parse_codex_output(
     cfg: &Config,
     pr: &PullRequest,
     raw: &str,
 ) -> Result<ReviewerResult, Error> {
+    if refused_for_missing_head(raw) {
+        return Err(review_head_unavailable());
+    }
     let encoded = envelope_payload(raw).ok_or_else(result_invalid)?;
     let decoded = decode_go_base64(encoded)
         .filter(|v| !v.is_empty())
@@ -170,6 +179,25 @@ pub(crate) fn parse_codex_output(
         prior,
         ..ReviewerResult::default()
     })
+}
+
+/// Reports whether `raw` ends with the adapter's marker of a missing head and the exit line
+/// with status 64.
+///
+/// The marker must come right before the exit line, separated by one of `SEPARATORS`, as the
+/// adapter writes both at once. A run could print the marker too, but a run that exits with
+/// status 64 is a refusal anyway, so it stops the review and never publishes.
+fn refused_for_missing_head(raw: &str) -> bool {
+    ENDINGS
+        .iter()
+        .filter_map(|ending| raw.strip_suffix(ending))
+        .filter_map(|rest| rest.strip_suffix(REFUSED_EXIT_LINE))
+        .any(|head| {
+            SEPARATORS
+                .iter()
+                .filter_map(|separator| head.strip_suffix(separator))
+                .any(|before| before.ends_with(HEAD_UNAVAILABLE_MARKER))
+        })
 }
 
 /// Returns the base64 text of the envelope that ends `raw`, or `None` when Go's envelope pattern
@@ -304,6 +332,53 @@ mod tests {
                 .expect_err(name);
             assert_eq!(error_code(&err), "review_adapter_outdated", "{name}");
             assert!(!reviewer_output_retryable(&err), "{name}");
+        }
+    }
+
+    // The adapter's marker right before the exit line with status 64 means the head is not in
+    // the review checkout; a fresh run on the same repository cannot find it either (#253).
+    #[test]
+    fn adapter_refusal_of_a_missing_head_is_not_retried() {
+        let pr = test_pull_request(3);
+        let marker = "[pohunek-codex-review-refused-v1:head_unavailable]";
+        let message = "codex-adapter: trusted pull request head is unavailable in the review \
+checkout";
+        let refused = "[pohunek-codex-review exited with status 64]";
+        let cases = [
+            (
+                "refusal on the terminal",
+                format!("{message}\r\n\r\n{marker}\r\n{refused}\r\n"),
+                "review_head_unavailable",
+            ),
+            (
+                "refusal",
+                format!("{marker}\n{refused}"),
+                "review_head_unavailable",
+            ),
+            (
+                "text after the marker",
+                format!("{marker}\nmore\n{refused}\n"),
+                "review_result_invalid",
+            ),
+            (
+                "marker before status 0",
+                format!("{marker}\n[pohunek-codex-review exited with status 0]\n"),
+                "review_result_invalid",
+            ),
+            (
+                "other refusal",
+                format!("codex-adapter: review checkout is not clean\n\n{refused}\n"),
+                "review_result_invalid",
+            ),
+        ];
+        for (name, output, code) in cases {
+            let err = parse_codex_output(&test_config(), &pr, &output).expect_err(name);
+            assert_eq!(error_code(&err), code, "{name}");
+            assert_eq!(
+                reviewer_output_retryable(&err),
+                code == "review_result_invalid",
+                "{name}"
+            );
         }
     }
 }
