@@ -186,7 +186,7 @@ a default in the code:
 | Setting | Where | Meaning |
 |---|---|---|
 | Codex executable | `--codex-binary` of `render_profile.py`: written to the file `<wrapper>.codex-binary` next to the resolved wrapper, and passed as the first program argument | Absolute path. The file must be a regular file owned by the current user and not writable by the group or others. A missing or invalid file, or a first argument that differs from the file, stops the run with a message. |
-| Input limit | `--maximum-input-bytes` | The largest request that the adapter accepts. |
+| Input limit | `--maximum-input-bytes` | The largest request that the adapter accepts. A re-review request also carries the prior findings and the discussion (bounded by `limits.max_discussion_characters`), so the limit must cover them. |
 | Result limit | `--maximum-result-bytes` | The largest report that the adapter prints. |
 | Retention | `--maximum-retention-seconds` | How long the adapter stays alive after the result, so that the coordinator can read it. |
 | Model and reasoning effort | `--model`, `--reasoning-effort` | `--reasoning-effort` is one of `low`, `medium`, `high`, `xhigh`. |

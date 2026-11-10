@@ -224,7 +224,7 @@ A reviewer run ends in one of these codes:
   Codex profile at that adapter, then run `autoreview retry` for the pull
   request.
 
-Each unusable run gets a fresh session, up to `session.reviewer_run_max_attempts`.
+Each other unusable run gets a fresh session, up to `session.reviewer_run_max_attempts`.
 If the same reviewer keeps failing, compare its agent profile and its prompt
 with the protocol named in `policy.yaml`.
 

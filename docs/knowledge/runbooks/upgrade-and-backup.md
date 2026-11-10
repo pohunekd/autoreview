@@ -328,7 +328,12 @@ autoreview inside it.
 
    Reviews published after the backup are not in the restored store; check
    them on GitHub before you retry them. Otherwise keep the store as it is.
-3. Start the Go engine on the same environment files:
+3. When a rule uses a `codex-envelope` reviewer, point its Codex profiles
+   back at the older Codex wrapper. The Go engine refuses the report of the
+   adapter in `adapters/codex/`, because it carries `blocking` and
+   `prior_findings`. A Codex review that is in flight with prior findings
+   stops; retry it after the Go engine runs.
+4. Start the Go engine on the same environment files:
    `systemctl enable --now <go-unit> <go-timer>`. With the drop-ins of step 1
    of the preparation, both units run `<go-binary>`, not autoreview.
 
@@ -336,6 +341,17 @@ autoreview inside it.
 
 None of these changes what the Go engine has written. Where they differ,
 autoreview refuses what the Go engine read leniently.
+
+Reviewers:
+
+- A `codex-envelope` reviewer must run the adapter in `adapters/codex/`.
+  autoreview refuses the report of the older Codex wrapper with
+  `review_adapter_outdated`, and the Go engine refuses the report of the
+  adapter. Switch every Codex profile to the adapter in the same maintenance
+  window as the upgrade, and switch it back when you roll back.
+- The older Codex wrapper marked every finding blocking. On the first Codex
+  re-review after the upgrade, every finding of the last review published
+  before it is a prior finding that the reviewer must settle.
 
 Configuration:
 
