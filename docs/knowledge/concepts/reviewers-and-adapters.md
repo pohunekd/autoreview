@@ -2,7 +2,7 @@
 type: Concept
 id: concept/reviewers-and-adapters
 title: Reviewers and adapters
-description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the Claude adapter and the pohunek agent profiles it runs (an installer is planned in #25), finding prefixes, mixing models, and how a new agent would be added.
+description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the Claude and Codex adapters and the pohunek agent profiles they run (an installer is planned in #25), finding prefixes, mixing models, and how a new agent would be added.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -28,9 +28,11 @@ reviewer declares exactly one protocol.
 | `claude-structured` | A Claude Code run with a JSON schema that the runtime enforces | The schema-enforced structured output of the run | Reviewers and the verifier |
 | `codex-envelope` | A Codex run that prints a result envelope | A base64 result frame followed by a line that reports exit status 0 | Reviewers only |
 
-Both protocols return a summary, findings and the tests the reviewer ran. Only a
+Both protocols return a summary, findings and the tests the reviewer ran. A
 `claude-structured` result also carries the blocking flag of each finding and one
-verdict per prior finding; for `codex-envelope` both are planned in #23.
+verdict per prior finding. The Codex adapter produces both as well; the engine
+reads them from a `codex-envelope` result with #23 (see
+[the Codex adapter](#the-codex-adapter)).
 
 With `claude-structured` the runtime itself refuses output that does not match
 the schema, and the engine also checks the output against the request. The
@@ -132,6 +134,77 @@ The tests of the adapter are in `adapters/claude/tests` and run with
 result protocol name `claude-otel-noninteractive/v2`, which the engine reads; the
 rename is planned in #24.
 
+### The Codex adapter
+
+The adapter for `codex-envelope` lives in `adapters/codex/` and uses only the
+Python standard library (Python 3.11 or newer). It has two parts:
+
+- `codex-adapter` is the program a profile starts. It runs under `python3 -I`.
+  It reads one request that pohunek writes into the session and checks the
+  review checkout before it starts Codex: `HEAD` must be the trusted head SHA of
+  the request, the work tree must be clean and the trusted base commit must be
+  present. It runs `codex exec` once with `--sandbox read-only`,
+  `approval_policy="never"`, `--ignore-user-config`, `--ignore-rules`,
+  `--ephemeral` and an output schema. It checks the report (status `completed`,
+  the reviewed head, a blocking flag on every finding, well-formed prior
+  findings, the result limit) and prints it as one frame,
+  `[pohunek-codex-review-result-v1:<base64>]`, followed by the line
+  `[pohunek-codex-review exited with status N]`. The Codex run gets the session
+  environment without the variables that the Claude adapter drops (see above).
+  The adapter then stays alive for the retention time, so that the coordinator
+  can read the output before it removes the session. It exits with the status of
+  Codex, or with status 64 when the report or the checkout check fails after
+  the run.
+- `render_profile.py` writes a profile from a base Codex profile. It copies the
+  runtime package pin and the environment of the base profile, and turns off
+  resuming.
+
+The report has the fields `findings`, `summary`, `tests`, `status`,
+`reviewed_head_sha` and `prior_findings`. A finding has `severity`,
+`confidence`, `blocking`, `path`, `line`, `title` and `body`. A prior finding
+verdict has `key`, `status` (`fixed`, `still_open` or `answered`), `note` and
+`relies_on`, as in the Claude result. The engine reads `blocking` and
+`prior_findings` of a Codex result with #23; until then it refuses a frame with
+fields it does not know, so a `codex-envelope` reviewer that runs on this
+adapter needs that change.
+
+Read-only is fixed in the adapter: the arguments above are not configurable, and
+the adapter accepts exactly the six arguments that the renderer writes, no
+more. The renderer is an allowlist for the arguments of the base profile: it
+accepts these spellings, each setting at most once, and drops them because the adapter passes them itself. Every other
+argument is refused, among them any other sandbox mode or approval policy,
+`--dangerously-bypass-approvals-and-sandbox`, `--approve-for-me`, `--add-dir`,
+`--cd`, `--profile`, `--model` and every other `--config` key.
+
+- Sandbox: `--sandbox read-only`, `--sandbox=read-only`, `-s read-only` and
+  `-s=read-only`.
+- Approval policy: `--config` or `-c`, with the value as the next argument or
+  after `=` (`--config=...`, `-c=...`), and the value `approval_policy="never"`
+  or `approval_policy=never`.
+
+Configuration comes from the profile and a file next to the program, never from
+a default in the code:
+
+| Setting | Where | Meaning |
+|---|---|---|
+| Codex executable | `--codex-binary` of `render_profile.py`: written to the file `<wrapper>.codex-binary` next to the resolved wrapper, and passed as the first program argument | Absolute path. The file must be a regular file owned by the current user and not writable by the group or others. A missing or invalid file, or a first argument that differs from the file, stops the run with a message. |
+| Input limit | `--maximum-input-bytes` | The largest request that the adapter accepts. |
+| Result limit | `--maximum-result-bytes` | The largest report that the adapter prints. |
+| Retention | `--maximum-retention-seconds` | How long the adapter stays alive after the result, so that the coordinator can read it. |
+| Model and reasoning effort | `--model`, `--reasoning-effort` | `--reasoning-effort` is one of `low`, `medium`, `high`, `xhigh`. |
+| Telemetry | `env` table of the base profile | Optional. Whatever the table holds is copied to the new profile; without a table the run has no telemetry. |
+
+The base profile must use `base = "codex"`. A bare `--version` call gets no
+profile arguments and no profile environment, only the launch `PATH`, so the
+adapter finds the Codex executable through the file next to itself, never
+through the home directory, the working directory or a `PATH` lookup, and prints
+the version line of that executable.
+
+The tests of the adapter are in `adapters/codex/tests` and run with
+`scripts/gates adapters`. They use fake executables only. The adapter keeps the
+frame and exit line texts above, which the engine reads; the rename is planned
+in #24.
+
 The `agent_profile` key of a reviewer names the profile that its sessions start
 with. The profile must exist on every review host that runs the reviewer.
 
@@ -206,11 +279,11 @@ Constraints on the mix:
 
 The engine combines the results of both protocols the same way: the decision
 and the notes hand-off do not depend on the protocol. A `codex-envelope` result
-carries no blocking flag and no verdicts on prior findings, so every Codex
-finding blocks at any severity and a Codex pipeline gets no prior findings; both
-are planned in #23. The commit history check of an incremental review is the
-same for both protocols: a rebase or a force push widens the review to full. Two
-more differences remain:
+is read without a blocking flag and without verdicts on prior findings, so every
+Codex finding blocks at any severity and a Codex pipeline gets no prior
+findings; reading both is planned in #23. The commit history check of an
+incremental review is the same for both protocols: a rebase or a force push
+widens the review to full. Two more differences remain:
 
 - **One protocol per pipeline.** The pipeline prompt is written for one request
   and one result format, and the engine combines the results of all reviewers of
@@ -239,8 +312,8 @@ and the design below is the outline that such a protocol would have to meet.
 4. **Verdicts, when the protocol supports them.** One verdict per prior finding.
    A protocol without verdicts can run only in a pipeline that has no prior
    findings to settle, or it must add the verdicts first.
-5. **A blocking flag.** The result carries it, as `claude-structured` does; for
-   `codex-envelope` it is planned in #23.
+5. **A blocking flag.** The result carries it, as `claude-structured` does; the
+   engine reads it from `codex-envelope` with #23.
 6. **Environment rules.** No GitHub token, no pohunek identity variables, and
    bounded output.
 7. **A profile installer.** Support for the new runtime in
