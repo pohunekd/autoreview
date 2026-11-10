@@ -167,6 +167,16 @@ class WrapperTests(unittest.TestCase):
                     with self.assertRaisesRegex(wrapper.InputFrameError, "blocking flag"):
                         wrapper.encoded_result(result, 4096, HEAD)
 
+    def test_result_requires_a_findings_list(self) -> None:
+        missing = review_result()
+        del missing["findings"]
+        for bad in (missing, review_result(findings=None), review_result(findings={})):
+            with self.subTest(result=bad):
+                with tempfile.TemporaryDirectory() as directory:
+                    result = self.write_result(directory, bad)
+                    with self.assertRaisesRegex(wrapper.InputFrameError, "findings list"):
+                        wrapper.encoded_result(result, 4096, HEAD)
+
     def test_result_requires_well_formed_prior_findings(self) -> None:
         missing = review_result()
         del missing["prior_findings"]
@@ -392,7 +402,7 @@ class ProfileRendererTests(unittest.TestCase):
             source.chmod(0o600)
             arguments: dict[str, object] = {
                 "wrapper": Path("/opt/autoreview/bin/codex-adapter"),
-                "codex_binary": Path("/usr/bin/codex"),
+                "codex_binary": Path("/bin/sh"),
                 "maximum_input_bytes": 262144,
                 "maximum_result_bytes": 262144,
                 "maximum_retention_seconds": 3900,
@@ -412,7 +422,7 @@ class ProfileRendererTests(unittest.TestCase):
         self.assertEqual(profile["program"], "/opt/autoreview/bin/codex-adapter")
         self.assertEqual(
             profile["args"],
-            ["/usr/bin/codex", "262144", "262144", "3900", "model-x", "high"],
+            ["/bin/sh", "262144", "262144", "3900", "model-x", "high"],
         )
         self.assertTrue(profile["input_rules"]["bracketed_paste"])
         self.assertFalse(profile["resume"]["resumable"])
@@ -537,6 +547,25 @@ class ProfileRendererTests(unittest.TestCase):
             with self.subTest(overrides=overrides):
                 with self.assertRaisesRegex(ValueError, message):
                     self.render(READ_ONLY_SOURCE, **overrides)
+
+    def test_refuses_a_codex_binary_that_is_not_an_executable_regular_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plain = root / "plain"
+            plain.write_text("x", encoding="utf-8")
+            plain.chmod(0o644)
+            newline = root / "with\nnewline"
+            newline.write_text("x", encoding="utf-8")
+            newline.chmod(0o755)
+            for binary, message in (
+                (root / "missing", "unavailable"),
+                (root, "executable regular file"),
+                (plain, "executable regular file"),
+                (newline, "newline"),
+            ):
+                with self.subTest(binary=binary.name):
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.render(READ_ONLY_SOURCE, codex_binary=binary)
 
     def test_atomic_write_is_idempotent_and_private(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

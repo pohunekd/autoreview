@@ -304,7 +304,9 @@ def verify_checkout_head(prompt: str, cwd: Path | None = None) -> str:
 def validate_blocking_and_prior_findings(value: dict) -> None:
     """Checks the two fields that the Claude result carries as well."""
     findings = value.get("findings")
-    if isinstance(findings, list) and not all(
+    if not isinstance(findings, list):
+        raise InputFrameError("Codex review result has no findings list")
+    if not all(
         isinstance(finding, dict) and isinstance(finding.get("blocking"), bool)
         for finding in findings
     ):

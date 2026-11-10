@@ -152,8 +152,9 @@ Python standard library (Python 3.11 or newer). It has two parts:
   `[pohunek-codex-review exited with status N]`. The Codex run gets the session
   environment without the variables that the Claude adapter drops (see above).
   The adapter then stays alive for the retention time, so that the coordinator
-  can read the output before it removes the session, and exits with the status
-  of Codex.
+  can read the output before it removes the session. It exits with the status of
+  Codex, or with status 64 when the report or the checkout check fails after
+  the run.
 - `render_profile.py` writes a profile from a base Codex profile. It copies the
   runtime package pin and the environment of the base profile, and turns off
   resuming.
@@ -170,12 +171,16 @@ adapter needs that change.
 Read-only is fixed in the adapter: the arguments above are not configurable, and
 the adapter accepts exactly the six arguments that the renderer writes, no
 more. The renderer is an allowlist for the arguments of the base profile: it
-accepts `--sandbox read-only` (also as `--sandbox=read-only`, `-s read-only`)
-and `--config approval_policy="never"` (also `-c`, and `=value`), each at most
-once, and drops them because the adapter passes them itself. Every other
+accepts these spellings, each setting at most once, and drops them because the adapter passes them itself. Every other
 argument is refused, among them any other sandbox mode or approval policy,
 `--dangerously-bypass-approvals-and-sandbox`, `--approve-for-me`, `--add-dir`,
 `--cd`, `--profile`, `--model` and every other `--config` key.
+
+- Sandbox: `--sandbox read-only`, `--sandbox=read-only`, `-s read-only` and
+  `-s=read-only`.
+- Approval policy: `--config` or `-c`, with the value as the next argument or
+  after `=` (`--config=...`, `-c=...`), and the value `approval_policy="never"`
+  or `approval_policy=never`.
 
 Configuration comes from the profile and a file next to the program, never from
 a default in the code:

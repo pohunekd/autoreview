@@ -143,6 +143,14 @@ def render_profile(
         raise ValueError("wrapper must be an absolute path")
     if not codex_binary.is_absolute():
         raise ValueError("Codex executable must be an absolute path")
+    if "\n" in str(codex_binary):
+        raise ValueError("Codex executable path must not contain a newline")
+    try:
+        executable = codex_binary.stat()
+    except OSError as error:
+        raise ValueError("Codex executable is unavailable") from error
+    if not stat.S_ISREG(executable.st_mode) or not os.access(codex_binary, os.X_OK):
+        raise ValueError("Codex executable must be an executable regular file")
     if (
         maximum_input_bytes <= 0
         or maximum_result_bytes <= 0
