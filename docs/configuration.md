@@ -222,9 +222,12 @@ origin URL and the pipeline's `project_sources`. A host that fails (unreachable,
 a pohunek error, a timeout) is skipped with the warning `review host skipped`
 and is not asked again in the same discovery pass. Two matching projects on the
 chosen host are `project_route_ambiguous`. When no host has the repository the
-review fails with `project_route_not_found`; when a host failed, it fails with the
-code of the first skipped host whose code is retried, or of the first skipped host
-when none is. A `route_overrides` entry asks only its host.
+review fails with `project_route_not_found`. When a host failed and no other host
+has the repository, the review waits for a review host instead: it uses no retry
+of `schedule.retry_delays_seconds` and starts on the first pass after a host
+answers (see
+[waiting for a review host](knowledge/concepts/state-and-recovery.md#waiting-for-a-review-host)).
+A `route_overrides` entry asks only its host.
 See [run on several hosts](knowledge/guides/multihost.md).
 
 ## session
@@ -252,7 +255,7 @@ How reviewer sessions are named, started, read and cleaned up.
 | `worker_tick_seconds` | How often the worker checks for reviews to start, resume or expire |
 | `max_concurrent_reviews` | Reviews running at once, across all review hosts of this service |
 | `debounce_seconds` | Quiet time after a push before a review starts, so a burst of pushes is reviewed once |
-| `retry_delays_seconds` | Delays between scheduler attempts of a failed review |
+| `retry_delays_seconds` | Delays between scheduler attempts of a failed review. A review that waits for a review host uses none of them |
 | `step_retry_seconds`, `step_retry_initial_seconds`, `step_retry_max_interval_seconds` | Total time and backoff of a review step that keeps failing transiently |
 | `discovery_lock_timeout_seconds`, `discovery_lock_poll_ms` | Concurrent discovery passes take turns on a lock |
 | `poll_limit`, `search_page_limit` | GitHub search bounds; a truncated search is an error, never a silent drop |

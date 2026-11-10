@@ -244,6 +244,21 @@ What is not compatible, by decision:
   approve a rebased head on an incremental review. No stored row changes, and a
   rollback to Go brings the Go behaviour back. The regression test is
   `rewritten_history_gets_a_full_review_on_a_codex_pipeline`.
+- **Review host outage (#241):** when the route of a due review fails because
+  a host failed its project list (a `pohunek_*` host failure code) and no other
+  host has the repository, the review waits in `retry_wait` at its due time with
+  its attempt and `retries` unchanged, and the schedule record gets
+  `awaits_host: true`. One `review_stopped` notice per host outage says that
+  reviews wait for a review host. The announced hosts are stored in the
+  `rejected` discovery entry under the keys `host:<host>` with the host error
+  code, and a host's key is removed on the first pass in which that host
+  answers. Go fails the route through `AfterFailure` (`discovery.go:305`), uses
+  the retry budget and stops the review. Go reads the record and ignores
+  `awaits_host`, and its `reportRejected` (`discovery.go:57-61`) drops the
+  `host:` keys on its first pass, so a rollback brings the Go behaviour back and
+  a return to Rust announces a lasting outage again. Any other route error
+  (`project_route_not_found`, `project_route_ambiguous`) still fails as in Go.
+  The regression test is `review_waits_through_an_outage_of_every_review_host`.
 
 - **MCP server (#179):** `autoreview mcp` has no Go counterpart. The `mcp`
   section exists only in `config.yaml`, which Go does not read, and the server

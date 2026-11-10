@@ -70,7 +70,7 @@ fails validation with `notifications: event X needs a level`.
 | `approval_requested` | A clean review waits for a human approval | `action` |
 | `handoff_reminder` | Notes were handed to an author, who did not ask for a review again within `notes_handoff.reminder_hours` | `action` |
 | `findings_on_own_pr` | A review of the reviewing account's own pull request has blocking findings | `action` |
-| `review_stopped` | A review failed after its retries, or an approved review could not be published | `action` |
+| `review_stopped` | A review failed after its retries, reviews wait for a review host, or an approved review could not be published | `action` |
 | `cleanup_manual` | A reviewer session could not be removed and needs `pohunek session rm` | `action` |
 | `command_failed` | An operator command failed, such as `approve` or `retry` | `action` |
 | `approved` | An approval was published | `digest` |
@@ -112,7 +112,8 @@ list the wait until it is approved or its deadline passes.
 
 A discovery pass sends its messages after it has saved its state and released
 the discovery lock: a rejected pull request (`review_stopped`), a review that
-stopped or waits for a retry (`review_stopped`, `retry_scheduled`), and a
+stopped or waits for a retry (`review_stopped`, `retry_scheduled`), reviews that
+wait for a review host (`review_stopped`, once per host outage), and a
 `handoff_reminder`. Each message gets one attempt, bounded by the notifier's
 request timeout. Once a message fails, at any level, the later messages of the
 same route in the same pass get no attempt; the route is the event's own route

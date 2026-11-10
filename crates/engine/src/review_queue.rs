@@ -623,6 +623,7 @@ notifications:
             workflow_id: String::new(),
             due_at: OffsetDateTime::UNIX_EPOCH,
             error_code: error_code.to_owned(),
+            awaits_host: false,
         }
     }
 

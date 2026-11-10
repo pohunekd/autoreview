@@ -17,8 +17,8 @@ use crate::config::NotifyRoute;
 use crate::engine::{Engine, SystemClock};
 use crate::error::{Error, error_code};
 use crate::integrations::SessionRequest;
-use crate::model::RejectedCandidate;
 use crate::model::review::Decision;
+use crate::model::{PullRequest, RejectedCandidate};
 use crate::protocol::fixtures::sha;
 use crate::review::input::NOTIFY_STEP_PREFIX;
 use crate::testing::fake::{INTEGRATION_POLICY, count_notes, reviewer_output};
@@ -532,6 +532,85 @@ async fn failing_first_host_is_skipped_and_the_review_runs_on_the_second() {
             .iter()
             .map(|request| request.route.host.as_str())
             .collect::<Vec<_>>()
+    );
+    h.stop_engine().await;
+}
+
+// An outage of every review host that outlasts the retry budget does not stop a due review:
+// the first pass after a host answers dispatches it without `retry`, and one notice, also
+// across a restart and a push during the outage, says that it waits for a review host (#241).
+#[tokio::test]
+async fn review_waits_through_an_outage_of_every_review_host() {
+    let mut h = start_harness(|cfg| {
+        cfg.pohunek_hosts = vec!["host-a".to_owned(), "host-b".to_owned()];
+    })
+    .await;
+    for host in ["host-a", "host-b"] {
+        h.fake
+            .lock()
+            .host_fail
+            .insert(host.to_owned(), "pohunek_request_failed".to_owned());
+    }
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    // Each settle polls for longer than the debounce and every retry delay together.
+    h.settle().await;
+    h.stop_engine().await;
+    let listed = h.fake.listing_count();
+    h.start();
+    h.wait_for("the start-up pass of the restarted engine", || {
+        h.fake.listing_count() > listed
+    })
+    .await;
+    h.settle().await;
+    let pushed = PullRequest {
+        head_sha: sha("c"),
+        ..pr.clone()
+    };
+    h.fake.open(pushed, h.rule(&pr.repository));
+    h.settle().await;
+    h.fake.lock().host_fail.remove("host-b");
+    let result = h.poll().await;
+    assert_eq!(
+        result.dispatched, 1,
+        "the first pass after a host answers dispatches the review: {result:?}"
+    );
+    h.wait_for("the review on the host that answers", || {
+        h.publications() == 1
+    })
+    .await;
+    let (_, notes, started, _) = h.fake.snapshot();
+    assert!(
+        started.iter().all(|request| request.route.host == "host-b"),
+        "session hosts = {:?}",
+        started
+            .iter()
+            .map(|request| request.route.host.as_str())
+            .collect::<Vec<_>>()
+    );
+    let waits: Vec<_> = notes
+        .iter()
+        .filter(|note| note.message.contains("wait for a review host"))
+        .collect();
+    assert_eq!(waits.len(), 1, "one notice of the wait: {notes:?}");
+    assert_eq!(waits[0].level, Level::Action, "level of {:?}", waits[0]);
+    assert!(
+        waits[0].message.contains("(failed: host-a, host-b)"),
+        "the notice names the failed hosts: {:?}",
+        waits[0]
+    );
+    assert!(
+        waits[0]
+            .message
+            .contains("Diagnostic: pohunek_request_failed."),
+        "the notice names the host error code: {:?}",
+        waits[0]
+    );
+    assert!(
+        !notes
+            .iter()
+            .any(|note| note.message.contains("stopped after attempt")),
+        "the outage stopped the review: {notes:?}"
     );
     h.stop_engine().await;
 }

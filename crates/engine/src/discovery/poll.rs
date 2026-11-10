@@ -11,7 +11,7 @@ use autoreview_schedule::scheduler::{self, Record, Run};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
-use super::route::HostFailures;
+use super::route::{HostAnswers, HostFailures, host_unavailable};
 use super::{Notice, PHASE_RETRY_WAIT, record_event};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
@@ -169,6 +169,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let mut dispatches = Vec::new();
         // A host that fails once is not asked again in this pass, so it costs one timeout.
         let mut host_failures = HostFailures::new();
+        let mut host_answers = HostAnswers::new();
         for (key, candidate) in &present {
             let pr = &candidate.pull_request;
             let entries = i64::try_from(state.schedule.len()).unwrap_or(i64::MAX);
@@ -208,14 +209,41 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 notices.push(self.notice(record_event(&decision.record), key, message)?);
             }
             if decision.dispatch {
-                // A route failure is a scheduler failure with its own retry policy, so it is
-                // not retried here.
+                // A route failure is not retried here. A failed host leaves the review due for
+                // the next pass; any other route failure follows the scheduler's retry policy.
                 let sources = &candidate.rule.pipeline.project_sources;
                 match self
-                    .resolve_route(cancel, &pr.repository, sources, &mut host_failures)
+                    .resolve_route(
+                        cancel,
+                        &pr.repository,
+                        sources,
+                        &mut host_failures,
+                        &mut host_answers,
+                    )
                     .await
                 {
                     Err(err) if cancel.is_cancelled() => return Err(err),
+                    Err(err) if host_unavailable(&err) => {
+                        decision.record =
+                            scheduler::wait_for_host(decision.record, error_code(&err));
+                        // Each host outage is announced once, by the first review that waits.
+                        let failed = self.failed_route_hosts(&pr.repository, &host_failures);
+                        let new: Vec<&str> = failed
+                            .iter()
+                            .filter(|host| !state.host_outages.contains_key(*host))
+                            .map(String::as_str)
+                            .collect();
+                        if !new.is_empty() {
+                            let message =
+                                scheduler::host_wait_notification(&target, &decision.record, &new);
+                            notices.push(self.notice(Event::ReviewStopped, key, message)?);
+                        }
+                        for host in failed {
+                            if let Some(failure) = host_failures.get(&host) {
+                                state.host_outages.insert(host, failure.code.clone());
+                            }
+                        }
+                    }
                     Err(err) => {
                         decision.record = scheduler::after_failure(
                             decision.record,
@@ -228,6 +256,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                         notices.push(self.notice(record_event(&decision.record), key, message)?);
                     }
                     Ok(route) => {
+                        decision.record.awaits_host = false;
                         let published = state.published.get(key);
                         let (scope, prior) = self.plan_review(cancel, candidate, published).await?;
                         let handoff = self.notes_handoff(published, pr)?;
@@ -258,6 +287,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             state.schedule.insert(key.clone(), decision.record);
         }
+        // An outage ends when its host answers or leaves `pohunek.hosts`; a host that answered
+        // and then failed in this pass is still out.
+        state.host_outages.retain(|host, _| {
+            self.config.pohunek_hosts.contains(host)
+                && (host_failures.contains_key(host) || !host_answers.contains(host))
+        });
         self.prune_discovery(&mut state, &present, now);
         live(cancel)?;
         self.store.in_tx(|transaction| {

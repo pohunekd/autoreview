@@ -4,7 +4,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
 use autoreview_schedule::scheduler::retryable;
@@ -22,6 +22,24 @@ const PROJECT_ROUTE_NOT_FOUND: &str = "project_route_not_found";
 /// Error code of a repository that two projects of one host serve.
 const PROJECT_ROUTE_AMBIGUOUS: &str = "project_route_ambiguous";
 
+/// Error codes of a host whose project list failed: the codes of a failed pohunek call and of
+/// a project list that does not read.
+const HOST_FAILURE_CODES: [&str; 4] = [
+    "pohunek_request_failed",
+    "pohunek_request_timeout",
+    "pohunek_session_not_found",
+    "pohunek_response_invalid",
+];
+
+/// Reports whether a route error comes from a host that failed.
+///
+/// After a host failure the review never started on a host, so it waits for one instead of
+/// using its retries. Any other code, such as `project_route_not_found`, follows the
+/// scheduler's retry policy, so an unknown code never waits without end.
+pub(crate) fn host_unavailable(err: &Error) -> bool {
+    HOST_FAILURE_CODES.contains(&error_code(err))
+}
+
 /// The failure of one host's project list, kept for the rest of a discovery pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct HostFailure {
@@ -33,6 +51,9 @@ pub(crate) struct HostFailure {
 
 /// The hosts that failed in one discovery pass, keyed by host.
 pub(crate) type HostFailures = BTreeMap<String, HostFailure>;
+
+/// The hosts whose project list succeeded in one discovery pass.
+pub(crate) type HostAnswers = BTreeSet<String>;
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the pohunek host and project that run the reviews of `repository`.
@@ -46,6 +67,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         repository: &str,
         sources: &[String],
         failures: &mut HostFailures,
+        answers: &mut HostAnswers,
     ) -> Result<ProjectRoute, Error> {
         search_route(
             &self.config.pohunek_hosts,
@@ -53,6 +75,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             repository,
             cancel,
             failures,
+            answers,
             |host| {
                 self.integration
                     .host_routes(cancel, host, repository, sources)
@@ -60,12 +83,29 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         )
         .await
     }
+
+    /// Returns the hosts that `repository` may use and that are in `failures`, in order.
+    pub(crate) fn failed_route_hosts(
+        &self,
+        repository: &str,
+        failures: &HostFailures,
+    ) -> Vec<String> {
+        route_hosts(
+            &self.config.pohunek_hosts,
+            self.config.route_overrides.get(repository),
+        )
+        .into_iter()
+        .filter(|host| failures.contains_key(*host))
+        .map(str::to_owned)
+        .collect()
+    }
 }
 
 /// Returns the route of the first host, in order, whose projects serve `repository`.
 ///
 /// `list` returns the routes of one host. A host in `failures` is skipped without a call; a host
-/// whose call fails is skipped and added to `failures`. Every skip logs one WARN line.
+/// whose call fails is skipped and added to `failures`, and a host whose call succeeds is added
+/// to `answers`. Every skip logs one WARN line.
 ///
 /// # Errors
 ///
@@ -80,6 +120,7 @@ pub(crate) async fn search_route<'a, F, Fut>(
     repository: &str,
     cancel: &CancellationToken,
     failures: &mut HostFailures,
+    answers: &mut HostAnswers,
     mut list: F,
 ) -> Result<ProjectRoute, Error>
 where
@@ -97,7 +138,10 @@ where
             None => list(host).await,
         };
         let routes = match answer {
-            Ok(routes) => routes,
+            Ok(routes) => {
+                answers.insert(host.to_owned());
+                routes
+            }
             Err(err) if cancel.is_cancelled() => return Err(err),
             Err(err) => {
                 let code = error_code(&err).to_owned();
@@ -170,7 +214,7 @@ mod tests {
 
     use autoreview_schedule::scheduler::retryable;
 
-    use super::{HostFailure, HostFailures, search_route};
+    use super::{HostAnswers, HostFailure, HostFailures, host_unavailable, search_route};
     use crate::config::RouteOverride;
     use crate::engine::is_permanent;
     use crate::error::{Error, error_code};
@@ -217,14 +261,23 @@ mod tests {
         let hosts: Vec<String> = hosts.iter().map(|host| (*host).to_owned()).collect();
         let answers: BTreeMap<&str, Answer> = answers.iter().copied().collect();
         let mut called = Vec::new();
-        let result = search_route(&hosts, overrides, REPOSITORY, cancel, failures, |host| {
-            called.push(host.to_owned());
-            let answer = answers.get(host).copied().unwrap_or(Ok(&[]));
-            ready(match answer {
-                Ok(projects) => Ok(projects.iter().map(|id| route(host, id)).collect()),
-                Err(code) => Err(Error::workflow(code, !retryable(code), None)),
-            })
-        })
+        let mut answered = HostAnswers::new();
+        let result = search_route(
+            &hosts,
+            overrides,
+            REPOSITORY,
+            cancel,
+            failures,
+            &mut answered,
+            |host| {
+                called.push(host.to_owned());
+                let answer = answers.get(host).copied().unwrap_or(Ok(&[]));
+                ready(match answer {
+                    Ok(projects) => Ok(projects.iter().map(|id| route(host, id)).collect()),
+                    Err(code) => Err(Error::workflow(code, !retryable(code), None)),
+                })
+            },
+        )
         .await;
         (result, called)
     }
@@ -325,6 +378,25 @@ mod tests {
                     "failures={failures:?} hosts={hosts:?} answers={answers:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn only_a_host_failure_makes_a_review_wait_for_a_host() {
+        // (error code, waits for a host)
+        let cases = [
+            ("pohunek_request_failed", true),
+            ("pohunek_request_timeout", true),
+            ("pohunek_session_not_found", true),
+            ("pohunek_response_invalid", true),
+            ("project_route_not_found", false),
+            ("project_route_ambiguous", false),
+            ("pohunek_session_lost", false),
+            ("workflow_failed", false),
+        ];
+        for (code, want) in cases {
+            let err = Error::workflow(code, !retryable(code), None);
+            assert_eq!(host_unavailable(&err), want, "code={code}");
         }
     }
 
