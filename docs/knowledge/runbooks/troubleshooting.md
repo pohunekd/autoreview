@@ -128,7 +128,7 @@ A route override pins one repository to one host. See
 
 | Code | Meaning and fix |
 |---|---|
-| `pohunek_session_start_failed` | The host could not start a session. Check that the agent profile exists on that host and that the runtime package is installed on that host. Each start attempt uses its own branch, so the engine retries up to `session.start_max_attempts`. |
+| `pohunek_session_start_failed` | The host could not start a session. Check that the agent profile exists on that host and that the runtime package is installed on that host. Each start attempt uses its own branch, so the engine retries up to `session.start_max_attempts`. For a Codex reviewer whose every start fails, see [Codex input not ready](#codex-input-not-ready). |
 | `pohunek_base_fetch_ref_locked` | The base fetch hit a locked ref (pohunek [#1437](https://github.com/zajca/pohunek/issues/1437)). The engine retries on a fresh `-startN` branch. Repeated failures: see [stale sessions and branches](stale-sessions-and-branches.md). |
 | `pohunek_session_warning` | The session reported a warning. The engine retries on a fresh branch. Read the warning on the review host before you change the policy. |
 | `pohunek_request_failed`, `pohunek_request_timeout` | The pohunek call failed or passed `pohunek.timeout_seconds`. A session start includes the base fetch, so 45 seconds is the recommended minimum. |
@@ -138,6 +138,27 @@ A route override pins one repository to one host. See
 
 When all start attempts fail, the review reaches `review_stopped`. See
 [retry and recovery](retry-and-recovery.md).
+
+### Codex input not ready
+
+Every start of a Codex reviewer fails with `pohunek_session_start_failed`, and
+the log line `reviewer session start failed` carries
+`diagnostic=unclassified_cli_failure`; the engine does not log pohunek's own
+error code. Each attempt waits for pohunek's whole input grace
+(`input.initial_startup_grace_ms`), then the review reaches `review_stopped`
+after `session.start_max_attempts`. A hand-run `pohunek session new
+--agent <profile> --input-stdin` on the review host, or the pohunek daemon log,
+shows the cause: `session_input_not_ready`.
+
+The Codex runtime declares `manifest_idle` input readiness, so pohunek writes
+the request only after the session shows an idle terminal title or screen. The
+adapter in `adapters/codex/` sets a fixed title before it reads its request; a
+profile whose program sets no title, such as an adapter written by an older
+autoreview or a wrapper of your own, never becomes ready. Run
+`autoreview profiles install` with the same flags on the review host (with
+`--replace` when the command did not write the profile; it prints `updated`
+when it rewrote only the adapter), then `autoreview retry` for the pull
+request. See [the Codex adapter](../concepts/reviewers-and-adapters.md#the-codex-adapter).
 
 ### Review host checks
 

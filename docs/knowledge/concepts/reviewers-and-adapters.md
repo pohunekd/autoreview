@@ -129,6 +129,18 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   profile. The profile also turns off resuming and disables prompt-box
   detection, because the adapter reads its input without rendering one.
 
+The empty detection manifest (`rules = []`) is deliberate. The Claude runtime
+declares pohunek's `screen_idle` input readiness, which waits for an idle rule
+on a screen region. An override manifest without one makes pohunek fall back to
+`bracketed_paste` readiness: the request is written once the adapter's terminal
+accepts a paste, which is what the adapter needs. `pohunek doctor` therefore
+lists an installed Claude profile as a warning (check `agent_profile_<name>`),
+and `pohunek service check` and the upgrade preflight list it under
+`profile_warnings` with the code `profile_without_screen_readiness`. The
+warning is expected and needs no change. Do not add the `prompt_box_body` idle
+rule that pohunek suggests: the adapter draws no prompt box, so the rule never
+matches and every session start would wait for input that is never written.
+
 Read-only is enforced by the renderer as an allowlist for the permission mode
 and a refusal list for everything that widens access. The base profile must set
 `--permission-mode` exactly once, to `plan` or `default`; any other value
@@ -168,6 +180,17 @@ The adapter for `codex-envelope` lives in `adapters/codex/` and uses only the
 Python standard library (Python 3.11 or newer). It has two parts:
 
 - `codex-adapter` is the program a profile starts. It runs under `python3 -I`.
+  Before it reads the request it sets the fixed terminal title
+  `autoreview codex adapter` (OSC 0), never on a bare `--version`. The Codex
+  runtime declares pohunek's `manifest_idle` input readiness: pohunek writes the
+  request only after the Codex detection manifest reads idle from the screen
+  or the terminal title, and any non-blank title that does not start with a
+  spinner glyph reads idle (`osc_title_idle`). The adapter draws nothing else,
+  so without the title pohunek refuses the start with
+  `session_input_not_ready`. The readiness gates only that first write: a
+  later title, from `codex exec` or anything else in the session, does not
+  affect the run, because the engine sends no further input and does not read
+  the session state, only the output.
   It reads one request that pohunek writes into the session and checks the
   review checkout before it starts Codex: `HEAD` must be the trusted head SHA of
   the request, the work tree must be clean and the trusted base commit must be

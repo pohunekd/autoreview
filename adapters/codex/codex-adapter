@@ -26,6 +26,11 @@ PROGRAM_NAME = "codex-adapter"
 # The engine reads the result frame and the exit line below by these exact texts.
 RESULT_MARKER_PREFIX = "[pohunek-codex-review-result-v1:"
 EXIT_LINE_FORMAT = "[pohunek-codex-review exited with status {}]"
+# Codex runtimes declare pohunek's `manifest_idle` input readiness: the initial
+# input is written only once the detection manifest reads idle, and any
+# non-blank terminal title without a leading spinner glyph reads idle. The
+# adapter draws nothing else, so this fixed OSC 0 title is that signal.
+READY_TITLE = b"\x1b]0;autoreview codex adapter\x07"
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
 # The renderer writes the Codex path into this file next to the wrapper.
 # The bare --version probe gets no arguments and no profile environment, so the
@@ -399,6 +404,8 @@ def main() -> NoReturn:
     if not sys.stdin.isatty():
         fail("stdin must be a Pohunek-managed PTY")
 
+    sys.stdout.buffer.write(READY_TITLE)
+    sys.stdout.buffer.flush()
     descriptor = sys.stdin.fileno()
     original_attributes = termios.tcgetattr(descriptor)
     try:

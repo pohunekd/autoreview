@@ -6,6 +6,8 @@ import base64
 import importlib.util
 import json
 import os
+import pty
+import select
 import shutil
 import stat
 import subprocess
@@ -354,6 +356,45 @@ class VersionProbeTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
         self.assertIn("differs", result.stderr)
+
+    def test_title_precedes_the_read_of_the_input_frame(self) -> None:
+        # pohunek writes the input of a `manifest_idle` runtime only after an idle
+        # title, so a title that waits for the input deadlocks the session start.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.install_wrapper(root, "{fake}\n")
+            home = root / "home"
+            home.mkdir()
+            primary, secondary = pty.openpty()
+            process = subprocess.Popen(
+                [str(script), str(root / "fake-codex"), "262144", "262144", "60", "model-x", "high"],
+                env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+                cwd=home,
+                stdin=secondary,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            os.close(secondary)
+            try:
+                title = b""
+                while len(title) < len(wrapper.READY_TITLE):
+                    readable, _, _ = select.select([process.stdout], [], [], 10)
+                    self.assertTrue(readable, "no title before the input frame was read")
+                    chunk = os.read(process.stdout.fileno(), len(wrapper.READY_TITLE) - len(title))
+                    self.assertTrue(chunk, "the adapter closed stdout before the title")
+                    title += chunk
+                # Not a bracketed-paste start; the line break delivers it in cooked mode too.
+                os.write(primary, b"x" * (len(wrapper.BRACKETED_PASTE_START) - 1) + b"\n")
+                stdout, stderr = process.communicate(timeout=10)
+            finally:
+                process.kill()
+                process.wait()
+                os.close(primary)
+
+        self.assertEqual(title, wrapper.READY_TITLE)
+        self.assertEqual(stdout, b"")
+        self.assertEqual(process.returncode, wrapper.EXIT_USAGE)
+        self.assertIn(b"bracketed-paste start marker", stderr)
 
     def test_version_with_other_arguments_keeps_the_wrapper_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
