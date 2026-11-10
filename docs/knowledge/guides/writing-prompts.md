@@ -25,6 +25,8 @@ autoreview appends. The context contains:
 
 - the repository and the pull request number,
 - the head SHA that is reviewed, and the trusted base commit,
+- for a `codex-envelope` reviewer, the base branch, the checkout (`base` or
+  `head`) and, on a base checkout, how to read the change through git,
 - the reviewer's label, as shown in the review body,
 - the review scope: `full`, or `incremental` with the previous reviewed head,
 - for an incremental review, the prior blocking findings and the instruction

@@ -10,7 +10,9 @@ use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
-use autoreview_policy::{Level, Permission, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID};
+use autoreview_policy::{
+    Checkout, Level, Permission, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
@@ -510,7 +512,8 @@ impl Integrations for FakeIntegration {
             Err(error) => Err(error),
             // An empty output stands for Go's nil output: the session has not finished yet.
             Ok((request, output)) => {
-                Ok(Some(output(&request).into_bytes()).filter(|bytes: &Vec<u8>| !bytes.is_empty()))
+                let text = codex_checkout_refusal(&request).unwrap_or_else(|| output(&request));
+                Ok(Some(text.into_bytes()).filter(|bytes: &Vec<u8>| !bytes.is_empty()))
             }
         };
         ready(result)
@@ -809,6 +812,34 @@ pub(crate) fn request_claims(prompt: &str) -> VerificationClaims {
             })
             .collect(),
     }
+}
+
+/// Returns the output of the Codex adapter when it refuses the checkout of `request`.
+///
+/// Like `adapters/codex/codex-adapter`, it reads the checkout from the one trusted checkout
+/// line of the prompt, `head` when there is none, and refuses one that differs from the
+/// session's: it prints no result frame and the exit line with status 64, which the engine
+/// reads as `review_result_invalid`.
+fn codex_checkout_refusal(request: &SessionRequest) -> Option<String> {
+    if request.reviewer.protocol != Protocol::CodexEnvelope {
+        return None;
+    }
+    let lines: Vec<&str> = request
+        .prompt
+        .lines()
+        .filter_map(|line| line.strip_prefix("- Trusted checkout: "))
+        .collect();
+    let named = match lines.as_slice() {
+        [] => Some("head"),
+        [line] => Some(*line),
+        _ => None,
+    };
+    let session = if request.checkout == Checkout::Head {
+        "head"
+    } else {
+        "base"
+    };
+    (named != Some(session)).then(|| "[pohunek-codex-review exited with status 64]\n".to_owned())
 }
 
 /// Returns the output of a Codex reviewer run with `findings` and the verdicts `prior`.

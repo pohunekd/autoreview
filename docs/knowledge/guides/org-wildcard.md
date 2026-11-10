@@ -140,7 +140,10 @@ Three pull requests, all labelled `ai:review` by a write-permission maintainer.
 
 **`pohunekd/pohunek.dev`, PR #31 (website).** None of the specific rules match,
 so the `pohunekd/*` rule applies: Codex from the base checkout with the generic
-prompt.
+prompt. The head of PR #31 must already be in the project repository on the
+review host (`git fetch origin refs/pull/31/head` there), or the adapter refuses
+the run (see [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
+[#253](https://github.com/pohunekd/autoreview/issues/253) tracks an engine fetch.
 
 1. Clean review: APPROVE from the review account. The `approved` event (digest).
 2. Blocking findings: REQUEST_CHANGES. The `changes_requested` event (digest).

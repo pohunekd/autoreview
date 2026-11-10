@@ -23,6 +23,31 @@ fn sessions_of(h: &Harness, pr: &PullRequest) -> Vec<SessionRequest> {
         .collect()
 }
 
+// An untrusted fork pull request on a Codex pipeline is reviewed from the base checkout that
+// the policy requires; the prompt names that checkout, which the Codex adapter checks (#252).
+#[tokio::test]
+async fn codex_review_of_a_fork_pull_request_runs_on_the_base_checkout() {
+    let h = start_harness(|_| {}).await;
+    let mut fork = integration_pull_request("codex/public", &sha("a"));
+    fork.author = "stranger".to_owned();
+    fork.author_type = "User".to_owned();
+    fork.fork = true;
+    h.fake.open(fork.clone(), h.rule(&fork.repository));
+    h.poll_until("the Codex review", || h.publications() == 1)
+        .await;
+    let sessions = sessions_of(&h, &fork);
+    let (published, _, _, _) = h.fake.snapshot();
+    assert!(
+        published[0].decision == Decision::Comment
+            && sessions.len() == 1
+            && sessions[0].reviewer.id == "codex"
+            && sessions[0].checkout == Checkout::Base
+            && sessions[0].prompt.contains("\n- Trusted checkout: base\n"),
+        "decision={:?} sessions={sessions:?}",
+        published[0].decision
+    );
+}
+
 // The public/* rule approves a trusted author's clean review from a head checkout. A fork pull
 // request is untrusted unless its author is listed, so its clean review is a comment from the
 // base checkout; a listed maintainer and a member with maintain are approved (#33, #34).

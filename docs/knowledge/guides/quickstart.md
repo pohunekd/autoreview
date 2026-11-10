@@ -160,6 +160,19 @@ label. Use a small pull request for the first run. A pull request with a
 normal diff is more useful than an empty one, because the reviewer needs
 changes to check.
 
+The reviewer of this example reads the pull request through git from a
+worktree at the base branch, and pohunek fetches only the base branch. Until
+[#253](https://github.com/pohunekd/autoreview/issues/253) makes the engine
+fetch the head, put it into the project repository on the review host before
+the review starts:
+
+```sh
+git -C <project repository> fetch origin refs/pull/<pr-number>/head
+```
+
+Without it the adapter refuses the run (see
+[Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
+
 ## 11. Run one discovery pass
 
 The service looks for new requests every minute. To start immediately, run
@@ -196,9 +209,10 @@ GitHub does not allow an author to approve their own pull request.
 
 ## 14. Repeat with a second push
 
-Push a new commit to the pull request. After the debounce period, the review
-runs again. The reviewer of this example is Codex, and it reviews only the new
-commits and settles each earlier blocking finding as fixed, still open or
+Push a new commit to the pull request, and fetch the new head on the review
+host as in step 10. After the debounce period, the review runs again. The
+reviewer of this example is Codex, and it reviews only the new commits and
+settles each earlier blocking finding as fixed, still open or
 answered. See [incremental reviews](../concepts/incremental-reviews.md).
 
 ## 15. Run as a service

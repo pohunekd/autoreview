@@ -99,6 +99,10 @@ Key lines:
   not a label.
 - `on_clean: await` keeps the agent's work behind a person's approval.
 - The untrusted section gives anyone else a comment from the base checkout.
+  Its Codex reviewer needs the pull request head in the project repository on
+  the review host (`git fetch origin refs/pull/<n>/head` there), or the adapter
+  refuses the run (see [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
+  [#253](https://github.com/pohunekd/autoreview/issues/253) tracks an engine fetch.
 
 ## How the agent's login is matched
 

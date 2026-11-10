@@ -12,6 +12,8 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import termios
+import time
 import tomllib
 import unittest
 from importlib.machinery import SourceFileLoader
@@ -23,6 +25,8 @@ READ_ONLY_SOURCE = 'base = "codex"\n'
 HEAD = "a" * 40
 # The token pohunek's Codex hook handler appends to every Codex launch.
 POHUNEK_NO_DAEMON = "--no-daemon"
+COMMITTER = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
+UNSIGNED = ["-c", "commit.gpgsign=false"]
 
 
 def load_module(name: str, path: Path):
@@ -219,6 +223,21 @@ class WrapperTests(unittest.TestCase):
                 "- Trusted head SHA: " + HEAD + "\n- Trusted head SHA: " + HEAD
             )
 
+    def test_trusted_checkout_must_be_unambiguous(self) -> None:
+        self.assertEqual(wrapper.trusted_checkout("- Trusted checkout: base"), "base")
+        self.assertEqual(wrapper.trusted_checkout("- Trusted checkout: head"), "head")
+        # The Go engine's prompt has no checkout line; it gets the head check.
+        self.assertEqual(wrapper.trusted_checkout("- Trusted head SHA: " + HEAD), "head")
+        for prompt in (
+            "- Trusted checkout: base\n- Trusted checkout: base",
+            "- Trusted checkout: base\n- Trusted checkout: head",
+            "- Trusted checkout: merge",
+            "- Trusted checkout: base ",
+        ):
+            with self.subTest(prompt=prompt):
+                with self.assertRaisesRegex(wrapper.InputFrameError, "ambiguous or invalid"):
+                    wrapper.trusted_checkout(prompt)
+
     def test_checkout_head_must_match_trusted_pull_request_head(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             checkout = Path(directory)
@@ -280,6 +299,169 @@ class WrapperTests(unittest.TestCase):
                     "- Trusted head SHA: " + actual_head + "\n- Trusted base SHA: " + "b" * 40,
                     checkout,
                 )
+
+
+class BaseCheckoutTests(unittest.TestCase):
+    """A base checkout starts at the base branch tip; Codex reads the head through git."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        (self.root / "home").mkdir()
+        self.environment = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(self.root / "home"),
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+        source = self.root / "source"
+        self.git(self.root, "init", "--quiet", "--initial-branch=main", str(source))
+        start_sha = self.commit(source, "start")
+        # The trusted base SHA is the base when the pull request was opened; main moved on.
+        self.base_sha = self.commit(source, "base")
+        self.git(source, "checkout", "--quiet", "-b", "feature")
+        self.head_sha = self.commit(source, "pull request")
+        self.git(source, "checkout", "--quiet", "main")
+        self.tip_sha = self.commit(source, "base moves on")
+        # A force push of main replaces the base with this commit.
+        self.git(source, "checkout", "--quiet", "-b", "rewritten", start_sha)
+        self.rewritten_sha = self.commit(source, "rewritten base")
+        origin = self.root / "origin.git"
+        self.git(self.root, "init", "--quiet", "--bare", str(origin))
+        self.git(
+            source, "push", "--quiet", str(origin), "main", "rewritten",
+            "feature:refs/pull/9/head",
+        )
+        # Pohunek fetches only the base branch for a base checkout.
+        self.checkout = self.root / "checkout"
+        self.git(self.root, "init", "--quiet", str(self.checkout))
+        self.git(self.checkout, "remote", "add", "origin", origin.as_uri())
+        self.git(self.checkout, "fetch", "--quiet", "origin", "main")
+        self.git(self.checkout, "checkout", "--quiet", "--detach", self.tip_sha)
+
+    def fetch_head(self) -> None:
+        """Puts the head in the repository, as an earlier head checkout or fetch does."""
+        self.git(self.checkout, "fetch", "--quiet", "origin", "refs/pull/9/head")
+
+    def git(self, cwd: Path, *arguments: str) -> str:
+        return subprocess.run(
+            ["git", *arguments],
+            cwd=cwd,
+            env=self.environment,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    def commit(self, cwd: Path, message: str) -> str:
+        self.git(cwd, *COMMITTER, *UNSIGNED, "commit", "--quiet", "--allow-empty", "-m", message)
+        return self.git(cwd, "rev-parse", "HEAD")
+
+    def has_commit(self, sha: str) -> bool:
+        return subprocess.run(
+            ["git", "cat-file", "-e", sha + "^{commit}"],
+            cwd=self.checkout,
+            env=self.environment,
+            check=False,
+            capture_output=True,
+        ).returncode == 0
+
+    def prompt(self) -> str:
+        return (
+            "Review the pull request.\n\nTrusted review context:\n"
+            "- Repository: acme/widget\n- Pull request: #9\n"
+            "- URL: https://github.com/acme/widget/pull/9\n"
+            f"- Trusted head SHA: {self.head_sha}\n- Trusted base SHA: {self.base_sha}\n"
+            "- Base branch: main\n- Trusted checkout: base"
+        )
+
+    def install(self, during_run: str = "") -> tuple[Path, Path]:
+        """Installs the adapter with a fake Codex that runs `during_run` and reports."""
+        report = json.dumps(review_result(reviewed_head_sha=self.head_sha))
+        fake = self.root / "fake-codex"
+        fake.write_text(
+            "#!/bin/sh\n"
+            'while [ "$#" -gt 1 ]; do\n'
+            '  if [ "$1" = --output-last-message ]; then result="$2"; fi\n'
+            "  shift\n"
+            "done\n"
+            "cat >/dev/null\n"
+            f"{during_run}\n"
+            f"printf '%s' '{report}' >\"$result\"\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        (self.root / "bin").mkdir(exist_ok=True)
+        script = self.root / "bin" / "codex-adapter"
+        shutil.copy(ROOT / "codex-adapter", script)
+        script.chmod(0o755)
+        sidecar = Path(str(script) + wrapper.SIDECAR_SUFFIX)
+        sidecar.write_text(f"{fake}\n", encoding="utf-8")
+        sidecar.chmod(0o600)
+        return script, fake
+
+    def run_adapter(self, during_run: str = "") -> tuple[int, str, str]:
+        script, fake = self.install(during_run)
+        primary, secondary = pty.openpty()
+        process = subprocess.Popen(
+            [str(script), str(fake), "262144", "262144", "1", "model-x", "high"],
+            env=self.environment,
+            cwd=self.checkout,
+            stdin=secondary,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        os.close(secondary)
+        try:
+            # The adapter flushes pending input when it switches the terminal to raw mode.
+            deadline = time.monotonic() + 10
+            while termios.tcgetattr(primary)[3] & termios.ICANON:
+                self.assertLess(time.monotonic(), deadline, "the adapter never read its input")
+                time.sleep(0.01)
+            frame = wrapper.BRACKETED_PASTE_START + self.prompt().encode("utf-8")
+            os.write(primary, frame + wrapper.BRACKETED_PASTE_END + wrapper.SUBMIT)
+            stdout, stderr = process.communicate(timeout=30)
+        finally:
+            process.kill()
+            process.wait()
+            os.close(primary)
+        return process.returncode, stdout.decode("utf-8"), stderr.decode("utf-8")
+
+    def test_base_checkout_at_the_base_branch_tip_is_reviewed_and_left_unchanged(self) -> None:
+        self.fetch_head()
+        refs = self.git(self.checkout, "for-each-ref")
+
+        status, stdout, stderr = self.run_adapter()
+
+        self.assertEqual(status, 0, stderr)
+        self.assertIn(wrapper.RESULT_MARKER_PREFIX, stdout)
+        self.assertIn(wrapper.EXIT_LINE_FORMAT.format(0), stdout)
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
+        self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
+        self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
+
+    def test_base_checkout_refuses_any_other_head(self) -> None:
+        moved = "git checkout --quiet --detach HEAD~1"
+        for name, start, during_run, message in (
+            ("head not fetched", self.tip_sha, "", "head is unavailable in the review checkout"),
+            ("pull request head", self.head_sha, "", "is the pull request head or contains it"),
+            ("rewritten base", self.rewritten_sha, "", "does not descend from the trusted"),
+            ("moved by the run", self.tip_sha, moved, "HEAD changed during the review"),
+        ):
+            with self.subTest(name=name):
+                if name != "head not fetched":
+                    self.fetch_head()
+                    self.git(self.checkout, "fetch", "--quiet", "origin", "rewritten")
+                self.git(self.checkout, "checkout", "--quiet", "--detach", start)
+
+                status, stdout, stderr = self.run_adapter(during_run)
+
+                self.assertEqual(status, wrapper.EXIT_USAGE, stderr)
+                self.assertIn(message, stderr)
+                self.assertNotIn(wrapper.RESULT_MARKER_PREFIX, stdout)
+                # The engine reads the output as finished only at the exit line.
+                self.assertIn(wrapper.EXIT_LINE_FORMAT.format(wrapper.EXIT_USAGE), stdout)
 
 
 class VersionProbeTests(unittest.TestCase):

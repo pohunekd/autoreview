@@ -7,7 +7,10 @@ like any other pull request.
 - **Repository:** `zajca/pohunek` (review requested)
 - **Ready drafts from:** `devin-ai-integration`, `copilot-swe-agent`
 - **Reviewer:** Sonnet for the agents and other trusted authors; Codex for
-  untrusted authors (comment only)
+  untrusted authors (comment only). Codex needs the pull request head in the
+  project repository on the review host (`git fetch origin refs/pull/<n>/head`
+  there, until [#253](https://github.com/pohunekd/autoreview/issues/253)); see
+  [Codex checkout refused](../../docs/knowledge/runbooks/troubleshooting.md#codex-checkout-refused)
 - **Outcome:** blocking findings request changes; a clean review waits for `autoreview approve`
 
 Read the [guide](../../docs/knowledge/guides/coding-agent-drafts.md) for the
