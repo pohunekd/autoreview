@@ -21,6 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 READ_ONLY_SOURCE = 'base = "codex"\n'
 HEAD = "a" * 40
+# The token pohunek's Codex hook handler appends to every Codex launch.
+POHUNEK_NO_DAEMON = "--no-daemon"
 
 
 def load_module(name: str, path: Path):
@@ -360,6 +362,8 @@ class VersionProbeTests(unittest.TestCase):
     def test_title_precedes_the_read_of_the_input_frame(self) -> None:
         # pohunek writes the input of a `manifest_idle` runtime only after an idle
         # title, so a title that waits for the input deadlocks the session start.
+        # The argument list is the one pohunek launches: the profile args and the
+        # trailing --no-daemon of its Codex hook handler.
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = self.install_wrapper(root, "{fake}\n")
@@ -367,7 +371,16 @@ class VersionProbeTests(unittest.TestCase):
             home.mkdir()
             primary, secondary = pty.openpty()
             process = subprocess.Popen(
-                [str(script), str(root / "fake-codex"), "262144", "262144", "60", "model-x", "high"],
+                [
+                    str(script),
+                    str(root / "fake-codex"),
+                    "262144",
+                    "262144",
+                    "60",
+                    "model-x",
+                    "high",
+                    POHUNEK_NO_DAEMON,
+                ],
                 env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
                 cwd=home,
                 stdin=secondary,
@@ -395,6 +408,28 @@ class VersionProbeTests(unittest.TestCase):
         self.assertEqual(stdout, b"")
         self.assertEqual(process.returncode, wrapper.EXIT_USAGE)
         self.assertIn(b"bracketed-paste start marker", stderr)
+
+    def test_refuses_arguments_beyond_one_trailing_no_daemon(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.install_wrapper(root, "{fake}\n")
+            fake = str(root / "fake-codex")
+            profile = [fake, "262144", "262144", "60", "model-x", "high"]
+            flag = POHUNEK_NO_DAEMON
+            for arguments in (
+                [*profile, flag, flag],
+                [flag, *profile],
+                [fake, "262144", "262144", "60", flag, "high"],
+                [fake, "262144", "262144", "60", "model-x", "high", "--other"],
+                [*profile, flag, "resume", "conversation-x"],
+                profile[:-1],
+            ):
+                with self.subTest(arguments=arguments):
+                    result = self.run_wrapper(root, script, arguments)
+
+                    self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("expected Codex executable", result.stderr)
 
     def test_version_with_other_arguments_keeps_the_wrapper_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

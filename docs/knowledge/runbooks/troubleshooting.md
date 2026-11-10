@@ -154,7 +154,9 @@ The Codex runtime declares `manifest_idle` input readiness, so pohunek writes
 the request only after the session shows an idle terminal title or screen. The
 adapter in `adapters/codex/` sets a fixed title before it reads its request; a
 profile whose program sets no title, such as an adapter written by an older
-autoreview or a wrapper of your own, never becomes ready. Run
+autoreview or a wrapper of your own, never becomes ready. Neither does a program
+that exits before its title because it refuses the `--no-daemon` that pohunek
+appends to every Codex launch. Run
 `autoreview profiles install` with the same flags on the review host (with
 `--replace` when the command did not write the profile; it prints `updated`
 when it rewrote only the adapter), then `autoreview retry` for the pull

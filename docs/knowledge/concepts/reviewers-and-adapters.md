@@ -219,7 +219,11 @@ a report without them (`review_adapter_outdated`).
 
 Read-only is fixed in the adapter: the arguments above are not configurable, and
 the adapter accepts exactly the six arguments that the renderer writes, no
-more. The renderer is an allowlist for the arguments of the base profile: it
+more, followed at most by one `--no-daemon`. Pohunek's Codex hook handler
+appends that flag to every Codex launch, profile sessions included. The adapter
+drops it: it keeps an interactive Codex off the shared app-server daemon, and
+`codex exec` always runs its app-server in its own process and has no such
+option. The renderer is an allowlist for the arguments of the base profile: it
 accepts these spellings, each setting at most once, and drops them because the adapter passes them itself. Every other
 argument is refused, among them any other sandbox mode or approval policy,
 `--dangerously-bypass-approvals-and-sandbox`, `--approve-for-me`, `--add-dir`,
