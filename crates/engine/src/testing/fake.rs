@@ -818,7 +818,8 @@ pub(crate) fn request_claims(prompt: &str) -> VerificationClaims {
 ///
 /// Like `adapters/codex/codex-adapter`, it reads the checkout from the one trusted checkout
 /// line of the prompt, `head` when there is none, and refuses one that differs from the
-/// session's: it exits with status 64 and prints no result frame.
+/// session's: it prints no result frame and the exit line with status 64, which the engine
+/// reads as `review_result_invalid`.
 fn codex_checkout_refusal(request: &SessionRequest) -> Option<String> {
     if request.reviewer.protocol != Protocol::CodexEnvelope {
         return None;

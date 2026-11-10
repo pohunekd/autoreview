@@ -203,9 +203,11 @@ Python standard library (Python 3.11 or newer). It has two parts:
     starts the worktree at the fetched base branch tip, which is the trusted base
     or a descendant of it; after a force push of the base branch the run is
     refused.
-    The adapter reads only the local repository: no network, no write. Pohunek
-    fetches only the base branch, and the read-only Codex sandbox cannot fetch,
-    so the head commit must already be in the repository (see
+    The adapter reads only the local repository: no network, no write (its git
+    calls run with `--no-optional-locks`, so `git status` leaves the index
+    alone). Pohunek fetches only the base branch, and the read-only Codex
+    sandbox cannot fetch, so the head commit must already be in the repository
+    (see
     [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)). The
     request tells Codex that the worktree is the base and to read the change
     with `git diff <base>...<head>` and `git show <head>:<path>`.
@@ -220,12 +222,18 @@ Python standard library (Python 3.11 or newer). It has two parts:
   environment without the variables that the Claude adapter drops (see above).
   The adapter then stays alive for the retention time, so that the coordinator
   can read the output before it removes the session. It exits with the status of
-  Codex, or with status 64 when the report or the checkout check fails after
-  the run. After the run the checkout gets the same check again, and a base
-  checkout must still be at the `HEAD` recorded before the run.
+  Codex, or with status 64 when the request's trusted lines, the checkout check
+  before or after the run, or the report fail. After the run the checkout gets
+  the same check again, and a base checkout must still be at the `HEAD`
+  recorded before the run.
   A refused checkout prints `codex-adapter: <reason>`, no result frame and the
-  exit line with status 64 (see
+  exit line with status 64, and the adapter stays alive for the retention time
+  as after a run. The engine reads that output at once as
+  `review_result_invalid` (see
   [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)).
+  An invalid argument, Codex path file or input frame stops the adapter before
+  that: it prints the reason and exits with status 64 at once, without the exit
+  line.
 - `render_profile.py` writes a profile from a base Codex profile. It copies the
   runtime package pin and the environment of the base profile, and turns off
   resuming.

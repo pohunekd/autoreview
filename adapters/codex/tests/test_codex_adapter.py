@@ -460,6 +460,8 @@ class BaseCheckoutTests(unittest.TestCase):
                 self.assertEqual(status, wrapper.EXIT_USAGE, stderr)
                 self.assertIn(message, stderr)
                 self.assertNotIn(wrapper.RESULT_MARKER_PREFIX, stdout)
+                # The engine reads the output as finished only at the exit line.
+                self.assertIn(wrapper.EXIT_LINE_FORMAT.format(wrapper.EXIT_USAGE), stdout)
 
 
 class VersionProbeTests(unittest.TestCase):

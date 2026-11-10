@@ -7,7 +7,11 @@ out from the pull request.
 
 - **`pohunekd/*`:** label `ai:review`; maintainers (permission `maintain` or
   above) get a Sonnet review that can request changes
-- **Untrusted authors and forks:** Codex review from the base checkout, comment only
+- **Untrusted authors and forks:** Codex review from the base checkout, comment only.
+  The pull request head must already be in the project repository on the review
+  host (`git fetch origin refs/pull/<n>/head` there, until
+  [#253](https://github.com/pohunekd/autoreview/issues/253)); see
+  [Codex checkout refused](../../docs/knowledge/runbooks/troubleshooting.md#codex-checkout-refused)
 - **`zajca/pohunek`:** same label, write-permission authors only; everyone else is skipped
 
 Read the [guide](../../docs/knowledge/guides/public-repositories.md) for the

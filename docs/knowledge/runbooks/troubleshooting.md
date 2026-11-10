@@ -33,7 +33,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
 | `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts | [Reviewer output](#reviewer-output) |
-| `codex-adapter: ...` in the session output, exit status 64 | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
+| `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
 | `configuration_invalid` naming `github.credentials.login` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
@@ -165,10 +165,13 @@ request. See [the Codex adapter](../concepts/reviewers-and-adapters.md#the-codex
 
 ### Codex checkout refused
 
-A Codex review keeps failing, and the session output ends with a
-`codex-adapter: ...` line and `[pohunek-codex-review exited with status 64]`
-without a result frame. The adapter checks the worktree against the trusted
-lines of the request before and after the Codex run:
+A Codex review keeps failing with `review_result_invalid`, and the session
+output ends with a `codex-adapter: ...` line and
+`[pohunek-codex-review exited with status 64]` without a result frame. The
+engine reads that output at once, starts a fresh session up to
+`session.reviewer_run_max_attempts`, then records the failure. The adapter
+checks the worktree against the trusted lines of the request before and after
+the Codex run:
 
 | Message | Cause | Fix |
 |---|---|---|
@@ -256,7 +259,8 @@ A reviewer run ends in one of these codes:
   reviewer stays within it, or raise the bound in `limits` with care.
 - `review_result_invalid`: a Codex result could not be read, is larger than
   `result_max_bytes`, or reports another head or a status other than
-  `completed`.
+  `completed`, or the adapter printed no result frame, as when it refuses the
+  checkout (see [Codex checkout refused](#codex-checkout-refused)).
 - `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
   finding without `blocking`. It comes from an adapter older than the one in
   `adapters/codex/`, so the review stops without a fresh session. Write the
