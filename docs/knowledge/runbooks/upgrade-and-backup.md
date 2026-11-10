@@ -52,7 +52,12 @@ retention settings (`store.review_retention_seconds`,
    [`autoreview profiles install`](../../cli.md#autoreview-profiles-install)
    again for every profile, with the flags it was written with: `updated` means
    the new binary carries a newer adapter. Write a profile the policy now needs
-   the same way.
+   the same way. Do it for every Claude profile in the same window as the
+   restart: the engine refuses the result of an older Claude adapter with
+   `review_adapter_outdated`, and the newer Claude adapter refuses the
+   `checkout: base` reviews of an engine whose requests carry no trusted
+   checkout lines. Run `autoreview retry` for a pull request whose review
+   stopped in that window.
 5. Restart the service and check its state:
 
    ```sh
@@ -337,7 +342,12 @@ autoreview inside it.
    adapter in `adapters/codex/`, because it carries `blocking` and
    `prior_findings`. A Codex review that is in flight with prior findings
    stops; retry it after the Go engine runs.
-4. Start the Go engine on the same environment files:
+4. Put the copy of each Claude adapter that you kept (see the known
+   differences) back in place on each review host, so the Claude profiles
+   start the older Claude wrapper again: the adapter in `adapters/claude/`
+   checks a Go request as a head checkout, so every Claude reviewer and
+   verifier on a `checkout: base` pipeline would be refused.
+5. Start the Go engine on the same environment files:
    `systemctl enable --now <go-unit> <go-timer>`. With the drop-ins of step 1
    of the preparation, both units run `<go-binary>`, not autoreview.
 
@@ -357,6 +367,18 @@ Reviewers:
   `autoreview profiles install --agent codex --name <profile> ... --replace`
   ([the CLI](../../cli.md#autoreview-profiles-install)); `--replace` is needed
   because the command did not write the old profile.
+- A `claude-structured` reviewer and the verifier must run the adapter in
+  `adapters/claude/`. autoreview refuses the result of the older Claude
+  wrapper, which does not name the checkout it checked, with
+  `review_adapter_outdated`, so switch every Claude profile in the same
+  maintenance window as the upgrade. The adapter checks the review checkout
+  against trusted lines that only autoreview writes, and a Go request without
+  them is checked as a head checkout. On the Go engine it refuses every Claude
+  run on a `checkout: base` pipeline, so a rollback needs the older Claude
+  wrapper as well as the older Codex one. `autoreview profiles install`
+  rewrites the adapter in place, so before you run it for a Claude profile,
+  copy `<data>/autoreview/adapters/<NAME>/claude-adapter` aside on each review
+  host ([the CLI](../../cli.md#autoreview-profiles-install)).
 - The Go engine treats every Codex finding as blocking. On the first Codex
   re-review after the upgrade, every finding of the last review published
   before it is a prior finding that the reviewer must settle.

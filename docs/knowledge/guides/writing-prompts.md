@@ -25,8 +25,8 @@ autoreview appends. The context contains:
 
 - the repository and the pull request number,
 - the head SHA that is reviewed, and the trusted base commit,
-- for a `codex-envelope` reviewer, the base branch, the checkout (`base` or
-  `head`) and, on a base checkout, how to read the change through git,
+- the checkout (`base` or `head`) and, on a base checkout, how to read the
+  change through git; a `codex-envelope` reviewer also gets the base branch,
 - the reviewer's label, as shown in the review body,
 - the review scope: `full`, or `incremental` with the previous reviewed head,
 - for an incremental review, the prior blocking findings and the instruction
@@ -129,7 +129,9 @@ head and to decide one of two things: the scenario cannot happen (refuted,
 with the guard, caller, schema or configuration that rules it out), or it
 happens with a result that is or is not blocking. Claims that stay unconfirmed
 become notes with the reason; nothing is dropped. The verifier must use the
-`claude-structured` protocol.
+`claude-structured` protocol. Its request carries the same trusted head, base
+and checkout lines as a Claude reviewer's, and on a base checkout the Claude
+adapter refuses the run when the head commit is not in the repository.
 
 ## Path and size rules
 

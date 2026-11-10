@@ -48,6 +48,40 @@ async fn codex_review_of_a_fork_pull_request_runs_on_the_base_checkout() {
     );
 }
 
+// A base checkout review whose head is not in the review host's repository stops with
+// `review_head_unavailable`: the adapter refuses the run, nothing is published, and neither a
+// fresh reviewer run nor the scheduler tries again (#253).
+#[tokio::test]
+async fn base_checkout_review_of_a_missing_head_stops_without_publishing() {
+    let mut h = start_harness(|_| {}).await;
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.lock().missing_heads.insert(pr.head_sha.clone());
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the stop notification", || {
+        h.fake
+            .has_note(Level::Action, "No further automatic attempt is scheduled")
+    })
+    .await;
+    h.settle().await;
+    let sessions = sessions_of(&h, &pr);
+    let (published, notes, _, _) = h.fake.snapshot();
+    assert!(
+        published.is_empty()
+            && sessions.len() == 1
+            && sessions[0].reviewer.id == "opus"
+            && sessions[0].checkout == Checkout::Base
+            && h.fake
+                .has_note(Level::Action, "Diagnostic: review_head_unavailable.")
+            && !notes
+                .iter()
+                .any(|note| note.message.contains("Next automatic attempt")),
+        "published={} sessions={} notes={notes:?}",
+        published.len(),
+        sessions.len()
+    );
+    h.stop_engine().await;
+}
+
 // The public/* rule approves a trusted author's clean review from a head checkout. A fork pull
 // request is untrusted unless its author is listed, so its clean review is a comment from the
 // base checkout; a listed maintainer and a member with maintain are approved (#33, #34).

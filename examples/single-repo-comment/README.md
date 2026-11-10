@@ -6,8 +6,7 @@ The simplest useful setup: one repository, one reviewer, comments only.
 - **Trigger:** the `ai:review` label
 - **Reviewer:** Codex (`codex-envelope`), one pipeline, read-only, base checkout.
   The pull request head must already be in the project repository on the review
-  host (`git fetch origin refs/pull/<n>/head` there, until
-  [#253](https://github.com/pohunekd/autoreview/issues/253)); see
+  host (`git fetch origin refs/pull/<n>/head` there); see
   [Codex checkout refused](../../docs/knowledge/runbooks/troubleshooting.md#codex-checkout-refused)
 - **Outcome:** every review is a comment. Nothing is approved or blocked.
 - **Authors:** `trusted: any`, because a comment cannot merge or block anything.

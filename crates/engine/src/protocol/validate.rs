@@ -241,6 +241,21 @@ pub(crate) fn reviewer_output_retryable(err: &Error) -> bool {
     RETRYABLE_CODES.contains(&error_code(err))
 }
 
+/// The error of a run that the adapter refused because the pull request head is missing.
+///
+/// The head commit is not in the review host's repository, so a fresh run on the same host
+/// cannot read the change either. It is permanent.
+pub(crate) fn review_head_unavailable() -> Error {
+    Error::workflow("review_head_unavailable", true, None)
+}
+
+/// The error of a result from an adapter older than the one the engine ships.
+///
+/// It is not retried: a fresh run of the same adapter writes the same result.
+pub(crate) fn review_adapter_outdated() -> Error {
+    Error::workflow("review_adapter_outdated", true, None)
+}
+
 /// The error of a reviewer output that fails the check that `reason` names.
 ///
 /// The reason never quotes the output, which is untrusted. A fresh reviewer run may fix it.

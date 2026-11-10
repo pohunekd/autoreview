@@ -175,6 +175,9 @@ pub fn failure_explanation(code: &str) -> &'static str {
         "pohunek_request_timeout" => {
             "The Pohunek review host did not answer within the CLI request timeout. The host was reachable; check its network latency and the size of its session list."
         }
+        "review_head_unavailable" => {
+            "The pull request head commit is not in the review host's repository, so the reviewer on a base checkout could not read the change and its adapter stopped the run. Pohunek fetches only the base branch for a base checkout; on the review host run `git -C <project repository> fetch origin refs/pull/<n>/head`, then retry this PR."
+        }
         "github_request_failed" => {
             "A GitHub API request failed. Check GitHub availability, authentication, and rate limits."
         }

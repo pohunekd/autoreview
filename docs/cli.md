@@ -339,7 +339,8 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `pohunek_base_fetch_ref_locked`, `pohunek_session_warning` | The session start hit a locked base fetch or reported a warning; retried on a fresh branch |
 | `pohunek_session_cleanup_failed` | A session could not be removed, see `cleanup_manual` |
 | `review_output_timeout`, `review_output_invalid`, `review_result_invalid` | A reviewer did not return a usable result in time |
-| `review_adapter_outdated` | A Codex report has no `prior_findings` or a finding without `blocking`; the profile runs an older adapter than `adapters/codex/`; run `profiles install` for it |
+| `review_head_unavailable` | A reviewer on a base checkout stopped because the pull request head commit is not in the review host's repository; fetch it there, then `retry` |
+| `review_adapter_outdated` | A Codex report has no `prior_findings` or a finding without `blocking`, or a Claude result names no checked checkout or another one; the profile runs an older adapter than `adapters/codex/` or `adapters/claude/`; run `profiles install` for it |
 | `github_search_limit_exceeded` | A search returned more than `schedule.poll_limit`; narrow the rules or raise the limit |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request |
 | `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message |

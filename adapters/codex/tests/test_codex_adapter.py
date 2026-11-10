@@ -460,6 +460,12 @@ class BaseCheckoutTests(unittest.TestCase):
                 self.assertEqual(status, wrapper.EXIT_USAGE, stderr)
                 self.assertIn(message, stderr)
                 self.assertNotIn(wrapper.RESULT_MARKER_PREFIX, stdout)
+                # Only a missing head gets the marker, right before the exit line.
+                refused = "[pohunek-codex-review-refused-v1:head_unavailable]\n"
+                exit_line = wrapper.EXIT_LINE_FORMAT.format(wrapper.EXIT_USAGE)
+                self.assertEqual(
+                    refused + exit_line in stdout, name == "head not fetched", stdout
+                )
                 # The engine reads the output as finished only at the exit line.
                 self.assertIn(wrapper.EXIT_LINE_FORMAT.format(wrapper.EXIT_USAGE), stdout)
 

@@ -6,8 +6,7 @@ the same service.
 - **Repositories:** `zajca/pohunek` (review requested), `zajca/pohunek-work` (`ai:review` label)
 - **Reviewer:** Sonnet for trusted authors, Codex for untrusted ones. Codex
   needs the pull request head in the project repository on the review host
-  (`git fetch origin refs/pull/<n>/head` there, until
-  [#253](https://github.com/pohunekd/autoreview/issues/253)); see
+  (`git fetch origin refs/pull/<n>/head` there); see
   [Codex checkout refused](../../docs/knowledge/runbooks/troubleshooting.md#codex-checkout-refused)
 - **Trusted:** the login `zajca`, or anyone with write permission
 - **Own pull requests:** always get a comment, because GitHub does not let an

@@ -2,13 +2,17 @@
 
 // Rust guideline compliant 2026-06-26
 
+use autoreview_policy::Checkout;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::Error;
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
-use crate::protocol::validate::reviewer_output_invalid;
+use crate::protocol::request::checkout_name;
+use crate::protocol::validate::{
+    review_adapter_outdated, review_head_unavailable, reviewer_output_invalid,
+};
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
 /// Protocol name of the wrapper around a finished structured Claude session.
@@ -16,6 +20,12 @@ pub(crate) const CLAUDE_RESULT_PROTOCOL: &str = "claude-otel-noninteractive/v2";
 
 /// Severities that hold the merge back when a finding flags itself as blocking.
 const BLOCKING_SEVERITIES: [&str; 2] = ["critical", "high"];
+
+/// Refusal of the adapter when the pull request head is not in the review checkout.
+const REFUSAL_HEAD_UNAVAILABLE: &str = "head_unavailable";
+
+/// Exit code of the wrapper when the adapter refuses the run.
+const EXIT_REFUSED: i64 = 64;
 
 /// Protocol name of the wrapper.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,6 +41,11 @@ pub(crate) struct ClaudeWrapper {
     pub(crate) stdout_base64: String,
     /// Base64 of the stderr bytes of the session.
     pub(crate) stderr_base64: String,
+    /// Reason the adapter refused the run; empty when Claude Code ran.
+    pub(crate) refusal: String,
+    /// Checkout that the adapter checked before and after the run, `base` or `head`; an older
+    /// adapter leaves it out.
+    pub(crate) checked_checkout: String,
 }
 
 autoreview_go_compat::object_only_serde!(ClaudeWrapper);
@@ -110,16 +125,22 @@ impl ClaudeFinding {
     }
 }
 
-/// Parses the structured output of a finished Claude session into a reviewer result.
+/// Parses the structured output of a finished Claude session on `checkout` into a reviewer
+/// result.
 ///
 /// # Errors
 ///
 /// Returns `review_output_incomplete` for empty output, `review_wrapper_invalid`,
 /// `claude_result_invalid` and `claude_result_mismatch` for a wrapper, outer message or prose
-/// result that the engine refuses, and `review_output_invalid` with a reason for an artifact that
-/// names another pull request or head, has no findings list or has a finding the engine refuses.
-pub(crate) fn parse_claude_output(pr: &PullRequest, raw: &str) -> Result<ReviewerResult, Error> {
-    let artifact: ClaudeArtifact = decode_structured(raw)?;
+/// result that the engine refuses, the codes of `decode_structured` for a refusal or an older
+/// adapter, and `review_output_invalid` with a reason for an artifact that names another pull
+/// request or head, has no findings list or has a finding the engine refuses.
+pub(crate) fn parse_claude_output(
+    pr: &PullRequest,
+    checkout: &Checkout,
+    raw: &str,
+) -> Result<ReviewerResult, Error> {
+    let artifact: ClaudeArtifact = decode_structured(raw, checkout)?;
     if artifact.repository != pr.repository || artifact.number != pr.number {
         return Err(reviewer_output_invalid(
             "the output names another pull request".to_owned(),
@@ -164,10 +185,14 @@ pub(crate) fn parse_claude_output(pr: &PullRequest, raw: &str) -> Result<Reviewe
     })
 }
 
-/// Reads the schema-enforced structured output of a finished Claude session.
+/// Reads the schema-enforced structured output of a finished Claude session on `checkout`.
 ///
-/// The prose result is checked against the structured output by `check_prose_agreement`.
-pub(crate) fn decode_structured<T>(raw: &str) -> Result<T, Error>
+/// The prose result is checked against the structured output by `check_prose_agreement`. A
+/// refusal of the adapter is `review_head_unavailable` for a missing head, and
+/// `review_result_invalid` otherwise. A wrapper of the protocol whose `checked_checkout` is not
+/// the name of `checkout` is `review_adapter_outdated`, whatever its exit code: only an adapter
+/// that checked the review checkout writes it, outside the base64 output of the run.
+pub(crate) fn decode_structured<T>(raw: &str, checkout: &Checkout) -> Result<T, Error>
 where
     T: DeserializeOwned + PartialEq + Default,
 {
@@ -176,6 +201,14 @@ where
     }
     refuse_case_variant_keys(raw, "review_wrapper_invalid")?;
     let wrapper: ClaudeWrapper = serde_json::from_str(raw).map_err(|_| wrapper_invalid())?;
+    if !wrapper.refusal.is_empty() {
+        return Err(adapter_refusal(&wrapper));
+    }
+    if wrapper.protocol == CLAUDE_RESULT_PROTOCOL
+        && wrapper.checked_checkout != checkout_name(checkout)
+    {
+        return Err(review_adapter_outdated());
+    }
     let stderr = decode_go_base64(&wrapper.stderr_base64);
     if stderr.is_none()
         || stderr.as_ref().is_some_and(|v| !v.is_empty())
@@ -240,6 +273,22 @@ fn is_source_id(id: &str) -> bool {
     }
 }
 
+/// The error of a wrapper with a refusal, which never carries a review.
+///
+/// Only the adapter's exact refusal of a missing head stops the review; any other refusal is
+/// a run that a fresh session may repeat.
+fn adapter_refusal(wrapper: &ClaudeWrapper) -> Error {
+    if wrapper.protocol == CLAUDE_RESULT_PROTOCOL
+        && wrapper.exit_code == EXIT_REFUSED
+        && wrapper.stdout_base64.is_empty()
+        && wrapper.refusal == REFUSAL_HEAD_UNAVAILABLE
+    {
+        review_head_unavailable()
+    } else {
+        Error::workflow("review_result_invalid", true, None)
+    }
+}
+
 /// The wrapper of a Claude session that the engine refuses.
 fn wrapper_invalid() -> Error {
     Error::workflow("review_wrapper_invalid", true, None)
@@ -257,12 +306,16 @@ fn claude_mismatch() -> Error {
 
 #[cfg(test)]
 mod tests {
+    use autoreview_policy::Checkout;
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
     use serde_json::json;
 
     use crate::error::error_code;
     use crate::protocol::fixtures::{claude_output, claude_session, sha, test_pull_request};
+    use crate::protocol::validate::reviewer_output_retryable;
 
-    use super::parse_claude_output;
+    use super::{CLAUDE_RESULT_PROTOCOL, parse_claude_output};
 
     #[test]
     fn claude_finding_blocks_unless_it_says_otherwise() {
@@ -282,7 +335,7 @@ mod tests {
             ]),
             None,
         );
-        let result = parse_claude_output(&pr, &output).expect("the output parses");
+        let result = parse_claude_output(&pr, &Checkout::Base, &output).expect("the output parses");
         let blocking: Vec<bool> = result
             .findings
             .iter()
@@ -302,8 +355,85 @@ mod tests {
             "summary": "Reviewed the change thoroughly.",
             "findings": []
         });
-        let err = parse_claude_output(&pr, &claude_session(&structured))
+        let err = parse_claude_output(&pr, &Checkout::Base, &claude_session(&structured))
             .expect_err("two keys that differ only in case are refused");
         assert_eq!(error_code(&err), "claude_result_invalid");
+    }
+
+    // A refusal envelope of the adapter names its reason. A head that is not in the review
+    // checkout stops the review; a fresh run on the same repository cannot find it either (#253).
+    // A result without the checkout that the adapter checked comes from an adapter that may not
+    // have checked it, and a fresh run of that adapter would write the same result.
+    #[test]
+    fn adapter_refusal_of_a_missing_head_is_not_retried() {
+        let pr = test_pull_request(3);
+        let review = claude_output(&pr, json!([]), None);
+        let mut success: serde_json::Value =
+            serde_json::from_str(&review).expect("the fixture is JSON");
+        let mut unchecked = success.clone();
+        unchecked
+            .as_object_mut()
+            .expect("the fixture is an object")
+            .remove("checked_checkout");
+        let mut other_checkout = success.clone();
+        other_checkout["checked_checkout"] = json!("head");
+        success["refusal"] = json!("head_unavailable");
+        let refusal = |reason: &str, exit_code: i64| {
+            let stderr = STANDARD.encode("claude-adapter: the head is unavailable\n");
+            format!(
+                "{}\n",
+                json!({
+                    "protocol": CLAUDE_RESULT_PROTOCOL,
+                    "mode": "structured",
+                    "exit_code": exit_code,
+                    "stdout_base64": "",
+                    "stderr_base64": stderr,
+                    "refusal": reason
+                })
+            )
+        };
+        let cases = [
+            (
+                "head unavailable",
+                refusal("head_unavailable", 64),
+                "review_head_unavailable",
+            ),
+            (
+                "other refusal",
+                refusal("checkout_invalid", 64),
+                "review_result_invalid",
+            ),
+            (
+                "exit status 0",
+                refusal("head_unavailable", 0),
+                "review_result_invalid",
+            ),
+            (
+                "refusal with a review",
+                format!("{success}\n"),
+                "review_result_invalid",
+            ),
+            (
+                "no checked checkout",
+                format!("{unchecked}\n"),
+                "review_adapter_outdated",
+            ),
+            (
+                "other checked checkout",
+                format!("{other_checkout}\n"),
+                "review_adapter_outdated",
+            ),
+        ];
+        for (name, output, code) in cases {
+            let err = parse_claude_output(&pr, &Checkout::Base, &output).expect_err(name);
+            assert_eq!(error_code(&err), code, "{name}");
+            assert_eq!(
+                reviewer_output_retryable(&err),
+                code == "review_result_invalid",
+                "{name}"
+            );
+        }
+        parse_claude_output(&pr, &Checkout::Head, &format!("{other_checkout}\n"))
+            .expect("a head result is read on a head checkout");
     }
 }

@@ -161,17 +161,16 @@ normal diff is more useful than an empty one, because the reviewer needs
 changes to check.
 
 The reviewer of this example reads the pull request through git from a
-worktree at the base branch, and pohunek fetches only the base branch. Until
-[#253](https://github.com/pohunekd/autoreview/issues/253) makes the engine
-fetch the head, put it into the project repository on the review host before
-the review starts:
+worktree at the base branch, and pohunek fetches only the base branch. Put the
+head into the project repository on the review host before the review starts:
 
 ```sh
 git -C <project repository> fetch origin refs/pull/<pr-number>/head
 ```
 
-Without it the adapter refuses the run (see
-[Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
+Without it the adapter refuses the run and the review stops with
+`review_head_unavailable` (see
+[Head commit unavailable](../runbooks/troubleshooting.md#head-commit-unavailable)).
 
 ## 11. Run one discovery pass
 

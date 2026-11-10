@@ -102,7 +102,6 @@ Assume maintainer `zajca` opens PR #42 in `zajca/pohunek` from a branch.
    host: run `git fetch origin refs/pull/42/head` there before the review starts,
    or the adapter refuses the run (see
    [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
-   [#253](https://github.com/pohunekd/autoreview/issues/253) tracks an engine fetch.
 5. **Findings are checked and published.** No verifier is configured, so every
    finding is published as it came. Findings on changed lines become inline
    comments; findings elsewhere are listed in the body.

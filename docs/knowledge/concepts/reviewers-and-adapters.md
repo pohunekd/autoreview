@@ -35,7 +35,10 @@ blocking flag of each finding and one verdict per prior finding (see
 With `claude-structured` the runtime itself refuses output that does not match
 the schema, and the engine also checks the output against the request. The
 free-text answer of the run may be prose. When it is JSON it has to agree with
-the structured output, or the run is rejected.
+the structured output, or the run is rejected. A result line without the
+checkout that the adapter checked, or with another checkout than the request
+names, comes from an older adapter and is refused with
+`review_adapter_outdated`, without a fresh session.
 
 With `codex-envelope` the engine looks for one result frame at the end of the
 output and decodes it strictly. The frame must not be larger than
@@ -115,12 +118,29 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   pohunek writes into the session, runs Claude Code once in print mode with
   `--setting-sources user`, `--no-session-persistence` and, for a structured
   request, `--json-schema`, and prints one result line that carries the exit
-  code and the output of the run. The Claude Code run gets the session
+  code and the output of the run, and the field `checked_checkout` with the
+  checkout it checked (`base` or `head`). The Claude Code run gets the session
   environment without the pohunek session identity variables, the GitHub token
   variables (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
   `GITHUB_ENTERPRISE_TOKEN`), `MATRIX_ACCESS_TOKEN` and every `AUTOREVIEW_`
   variable. The adapter then stays alive so that the coordinator can read the
   result before it removes the session.
+  Before and after the run it checks the review checkout against the trusted
+  lines of the request (`- Trusted head SHA:`, `- Trusted base SHA:`,
+  `- Trusted checkout:`), as the [Codex adapter](#the-codex-adapter) does, with
+  local read-only git calls only. A `base` checkout gets the Codex base checks:
+  clean work tree, both trusted commits present, `HEAD` neither the head nor a
+  commit that contains it, the trusted base `HEAD` or an ancestor of it, and the
+  same `HEAD` after the run. A `head` checkout needs `HEAD` to be the trusted
+  head. A request without the checkout line comes from the Go engine; it is
+  checked as `head`, with the head SHA of its `Head SHA:` line. A refused
+  checkout prints only one result line, with exit code 64, no Claude Code
+  output, the reason in `stderr_base64` and the field `refusal`:
+  `head_unavailable` when the head commit is not in the repository (the engine
+  stops the review with `review_head_unavailable`, without a fresh session), or
+  `checkout_invalid` (the engine reads `review_result_invalid` and starts a
+  fresh session). Claude Code does not run then. See
+  [troubleshooting](../runbooks/troubleshooting.md#head-commit-unavailable).
 - `render_profile.py` writes a profile from a base Claude profile. It copies the
   runtime package pin, the arguments and the environment of the base profile,
   refuses an argument that the adapter controls (`--print`, `--output-format`,
@@ -231,6 +251,10 @@ Python standard library (Python 3.11 or newer). It has two parts:
   as after a run. The engine reads that output at once as
   `review_result_invalid` (see
   [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)).
+  When the head commit is not in the repository, the line
+  `[pohunek-codex-review-refused-v1:head_unavailable]` comes right before the
+  exit line, and the engine stops the review with `review_head_unavailable`
+  without a fresh session.
   An invalid argument, Codex path file or input frame stops the adapter before
   that: it prints the reason and exits with status 64 at once, without the exit
   line.
