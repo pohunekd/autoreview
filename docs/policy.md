@@ -138,7 +138,7 @@ A reviewer is one coding agent run in its own pohunek session.
 |---|---|
 | id (map key) | `[a-z0-9][a-z0-9_-]{0,31}`; `verifier` is reserved |
 | `protocol` | `claude-structured` or `codex-envelope`, see [reviewers and adapters](knowledge/concepts/reviewers-and-adapters.md) |
-| `agent_profile` | The pohunek agent profile that runs the adapter; it must exist on the review host, and `autoreview profiles install` is planned in #25 |
+| `agent_profile` | The pohunek agent profile that runs the adapter; it must exist on the review host; `autoreview profiles install` writes it there |
 | `label` | Name shown in the review body, one line, at most 64 characters |
 | `finding_prefix` | One uppercase letter other than `P` (reserved for prior findings published again), unique across reviewers. A reviewer numbers its findings `C001`, `C002`; the published id takes the prefix instead of `C`, so Opus's `C002` is published as `O002` |
 

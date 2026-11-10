@@ -48,8 +48,11 @@ retention settings (`store.review_retention_seconds`,
    `validate` loads `config.yaml`, the policy and every prompt. A new key or a changed
    policy rule shows up here as a named error. Fix it before the restart.
 4. Compare `agent_profiles` in the output with the profiles on each review host.
-   Create a profile the policy now needs on each review host; `autoreview
-   profiles install` is planned in #25.
+   On each review host, install the new binary as well and run
+   [`autoreview profiles install`](../../cli.md#autoreview-profiles-install)
+   again for every profile, with the flags it was written with: `updated` means
+   the new binary carries a newer adapter. Write a profile the policy now needs
+   the same way.
 5. Restart the service and check its state:
 
    ```sh
@@ -328,8 +331,9 @@ autoreview inside it.
 
    Reviews published after the backup are not in the restored store; check
    them on GitHub before you retry them. Otherwise keep the store as it is.
-3. When a rule uses a `codex-envelope` reviewer, point its Codex profiles
-   back at the older Codex wrapper. The Go engine refuses the report of the
+3. When a rule uses a `codex-envelope` reviewer, put the copies of its Codex
+   profiles that you kept before `--replace` back in place on each review host,
+   so they start the older Codex wrapper again. The Go engine refuses the report of the
    adapter in `adapters/codex/`, because it carries `blocking` and
    `prior_findings`. A Codex review that is in flight with prior findings
    stops; retry it after the Go engine runs.
@@ -348,7 +352,11 @@ Reviewers:
   autoreview refuses the report of the older Codex wrapper with
   `review_adapter_outdated`, and the Go engine refuses the report of the
   adapter. Switch every Codex profile to the adapter in the same maintenance
-  window as the upgrade, and switch it back when you roll back.
+  window as the upgrade, and switch it back when you roll back. On each review
+  host, copy the profile file aside, then write it with
+  `autoreview profiles install --agent codex --name <profile> ... --replace`
+  ([the CLI](../../cli.md#autoreview-profiles-install)); `--replace` is needed
+  because the command did not write the old profile.
 - The Go engine treats every Codex finding as blocking. On the first Codex
   re-review after the upgrade, every finding of the last review published
   before it is a prior finding that the reviewer must settle.

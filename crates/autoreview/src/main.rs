@@ -9,6 +9,7 @@ mod error_response;
 mod init;
 mod logging;
 mod mcp_server;
+mod profiles;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -81,11 +82,14 @@ struct Cli {
     command: Invocation,
 }
 
-/// The commands of `autoreview`: `init`, and the commands that load the configuration.
+/// The commands of `autoreview`: the host commands, and the commands that load the configuration.
 #[derive(Debug, Subcommand)]
 enum Invocation {
     /// Writes a new configuration directory from an example; it never overwrites a file.
     Init(init::InitArguments),
+    /// Manages the pohunek agent profiles of the reviewers on this host.
+    #[command(subcommand)]
+    Profiles(profiles::ProfilesCommand),
     /// A command that loads the configuration first.
     #[command(flatten)]
     Configured(Command),
@@ -171,6 +175,10 @@ async fn main() -> ExitCode {
                 config,
                 command: Invocation::Init(arguments),
             }) => init::run(config.as_deref(), &arguments).and_then(|result| print_json(&result)),
+            Ok(Cli {
+                config,
+                command: Invocation::Profiles(command),
+            }) => profiles::run(config.as_deref(), &command).and_then(|done| print_json(&done)),
             Ok(Cli {
                 config,
                 command: Invocation::Configured(command),

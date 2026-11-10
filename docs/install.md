@@ -259,8 +259,10 @@ mentioned user of its placeholder `matrix` backend in `notify`, see
 [notifiers](knowledge/guides/notifiers.md).
 
 The agent profile named as `reviewers.<id>.agent_profile` in `policy.yaml` must
-exist on the review host; autoreview does not create it. `autoreview profiles
-install` is planned in #25.
+exist on the review host. Install the same autoreview binary there and write the
+profile with [`autoreview profiles install`](cli.md#autoreview-profiles-install),
+run as the user of the pohunek daemon on that host. It also writes the reviewer
+adapter that the profile starts, which needs Python 3.11 or newer as `python3`.
 
 Check configuration, policy and prompts before every start:
 

@@ -82,7 +82,9 @@ content. Keep the reviewer's environment free of secrets:
 
 - **Do not put GitHub or backend secrets in a pohunek agent profile.** The
   profile's environment is secret-bearing when it has one. `autoreview profiles
-  install` takes only the host, agent, model and profile name; it takes no secret.
+  install` takes the host, the agent, the profile name, the model, the effort,
+  the agent executable and the adapter limits; it takes no secret and writes an
+  empty `[env]` table.
 - **Keep model credentials in the runtime's own login.** The `claude` or `codex`
   runtime uses the login it was set up with on the review host. Do not copy the
   credentials into the profile, the policy or the prompts.

@@ -576,6 +576,26 @@ class ProfileRendererTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
             self.assertEqual(target.stat().st_uid, os.geteuid())
 
+    def test_renders_the_profile_that_profiles_install_writes(self) -> None:
+        # `autoreview profiles install` writes this text under its own first line, and its
+        # Rust test compares it with the same golden file.
+        digest = "sha256:" + "0123456789abcdef" * 4
+        rendered = self.render(
+            'base = "codex"\n'
+            f'package = "pohunek.runtime.codex"\ndigest = "{digest}"\n',
+            wrapper=Path(
+                "/home/review/.local/share/autoreview/adapters/autoreview-codex/codex-adapter"
+            ),
+            codex_binary=Path("/bin/sh"),
+            maximum_input_bytes=1048576,
+            maximum_result_bytes=1048576,
+            maximum_retention_seconds=7200,
+            model="gpt-5-codex",
+            reasoning_effort="high",
+        )
+        golden = Path(__file__).resolve().parent / "installed-profile.toml"
+        self.assertEqual(rendered.split("\n", 1)[1], golden.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

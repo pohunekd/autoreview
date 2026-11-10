@@ -220,9 +220,10 @@ A reviewer run ends in one of these codes:
   `completed`.
 - `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
   finding without `blocking`. It comes from an adapter older than the one in
-  `adapters/codex/`, so the review stops without a fresh session. Point the
-  Codex profile at that adapter, then run `autoreview retry` for the pull
-  request.
+  `adapters/codex/`, so the review stops without a fresh session. Write the
+  Codex profile with `autoreview profiles install` on the review host (with
+  `--replace` when the command did not write it), then run `autoreview retry`
+  for the pull request.
 
 Each other unusable run gets a fresh session, up to `session.reviewer_run_max_attempts`.
 If the same reviewer keeps failing, compare its agent profile and its prompt

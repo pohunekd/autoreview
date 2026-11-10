@@ -10,6 +10,10 @@ use autoreview_engine::{Error, error_code};
 use serde::Serialize;
 
 use crate::init::{INIT_FILE_EXISTS, INIT_WRITE_FAILED};
+use crate::profiles::{
+    POHUNEK_COMMAND_FAILED, PROFILE_FOREIGN, PROFILE_HOST_NOT_LOCAL, PROFILE_WRITE_FAILED,
+    RUNTIME_PACKAGE_MISSING,
+};
 
 /// Error code of a command with unknown or malformed arguments.
 pub(crate) const COMMAND_INVALID: &str = "command_invalid";
@@ -21,7 +25,10 @@ const DISCOVERY_BUSY: &str = "discovery_busy";
 const USAGE: &str = "usage: autoreview [--config PATH] serve | mcp | validate | poll | \
 retry|resolve|approve --repository OWNER/REPO NUMBER HEAD | review --repository OWNER/REPO \
 NUMBER | reviews [LIMIT] | candidates | awaiting | review-queue | backup-db PATH; \
-autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME";
+autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME; \
+autoreview profiles install --host HOST --agent claude|codex --name NAME --model MODEL \
+--effort EFFORT --agent-binary PATH --maximum-input-bytes BYTES [--maximum-result-bytes BYTES \
+--maximum-retention-seconds SECONDS] [--replace]";
 
 /// The JSON a caller reads from a failed command. It carries stable codes, never raw causes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -65,6 +72,20 @@ pub(crate) fn error_response(error: &(dyn StdError + 'static)) -> ErrorResponse 
             INIT_WRITE_FAILED => {
                 format!("{name} cannot be written; init removed what it had created.")
             }
+            PROFILE_HOST_NOT_LOCAL => format!(
+                "{name} does not name this machine; run profiles install on the review host."
+            ),
+            PROFILE_FOREIGN => format!(
+                "{name} was not written by profiles install; move it away, or pass --replace \
+for a regular file."
+            ),
+            PROFILE_WRITE_FAILED => format!("{name} cannot be written; the profile is unchanged."),
+            RUNTIME_PACKAGE_MISSING => format!(
+                "No selected official pohunek package serves {name}. From the extracted pohunek \
+release, run: pohunek plugin install runtime/packages/{name}.tar.zst --catalog \
+runtime/runtime-catalog.json --yes"
+            ),
+            POHUNEK_COMMAND_FAILED => format!("{name} failed; check the pohunek daemon."),
             _ => format!("Configuration is invalid or missing: {name}."),
         };
     }

@@ -2,7 +2,7 @@
 type: Concept
 id: concept/reviewers-and-adapters
 title: Reviewers and adapters
-description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the Claude and Codex adapters and the pohunek agent profiles they run (an installer is planned in #25), finding prefixes, mixing models, and how a new agent would be added.
+description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the Claude and Codex adapters, the pohunek agent profiles they run and how `autoreview profiles install` writes both, finding prefixes, mixing models, and how a new agent would be added.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -74,8 +74,36 @@ each reviewer, on top of the official pohunek runtime package for the agent:
 Claude Code for `claude-structured`, Codex for `codex-envelope`. The runtime
 package must already be installed on the review host.
 
-autoreview does not create the profiles; `autoreview profiles install` is planned
-in #25. `autoreview validate` prints the profiles the policy needs.
+`autoreview validate` prints the profiles the policy needs.
+[`autoreview profiles install`](../../cli.md#autoreview-profiles-install) writes
+one of them, with the adapter it starts, for the pohunek daemon of the machine it
+runs on. The adapters are embedded in the autoreview binary, so the release
+attestation of the archive covers them and an upgrade brings the new adapters:
+run the command again with the same flags after each upgrade. The profile it
+writes is the profile that `render_profile.py` (below) writes from a base profile
+with the same package pin and no `[env]` entries; a test of each adapter and a
+test of autoreview compare both with the same golden file under
+`adapters/<agent>/tests/`. The command marks the profile as its own and never
+overwrites a profile without that mark unless `--replace` is given; pohunek may
+repin the package of a marked profile without making it foreign.
+
+What keeps a profile written by the command read-only, beyond the adapter rules
+below:
+
+- A Claude profile passes `--permission-mode plan`, never `default`. Claude
+  Code keeps plan mode's block on the edit tools in print mode, and only an
+  approved plan lifts it, which a print-mode run cannot give. Its built-in
+  read-only commands, read-only `git` among them, run without approval in every
+  mode. Any other shell command runs only when an allow rule in the Claude user
+  settings of the daemon user approves it, or, where Claude Code's auto mode is
+  available, when the auto-mode classifier approves it. Keep the allow rules to
+  read-only commands, and set `useAutoModeDuringPlan` to `false` in those user
+  settings, so that every other command is denied (#243).
+- Its `[env]` table is empty, so no variable is copied from another profile.
+  The agent runs with the daemon's environment (pohunek's allowlist of session
+  variables) and its default config home (`~/.claude`, `~/.codex`); a profile
+  for a second subscription or with telemetry settings is written with
+  `render_profile.py` from a base profile instead.
 
 ### The Claude adapter
 
@@ -311,7 +339,7 @@ and the design below is the outline that such a protocol would have to meet.
 6. **Environment rules.** No GitHub token, no pohunek identity variables, and
    bounded output.
 7. **A profile installer.** Support for the new runtime in
-   `autoreview profiles install` (planned in #25).
+   `autoreview profiles install`.
 8. **Validation.** The new protocol name is added to the policy validator, and
    the pipeline rules above (one protocol per pipeline, verifier protocol) are
    checked for it.

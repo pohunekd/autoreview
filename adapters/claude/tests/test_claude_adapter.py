@@ -578,6 +578,37 @@ class ProfileInstallerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid effort option"):
                     self.render_with_source_args(source_args)
 
+    def test_renders_the_profile_that_profiles_install_writes(self) -> None:
+        # `autoreview profiles install` writes these files under its own first line, and its
+        # Rust test compares them with the same golden files.
+        digest = "sha256:" + "0123456789abcdef" * 4
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.toml"
+            source.write_text(
+                'base = "claude"\n'
+                f'package = "pohunek.runtime.claude"\ndigest = "{digest}"\n'
+                'args = ["--permission-mode", "plan"]\n',
+                encoding="utf-8",
+            )
+            source.chmod(0o600)
+            rendered = installer.render_profile(
+                source,
+                Path(
+                    "/home/review/.local/share/autoreview/adapters/autoreview-sonnet/"
+                    "claude-adapter"
+                ),
+                Path("/usr/local/bin/claude"),
+                1048576,
+                "claude-sonnet-4-5",
+                "high",
+                "autoreview-sonnet",
+            )
+        tests = Path(__file__).resolve().parent
+        golden = (tests / "installed-profile.toml").read_text(encoding="utf-8")
+        self.assertEqual(rendered.split("\n", 1)[1], golden)
+        manifest = (tests / "installed-manifest.toml").read_text(encoding="utf-8")
+        self.assertEqual(installer.MANIFEST_CONTENT, manifest)
+
 
 if __name__ == "__main__":
     unittest.main()
