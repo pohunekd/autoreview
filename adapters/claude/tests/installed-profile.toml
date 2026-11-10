@@ -1,0 +1,15 @@
+base = "claude"
+package = "pohunek.runtime.claude"
+digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+manifest = "autoreview-sonnet"
+program = "/home/review/.local/share/autoreview/adapters/autoreview-sonnet/claude-adapter"
+args = ["/usr/local/bin/claude", "1048576", "--permission-mode", "plan", "--model", "claude-sonnet-4-5", "--effort", "high"]
+
+[input_rules]
+bracketed_paste = true
+submit_delay_ms = 0
+
+[resume]
+resumable = false
+
+[env]

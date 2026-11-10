@@ -33,7 +33,9 @@ autoreview --config /etc/autoreview/config.yaml validate
 
 Set the keys that [use one](../README.md#use-one) names first.
 
-Create the `autoreview-codex` profile on the
-review host first; `autoreview profiles install` is planned in #25.
+Create the `autoreview-codex` profile on the review host first, with
+`autoreview profiles install --host <HOST> --agent codex --name autoreview-codex`
+and the flags of [the CLI](../../docs/cli.md#autoreview-profiles-install), run on
+that host.
 
 Files: [policy.yaml](policy.yaml), shared [config.yaml](../config.yaml).

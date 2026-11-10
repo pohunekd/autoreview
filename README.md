@@ -59,7 +59,7 @@ GitHub (gh) --> discovery --> policy match --> review workflow (SQLite)
 The engine needs three parts to be useful: the engine itself (Rust), the
 reviewer adapters that turn a pohunek agent session into one structured,
 read-only review run, and an installer that creates the pohunek agent profiles
-(planned in #25) and the service unit (planned in #39).
+(`autoreview profiles install`) and the service unit (planned in #39).
 
 ## Rough plan
 

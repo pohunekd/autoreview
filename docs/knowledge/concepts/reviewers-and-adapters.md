@@ -2,7 +2,7 @@
 type: Concept
 id: concept/reviewers-and-adapters
 title: Reviewers and adapters
-description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the Claude and Codex adapters and the pohunek agent profiles they run (an installer is planned in #25), finding prefixes, mixing models, and how a new agent would be added.
+description: What a reviewer is, the two protocols (claude-structured and codex-envelope), what an adapter enforces, the Claude and Codex adapters, the pohunek agent profiles they run and how `autoreview profiles install` writes both, finding prefixes, mixing models, and how a new agent would be added.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -74,8 +74,36 @@ each reviewer, on top of the official pohunek runtime package for the agent:
 Claude Code for `claude-structured`, Codex for `codex-envelope`. The runtime
 package must already be installed on the review host.
 
-autoreview does not create the profiles; `autoreview profiles install` is planned
-in #25. `autoreview validate` prints the profiles the policy needs.
+`autoreview validate` prints the profiles the policy needs.
+[`autoreview profiles install`](../../cli.md#autoreview-profiles-install) writes
+one of them, with the adapter it starts, for the pohunek daemon of the machine it
+runs on. The adapters are embedded in the autoreview binary, so the release
+attestation of the archive covers them and an upgrade brings the new adapters:
+run the command again with the same flags after each upgrade. The profile it
+writes is the profile that `render_profile.py` (below) writes from a base profile
+with the same package pin and no `[env]` entries; a test of each adapter and a
+test of autoreview compare both with the same golden file under
+`adapters/<agent>/tests/`. The command marks the profile as its own and never
+overwrites a profile without that mark unless `--replace` is given; pohunek may
+repin the package of a marked profile without making it foreign.
+
+What keeps a profile written by the command read-only, beyond the adapter rules
+below:
+
+- A Claude profile passes `--permission-mode plan`, never `default`. Claude
+  Code keeps plan mode's block on the edit tools in print mode, and only an
+  approved plan lifts it, which a print-mode run cannot give. Its built-in
+  read-only commands, read-only `git` among them, run without approval in every
+  mode. Any other shell command runs only when an allow rule in the Claude user
+  settings of the daemon user approves it, or, where Claude Code's auto mode is
+  available, when the auto-mode classifier approves it. Keep the allow rules to
+  read-only commands, and set `useAutoModeDuringPlan` to `false` in those user
+  settings, so that every other command is denied (#243).
+- Its `[env]` table is empty, so no variable is copied from another profile.
+  The agent runs with the daemon's environment (pohunek's allowlist of session
+  variables) and its default config home (`~/.claude`, `~/.codex`); a profile
+  for a second subscription or with telemetry settings is written with
+  `render_profile.py` from a base profile instead.
 
 ### The Claude adapter
 
@@ -100,6 +128,18 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   and their short forms), and sets the model and the effort level of the new
   profile. The profile also turns off resuming and disables prompt-box
   detection, because the adapter reads its input without rendering one.
+
+The empty detection manifest (`rules = []`) is deliberate. The Claude runtime
+declares pohunek's `screen_idle` input readiness, which waits for an idle rule
+on a screen region. An override manifest without one makes pohunek fall back to
+`bracketed_paste` readiness: the request is written once the adapter's terminal
+accepts a paste, which is what the adapter needs. `pohunek doctor` therefore
+lists an installed Claude profile as a warning (check `agent_profile_<name>`),
+and `pohunek service check` and the upgrade preflight list it under
+`profile_warnings` with the code `profile_without_screen_readiness`. The
+warning is expected and needs no change. Do not add the `prompt_box_body` idle
+rule that pohunek suggests: the adapter draws no prompt box, so the rule never
+matches and every session start would wait for input that is never written.
 
 Read-only is enforced by the renderer as an allowlist for the permission mode
 and a refusal list for everything that widens access. The base profile must set
@@ -140,6 +180,17 @@ The adapter for `codex-envelope` lives in `adapters/codex/` and uses only the
 Python standard library (Python 3.11 or newer). It has two parts:
 
 - `codex-adapter` is the program a profile starts. It runs under `python3 -I`.
+  Before it reads the request it sets the fixed terminal title
+  `autoreview codex adapter` (OSC 0), never on a bare `--version`. The Codex
+  runtime declares pohunek's `manifest_idle` input readiness: pohunek writes the
+  request only after the Codex detection manifest reads idle from the screen
+  or the terminal title, and any non-blank title that does not start with a
+  spinner glyph reads idle (`osc_title_idle`). The adapter draws nothing else,
+  so without the title pohunek refuses the start with
+  `session_input_not_ready`. The readiness gates only that first write: a
+  later title, from `codex exec` or anything else in the session, does not
+  affect the run, because the engine sends no further input and does not read
+  the session state, only the output.
   It reads one request that pohunek writes into the session and checks the
   review checkout before it starts Codex: `HEAD` must be the trusted head SHA of
   the request, the work tree must be clean and the trusted base commit must be
@@ -168,7 +219,11 @@ a report without them (`review_adapter_outdated`).
 
 Read-only is fixed in the adapter: the arguments above are not configurable, and
 the adapter accepts exactly the six arguments that the renderer writes, no
-more. The renderer is an allowlist for the arguments of the base profile: it
+more, followed at most by one `--no-daemon`. Pohunek's Codex hook handler
+appends that flag to every Codex launch, profile sessions included. The adapter
+drops it: it keeps an interactive Codex off the shared app-server daemon, and
+`codex exec` always runs its app-server in its own process and has no such
+option. The renderer is an allowlist for the arguments of the base profile: it
 accepts these spellings, each setting at most once, and drops them because the adapter passes them itself. Every other
 argument is refused, among them any other sandbox mode or approval policy,
 `--dangerously-bypass-approvals-and-sandbox`, `--approve-for-me`, `--add-dir`,
@@ -311,7 +366,7 @@ and the design below is the outline that such a protocol would have to meet.
 6. **Environment rules.** No GitHub token, no pohunek identity variables, and
    bounded output.
 7. **A profile installer.** Support for the new runtime in
-   `autoreview profiles install` (planned in #25).
+   `autoreview profiles install`.
 8. **Validation.** The new protocol name is added to the policy validator, and
    the pipeline rules above (one protocol per pipeline, verifier protocol) are
    checked for it.

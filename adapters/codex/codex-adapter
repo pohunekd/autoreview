@@ -26,7 +26,18 @@ PROGRAM_NAME = "codex-adapter"
 # The engine reads the result frame and the exit line below by these exact texts.
 RESULT_MARKER_PREFIX = "[pohunek-codex-review-result-v1:"
 EXIT_LINE_FORMAT = "[pohunek-codex-review exited with status {}]"
+# Codex runtimes declare pohunek's `manifest_idle` input readiness: the initial
+# input is written only once the detection manifest reads idle, and any
+# non-blank terminal title without a leading spinner glyph reads idle. The
+# adapter draws nothing else, so this fixed OSC 0 title is that signal.
+READY_TITLE = b"\x1b]0;autoreview codex adapter\x07"
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
+PROFILE_ARGUMENT_COUNT = 6
+# Pohunek's codex-hook-v1 handler appends this to every Codex launch, profile
+# sessions included, after the profile args. It keeps an interactive Codex TUI
+# off the shared app-server daemon; `codex exec` always runs its app-server in
+# process and has no such option, so the adapter drops it.
+NO_DAEMON_ARGUMENT = "--no-daemon"
 # The renderer writes the Codex path into this file next to the wrapper.
 # The bare --version probe gets no arguments and no profile environment, so the
 # file is the only place both the probe and a launch can read it from.
@@ -363,10 +374,20 @@ def main() -> NoReturn:
     # --version and without the profile args, so answer it for Codex.
     if sys.argv[1:] == ["--version"]:
         exec_version_probe()
-    if len(sys.argv) != 7:
+    profile_arguments = sys.argv[1:]
+    if (
+        len(profile_arguments) == PROFILE_ARGUMENT_COUNT + 1
+        and profile_arguments[-1] == NO_DAEMON_ARGUMENT
+    ):
+        profile_arguments = profile_arguments[:-1]
+    if (
+        len(profile_arguments) != PROFILE_ARGUMENT_COUNT
+        or NO_DAEMON_ARGUMENT in profile_arguments
+    ):
         fail(
             "expected Codex executable, maximum input size, maximum result size, "
-            "maximum retention time, model, and reasoning effort"
+            "maximum retention time, model, and reasoning effort, optionally "
+            f"followed by {NO_DAEMON_ARGUMENT}"
         )
     (
         codex_binary,
@@ -375,7 +396,7 @@ def main() -> NoReturn:
         maximum_retention_seconds_text,
         model,
         reasoning_effort,
-    ) = sys.argv[1:]
+    ) = profile_arguments
     try:
         maximum_bytes = int(maximum_bytes_text)
         maximum_result_bytes = int(maximum_result_bytes_text)
@@ -399,6 +420,8 @@ def main() -> NoReturn:
     if not sys.stdin.isatty():
         fail("stdin must be a Pohunek-managed PTY")
 
+    sys.stdout.buffer.write(READY_TITLE)
+    sys.stdout.buffer.flush()
     descriptor = sys.stdin.fileno()
     original_attributes = termios.tcgetattr(descriptor)
     try:

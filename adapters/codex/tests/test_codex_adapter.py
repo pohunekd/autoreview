@@ -6,6 +6,8 @@ import base64
 import importlib.util
 import json
 import os
+import pty
+import select
 import shutil
 import stat
 import subprocess
@@ -19,6 +21,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 READ_ONLY_SOURCE = 'base = "codex"\n'
 HEAD = "a" * 40
+# The token pohunek's Codex hook handler appends to every Codex launch.
+POHUNEK_NO_DAEMON = "--no-daemon"
 
 
 def load_module(name: str, path: Path):
@@ -355,6 +359,78 @@ class VersionProbeTests(unittest.TestCase):
         self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
         self.assertIn("differs", result.stderr)
 
+    def test_title_precedes_the_read_of_the_input_frame(self) -> None:
+        # pohunek writes the input of a `manifest_idle` runtime only after an idle
+        # title, so a title that waits for the input deadlocks the session start.
+        # The argument list is the one pohunek launches: the profile args and the
+        # trailing --no-daemon of its Codex hook handler.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.install_wrapper(root, "{fake}\n")
+            home = root / "home"
+            home.mkdir()
+            primary, secondary = pty.openpty()
+            process = subprocess.Popen(
+                [
+                    str(script),
+                    str(root / "fake-codex"),
+                    "262144",
+                    "262144",
+                    "60",
+                    "model-x",
+                    "high",
+                    POHUNEK_NO_DAEMON,
+                ],
+                env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+                cwd=home,
+                stdin=secondary,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            os.close(secondary)
+            try:
+                title = b""
+                while len(title) < len(wrapper.READY_TITLE):
+                    readable, _, _ = select.select([process.stdout], [], [], 10)
+                    self.assertTrue(readable, "no title before the input frame was read")
+                    chunk = os.read(process.stdout.fileno(), len(wrapper.READY_TITLE) - len(title))
+                    self.assertTrue(chunk, "the adapter closed stdout before the title")
+                    title += chunk
+                # Not a bracketed-paste start; the line break delivers it in cooked mode too.
+                os.write(primary, b"x" * (len(wrapper.BRACKETED_PASTE_START) - 1) + b"\n")
+                stdout, stderr = process.communicate(timeout=10)
+            finally:
+                process.kill()
+                process.wait()
+                os.close(primary)
+
+        self.assertEqual(title, wrapper.READY_TITLE)
+        self.assertEqual(stdout, b"")
+        self.assertEqual(process.returncode, wrapper.EXIT_USAGE)
+        self.assertIn(b"bracketed-paste start marker", stderr)
+
+    def test_refuses_arguments_beyond_one_trailing_no_daemon(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.install_wrapper(root, "{fake}\n")
+            fake = str(root / "fake-codex")
+            profile = [fake, "262144", "262144", "60", "model-x", "high"]
+            flag = POHUNEK_NO_DAEMON
+            for arguments in (
+                [*profile, flag, flag],
+                [flag, *profile],
+                [fake, "262144", "262144", "60", flag, "high"],
+                [fake, "262144", "262144", "60", "model-x", "high", "--other"],
+                [*profile, flag, "resume", "conversation-x"],
+                profile[:-1],
+            ):
+                with self.subTest(arguments=arguments):
+                    result = self.run_wrapper(root, script, arguments)
+
+                    self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("expected Codex executable", result.stderr)
+
     def test_version_with_other_arguments_keeps_the_wrapper_protocol(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -575,6 +651,26 @@ class ProfileRendererTests(unittest.TestCase):
             self.assertFalse(renderer.atomic_write(target, 'base = "codex"\n'))
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
             self.assertEqual(target.stat().st_uid, os.geteuid())
+
+    def test_renders_the_profile_that_profiles_install_writes(self) -> None:
+        # `autoreview profiles install` writes this text under its own first line, and its
+        # Rust test compares it with the same golden file.
+        digest = "sha256:" + "0123456789abcdef" * 4
+        rendered = self.render(
+            'base = "codex"\n'
+            f'package = "pohunek.runtime.codex"\ndigest = "{digest}"\n',
+            wrapper=Path(
+                "/home/review/.local/share/autoreview/adapters/autoreview-codex/codex-adapter"
+            ),
+            codex_binary=Path("/bin/sh"),
+            maximum_input_bytes=1048576,
+            maximum_result_bytes=1048576,
+            maximum_retention_seconds=7200,
+            model="gpt-5-codex",
+            reasoning_effort="high",
+        )
+        golden = Path(__file__).resolve().parent / "installed-profile.toml"
+        self.assertEqual(rendered.split("\n", 1)[1], golden.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

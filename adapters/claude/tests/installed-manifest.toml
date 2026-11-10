@@ -1,0 +1,3 @@
+# An empty rule list intentionally disables detection: the wrapper never renders a
+# prompt box, so the initial input must not wait for one.
+rules = []

@@ -1,0 +1,14 @@
+base = "codex"
+package = "pohunek.runtime.codex"
+digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+program = "/home/review/.local/share/autoreview/adapters/autoreview-codex/codex-adapter"
+args = ["/bin/sh", "1048576", "1048576", "7200", "gpt-5-codex", "high"]
+
+[input_rules]
+bracketed_paste = true
+submit_delay_ms = 150
+
+[resume]
+resumable = false
+
+[env]

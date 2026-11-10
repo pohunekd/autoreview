@@ -86,8 +86,22 @@ as `AUTOREVIEW_MATRIX_TOKEN` in the same way as the GitHub token in step 7.
 ## 6. Install the agent profile
 
 The policy names one agent profile for its reviewer in
-`reviewers.<id>.agent_profile`. It must exist on the review host; autoreview
-does not create it. `autoreview profiles install` is planned in #25.
+`reviewers.<id>.agent_profile`. It must exist on the review host. Write it on
+that host, as the user of its pohunek daemon, with
+[`autoreview profiles install`](../../cli.md#autoreview-profiles-install). The
+example reviewer uses Codex:
+
+```sh
+autoreview profiles install --host <host> --agent codex --name autoreview-codex \
+  --model <model> --effort high --agent-binary "$(command -v codex)" \
+  --maximum-input-bytes 1048576 --maximum-result-bytes 1048576 \
+  --maximum-retention-seconds 7200
+```
+
+Its `result` is `created`, and `unchanged` when you run it again. Keep
+`--maximum-result-bytes` at most `limits.result_max_bytes` and
+`--maximum-retention-seconds` at least `session.timeout_seconds` of the
+configuration.
 
 The base runtime must already be installed on that host, see step 1.
 
