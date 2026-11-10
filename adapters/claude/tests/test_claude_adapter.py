@@ -17,6 +17,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+READ_ONLY_SOURCE = 'base = "claude"\nargs = ["--permission-mode", "plan"]\n'
 
 
 def load_module(name: str, path: Path):
@@ -236,7 +237,7 @@ class VersionProbeTests(unittest.TestCase):
             script = self.install_wrapper(root, None)
             fake = root / "fake-claude"
             source = root / "source.toml"
-            source.write_text('base = "claude"\n', encoding="utf-8")
+            source.write_text(READ_ONLY_SOURCE, encoding="utf-8")
             source.chmod(0o600)
             rendered = subprocess.run(
                 [
@@ -306,7 +307,7 @@ class ProfileInstallerTests(unittest.TestCase):
     def test_source_without_an_environment_table_renders_without_telemetry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.toml"
-            source.write_text('base = "claude"\n', encoding="utf-8")
+            source.write_text(READ_ONLY_SOURCE, encoding="utf-8")
             source.chmod(0o600)
 
             rendered = installer.render_profile(
@@ -384,18 +385,52 @@ class ProfileInstallerTests(unittest.TestCase):
             self.assertIn(argument, installer.WRAPPER_CONTROLLED_ARGUMENTS)
 
     def test_rejects_permission_widening_arguments(self) -> None:
-        for source_args in (
+        plan = ["--permission-mode", "plan"]
+        for widening in (
             ["--dangerously-skip-permissions"],
             ["--allow-dangerously-skip-permissions"],
-            ["--permission-mode", "bypassPermissions"],
-            ["--permission-mode=bypassPermissions"],
             ["--add-dir", "/"],
             ["--add-dir=/"],
+            ["--agents", "{}"],
+            ["--allowedTools", "Bash,Edit,Write"],
+            ["--allowed-tools", "Bash"],
+            ["--allowed-tools=Bash"],
+            ["--disallowedTools", "Bash"],
+            ["--disallowed-tools", "Bash"],
+            ["--mcp-config", "servers.json"],
+            ["--mcp-config=servers.json"],
+            ["--strict-mcp-config"],
+            ["--plugin-dir", "plugin"],
+            ["--plugin-url", "https://example.invalid/p.zip"],
+            ["--permission-prompt-tool", "tool"],
+            ["--permission-prompts", "none"],
+            ["--tools", "Bash"],
+        ):
+            with self.subTest(widening=widening):
+                with self.assertRaisesRegex(ValueError, "permission-widening"):
+                    self.render_with_args([*plan, *widening])
+
+    def test_permission_mode_is_an_allowlist(self) -> None:
+        for mode in ("plan", "default"):
+            for source_args in (["--permission-mode", mode], [f"--permission-mode={mode}"]):
+                with self.subTest(source_args=source_args):
+                    self.render_with_args(source_args)
+        for source_args in (
+            [],
+            ["--permission-mode"],
+            ["--permission-mode", "acceptEdits"],
+            ["--permission-mode=acceptEdits"],
+            ["--permission-mode", "auto"],
+            ["--permission-mode", "dontAsk"],
+            ["--permission-mode", "bypassPermissions"],
+            ["--permission-mode=bypassPermissions"],
+            ["--permission-mode", "Plan"],
+            ["--permission-mode", "plan", "--permission-mode", "plan"],
+            ["--permission-mode", "plan", "--permission-mode", "acceptEdits"],
         ):
             with self.subTest(source_args=source_args):
-                with self.assertRaisesRegex(ValueError, "permission-widening"):
+                with self.assertRaisesRegex(ValueError, "--permission-mode once"):
                     self.render_with_args(source_args)
-        self.render_with_args(["--permission-mode", "plan"])
 
     def render_pinned_source(self, pin_lines: str) -> str:
         with tempfile.TemporaryDirectory() as directory:
@@ -439,7 +474,7 @@ class ProfileInstallerTests(unittest.TestCase):
     def test_rejects_a_malformed_manifest_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source.toml"
-            source.write_text('base = "claude"\n', encoding="utf-8")
+            source.write_text(READ_ONLY_SOURCE, encoding="utf-8")
             source.chmod(0o600)
 
             with self.assertRaises(ValueError):
@@ -538,7 +573,7 @@ class ProfileInstallerTests(unittest.TestCase):
                     self.render_with_source_args('["--permission-mode", "plan"]', effort)
 
     def test_rejects_a_malformed_source_effort_option(self) -> None:
-        for source_args in ('["--permission-mode", "plan", "--effort"]', '["--effort", "--verbose"]', '["--effort="]'):
+        for source_args in ('["--permission-mode", "plan", "--effort"]', '["--permission-mode", "plan", "--effort", "--verbose"]', '["--permission-mode", "plan", "--effort="]'):
             with self.subTest(source_args=source_args):
                 with self.assertRaisesRegex(ValueError, "invalid effort option"):
                     self.render_with_source_args(source_args)

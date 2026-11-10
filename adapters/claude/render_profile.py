@@ -33,9 +33,26 @@ MANIFEST_CONTENT = (
 # The wrapper reads the Claude Code path from this file next to it; it must
 # match the suffix in the wrapper.
 SIDECAR_SUFFIX = ".claude-binary"
-# Options that widen what a run may do. A review run is read-only, so a base
-# profile cannot carry them.
-PERMISSION_WIDENING_PREFIXES = ("--dangerously-", "--allow-dangerously-", "--add-dir")
+# A review run is read-only: the base profile must set exactly one of these
+# permission modes, and must not carry an option that widens what the run may
+# use or reach. Names match with or without `=value`.
+ALLOWED_PERMISSION_MODES = ("plan", "default")
+PERMISSION_WIDENING_PREFIXES = ("--dangerously-", "--allow-dangerously-")
+PERMISSION_WIDENING_OPTIONS = {
+    "--add-dir",
+    "--agents",
+    "--allowed-tools",
+    "--allowedTools",
+    "--disallowed-tools",
+    "--disallowedTools",
+    "--mcp-config",
+    "--permission-prompt-tool",
+    "--permission-prompts",
+    "--plugin-dir",
+    "--plugin-url",
+    "--strict-mcp-config",
+    "--tools",
+}
 WRAPPER_CONTROLLED_ARGUMENTS = {
     "--continue",
     "--json-schema",
@@ -110,17 +127,21 @@ def render_profile(
         for argument in source_args
     ):
         raise ValueError("source profile args contain a wrapper-controlled option")
+    permission_modes: list[str] = []
     for index, argument in enumerate(source_args):
-        if argument.startswith(PERMISSION_WIDENING_PREFIXES):
+        name = argument.split("=", 1)[0]
+        if name.startswith(PERMISSION_WIDENING_PREFIXES) or name in PERMISSION_WIDENING_OPTIONS:
             raise ValueError("source profile args contain a permission-widening option")
-        if argument == "--permission-mode":
-            mode = source_args[index + 1] if index + 1 < len(source_args) else ""
-        elif argument.startswith("--permission-mode="):
-            mode = argument.removeprefix("--permission-mode=")
-        else:
-            continue
-        if "bypass" in mode.lower():
-            raise ValueError("source profile args contain a permission-widening option")
+        if name == "--permission-mode":
+            if "=" in argument:
+                permission_modes.append(argument.split("=", 1)[1])
+            else:
+                permission_modes.append(source_args[index + 1] if index + 1 < len(source_args) else "")
+    if len(permission_modes) != 1 or permission_modes[0] not in ALLOWED_PERMISSION_MODES:
+        raise ValueError(
+            "source profile args must set --permission-mode once, to "
+            + " or ".join(ALLOWED_PERMISSION_MODES)
+        )
     # The environment table is optional: telemetry settings, when present, are
     # carried over, and a profile without them runs without telemetry.
     environment = data.get("env", {})

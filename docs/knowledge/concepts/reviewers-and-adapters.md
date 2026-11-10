@@ -94,13 +94,20 @@ the Python standard library (Python 3.11 or newer). It has two parts:
 - `render_profile.py` writes a profile from a base Claude profile. It copies the
   runtime package pin, the arguments and the environment of the base profile,
   refuses an argument that the adapter controls (`--print`, `--output-format`,
-  `--settings`, `--setting-sources`, `--json-schema`, `--resume` and similar)
-  and an argument that widens permissions (`--dangerously-*`,
-  `--allow-dangerously-*`, `--add-dir`, `--permission-mode` with a bypass value),
-  and sets the model and the effort level of the new profile. The base profile
-  carries the read-only settings of the run, such as the permission mode. The
-  profile also turns off resuming and disables prompt-box detection, because the
-  adapter reads its input without rendering one.
+  `--settings`, `--setting-sources`, `--json-schema`, `--resume`, `--continue`
+  and their short forms), and sets the model and the effort level of the new
+  profile. The profile also turns off resuming and disables prompt-box
+  detection, because the adapter reads its input without rendering one.
+
+Read-only is enforced by the renderer as an allowlist for the permission mode
+and a refusal list for everything that widens access. The base profile must set
+`--permission-mode` exactly once, to `plan` or `default`; any other value
+(`acceptEdits`, `auto`, `dontAsk`, a bypass mode) and a missing mode are
+refused. It must not carry any of `--dangerously-*`, `--allow-dangerously-*`,
+`--add-dir`, `--agents`, `--allowedTools` and `--allowed-tools`,
+`--disallowedTools` and `--disallowed-tools`, `--tools`, `--mcp-config`,
+`--strict-mcp-config`, `--plugin-dir`, `--plugin-url`, `--permission-prompt-tool`
+and `--permission-prompts`, with or without `=value`.
 
 Configuration comes from the profile and a file next to the program, never from
 a default in the code:
