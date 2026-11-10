@@ -113,19 +113,23 @@ CLI output:
 
 Finding a review host is not one of these layers, because it has no limit. A
 review starts on a host only after a host's project list names its repository.
-When every host the review may use fails that list (unreachable, a pohunek error,
-a timeout), no review started, so the failure is an outage of the hosts and not
-of the review. Each skipped host is still logged as `review host skipped`. The
-review is not given up and uses none of `schedule.retry_delays_seconds`: it stays
-due, keeps its attempt number, and is dispatched on the first discovery pass after
-a host answers again. No `autoreview retry` is needed.
+When a host the review may use fails that list (unreachable, a pohunek error,
+a timeout) and no other host has the repository, no review started, so the
+failure is an outage of the hosts and not of the review. Each skipped host is
+still logged as `review host skipped`. The review is not given up and uses none
+of `schedule.retry_delays_seconds`: it stays due, keeps its attempt number, and
+is dispatched on the first discovery pass after a host answers again. No
+`autoreview retry` is needed.
 
-The outage is announced once, with the `review_stopped` event: the message says
-that reviews wait for a review host, names the first waiting review, and ends with
-the host error code (`Diagnostic: pohunek_request_failed.`). The mark of a waiting
-review is stored with its schedule record, so later passes and a restart of the
-service do not announce the same outage again. A new outage, after every waiting
-review has started or left, is announced again.
+Each host outage is announced once, with the `review_stopped` event: the message
+says that reviews wait for a review host, names the first waiting review and the
+failed hosts, and ends with the host error code
+(`Diagnostic: pohunek_request_failed.`). The announced hosts are stored with the
+discovery state, so later passes, a push or `autoreview retry` of a waiting
+review and a restart of the service do not announce the same outage again. A
+host's outage ends on the first pass in which that host answers; its next
+outage, or an outage of another host while a review still waits, is announced
+again.
 
 A failure after a review started on a host (a session that could not start, a
 lost session, a failed base fetch) keeps the retry budget of the scheduler row

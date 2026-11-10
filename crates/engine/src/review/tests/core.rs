@@ -17,8 +17,8 @@ use crate::config::NotifyRoute;
 use crate::engine::{Engine, SystemClock};
 use crate::error::{Error, error_code};
 use crate::integrations::SessionRequest;
-use crate::model::RejectedCandidate;
 use crate::model::review::Decision;
+use crate::model::{PullRequest, RejectedCandidate};
 use crate::protocol::fixtures::sha;
 use crate::review::input::NOTIFY_STEP_PREFIX;
 use crate::testing::fake::{INTEGRATION_POLICY, count_notes, reviewer_output};
@@ -538,7 +538,7 @@ async fn failing_first_host_is_skipped_and_the_review_runs_on_the_second() {
 
 // An outage of every review host that outlasts the retry budget does not stop a due review:
 // the first pass after a host answers dispatches it without `retry`, and one notice, also
-// across a restart, says that it waits for a review host (#241).
+// across a restart and a push during the outage, says that it waits for a review host (#241).
 #[tokio::test]
 async fn review_waits_through_an_outage_of_every_review_host() {
     let mut h = start_harness(|cfg| {
@@ -562,6 +562,12 @@ async fn review_waits_through_an_outage_of_every_review_host() {
         h.fake.listing_count() > listed
     })
     .await;
+    h.settle().await;
+    let pushed = PullRequest {
+        head_sha: sha("c"),
+        ..pr.clone()
+    };
+    h.fake.open(pushed, h.rule(&pr.repository));
     h.settle().await;
     h.fake.lock().host_fail.remove("host-b");
     let result = h.poll().await;
@@ -588,6 +594,11 @@ async fn review_waits_through_an_outage_of_every_review_host() {
         .collect();
     assert_eq!(waits.len(), 1, "one notice of the wait: {notes:?}");
     assert_eq!(waits[0].level, Level::Action, "level of {:?}", waits[0]);
+    assert!(
+        waits[0].message.contains("(failed: host-a, host-b)"),
+        "the notice names the failed hosts: {:?}",
+        waits[0]
+    );
     assert!(
         waits[0]
             .message

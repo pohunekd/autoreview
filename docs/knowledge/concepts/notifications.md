@@ -113,7 +113,7 @@ list the wait until it is approved or its deadline passes.
 A discovery pass sends its messages after it has saved its state and released
 the discovery lock: a rejected pull request (`review_stopped`), a review that
 stopped or waits for a retry (`review_stopped`, `retry_scheduled`), reviews that
-wait for a review host (`review_stopped`, once per outage), and a
+wait for a review host (`review_stopped`, once per host outage), and a
 `handoff_reminder`. Each message gets one attempt, bounded by the notifier's
 request timeout. Once a message fails, at any level, the later messages of the
 same route in the same pass get no attempt; the route is the event's own route

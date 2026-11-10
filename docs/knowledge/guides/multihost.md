@@ -81,8 +81,9 @@ When no later host has the repository, the review waits for a review host, not
 `project_route_not_found`. It uses no retry of
 [`schedule.retry_delays_seconds`](../../configuration.md#schedule), however long
 the outage lasts, and starts on the first discovery pass after a host answers,
-without `autoreview retry`. One `review_stopped` message per outage says that
-reviews wait for a review host and names the host error code, for example
+without `autoreview retry`. One `review_stopped` message per host outage says
+that reviews wait for a review host, names the failed hosts and the host error
+code, for example
 `Diagnostic: pohunek_request_timeout.` (see
 [waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host)).
 

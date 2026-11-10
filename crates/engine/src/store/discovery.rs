@@ -22,7 +22,14 @@ pub const STATE_AWAITING: &str = "awaiting";
 /// Discovery entry that holds the code last reported for each rejected pull request.
 pub const STATE_REJECTED: &str = "rejected";
 
-/// The four discovery maps, each keyed by the `repository#number` key of a pull request.
+/// Key prefix of an announced host outage in the `rejected` entry.
+///
+/// Go reads only the four entries above (`store.go:191-200`), so the outages share the
+/// `rejected` map; no `owner/name#N` key starts with this prefix, because an owner has no `:`.
+const HOST_OUTAGE_PREFIX: &str = "host:";
+
+/// The discovery maps; all but `host_outages` are keyed by the `repository#number` key of a
+/// pull request.
 ///
 /// A missing or `null` entry in the database reads as an empty map.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,6 +42,9 @@ pub struct DiscoveryState {
     pub awaiting: BTreeMap<String, AwaitRecord>,
     /// Code last reported for each rejected pull request, so each rejection is announced once.
     pub rejected: BTreeMap<String, String>,
+    /// Error code of each review host whose outage was announced, keyed by host, so each
+    /// outage is announced once. Stored in the `rejected` entry under [`HOST_OUTAGE_PREFIX`].
+    pub host_outages: BTreeMap<String, String>,
 }
 
 impl Store {
@@ -70,7 +80,14 @@ impl Store {
                     state.awaiting = read_entry(&name, &value)?;
                 }
                 STATE_REJECTED => {
-                    state.rejected = read_entry(&name, &value)?;
+                    let entries: BTreeMap<String, String> = read_entry(&name, &value)?;
+                    for (key, code) in entries {
+                        if let Some(host) = key.strip_prefix(HOST_OUTAGE_PREFIX) {
+                            state.host_outages.insert(host.to_owned(), code);
+                        } else {
+                            state.rejected.insert(key, code);
+                        }
+                    }
                 }
                 _ => {
                     return Err(store_error(
@@ -119,6 +136,8 @@ fn read_entry<T: DeserializeOwned + Default>(name: &str, value: &str) -> Result<
 }
 
 /// Writes the four entries in schedule, published, awaiting, rejected order.
+///
+/// The `rejected` entry holds the host outages as well.
 pub(crate) fn save_discovery(
     transaction: &Transaction<'_>,
     state: &DiscoveryState,
@@ -126,7 +145,11 @@ pub(crate) fn save_discovery(
     write_entry(transaction, STATE_SCHEDULE, &state.schedule)?;
     write_entry(transaction, STATE_PUBLISHED, &state.published)?;
     write_entry(transaction, STATE_AWAITING, &state.awaiting)?;
-    write_entry(transaction, STATE_REJECTED, &state.rejected)?;
+    let mut rejected = state.rejected.clone();
+    for (host, code) in &state.host_outages {
+        rejected.insert(format!("{HOST_OUTAGE_PREFIX}{host}"), code.clone());
+    }
+    write_entry(transaction, STATE_REJECTED, &rejected)?;
     Ok(())
 }
 

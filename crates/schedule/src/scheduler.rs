@@ -97,13 +97,6 @@ impl Default for Record {
     }
 }
 
-impl Record {
-    /// Reports whether the record waits for a review host to answer.
-    pub fn waits_for_host(&self) -> bool {
-        self.awaits_host && self.phase == "retry_wait"
-    }
-}
-
 /// Reports whether a flag is unset; an unset flag is not written.
 fn is_false(value: &bool) -> bool {
     !*value
@@ -443,8 +436,9 @@ pub fn notification(target: &Target, record: &Record) -> String {
 
 /// Returns the notice that reviews wait for a review host.
 ///
-/// It names the review of `target` as the first one that waits, and the host error code.
-pub fn host_wait_notification(target: &Target, record: &Record) -> String {
+/// It names the review of `target` as the first one that waits, the `hosts` whose outage it
+/// announces, and the host error code.
+pub fn host_wait_notification(target: &Target, record: &Record, hosts: &[&str]) -> String {
     let description = failure_explanation(&record.error_code);
     let head: String = target
         .head_sha
@@ -452,11 +446,12 @@ pub fn host_wait_notification(target: &Target, record: &Record) -> String {
         .take(NOTIFICATION_HEAD_CHARS)
         .collect();
     format!(
-        "Reviews wait for a review host: no review host could start the review for {} at {}. \
-         {} Each waiting review starts on the first discovery pass after a host answers and \
-         uses no automatic retry. Diagnostic: {}.",
+        "Reviews wait for a review host: no review host could start the review for {} at {} \
+         (failed: {}). {} Each waiting review starts on the first discovery pass after a host \
+         answers and uses no automatic retry. Diagnostic: {}.",
         target.key(),
         head,
+        hosts.join(", "),
         description,
         record.error_code
     )
