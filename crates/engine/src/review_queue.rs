@@ -52,6 +52,8 @@ pub(crate) enum QueuePriority {
     AwaitingApproval,
     /// The policy does not cover the repository with a review-request trigger.
     NotCovered,
+    /// The rule skips the untrusted author, so only a human reviews the pull request.
+    Skipped,
     /// The last review attempt stopped with an error.
     Stopped,
     /// The engine works on the request or has finished it.
@@ -91,6 +93,8 @@ pub(crate) struct QueueState {
     pub(crate) published: BTreeMap<String, PublishedRecord>,
     /// Approvals that wait for the owner.
     pub(crate) awaiting: BTreeMap<String, AwaitRecord>,
+    /// Reasons of the pull requests that the last discovery pass skipped.
+    pub(crate) skipped: BTreeMap<String, String>,
 }
 
 /// The digest bodies and the count of requests they show.
@@ -185,6 +189,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             schedule: discovery.schedule,
             published: discovery.published,
             awaiting: discovery.awaiting,
+            skipped: discovery.skipped,
         };
         let mut entries = queue_entries(self.policy()?, &state, &list.requests);
         entries.extend(self.waiting_on_author(cancel, &state, &list.requests).await);
@@ -341,6 +346,12 @@ pub(crate) fn queue_status(
         return (
             format!("AI review published {}", decision_text(&record.decision)),
             QueuePriority::Other,
+        );
+    }
+    if let Some(reason) = state.skipped.get(key) {
+        return (
+            format!("AI review skipped: {reason}"),
+            QueuePriority::Skipped,
         );
     }
     let covered = policy
@@ -758,6 +769,29 @@ notifications:
                 },
                 "AI review completed",
                 QueuePriority::Other,
+            ),
+            // Rust only (#226): Go keeps no state of a pull request whose rule skips its author.
+            (
+                "skipped untrusted author",
+                connection,
+                |state, key| {
+                    state
+                        .skipped
+                        .insert(key.to_owned(), "untrusted_author".to_owned());
+                },
+                "AI review skipped: untrusted_author",
+                QueuePriority::Skipped,
+            ),
+            (
+                "skipped under a label trigger",
+                labelled,
+                |state, key| {
+                    state
+                        .skipped
+                        .insert(key.to_owned(), "untrusted_author".to_owned());
+                },
+                "AI review skipped: untrusted_author",
+                QueuePriority::Skipped,
             ),
             (
                 "covered and not yet started",

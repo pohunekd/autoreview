@@ -154,8 +154,8 @@ autoreview review --repository zajca/pohunek 64              # engine state for 
 autoreview retry --repository zajca/pohunek 64 3f2a9c1d0b7e  # after review_stopped
 ```
 
-`review` does not show the author class; the `review scheduled` log line carries the
-`author_class` each review was given.
+`review` shows the `author_class` each review was given, as the `review scheduled` log
+line does.
 
 ## Variations
 

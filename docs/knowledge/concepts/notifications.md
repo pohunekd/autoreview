@@ -152,6 +152,9 @@ Rules for the queue:
   the engine. Within a priority, entries are sorted by repository and number.
   The cut is made after sorting, so an entry that needs action is not dropped to
   make room for one that does not.
+- A pull request whose rule skips its untrusted author (`untrusted: skip`) is
+  listed as `AI review skipped: untrusted_author`, after the pull requests that
+  AI review does not cover and before the stopped reviews: only a human reviews it.
 - Pull requests whose notes were handed to the author are listed with the state
   **Waiting on author**. These are listed apart from the other requests, because
   the author has to act first.

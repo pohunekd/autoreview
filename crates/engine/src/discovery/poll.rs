@@ -153,6 +153,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
         let mut notices = Vec::new();
         self.report_rejected(&mut state, &listed.rejected, &mut notices)?;
+        // The review queue and `review` read the skips of the last pass; a skip sends no notice.
+        state.skipped = listed
+            .skipped
+            .iter()
+            .map(|item| (item.key(), item.reason.clone()))
+            .collect();
         let mut result = PollResult {
             open,
             ..PollResult::default()

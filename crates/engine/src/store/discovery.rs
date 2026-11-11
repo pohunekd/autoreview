@@ -28,6 +28,12 @@ pub const STATE_REJECTED: &str = "rejected";
 /// `rejected` map; no `owner/name#N` key starts with this prefix, because an owner has no `:`.
 const HOST_OUTAGE_PREFIX: &str = "host:";
 
+/// Key prefix of a pull request that the last pass skipped, in the `rejected` entry.
+///
+/// Go's `reportRejected` (`discovery.go:45-63`) rebuilds that map from its own rejections, so
+/// it drops these keys on its first pass.
+const SKIPPED_PREFIX: &str = "skipped:";
+
 /// The discovery maps; all but `host_outages` are keyed by the `repository#number` key of a
 /// pull request.
 ///
@@ -45,6 +51,9 @@ pub struct DiscoveryState {
     /// Error code of each review host whose outage was announced, keyed by host, so each
     /// outage is announced once. Stored in the `rejected` entry under [`HOST_OUTAGE_PREFIX`].
     pub host_outages: BTreeMap<String, String>,
+    /// Reason of each pull request that the last pass skipped, such as `untrusted_author`.
+    /// Stored in the `rejected` entry under [`SKIPPED_PREFIX`].
+    pub skipped: BTreeMap<String, String>,
 }
 
 impl Store {
@@ -93,6 +102,8 @@ impl Store {
                     for (key, code) in entries {
                         if let Some(host) = key.strip_prefix(HOST_OUTAGE_PREFIX) {
                             state.host_outages.insert(host.to_owned(), code);
+                        } else if let Some(skipped) = key.strip_prefix(SKIPPED_PREFIX) {
+                            state.skipped.insert(skipped.to_owned(), code);
                         } else {
                             state.rejected.insert(key, code);
                         }
@@ -146,7 +157,7 @@ fn read_entry<T: DeserializeOwned + Default>(name: &str, value: &str) -> Result<
 
 /// Writes the four entries in schedule, published, awaiting, rejected order.
 ///
-/// The `rejected` entry holds the host outages as well.
+/// The `rejected` entry holds the host outages and the skipped pull requests as well.
 pub(crate) fn save_discovery(
     transaction: &Transaction<'_>,
     state: &DiscoveryState,
@@ -157,6 +168,9 @@ pub(crate) fn save_discovery(
     let mut rejected = state.rejected.clone();
     for (host, code) in &state.host_outages {
         rejected.insert(format!("{HOST_OUTAGE_PREFIX}{host}"), code.clone());
+    }
+    for (key, reason) in &state.skipped {
+        rejected.insert(format!("{SKIPPED_PREFIX}{key}"), reason.clone());
     }
     write_entry(transaction, STATE_REJECTED, &rejected)?;
     Ok(())

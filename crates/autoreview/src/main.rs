@@ -19,7 +19,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use autoreview_engine::config::Config;
-use autoreview_engine::integrations::Integrations;
 use autoreview_engine::mcp::McpConfig;
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::model::{
@@ -104,8 +103,6 @@ enum Invocation {
 enum Command {
     /// Validates the configuration and the policy and prints the policy digest.
     Validate,
-    /// Prints the pull requests that the next discovery pass would consider.
-    Candidates,
     /// A command that runs on the store and the engine.
     #[command(flatten)]
     Engine(EngineCommand),
@@ -120,6 +117,8 @@ enum EngineCommand {
     Mcp,
     /// Runs one discovery pass and prints what it queued.
     Poll,
+    /// Prints the pull requests that the next discovery pass would consider, classified.
+    Candidates,
     /// Starts a new attempt of a stopped review.
     Retry(ReviewArguments),
     /// Prints the full head of the review awaiting approval at a head prefix.
@@ -268,7 +267,6 @@ async fn run(config_path: Option<PathBuf>, command: Command) -> Result<(), Error
     cancel_on_signal(cancel.clone())?;
     match command {
         Command::Validate => validate(&config),
-        Command::Candidates => print_json(&external.list_candidates(&cancel).await?),
         Command::Engine(command) => {
             let sections = Sections { mcp, metrics };
             run_engine(command, config, sections, external, &cancel).await
@@ -322,6 +320,7 @@ async fn run_engine(
             mcp_server::serve(engine, &mcp, cancel).await
         }
         EngineCommand::Poll => print_json(&engine.poll(cancel).await?),
+        EngineCommand::Candidates => print_json(&engine.list_classified(cancel).await?),
         EngineCommand::Retry(arguments) => {
             let (repository, number, head_sha) = review_arguments(&arguments.arguments, true)?;
             let request = RetryRequest {

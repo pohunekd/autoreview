@@ -283,17 +283,32 @@ runs: passes take turns on a lock.
 ### `autoreview candidates`
 
 Read-only: prints the pull requests the next discovery pass would consider,
-per rule and trigger.
+per rule and trigger, after it has classified each author as a pass does. It
+runs the same candidate search and author permission reads, and it opens the
+store as `reviews` does (an empty one is created when none exists), but writes
+no state.
+
+- `candidates`: each pull request with its `author_class` (`trusted` or
+  `untrusted`) and the `rule` it would run under; for an untrusted author that is
+  the rule of the `untrusted` section.
+- `rejected`: pull requests whose data or author permission read was refused,
+  with the `code`.
+- `skipped`: pull requests whose rule skips their untrusted author
+  (`untrusted: skip`), with `author`, `fork`, `author_class` and the `reason`
+  `untrusted_author`.
 
 ## Inspect
 
 | Command | Prints |
 |---|---|
-| `autoreview reviews [LIMIT]` | The newest reviews, at most `cli.review_list_limit` |
-| `autoreview review --repository OWNER/REPO NUMBER` | Everything the engine knows about one pull request: current head, reviews, published decisions, waits, hand-offs |
+| `autoreview reviews [LIMIT]` | The newest reviews, at most `cli.review_list_limit`, each with its `author_class` |
+| `autoreview review --repository OWNER/REPO NUMBER` | Everything the engine knows about one pull request: current head, reviews with their `author_class`, published decisions, waits, hand-offs, and `skipped` with the reason when the last discovery pass skipped it |
 | `autoreview awaiting` | Reviews that wait for a human approval |
 | `autoreview stats [--since DATE [--until DATE]] [--json]` | Review statistics from the store: the current state and, with `--since`, daily counts over UTC days; see [review statistics](stats.md) |
 | `autoreview review-queue` | Sends the review queue to `notify.review_queue.backends` and prints it. Run it from a timer |
+
+A review's `author_class` is the class it was dispatched with, `trusted` or
+`untrusted`; a review stored before author classes has no `author_class`.
 
 ## Act
 

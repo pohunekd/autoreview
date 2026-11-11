@@ -15,8 +15,8 @@ pub use finding::{Finding, ReviewerResult, ReviewerSummary};
 pub use ids::{HEAD_PREFIX_MIN_LEN, SHA_LEN, head_prefix_valid, repository_valid, sha_valid};
 #[doc(inline)]
 pub use pull_request::{
-    Candidate, CandidateList, NotesHandoff, PriorFinding, ProjectRoute, PullRequest,
-    RejectedCandidate, ReviewInput, ReviewScope, RunLimits,
+    Candidate, CandidateList, ClassifiedCandidates, NotesHandoff, PriorFinding, ProjectRoute,
+    PullRequest, RejectedCandidate, ReviewInput, ReviewScope, RunLimits, SkippedCandidate,
 };
 #[doc(inline)]
 pub use review::{

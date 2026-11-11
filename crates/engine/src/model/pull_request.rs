@@ -98,6 +98,42 @@ pub struct CandidateList {
     pub rejected: Vec<RejectedCandidate>,
 }
 
+/// A pull request that its rule leaves out, because the rule skips its untrusted author.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SkippedCandidate {
+    /// Repository as `owner/name`.
+    pub repository: String,
+    /// Pull request number.
+    pub number: i64,
+    /// Login of the author.
+    pub author: String,
+    /// Marks a pull request from a fork.
+    pub fork: bool,
+    /// The author class, always `untrusted`.
+    pub author_class: AuthorClass,
+    /// Why the pull request is not reviewed: `untrusted_author`.
+    pub reason: String,
+}
+
+impl SkippedCandidate {
+    /// Returns the `repository#number` key of the skipped pull request.
+    #[must_use]
+    pub fn key(&self) -> String {
+        format!("{}#{}", self.repository, self.number)
+    }
+}
+
+/// The candidates of one discovery search after each author was classified.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ClassifiedCandidates {
+    /// Pull requests to review, each with its author class and the rule of that class.
+    pub candidates: Vec<Candidate>,
+    /// Pull requests whose data or author permission read was refused.
+    pub rejected: Vec<RejectedCandidate>,
+    /// Pull requests whose rule skips their untrusted author.
+    pub skipped: Vec<SkippedCandidate>,
+}
+
 /// Whether a review reads the whole pull request or only its newest commits.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
@@ -269,7 +305,7 @@ pub struct RunLimits {
 autoreview_go_compat::object_only_serde!(RunLimits);
 
 /// Reports whether an author class is unset, which a review stored before classes holds.
-fn is_unset_class(value: &AuthorClass) -> bool {
+pub(crate) fn is_unset_class(value: &AuthorClass) -> bool {
     *value == AuthorClass::Unset
 }
 
