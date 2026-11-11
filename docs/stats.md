@@ -25,8 +25,11 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   document in the `result` field of its answer; see the
   [MCP server](knowledge/guides/mcp-server.md#tools).
 - The document is read from the store only. `stats` asks neither GitHub nor pohunek, and
-  changes nothing. Each call reads the whole `reviews` table, so its cost grows with
-  `store.review_retention_seconds`, which decides how many reviews the store keeps.
+  changes nothing. Both forms read the discovery state. Without `--since` they read the
+  reviews that are not completed, through the status index. With `--since` they read the
+  whole `reviews` table, so the cost grows with `store.review_retention_seconds`, which
+  decides how many reviews the store keeps. The reviews and the discovery state come from
+  one read transaction, so all counts describe the same moment.
 
 ## The range
 
@@ -49,9 +52,10 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   "schema_version": 1,
   "generated_at": "2026-11-11T05:47:56Z",
   "current": {
-    "queued": 0, "running": 1, "awaiting": 1,
+    "queued": 0, "running": 1, "awaiting": 1, "stopped": 1,
     "by_repository": [{"key": "acme/widget", "queued": 0, "running": 1, "awaiting": 1}],
-    "by_host": [{"key": "review-host", "queued": 0, "running": 1, "awaiting": 1}]
+    "by_host": [{"key": "review-host", "queued": 0, "running": 1, "awaiting": 1}],
+    "stopped_by_repository": [{"key": "acme/widget", "stopped": 1}]
   },
   "history": {
     "since": "2026-11-09",
@@ -67,7 +71,8 @@ autoreview stats [--since DATE [--until DATE]] [--json]
     "days": [{"key": "2026-11-09", "started": 2, "...": "the counters of totals"}],
     "by_repository": [{"key": "acme/widget", "...": "the counters of totals"}],
     "by_rule": [{"key": "acme/*", "...": "the counters of totals"}],
-    "by_reviewer": [{"key": "opus", "...": "the counters of totals"}]
+    "by_reviewer": [{"key": "opus", "...": "the counters of totals"}],
+    "failed_by_code": [{"key": "pohunek_session_start_failed", "failed": 1}]
   }
 }
 ```
@@ -79,7 +84,8 @@ writes all of them.
 
 - `schema_version`: `1`. A change to a field's name or meaning gets a new version.
 - `generated_at`: when the document was computed, RFC 3339 in UTC.
-- `current`: the queued and running reviews and the approval waits without a decision.
+- `current`: the queued and running reviews, the approval waits without a decision, and
+  the stopped pull requests (attempts used up, or a failure that is not retried).
 - `history`: the counts of the range, or `null` without `--since`.
 
 ```sh
@@ -93,15 +99,28 @@ autoreview stats --json | jq '{schema_version, generated_at}'
 - `awaiting`: clean reviews that wait for an approval decision or its deadline
   (`on_clean: await`), the reviews that `autoreview awaiting` lists. A wait that is already
   decided (approved, expired or superseded) counts nowhere until `serve` continues it.
-- `by_repository` and `by_host`: the same three counts per repository and per review host,
-  sorted by `key`. The host is the one chosen when the review was dispatched.
+- `stopped`: pull requests whose schedule record is `failed`: their attempts are used up,
+  or the failure is not retryable (see the
+  [scheduler states](knowledge/concepts/state-and-recovery.md#scheduler-states)). Such a
+  pull request has no review in the three counts above. It counts here from the discovery
+  pass after its failed review, which decides that the failure is not retried. It leaves `stopped` when
+  discovery sees a new head or a new review request (the record becomes `waiting` before a
+  review starts), when `autoreview retry` or the MCP tool `retry` starts a review, and when
+  discovery drops its record after the pull request left every trigger. `autoreview review`
+  shows the record.
+- `by_repository` and `by_host`: the queued, running and awaiting counts per repository
+  and per review host, sorted by `key`. The host is the one chosen when the review was
+  dispatched.
+- `stopped_by_repository`: `stopped` per repository, sorted by `key`, only repositories
+  with a stopped pull request. A schedule record names no review host, so `by_host` has no
+  `stopped`.
 
-The store does not know whether the session of a running review still lives on its host,
-and a pull request that stopped after its retries has no review in these counts until
-`autoreview retry` starts one; `autoreview review` shows its schedule record.
+`stopped` counts pull requests, the other counts count reviews (attempts). The store does
+not know whether the session of a running review still lives on its host.
 
 ```sh
 autoreview stats --json | jq '.current.by_host[] | select(.running + .queued > 0)'
+autoreview stats --json | jq -r '.current.stopped_by_repository[] | "\(.key) \(.stopped)"'
 ```
 
 ### History
@@ -117,6 +136,12 @@ autoreview stats --json | jq '.current.by_host[] | select(.running + .queued > 0
   repository, per rule (its `match` value) and per reviewer ID, sorted by `key`. Only
   entries with a count appear. A review counts once for each of its reviewers, so the
   reviewer entries do not add up to `totals`.
+- `failed_by_code`: the attempts that `failed` counts over the range, per stored error code
+  (`key`), sorted by code. The entries add up to `totals.failed`; a superseding code such as
+  `head_changed` counts in `superseded` and is not listed. The codes are those of the
+  [CLI error codes](cli.md#error-codes) and the
+  [troubleshooting](knowledge/runbooks/troubleshooting.md) table, including
+  `workflow_failed` for a failure without a more specific code.
 
 ```sh
 autoreview stats --since 2026-11-01 --json | jq '.history.totals'
@@ -124,6 +149,8 @@ autoreview stats --since 2026-11-01 --json \
   | jq -r '.history.days[] | [.key, .started, .published, .failed] | @tsv'
 autoreview stats --since 2026-11-01 --json \
   | jq '.history.by_reviewer[] | {key, published, publication_median_seconds}'
+autoreview stats --since 2026-11-01 --json \
+  | jq -r '.history.failed_by_code | sort_by(-.failed)[] | "\(.failed) \(.key)"'
 ```
 
 ### Counters
@@ -168,7 +195,8 @@ autoreview stats --since 2026-11-01 --json \
 
 The store does not keep these, so the document leaves them out:
 
-- notes handed off per day, and pull requests stopped after their retries per day;
+- notes handed off per day, and stops per day: `stopped` is a current count, because the
+  schedule record does not keep the time of the stop;
 - the duration of each reviewer run and of the verifier, and retries per step;
 - token or cost data, which pohunek does not report to autoreview;
 - days before `pruned_before`, which need a rollup table that outlives the retention.
@@ -181,9 +209,11 @@ The store does not keep these, so the document leaves them out:
 Current: 0 queued, 1 running, 1 awaiting approval
   acme/widget: 0 queued, 1 running, 1 awaiting approval
   host review-host: 0 queued, 1 running, 1 awaiting approval
+Pull requests stopped: 1
 History 2026-11-09 to 2026-11-10 (UTC days):
   started 6, completed 4, published 3, superseded 0, approval expired 0, failed 1
   published: approved without a human 1, approved after a wait 1, changes requested 1, commented 0
+  failed by code: pohunek_session_start_failed 1
   time to publication: median 750 s, p90 9000 s
   completed reviews last updated before 2026-10-12T05:47:56Z may be pruned
 ```

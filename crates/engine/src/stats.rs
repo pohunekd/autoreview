@@ -1,7 +1,8 @@
 //! Review statistics: the current state and a daily history, read from the store only.
 //!
 //! One review row is one attempt: a retry is a new row, so `started` and `failed` count
-//! attempts. Every count comes from the `reviews` table; nothing asks GitHub or pohunek.
+//! attempts. The counts come from the `reviews` table and the schedule records of the
+//! discovery state; nothing asks GitHub or pohunek.
 
 // Rust guideline compliant 2026-06-26
 
@@ -9,12 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use autoreview_go_compat::go_time::{format_rfc3339_seconds, parse_rfc3339};
-use autoreview_schedule::scheduler::superseded;
+use autoreview_schedule::scheduler::{Record, superseded};
 use serde::Serialize;
 use time::{Date, OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::poll::live;
+use crate::discovery::poll::{PHASE_FAILED, live};
 use crate::engine::{Clock, Engine};
 use crate::error::Error;
 use crate::integrations::Integrations;
@@ -170,10 +171,30 @@ pub struct CurrentState {
     /// Counts over every queued, running and undecided awaiting review.
     #[serde(flatten)]
     pub total: StateCounts,
+    /// Pull requests whose schedule record is `failed`: attempts used up, or a failure that is
+    /// not retried.
+    pub stopped: i64,
     /// Counts per repository, sorted by name.
     pub by_repository: Vec<Keyed<StateCounts>>,
     /// Counts per review host chosen at dispatch, sorted by name.
     pub by_host: Vec<Keyed<StateCounts>>,
+    /// Stopped pull requests per repository, sorted by name; the schedule records no host.
+    pub stopped_by_repository: Vec<Keyed<StoppedCount>>,
+}
+
+/// The stopped pull requests of one repository.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct StoppedCount {
+    /// Pull requests whose schedule record is `failed`: attempts used up, or a failure that is
+    /// not retried.
+    pub stopped: i64,
+}
+
+/// The failed attempts of one error code.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct FailedCount {
+    /// Attempts counted as `failed` that stored this code.
+    pub failed: i64,
 }
 
 /// One entry of a breakdown: its name, then its counts.
@@ -205,6 +226,8 @@ pub struct History {
     pub by_rule: Vec<Keyed<Counters>>,
     /// Counts per reviewer ID over the range; a review counts once for each of its reviewers.
     pub by_reviewer: Vec<Keyed<Counters>>,
+    /// The `failed` attempts of the range per stored error code, sorted by code.
+    pub failed_by_code: Vec<Keyed<FailedCount>>,
 }
 
 /// Counts of review attempts that started or completed in one bucket.
@@ -387,6 +410,8 @@ struct HistoryTally {
     rules: BTreeMap<String, Tally>,
     /// One bucket per reviewer ID.
     reviewers: BTreeMap<String, Tally>,
+    /// The `failed` attempts per stored error code.
+    failures: BTreeMap<String, i64>,
 }
 
 impl HistoryTally {
@@ -408,23 +433,26 @@ impl HistoryTally {
     }
 }
 
-/// Builds the document from the review rows that `Store::stats_reviews` returns.
+/// Builds the document from review rows and schedule records.
 ///
-/// The current state counts every queued and running row and every awaiting row without an
-/// approval decision. With `range`, an attempt counts as started on the UTC day of
-/// `created_at` and as completed on the UTC day of `completed_at`, each only inside the range.
+/// The rows and the schedule records are those of one `Store::stats_snapshot`. The current
+/// state counts every queued and running row, every awaiting row without an approval
+/// decision, and every schedule record in phase `failed`. With `range`, an attempt
+/// counts as started on the UTC day of `created_at` and as completed on the UTC day of
+/// `completed_at`, each only inside the range.
 ///
 /// # Errors
 ///
-/// Returns `store_state_invalid` for a timestamp or an outcome that does not decode, and for
-/// a completed row without `completed_at`.
+/// Returns `store_state_invalid` for a timestamp or an outcome that does not decode, for a
+/// completed row without `completed_at`, and for a schedule key without `#`.
 pub fn compute(
     reviews: &[StoredReview],
+    schedule: &BTreeMap<String, Record>,
     range: Option<&StatsRange>,
     generated_at: OffsetDateTime,
     pruned_before: OffsetDateTime,
 ) -> Result<StatsDocument, Error> {
-    let current = current_state(reviews);
+    let current = current_state(reviews, schedule)?;
     let history = match range {
         Some(range) => Some(history(reviews, range, pruned_before)?),
         None => None,
@@ -437,12 +465,43 @@ pub fn compute(
     })
 }
 
-/// Counts the queued, running and undecided awaiting rows, in total, per repository and per
-/// host.
+/// Counts the pull requests whose schedule record is in phase `failed`, per repository.
+///
+/// The key of a record is `repository#number`.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` for a key without `#`.
+fn stopped(records: &BTreeMap<String, Record>) -> Result<BTreeMap<String, i64>, Error> {
+    let mut repositories: BTreeMap<String, i64> = BTreeMap::new();
+    for (key, record) in records {
+        if record.phase != PHASE_FAILED {
+            continue;
+        }
+        let Some((repository, _)) = key.rsplit_once('#') else {
+            let cause = format!("schedule key {key:?} has no number");
+            return Err(Error::workflow(
+                "store_state_invalid",
+                true,
+                Some(cause.into()),
+            ));
+        };
+        *repositories.entry(repository.to_owned()).or_default() += 1;
+    }
+    Ok(repositories)
+}
+
+/// Counts the current state of the rows and the schedule records.
+///
+/// The queued, running and undecided awaiting rows count in total, per repository and per
+/// host; the stopped pull requests of `schedule` count per repository.
 ///
 /// An awaiting row counts only while it waits for a decision, as `autoreview awaiting` lists
 /// it; a decided wait that `serve` has not continued yet counts nowhere.
-fn current_state(reviews: &[StoredReview]) -> CurrentState {
+fn current_state(
+    reviews: &[StoredReview],
+    schedule: &BTreeMap<String, Record>,
+) -> Result<CurrentState, Error> {
     let mut total = StateCounts::default();
     let mut repositories: BTreeMap<String, StateCounts> = BTreeMap::new();
     let mut hosts: BTreeMap<String, StateCounts> = BTreeMap::new();
@@ -467,11 +526,14 @@ fn current_state(reviews: &[StoredReview]) -> CurrentState {
         );
         count(hosts.entry(input.route.host.clone()).or_default());
     }
-    CurrentState {
+    let stopped = stopped(schedule)?;
+    Ok(CurrentState {
         total,
+        stopped: stopped.values().sum(),
         by_repository: keyed(repositories, |counts| counts),
         by_host: keyed(hosts, |counts| counts),
-    }
+        stopped_by_repository: keyed(stopped, |stopped| StoppedCount { stopped }),
+    })
 }
 
 /// Counts the starts and completions inside `range`.
@@ -507,6 +569,9 @@ fn history(
         let elapsed = (completed - created).whole_seconds();
         let ending = ending(review, (elapsed >= 0).then_some(elapsed))?;
         tally.add(review, completed.date(), |bucket| bucket.complete(ending));
+        if ending == Ending::Failed {
+            *tally.failures.entry(review.failure.clone()).or_default() += 1;
+        }
     }
     Ok(History {
         since: range.since.to_string(),
@@ -517,6 +582,7 @@ fn history(
         by_repository: keyed(tally.repositories, Tally::finish),
         by_rule: keyed(tally.rules, Tally::finish),
         by_reviewer: keyed(tally.reviewers, Tally::finish),
+        failed_by_code: keyed(tally.failures, |failed| FailedCount { failed }),
     })
 }
 
@@ -541,6 +607,7 @@ impl fmt::Display for StatsDocument {
         for entry in &current.by_host {
             writeln!(f, "  host {}: {}", entry.key, state_line(&entry.counts))?;
         }
+        writeln!(f, "Pull requests stopped: {}", current.stopped)?;
         let Some(history) = &self.history else {
             return writeln!(
                 f,
@@ -573,6 +640,14 @@ impl fmt::Display for StatsDocument {
             totals.changes_requested,
             totals.commented
         )?;
+        if !history.failed_by_code.is_empty() {
+            let codes: Vec<String> = history
+                .failed_by_code
+                .iter()
+                .map(|entry| format!("{} {}", entry.key, entry.counts.failed))
+                .collect();
+            writeln!(f, "  failed by code: {}", codes.join(", "))?;
+        }
         writeln!(
             f,
             "  time to publication: median {}, p90 {}",
@@ -607,7 +682,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns the errors of `StatsRange::parse`, `Store::stats_reviews` and `compute`.
+    /// Returns the errors of `StatsRange::parse`, `Store::stats_snapshot` and `compute`.
     pub fn review_stats(
         &self,
         cancel: &CancellationToken,
@@ -618,14 +693,23 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let range = StatsRange::parse(since, until, now.date())?;
         live(cancel)?;
         let bounds = range.map(|range| (range.start, range.end));
-        let reviews = self.store.stats_reviews(bounds)?;
-        compute(&reviews, range.as_ref(), now, self.prune_cutoff())
+        let (reviews, discovery) = self.store.stats_snapshot(bounds)?;
+        compute(
+            &reviews,
+            &discovery.schedule,
+            range.as_ref(),
+            now,
+            self.prune_cutoff(),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use autoreview_policy::Reviewer;
+    use autoreview_schedule::scheduler::Record;
     use serde_json::{Value, json};
     use time::macros::{date, datetime};
 
@@ -717,6 +801,27 @@ mod tests {
     /// Returns one current-state entry.
     fn state(key: &str, queued: i64, running: i64, awaiting: i64) -> Value {
         json!({ "key": key, "queued": queued, "running": running, "awaiting": awaiting })
+    }
+
+    /// The schedule records of the table test: three stopped pull requests in two repositories.
+    fn schedule() -> BTreeMap<String, Record> {
+        let records = [
+            ("acme/widget#7", "failed"),
+            ("acme/widget#8", "failed"),
+            ("acme/gadget#3", "retry_wait"),
+            ("acme/gadget#4", "failed"),
+            ("acme/gadget#5", "completed"),
+        ];
+        records
+            .into_iter()
+            .map(|(key, phase)| {
+                let record = Record {
+                    phase: phase.to_owned(),
+                    ..Record::default()
+                };
+                (key.to_owned(), record)
+            })
+            .collect()
     }
 
     /// The fixed store of the table test: one row per case that the counters distinguish.
@@ -830,6 +935,14 @@ mod tests {
                 "pohunek_session_start_failed",
                 "",
             ),
+            // The code of `l1`, which completes after the range and so counts once.
+            done(
+                review("g1", widget, "2026-11-02T05:00:00Z"),
+                "2026-11-02T05:00:10Z",
+                failure,
+                "github_request_failed",
+                "",
+            ),
             // Completed after the range.
             done(
                 review("l1", widget, "2026-11-02T23:00:00Z"),
@@ -853,6 +966,7 @@ mod tests {
         .expect("the range is set");
         let document = compute(
             &rows(),
+            &schedule(),
             Some(&range),
             datetime!(2026-11-03 08:00:00.25 UTC),
             datetime!(2026-10-04 08:00:00 UTC),
@@ -866,7 +980,7 @@ mod tests {
                 Some(90),
                 Some(100),
             ),
-            counters("2026-11-02", [5, 6, 3, 0, 1, 0, 1, 1, 1, 0], Some(300), day),
+            counters("2026-11-02", [6, 7, 3, 0, 1, 0, 1, 1, 1, 1], Some(300), day),
         ];
         let by_repository = vec![
             counters(
@@ -877,13 +991,13 @@ mod tests {
             ),
             counters(
                 "acme/widget",
-                [10, 7, 3, 1, 1, 0, 0, 2, 1, 0],
+                [11, 8, 3, 1, 1, 0, 0, 2, 1, 1],
                 Some(100),
                 day,
             ),
         ];
         let by_rule = vec![
-            counters("acme/*", [11, 8, 3, 1, 1, 0, 0, 2, 1, 1], Some(100), day),
+            counters("acme/*", [12, 9, 3, 1, 1, 0, 0, 2, 1, 2], Some(100), day),
             counters(
                 "acme/gadget",
                 [1, 2, 2, 0, 0, 1, 1, 0, 0, 0],
@@ -893,7 +1007,7 @@ mod tests {
         ];
         let by_reviewer = vec![
             counters("codex", [1, 1, 0, 0, 0, 0, 0, 0, 0, 1], None, None),
-            counters("opus", [11, 9, 5, 1, 1, 1, 1, 2, 1, 0], Some(100), day),
+            counters("opus", [12, 10, 5, 1, 1, 1, 1, 2, 1, 1], Some(100), day),
             counters(
                 "sonnet",
                 [1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
@@ -908,18 +1022,28 @@ mod tests {
                 "queued": 1,
                 "running": 1,
                 "awaiting": 1,
+                "stopped": 3,
                 "by_repository": [state("acme/gadget", 0, 1, 0), state("acme/widget", 1, 0, 1)],
                 "by_host": [state("host-a", 1, 0, 1), state("host-b", 0, 1, 0)],
+                "stopped_by_repository": [
+                    { "key": "acme/gadget", "stopped": 1 },
+                    { "key": "acme/widget", "stopped": 2 },
+                ],
             },
             "history": {
                 "since": "2026-11-01",
                 "until": "2026-11-02",
                 "pruned_before": "2026-10-04T08:00:00Z",
-                "totals": counters("", [12, 10, 5, 1, 1, 1, 1, 2, 1, 1], Some(100), day),
+                "totals": counters("", [13, 11, 5, 1, 1, 1, 1, 2, 1, 2], Some(100), day),
                 "days": days,
                 "by_repository": by_repository,
                 "by_rule": by_rule,
                 "by_reviewer": by_reviewer,
+                // Sums to `totals.failed`: the superseding `head_changed` and `l1` count nowhere.
+                "failed_by_code": [
+                    { "key": "github_request_failed", "failed": 1 },
+                    { "key": "pohunek_session_start_failed", "failed": 1 },
+                ],
             },
         });
         let actual = serde_json::to_value(&document).expect("the document serializes");
