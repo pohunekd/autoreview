@@ -55,20 +55,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// The permission is read only when it can change the class, once per author and
     /// repository in a pass. A candidate whose rule skips untrusted authors is listed as skipped,
-    /// and one that the policy no longer covers is dropped, each with a log line. A candidate
-    /// whose permission read fails is rejected with the read's code, so it is never reviewed as
-    /// trusted and the other candidates go on; the next pass reads it again.
+    /// and one without an authors section is dropped, each with a log line. A candidate whose
+    /// permission read fails is rejected with the read's code, so it is never reviewed as
+    /// trusted and the other candidates go on; the next pass reads it again. The trust section
+    /// is the candidate's own, from the policy match that gave its rule.
     ///
     /// # Errors
     ///
-    /// Returns the error of the search, the error of a permission read after a cancel, and
-    /// `configuration_invalid` when the configuration has no policy.
+    /// Returns the error of the search and the error of a permission read after a cancel.
     pub async fn list_classified(
         &self,
         cancel: &CancellationToken,
     ) -> Result<ClassifiedCandidates, Error> {
         let listed = self.integration.list_candidates(cancel).await?;
-        let policy = self.policy()?;
         let mut candidates = Vec::new();
         let mut rejected = listed.rejected;
         let mut skipped = Vec::new();
@@ -78,7 +77,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         for candidate in listed.candidates {
             let pr = &candidate.pull_request;
             let review_id = pr.review_id();
-            let Some(authors) = policy.authors(&pr.repository) else {
+            let Some(authors) = candidate.authors.clone() else {
                 tracing::info!(
                     review_id = %review_id,
                     "candidate is not covered by the policy"
@@ -131,7 +130,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 author_class: AuthorClass::Untrusted,
                 reason: SKIPPED_UNTRUSTED_AUTHOR.to_owned(),
             };
-            match classify_candidate(authors, candidate, permission) {
+            match classify_candidate(&authors, candidate, permission) {
                 Some(classified) => candidates.push(classified),
                 None => {
                     tracing::info!(
@@ -186,6 +185,7 @@ mod tests {
                 ..Rule::default()
             },
             author_class: None,
+            authors: None,
         }
     }
 
