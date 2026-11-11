@@ -14,7 +14,7 @@ use http::{HeaderMap, HeaderValue, StatusCode, Uri};
 /// A host and an optional port, the host lowercased and without IPv6 brackets.
 type HostPort = (String, Option<u16>);
 
-/// The most bytes of the host that a refusal log line carries.
+/// The most bytes of the host that a refusal log line takes before lossy decoding.
 ///
 /// A valid `host:port` has at most 259 bytes (a DNS name of 253 bytes and `:65535`), so only a
 /// host that cannot be a real name is cut.
@@ -92,7 +92,8 @@ impl AllowedHosts {
 ///
 /// A host that parses is written as the check compares it: lowercased, IPv6 in brackets, with
 /// its port if it has one. Otherwise it is the raw `Host` header as lossy UTF-8, or empty
-/// without a header. Either is cut to its first [`LOGGED_HOST_MAX_BYTES`] bytes.
+/// without a header. Either is cut to its first [`LOGGED_HOST_MAX_BYTES`] bytes before lossy
+/// decoding, which writes each invalid UTF-8 sequence as U+FFFD (three bytes).
 pub(crate) fn logged_host(uri: &Uri, headers: &HeaderMap) -> String {
     let read: Cow<'_, [u8]> = match read_host(uri, headers) {
         Ok((host, port)) => {

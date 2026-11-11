@@ -155,8 +155,8 @@ Every tool call writes one JSON log line `mcp tool call` with the client name, t
 its arguments and the outcome (`ok` or the error code). A refused request writes
 `mcp request refused` with the reason `missing_token` or `unknown_token`, or `host_invalid`
 or `host_not_allowed` for a `Host` the server does not accept, with the received `host`: the
-host and port it compared, or else the raw `Host` header (empty without one), cut to 260
-bytes. A request over `mcp.request_timeout_seconds` writes `mcp request timed out` with the
+host and port it compared, or else the raw `Host` header (empty without one), from its first
+260 bytes. A request over `mcp.request_timeout_seconds` writes `mcp request timed out` with the
 client name. The token is never logged.
 
 ## Not included
