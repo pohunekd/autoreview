@@ -85,7 +85,7 @@ it did not create.
 | Failure | Code | `configuration` field |
 |---|---|---|
 | `--config` given, a flag missing, an unknown example | `command_invalid` | none |
-| `--dir` relative or unclean, or its parent missing; `--login`, `--pohunek-host` or a layout flag malformed | `configuration_invalid` | the flag |
+| `--dir` relative or unclean, or its parent missing or not a directory; `--login`, `--pohunek-host` or a layout flag malformed | `configuration_invalid` | the flag |
 | A path of the set is in the way | `init_file_exists` | the path |
 | A path cannot be checked, created or written (permissions, disk full) | `init_write_failed` | the path |
 

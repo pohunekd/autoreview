@@ -38,6 +38,8 @@ pub enum Error {
         code: String,
         /// The name of the key that failed, for example `policy_file`.
         name: String,
+        /// The message of the command error, when the failing site words it itself.
+        message: Option<String>,
         /// The error that caused this failure, if any.
         #[source]
         cause: Option<BoxError>,
@@ -72,6 +74,22 @@ impl Error {
         Self::Config {
             code: code.into(),
             name: name.into(),
+            message: None,
+            cause,
+        }
+    }
+
+    /// Creates a configuration error for the key `name` with the message a command prints.
+    pub fn config_with_message(
+        code: impl Into<String>,
+        name: impl Into<String>,
+        message: impl Into<String>,
+        cause: Option<BoxError>,
+    ) -> Self {
+        Self::Config {
+            code: code.into(),
+            name: name.into(),
+            message: Some(message.into()),
             cause,
         }
     }
