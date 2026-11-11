@@ -199,7 +199,13 @@ A third run with the same `--dir` on the finished setup prints every step as
   run `autoreview --config <dir>/config.yaml validate` with the secrets set and
   `systemctl --user restart autoreview.service`.
 - Register each repository of the policy with `pohunek project add` and run a
-  first review as the [quickstart](quickstart.md) describes from step 9 on.
+  first review as the [quickstart](quickstart.md) describes from step 9 on. A
+  reviewer on a `checkout: base` pipeline (the examples use it) reads the change
+  through git, so the pull request head must be in that project repository on
+  the review host: run `git -C <project repository> fetch origin
+  refs/pull/<n>/head` there before the review, or the review stops with
+  `review_head_unavailable`; see
+  [Head commit unavailable](../runbooks/troubleshooting.md#head-commit-unavailable).
 - After an upgrade of autoreview, run `autoreview profiles install` with the
   same flags for each profile, and `--pohunek-timeout-seconds`, which 0.3.0 and
   earlier did not take; the script keeps a profile it wrote and does not know
