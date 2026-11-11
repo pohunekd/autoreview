@@ -11,7 +11,6 @@ use autoreview_engine::stats::{STATS_RANGE_INVALID, STATS_RANGE_MAX_DAYS, STATS_
 use autoreview_engine::{Error, error_code};
 use serde::Serialize;
 
-use crate::init::{INIT_FILE_EXISTS, INIT_WRITE_FAILED};
 use crate::profiles::{
     POHUNEK_COMMAND_FAILED, PROFILE_FOREIGN, PROFILE_HOST_NOT_LOCAL, PROFILE_WRITE_FAILED,
     RUNTIME_PACKAGE_MISSING,
@@ -94,42 +93,53 @@ today (UTC); --until needs --since and must not come before it."
 ranges."
         );
     }
-    if let Some((config_code, name)) = first_config_error(error) {
+    if let Some((config_code, name, message)) = first_config_error(error) {
         response.error = config_code.to_owned();
         response.configuration = name.to_owned();
-        response.message = match config_code {
-            INIT_FILE_EXISTS => format!("{name} is in the way; init never overwrites a file."),
-            INIT_WRITE_FAILED => {
-                format!("{name} cannot be written; init removed what it had created.")
-            }
-            PROFILE_HOST_NOT_LOCAL => format!(
-                "{name} does not name this machine; run profiles install on the review host."
-            ),
-            PROFILE_FOREIGN => format!(
-                "{name} was not written by profiles install; move it away, or pass --replace \
-for a regular file."
-            ),
-            PROFILE_WRITE_FAILED => format!(
-                "{name} cannot be written; profiles install restored the files it had \
-rewritten and removed those it had created, and logged a warning for any it could not."
-            ),
-            RUNTIME_PACKAGE_MISSING => format!(
-                "No selected official pohunek package serves {name}. From the extracted pohunek \
-release, run: pohunek plugin install runtime/packages/{name}.tar.zst --catalog \
-runtime/runtime-catalog.json --yes"
-            ),
-            POHUNEK_COMMAND_FAILED => format!("{name} failed; check the pohunek daemon."),
-            _ => format!("Configuration is invalid or missing: {name}."),
+        response.message = match message {
+            Some(message) => message.to_owned(),
+            None => config_message(config_code, name),
         };
     }
     response
 }
 
-/// Returns the code and key of the first configuration error in the chain.
-fn first_config_error<'a>(error: &'a (dyn StdError + 'static)) -> Option<(&'a str, &'a str)> {
+/// Returns the message of a configuration error with `code` for the key `name`.
+fn config_message(code: &str, name: &str) -> String {
+    match code {
+        PROFILE_HOST_NOT_LOCAL => {
+            format!("{name} does not name this machine; run profiles install on the review host.")
+        }
+        PROFILE_FOREIGN => format!(
+            "{name} was not written by profiles install; move it away, or pass --replace \
+for a regular file."
+        ),
+        PROFILE_WRITE_FAILED => format!(
+            "{name} cannot be written; profiles install restored the files it had \
+rewritten and removed those it had created, and logged a warning for any it could not."
+        ),
+        RUNTIME_PACKAGE_MISSING => format!(
+            "No selected official pohunek package serves {name}. From the extracted pohunek \
+release, run: pohunek plugin install runtime/packages/{name}.tar.zst --catalog \
+runtime/runtime-catalog.json --yes"
+        ),
+        POHUNEK_COMMAND_FAILED => format!("{name} failed; check the pohunek daemon."),
+        _ => format!("Configuration is invalid or missing: {name}."),
+    }
+}
+
+/// Returns the code, key and message of the first configuration error in the chain.
+fn first_config_error<'a>(
+    error: &'a (dyn StdError + 'static),
+) -> Option<(&'a str, &'a str, Option<&'a str>)> {
     std::iter::successors(Some(error), |&current| current.source()).find_map(
         |current| match current.downcast_ref::<Error>() {
-            Some(Error::Config { code, name, .. }) => Some((code.as_str(), name.as_str())),
+            Some(Error::Config {
+                code,
+                name,
+                message,
+                ..
+            }) => Some((code.as_str(), name.as_str(), message.as_deref())),
             _ => None,
         },
     )

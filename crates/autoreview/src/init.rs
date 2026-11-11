@@ -419,16 +419,16 @@ fn invalid_flag(flag: &str, reason: &'static str) -> Error {
 
 /// Returns the error that names `path`, which is in the way of `init`.
 fn in_the_way(path: &Path) -> Error {
-    Error::config(INIT_FILE_EXISTS, path.to_string_lossy(), None)
+    let name = path.to_string_lossy();
+    let message = format!("{name} is in the way; init never overwrites a file.");
+    Error::config_with_message(INIT_FILE_EXISTS, name, message, None)
 }
 
 /// Returns the error that names `path`, which `init` cannot check, create or write.
 fn write_failed(path: &Path, cause: io::Error) -> Error {
-    Error::config(
-        INIT_WRITE_FAILED,
-        path.to_string_lossy(),
-        Some(Box::new(cause)),
-    )
+    let name = path.to_string_lossy();
+    let message = format!("{name} cannot be written; init removed what it had created.");
+    Error::config_with_message(INIT_WRITE_FAILED, name, message, Some(Box::new(cause)))
 }
 
 /// Writes `files` into `directory`, creating it and `prompts/` when they are absent.
