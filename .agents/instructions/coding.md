@@ -173,7 +173,9 @@ What is not compatible, by decision:
   message or the Codex result fails to decode (`review_wrapper_invalid`,
   `claude_result_invalid`, `review_result_invalid`), Go's `error` field holds
   the JSON or base64 decoder text; Rust logs only the code, so no decoder text
-  quotes untrusted output.
+  quotes untrusted output. For a Codex run that exits without a result, Rust
+  logs `review_result_invalid` with the adapter's reason line: a line of
+  Codex's stderr, bounded to 512 bytes and neutralized (#283).
 - **CLI wording and usage text** (`main.go:16`); the JSON error object keeps its
   keys and codes (`command.go:22-47`).
 - **In-flight Go reviews** (statuses `queued`, `running`, `awaiting` at
@@ -402,6 +404,20 @@ What is not compatible, by decision:
   `example_passes_the_loader_and_the_engine_validation`,
   `init_login_follows_the_user_login_grammar` and
   `permission_is_read_from_the_role_name`.
+- **Repositories of Enterprise Managed Users (#294):** `repository_valid`
+  (`crates/engine/src/model/ids.rs`) and the policy's rule `match` check the
+  owner with `autoreview_policy::user_login_valid`, so a managed user's
+  `handle_shortcode/name` is accepted; every other owner keeps Go's grammar.
+  Go's `repositoryPattern` (`cmd/autoreview/config.go:147`) and `ownerPattern`
+  (`policy/policy.go:213`, applied at `policy.go:639`) refuse the underscore.
+  On a rollback to Go a policy with such a `match` does not load, such a
+  `pohunek.route_overrides` key stops the start (`config.go:304`), and a stored
+  review of such a repository fails `reviewIdentityValid` (`model.go:539`,
+  called from `review.go:40` and `discovery.go:540`). No stored row changes
+  shape. `testdata/parity/ids.json` gets no case: Go writes it, and
+  `TestWriteParityGolden` compares it byte for byte. The regression tests are
+  `repository_owner_follows_the_github_login_grammar` and
+  `rule_match_owner_follows_the_github_login_grammar`.
 - **Step runs table (#270):** the store holds the additive table
   `review_step_runs` (`crates/engine/src/store/steps.rs`), which Go's schema
   lacks. Every open creates it with `CREATE TABLE IF NOT EXISTS` after the Go

@@ -4,6 +4,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use autoreview_policy::user_login_valid;
 use autoreview_schedule::scheduler::Target;
 use sha2::{Digest, Sha256};
 
@@ -35,9 +36,6 @@ pub const SHA_LEN: usize = 40;
 
 /// Shortest head SHA prefix a command accepts.
 pub const HEAD_PREFIX_MIN_LEN: usize = 12;
-
-/// Longest repository owner name.
-const OWNER_MAX_LEN: usize = 39;
 
 /// Longest repository name.
 const NAME_MAX_LEN: usize = 100;
@@ -93,27 +91,18 @@ impl RejectedCandidate {
 
 /// Reports whether a repository is a lowercase `owner/name` that GitHub allows.
 ///
-/// It matches Go's `^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9_.-]{1,100}$`.
+/// The owner is a user or organization login, a managed user's `handle_shortcode` included
+/// ([`user_login_valid`]); the name matches `[a-z0-9_.-]{1,100}`.
 #[must_use]
 pub fn repository_valid(repository: &str) -> bool {
     let Some((owner, name)) = repository.split_once('/') else {
         return false;
     };
-    if owner.is_empty() || owner.len() > OWNER_MAX_LEN {
+    if !user_login_valid(owner) {
         return false;
     }
     if name.is_empty() || name.len() > NAME_MAX_LEN {
         return false;
-    }
-    let owner_bytes = owner.as_bytes();
-    let first = owner_bytes[0];
-    if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
-        return false;
-    }
-    for &byte in &owner_bytes[1..] {
-        if !(byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-') {
-            return false;
-        }
     }
     for &byte in name.as_bytes() {
         if !(byte.is_ascii_lowercase()
@@ -160,7 +149,7 @@ mod tests {
     use serde::Deserialize;
     use serde_json::Value;
 
-    use super::PullRequest;
+    use super::{PullRequest, repository_valid};
     use crate::integrations::SessionRequest;
     use crate::model::review::{AwaitRecord, PublishedRecord, prior_key};
 
@@ -247,5 +236,68 @@ mod tests {
             checked, 12,
             "golden has the twelve identifier cases of this module"
         );
+    }
+
+    #[test]
+    fn repository_owner_follows_the_github_login_grammar() {
+        // A managed user owns repositories as `handle_shortcode`, 39 bytes at most.
+        let longest_owner = format!("{}/widget", "a".repeat(39));
+        let too_long_owner = format!("{}/widget", "a".repeat(40));
+        let longest_managed = format!("{}_octo/widget", "a".repeat(34));
+        let too_long_managed = format!("{}_octo/widget", "a".repeat(35));
+        let longest_name = format!("acme/{}", "a".repeat(100));
+        let too_long_name = format!("acme/{}", "a".repeat(101));
+        let accepted = [
+            "acme/widget",
+            "0/x",
+            "a-/x",
+            "a--b/x",
+            "acme/my_repo.v2-x",
+            longest_owner.as_str(),
+            longest_name.as_str(),
+            "mona-cat_octo/widget",
+            "octo_admin/repo.name",
+            "2abvd19d_admin/x",
+            longest_managed.as_str(),
+        ];
+        let refused = [
+            "",
+            "acme",
+            "/widget",
+            "acme/",
+            "acme/widget/x",
+            "Acme/widget",
+            "acme/Widget",
+            "-acme/x",
+            "acme[bot]/x",
+            too_long_owner.as_str(),
+            too_long_name.as_str(),
+            "_octo/x",
+            "mona_/x",
+            "mona__octo/x",
+            "mona_cat_octo/x",
+            "-mona_octo/x",
+            "mona-_octo/x",
+            "mona--cat_octo/x",
+            "mona_oc-to/x",
+            "mona.cat_octo/x",
+            "mona cat_octo/x",
+            "mona_\u{f6}cto/x",
+            "mona_octo[bot]/x",
+            "Mona-Cat_octo/x",
+            too_long_managed.as_str(),
+        ];
+        for repository in accepted {
+            assert!(
+                repository_valid(repository),
+                "{repository:?} must be accepted"
+            );
+        }
+        for repository in refused {
+            assert!(
+                !repository_valid(repository),
+                "{repository:?} must be refused"
+            );
+        }
     }
 }

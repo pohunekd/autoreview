@@ -34,6 +34,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts, or a Claude profile one that does not name the checkout it checked | [Reviewer output](#reviewer-output) |
 | `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
+| `review_result_invalid: Codex exited without a result: ...` in the log | The Codex program itself failed, for example on a model the account does not support | [Codex program failed](#codex-program-failed) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
@@ -203,6 +204,28 @@ missing head is `review_result_invalid`:
 | `review checkout HEAD is the pull request head or contains it` | A `base` request in a worktree at the pull request code | Check the pipeline's `checkout` and the session's branch on the review host |
 | `review checkout is not clean`, `review checkout HEAD changed during the review` | Something changed the worktree before or during the run | Find the process that writes into the reviewer worktree |
 
+### Codex program failed
+
+A Codex review keeps failing with `review_result_invalid`, and the session
+output ends with the lines `[pohunek-codex-review-reason-v1:<base64>]` and
+`[pohunek-codex-review exited with status N]`, N not 0, without a result frame:
+Codex itself failed, for example on a model that the account does not support
+or on an argument that its version does not know. The adapter prints the reason
+line whenever Codex exits with a status other than 0. Its reason is the last
+line of Codex's stderr that starts with `ERROR:` or `error:`, else the last
+line that is not blank, with control characters, format characters and line or
+paragraph separators shown as `?`, cut to 512 bytes at a character boundary.
+The engine logs it in the `error` field of the warnings "retrying
+reviewer after unusable output" and "rejecting reviewer output", as
+`review_result_invalid: Codex exited without a result: <reason>`, and nowhere
+else: the recorded failure, the notifications and GitHub get only the code. The
+reason comes from Codex's output, so read it as a hint, not as a verdict. Fix
+what it names (the `model` of the profile, the Codex login on the review host,
+the Codex version), then `autoreview retry` the pull request. A profile whose
+adapter was written by an older autoreview prints no reason line; run
+`autoreview profiles install` with the same flags on the review host to write
+the adapter in `adapters/codex/`.
+
 ### Head commit unavailable
 
 A review stops with `review_head_unavailable` and publishes nothing. A
@@ -309,7 +332,8 @@ A reviewer run ends in one of these codes:
 - `review_result_invalid`: a Codex result could not be read, is larger than
   `result_max_bytes`, or reports another head or a status other than
   `completed`, or the adapter printed no result frame, as when it refuses the
-  checkout (see [Codex checkout refused](#codex-checkout-refused)).
+  checkout (see [Codex checkout refused](#codex-checkout-refused)) or Codex
+  itself fails (see [Codex program failed](#codex-program-failed)).
 - `review_head_unavailable`: the adapter refused a base checkout run because
   the pull request head commit is not in the review host's repository (see
   [Head commit unavailable](#head-commit-unavailable)). The review stops

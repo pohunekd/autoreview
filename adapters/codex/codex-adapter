@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import re
@@ -12,8 +13,10 @@ import subprocess
 import sys
 import termios
 import tempfile
+import threading
 import time
 import tty
+import unicodedata
 from pathlib import Path
 from typing import BinaryIO, NoReturn
 
@@ -30,6 +33,24 @@ EXIT_LINE_FORMAT = "[pohunek-codex-review exited with status {}]"
 # engine does not retry.
 REFUSAL_MARKER_FORMAT = "[pohunek-codex-review-refused-v1:{}]"
 REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
+# Right before the exit line of a failed Codex run, it holds the base64 of the reason
+# that `exit_reason` takes from Codex's stderr; empty when stderr has no line.
+REASON_MARKER_FORMAT = "[pohunek-codex-review-reason-v1:{}]"
+# Most UTF-8 bytes of a reason, as the engine's bound; a longer one is cut at a character.
+REASON_MAX_BYTES = 512
+# Codex prints a failed turn as `ERROR: ...`; its argument parser prints `error: ...`.
+ERROR_LINE_PREFIXES = (b"ERROR:", b"error:")
+# Most bytes of Codex's stderr that the adapter keeps to find the reason in. Not a tunable:
+# it bounds the adapter's own memory, and no operator decision depends on it.
+STDERR_TAIL_BYTES = 65536
+# Longest wait for the end of Codex's stderr after Codex exited: a process that Codex
+# started may keep the pipe open, and the exit line must not wait for it. Not a tunable:
+# it bounds the wait for such a process, and no operator decision depends on it.
+STDERR_DRAIN_SECONDS = 5
+# Unicode general categories that a reason shows as `?`: controls, format characters such
+# as bidi controls, soft hyphens and tags, and the line and paragraph separators, which
+# could make a log line read differently than it is.
+NEUTRALIZED_CATEGORIES = ("Cc", "Cf", "Zl", "Zp")
 # Codex runtimes declare pohunek's `manifest_idle` input readiness: the initial
 # input is written only once the detection manifest reads idle, and any
 # non-blank terminal title without a leading spinner glyph reads idle. The
@@ -230,13 +251,13 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(EXIT_USAGE)
 
 
-def exit_after_retention(exit_status: int, retention_seconds: int, refusal: str = "") -> NoReturn:
+def exit_after_retention(exit_status: int, retention_seconds: int, marker: str = "") -> NoReturn:
     """Prints the exit line that ends the output for the engine, then keeps it readable.
 
-    A `refusal` marker goes into the same write, on the line right before the exit line.
+    A `marker` line goes into the same write, on the line right before the exit line.
     """
-    marker = f"\n{REFUSAL_MARKER_FORMAT.format(refusal)}" if refusal else ""
-    print(f"{marker}\n{EXIT_LINE_FORMAT.format(exit_status)}", flush=True)
+    marker_line = f"\n{marker}" if marker else ""
+    print(f"{marker_line}\n{EXIT_LINE_FORMAT.format(exit_status)}", flush=True)
     time.sleep(retention_seconds)
     raise SystemExit(exit_status)
 
@@ -244,8 +265,95 @@ def exit_after_retention(exit_status: int, retention_seconds: int, refusal: str 
 def refuse(error: InputFrameError, retention_seconds: int) -> NoReturn:
     """Ends a run whose request or checkout the adapter refuses, with the exit line."""
     print(f"{PROGRAM_NAME}: {error}", file=sys.stderr, flush=True)
-    refusal = REFUSAL_HEAD_UNAVAILABLE if isinstance(error, HeadUnavailableError) else ""
-    exit_after_retention(EXIT_USAGE, retention_seconds, refusal)
+    marker = (
+        REFUSAL_MARKER_FORMAT.format(REFUSAL_HEAD_UNAVAILABLE)
+        if isinstance(error, HeadUnavailableError)
+        else ""
+    )
+    exit_after_retention(EXIT_USAGE, retention_seconds, marker)
+
+
+def is_neutralized(character: str) -> bool:
+    """Reports whether a reason shows `character` as `?`: see `NEUTRALIZED_CATEGORIES`."""
+    return unicodedata.category(character) in NEUTRALIZED_CATEGORIES
+
+
+def exit_reason(stderr: bytes) -> str:
+    """Returns the line of Codex's `stderr` that names why the run failed, bounded and neutralized.
+
+    The last line that starts with one of `ERROR_LINE_PREFIXES` wins, else the last line that
+    is not blank, else the reason is empty. The first `REASON_MAX_BYTES` bytes of the line are
+    decoded, invalid bytes as U+FFFD, and neutralized; the text is then cut to
+    `REASON_MAX_BYTES` UTF-8 bytes at a character boundary.
+    """
+    lines = [line.strip() for line in stderr.split(b"\n")]
+    lines = [line for line in lines if line]
+    errors = [line for line in lines if line.startswith(ERROR_LINE_PREFIXES)]
+    chosen = (errors or lines or [b""])[-1]
+    text = chosen[:REASON_MAX_BYTES].decode("utf-8", errors="replace")
+    neutralized = "".join("?" if is_neutralized(character) else character for character in text)
+    # The text holds no surrogates, so "ignore" drops only a character that the cut split.
+    return neutralized.encode("utf-8")[:REASON_MAX_BYTES].decode("utf-8", errors="ignore")
+
+
+def reason_marker(stderr: bytes) -> str:
+    """Returns the marker line that carries the reason of a failed run to the engine."""
+    reason = exit_reason(stderr).encode("utf-8")
+    return REASON_MARKER_FORMAT.format(base64.b64encode(reason).decode("ascii"))
+
+
+def write_prompt(stream: BinaryIO, prompt: bytes) -> None:
+    """Writes `prompt` to Codex's stdin and closes it; a Codex that exited ends the write."""
+    with contextlib.suppress(BrokenPipeError):
+        stream.write(prompt)
+    with contextlib.suppress(BrokenPipeError):
+        stream.close()
+
+
+class StderrTail:
+    """The end of Codex's stderr, which goes on to the adapter's stderr as it arrives."""
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+        self.truncated = False
+
+    def copy(self, stream: BinaryIO) -> None:
+        """Copies `stream` to the adapter's stderr until its end, keeping the last bytes."""
+        while chunk := os.read(stream.fileno(), STDERR_TAIL_BYTES):
+            sys.stderr.buffer.write(chunk)
+            sys.stderr.buffer.flush()
+            self.data += chunk
+            if len(self.data) > STDERR_TAIL_BYTES:
+                del self.data[:-STDERR_TAIL_BYTES]
+                self.truncated = True
+
+    def lines(self) -> bytes:
+        """Returns the kept bytes; a cut tail loses its first line, which is only an end."""
+        data = bytes(self.data)
+        if self.truncated:
+            _, _, data = data.partition(b"\n")
+        return data
+
+
+def run_codex(
+    arguments: list[str], prompt: bytes, environment: dict[str, str]
+) -> tuple[int, bytes]:
+    """Runs Codex; returns its status and the complete lines of the end of its stderr.
+
+    Codex's stderr goes on to the session output as it arrives. Threads write the prompt
+    and read stderr, so neither pipe can block the other, and the run ends when Codex exits.
+    """
+    process = subprocess.Popen(
+        arguments, stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=environment
+    )
+    tail = StderrTail()
+    reader = threading.Thread(target=tail.copy, args=(process.stderr,), daemon=True)
+    writer = threading.Thread(target=write_prompt, args=(process.stdin, prompt), daemon=True)
+    reader.start()
+    writer.start()
+    status = process.wait()
+    reader.join(STDERR_DRAIN_SECONDS)
+    return status, tail.lines()
 
 
 def codex_arguments(
@@ -559,7 +667,7 @@ def main() -> NoReturn:
             encoding="utf-8",
         )
         os.chmod(schema_path, 0o600)
-        completed = subprocess.run(
+        status, stderr_tail = run_codex(
             codex_arguments(
                 codex_binary,
                 model,
@@ -567,12 +675,11 @@ def main() -> NoReturn:
                 schema_path,
                 result_path,
             ),
-            input=prompt.encode("utf-8"),
-            env=codex_environment(dict(os.environ)),
-            check=False,
+            prompt.encode("utf-8"),
+            codex_environment(dict(os.environ)),
         )
-        if completed.returncode != 0:
-            exit_after_retention(completed.returncode, maximum_retention_seconds)
+        if status != 0:
+            exit_after_retention(status, maximum_retention_seconds, reason_marker(stderr_tail))
         try:
             verify_review_checkout_after_run(prompt, checkout_sha)
             result = encoded_result(result_path, maximum_result_bytes, expected_head_sha)

@@ -189,7 +189,7 @@ repositories before their owner wildcard.
 
 | Key | Value |
 |---|---|
-| `match` | Lowercase `owner/repository` or `owner/*` |
+| `match` | Lowercase `owner/repository` or `owner/*`. The owner is an organization or a user; an Enterprise Managed User is `handle_shortcode`, such as `mona-cat_octo/*` |
 | `trigger` | `review-requested` (the pull request requests a review from the login of the [credential](configuration.md#credentials) that serves the repository) or `label:<name>` (`[A-Za-z0-9][A-Za-z0-9:._-]{0,49}`) |
 | `pipeline` | A pipeline name |
 | `on_findings` | What a review with blocking findings publishes: `request_changes` or `comment` |
