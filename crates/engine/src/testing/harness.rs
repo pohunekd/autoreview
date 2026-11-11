@@ -161,12 +161,9 @@ pub(crate) async fn start_harness(configure: impl Fn(&mut Config) + 'static) -> 
     let fake = Arc::new(FakeIntegration::new());
     fake.lock().output = Some(Arc::new(reviewer_output(Vec::new())));
     let store = Arc::new(store);
-    let engine = Arc::new(Engine::new(
-        cfg,
-        Arc::clone(&store),
-        Arc::clone(&fake),
-        SystemClock,
-    ));
+    let engine = Arc::new(
+        Engine::new(cfg, Arc::clone(&store), Arc::clone(&fake), SystemClock).with_metrics(),
+    );
     let mut harness = Harness {
         configure: Box::new(configure),
         fake,
@@ -197,12 +194,9 @@ impl Harness {
 
     /// Runs a new engine on the harness store until [`Harness::stop_engine`].
     pub(crate) fn start(&mut self) {
-        self.engine = Arc::new(Engine::new(
-            self.config(),
-            Arc::clone(&self.store),
-            Arc::clone(&self.fake),
-            SystemClock,
-        ));
+        let store = Arc::clone(&self.store);
+        let engine = Engine::new(self.config(), store, Arc::clone(&self.fake), SystemClock);
+        self.engine = Arc::new(engine.with_metrics());
         self.serve();
     }
 

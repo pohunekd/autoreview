@@ -87,6 +87,7 @@ clean up are reported. [State and recovery](knowledge/concepts/state-and-recover
 **Counts its work.** `autoreview stats` and the MCP tool `review_stats` (after
 0.3.0) report what runs now and how reviews went per UTC day, repository, rule
 and reviewer, as one versioned JSON document for a dashboard of your own.
+`autoreview serve` can serve the same numbers to Prometheus.
 [Review statistics](stats.md)
 
 ## Requirements

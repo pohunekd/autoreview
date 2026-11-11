@@ -24,13 +24,13 @@ const DIGEST_BYTES: usize = 32;
 const CLIENT_NAME_MAX: usize = 32;
 
 /// Longest request or header timeout: one day, far below the overflow of `Instant`.
-const TIMEOUT_MAX: Duration = Duration::from_secs(86_400);
+pub(crate) const TIMEOUT_MAX: Duration = Duration::from_secs(86_400);
 
 /// Largest request body: 16 MiB, far above any tool's arguments.
 const REQUEST_MAX_BYTES_LIMIT: usize = 16 << 20;
 
 /// Most connections at once, well below the permit limit of the connection semaphore.
-const MAX_CONNECTIONS_LIMIT: usize = 4096;
+pub(crate) const MAX_CONNECTIONS_LIMIT: usize = 4096;
 
 /// Scheme of the `Authorization` header, compared without case as RFC 9110 says.
 const BEARER_SCHEME: &str = "bearer";
@@ -252,7 +252,7 @@ fn check_limits(limits: &McpLimits) -> Result<(), Error> {
 }
 
 /// Reports whether `host` is a bare `host` or `host:port` authority, as a `Host` header is.
-fn host_valid(host: &str) -> bool {
+pub(crate) fn host_valid(host: &str) -> bool {
     // `Authority` keeps a port it cannot read as `u16`, so a port must also parse.
     !host.contains('@')
         && host.parse::<Authority>().is_ok_and(|authority| {
@@ -301,7 +301,7 @@ fn client(index: usize, entry: &McpClientEntry) -> Result<McpClient, Error> {
 }
 
 /// Builds a `configuration_invalid` error that names `key`.
-fn invalid(key: impl Into<String>, message: &'static str) -> Error {
+pub(crate) fn invalid(key: impl Into<String>, message: &'static str) -> Error {
     Error::config(CONFIGURATION_INVALID, key, Some(Box::from(message)))
 }
 

@@ -2,15 +2,15 @@
 type: Reference
 id: reference/stats
 title: Review statistics
-description: The document that autoreview stats --json prints and the MCP tool review_stats returns - the current state of the reviews, daily counts over a range of UTC days, breakdowns per repository, rule and reviewer, how each count is defined, and a jq query for each part.
+description: The document that autoreview stats --json prints and the MCP tool review_stats returns - the current state of the reviews, daily counts over a range of UTC days, breakdowns per repository, rule and reviewer, how each count is defined, and a jq query for each part - and the Prometheus metrics of autoreview serve on the same numbers.
 source_kind: manual
 intents: [debug, help]
 ---
 
 # Review statistics
 
-> **Status: after 0.3.0.** `autoreview stats` and the MCP tool `review_stats` come after
-> 0.3.0. A Prometheus endpoint on the same numbers is planned in #235.
+> **Status: after 0.3.0.** `autoreview stats`, the MCP tool `review_stats` and the
+> Prometheus endpoint of `autoreview serve` come after 0.3.0.
 
 autoreview ships no dashboard. It prints the numbers a dashboard needs as one JSON document,
 so any tool that reads JSON can draw them:
@@ -30,6 +30,8 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   whole `reviews` table, so the cost grows with `store.review_retention_seconds`, which
   decides how many reviews the store keeps. The reviews and the discovery state come from
   one read transaction, so all counts describe the same moment.
+- `autoreview serve` can serve the same numbers to Prometheus; see
+  [Prometheus metrics](#prometheus-metrics).
 
 ## The range
 
@@ -219,3 +221,88 @@ History 2026-11-09 to 2026-11-10 (UTC days):
 ```
 
 Scripts read the JSON; the text may change between versions.
+
+## Prometheus metrics
+
+With a [`metrics` section](configuration.md#metrics) in `config.yaml`, `autoreview serve`
+answers `GET /metrics` on `metrics.listen` in the Prometheus text format, version 0.0.4.
+Without the section `serve` opens no port and counts nothing for it. Only `serve` runs the
+endpoint, and it stops with `serve`.
+
+```yaml
+scrape_configs:
+  - job_name: autoreview
+    static_configs:
+      - targets: ["127.0.0.1:9464"]
+```
+
+- The endpoint answers only `GET /metrics` whose `Host` header is in
+  `metrics.allowed_hosts` (400 without a valid `Host`, 403 for another one). A request with
+  an `Origin` header gets 403, another path 404 and another method 405. It has no token:
+  keep `listen` on loopback and see the [threat model](knowledge/safety/threat-model.md).
+- The gauges are read from the store at each scrape, with the read of `stats` without
+  `--since`: the reviews that are not completed, through the status index, and the
+  discovery state. A scrape never reads the completed reviews.
+- The counters live in the memory of the `serve` process and start at zero with it. A
+  restart reads as a counter reset, so query them with `rate()` or `increase()`. They count
+  what the workers of this `serve` do; `poll`, `retry` and `mcp` add nothing until `serve`
+  runs the review.
+- A series appears with its first count, so a missing series means zero. The labels are
+  `repository`, `host` (the review host chosen at dispatch), `rule` (the `match` value of
+  the rule), `decision` and `error_code`; no label holds review text.
+
+### Gauges
+
+- `autoreview_reviews_queued`, `autoreview_reviews_running`, `autoreview_reviews_awaiting`
+  (labels `repository`, `host`): `queued`, `running` and `awaiting` of the
+  [current state](#current-state) per repository and review host. A pair without a queued,
+  running or awaiting review has no sample.
+- `autoreview_pull_requests_stopped` (label `repository`): `current.stopped_by_repository`,
+  the pull requests stopped after their retries.
+
+```promql
+sum by (repository) (autoreview_reviews_queued + autoreview_reviews_running)
+sum by (host) (autoreview_reviews_running)
+sum(autoreview_pull_requests_stopped) > 0
+```
+
+### Counters
+
+Each counter has the labels `repository` and `rule`. A completed review is classified as
+the document classifies it, so each counter counts what its [counter](#counters) of the
+document counts, over the life of the process instead of per UTC day.
+
+- `autoreview_reviews_started_total`: attempts that a worker took from the queue. The
+  document counts `started` when the attempt is created; this counter counts it when the
+  attempt leaves the queue, so it lags while every worker is busy. A review that resumes as
+  `running` after a restart and a decided wait that continues are not counted again.
+- `autoreview_reviews_completed_total`: `completed`.
+- `autoreview_reviews_published_total` (label `decision`): `published` per decision:
+  `approved_without_human`, `approved_after_wait`, `changes_requested`, `commented`, or
+  `other` for a decision this version does not know. The decisions add up to `published`.
+- `autoreview_reviews_superseded_total`: `superseded`.
+- `autoreview_reviews_approval_expired_total`: `approval_expired`.
+- `autoreview_reviews_failed_total` (label `error_code`): `failed` per stored error code, as
+  `failed_by_code`.
+
+```promql
+sum by (decision) (increase(autoreview_reviews_published_total[1d]))
+sum by (error_code) (increase(autoreview_reviews_failed_total[1d]))
+sum(increase(autoreview_reviews_published_total{decision="approved_without_human"}[7d]))
+  / sum(increase(autoreview_reviews_published_total[7d]))
+```
+
+### Histogram
+
+- `autoreview_review_publication_seconds` (labels `repository`, `rule`): the seconds from
+  creation to completion of each publication, as `publication_median_seconds` measures
+  them, including an approval wait. The buckets `le` are 60, 300, 900, 1800, 3600, 14400,
+  43200, 86400 and 259200 seconds and `+Inf`. A publication whose completion is earlier
+  than its creation is left out, so `_count` can be below the publications.
+
+```promql
+histogram_quantile(0.9,
+  sum by (le) (rate(autoreview_review_publication_seconds_bucket[1d])))
+```
+
+The durations and retries of the workflow steps are not exported.

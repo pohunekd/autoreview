@@ -260,6 +260,14 @@ the login of the token and refuses with `configuration_invalid` naming
 [credentials](configuration.md#credentials). A second `serve` on the same database is refused. Reviews
 running at shutdown resume from their stored steps on the next start.
 
+With a [`metrics` section](configuration.md#metrics), `serve` also answers
+`GET /metrics` on `metrics.listen`, see
+[Prometheus metrics](stats.md#prometheus-metrics). It binds that address after
+the login check and before it takes the engine lock, so a second `serve` with
+the same section fails with `metrics_listen_failed` before it reaches
+`engine_already_running`; one without the section, or with another port, fails
+with `engine_already_running`.
+
 ### `autoreview mcp`
 
 Serves the review tools over MCP Streamable HTTP on `mcp.listen` until stopped,
@@ -382,6 +390,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request |
 | `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message |
 | `mcp_listen_failed` | `autoreview mcp` could not listen on `mcp.listen` |
+| `metrics_listen_failed` | `autoreview serve` could not listen on `metrics.listen` |
 | `review_not_found` | The MCP tool `review_detail` got a workflow ID that the store does not know |
 | `mcp_scope_denied`, `mcp_tool_unknown` | An MCP client without the `write` scope called a write tool, or called a tool the server does not have |
 | `mcp_client_missing`, `mcp_result_invalid` | An MCP tool call reached the tools without an authenticated client, or its result could not be encoded; both are server defects to report |

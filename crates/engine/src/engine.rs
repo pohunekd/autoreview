@@ -23,9 +23,10 @@ use crate::config::Config;
 use crate::discovery::poll::live;
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
+use crate::metrics::Metrics;
 use crate::model::review::APPROVAL_KIND_EXPIRED;
 use crate::review::sessions::is_shutdown;
-use crate::store::{REVIEW_RUNNING, ReviewFilter, Store};
+use crate::store::{REVIEW_QUEUED, REVIEW_RUNNING, ReviewFilter, Store};
 
 /// Retry policy of one workflow step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +91,8 @@ pub struct Engine<I, C> {
     pub(crate) clock: C,
     /// Workflow IDs of the reviews claimed by this engine.
     active: Mutex<BTreeSet<String>>,
+    /// Review counters of the metrics endpoint; `None` unless `with_metrics` set them.
+    pub(crate) metrics: Option<Metrics>,
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
@@ -101,6 +104,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             integration,
             clock,
             active: Mutex::new(BTreeSet::new()),
+            metrics: None,
         }
     }
 
@@ -296,6 +300,10 @@ where
                     self.release(&stored.workflow_id);
                     continue;
                 }
+                // A decided wait also moves to running; only a move from the queue starts.
+                if stored.status == REVIEW_QUEUED {
+                    self.count_started(&stored);
+                }
                 REVIEW_RUNNING.clone_into(&mut stored.status);
             }
             let engine = Arc::clone(self);
@@ -305,7 +313,7 @@ where
                 let review_id = stored.input.pull_request.review_id();
                 let result = engine.run_review(&cancel, stored).await;
                 match result {
-                    Ok(()) => {}
+                    Ok(()) => engine.count_completed(&workflow_id),
                     Err(err) if is_shutdown(&err) || cancel.is_cancelled() => {}
                     Err(err) => {
                         // The review keeps its status, so the next tick resumes it.

@@ -31,6 +31,7 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 | Reviewer model accounts | Keys or logins of the models that review code and cost money | The runtime login on the review host, not the pohunek profile |
 | Backend secrets | The Matrix token of the notifier | Environment, named by `*_env` keys |
 | Store | Review history, discovery state, published decisions | SQLite file at `store.path` |
+| Metrics text | Counts and the names of repositories, review hosts, rules and error codes | Served by `serve` on `metrics.listen` when the `metrics` section is set |
 | MCP bearer tokens | A `write` token can approve a waiting review and start a discovery pass; a `read` token reads review text and runs GitHub searches | Held by each MCP client; the configuration holds only their SHA-256 digests (`mcp.clients[N].token_sha256`). Rotate a token by replacing its digest and restarting `autoreview mcp` |
 
 ## Actors
@@ -46,6 +47,7 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 | GitHub | Trusted platform | Stores the reviews; its search results bound discovery |
 | MCP client with the `write` scope | Semi-trusted | `resolve`, `approve` and `retry`, and the read tools. An agent client reads review text that pull request authors and models wrote, so injected text can steer it |
 | MCP client with the `read` scope | Semi-trusted | The read tools: review text, statuses, the review queue and the review statistics |
+| Anyone who reaches `metrics.listen` | Not trusted | `GET /metrics`: the metrics text, no review text and no write |
 
 ## What runs where
 
@@ -53,6 +55,7 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 |---|---|---|---|
 | `autoreview` service | Autoreview host | GitHub tokens, backend secrets, the store | GitHub through `gh`; pohunek CLI; notifier backends |
 | `autoreview mcp` | Autoreview host, behind a TLS reverse proxy | The token digests, the store (same file as the service), the engine credential for the GitHub calls of `review_queue` and `retry` | GitHub through `gh`; MCP clients through the proxy |
+| Metrics endpoint of `serve` (optional) | Autoreview host, on `metrics.listen`, loopback recommended | The review counters of the process; it reads the store | The scraper, directly or through a reverse proxy |
 | `gh` | Autoreview host | One credential's token, for the calls of its repositories | GitHub API |
 | `pohunek` CLI | Autoreview host | Its own state and runtime directories, no GitHub token | Review host daemons |
 | pohunek daemon | Review host | Sessions, worktrees, project setup | Git remote, the agent runtime |
@@ -85,6 +88,7 @@ the engine publishes.
 | 15 | Two engines process one database | `serve` refuses a second process on the same database (`engine_already_running`) | Engine behaviour |
 | 16 | Secret written into config, policy or a prompt | Only `*_env` names appear in config; secret values stay in the environment file | Operator rule |
 | 17 | An agent with an MCP `write` token is steered into `approve` or `retry` by text injected into a pull request | Tool results carry review text as neutralized data inside an untrusted-data notice; `approve` publishes only a clean review that waits at the exact head. Give the `write` scope only to agents that keep review text out of their instructions | Operator choice; see the [MCP server guide](../guides/mcp-server.md#untrusted-output) |
+| 18 | Another process, a host on the network or a web page reads or floods the metrics endpoint | The endpoint is off without its `metrics` section and checks no token, so keep `listen` on loopback and put a reverse proxy with authentication in front of a scraper on another host. It serves only `GET /metrics`, only for a `Host` in `allowed_hosts` (against DNS rebinding), and refuses any request with an `Origin` header. `max_connections` bounds the connections at once, `header_timeout_seconds` the time to send a request head, and `request_timeout_seconds` each connection, which serves one request, and the wait for them at shutdown; each scrape is one indexed read of the store. The text names repositories, hosts, rules and error codes, which a reader learns | Engine behaviour; `listen` and the proxy are the operator's |
 
 ## Residual risks
 

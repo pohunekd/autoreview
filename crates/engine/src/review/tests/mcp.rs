@@ -1,4 +1,4 @@
-//! The MCP server against the fake integration: list, stats, resolve and approve over HTTP.
+//! The MCP server and the metrics endpoint against the fake integration, over HTTP.
 
 // Rust guideline compliant 2026-06-26
 
@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::{Engine, SystemClock};
 use crate::mcp::{MCP_PATH, McpClientEntry, McpConfig, McpLimits, McpServer};
 use crate::messages::APPROVAL_REQUESTED_TITLE;
+use crate::metrics::{METRICS_PATH, MetricsConfig, MetricsServer};
 use crate::protocol::fixtures::sha;
 use crate::store::{REVIEW_AWAITING, Store};
 use crate::testing::fake::FakeIntegration;
@@ -79,6 +80,27 @@ async fn call(
         serde_json::from_slice(&bytes).expect("the body is JSON")
     };
     (status, value)
+}
+
+/// Gets the metrics text with the `Host` header `host` and returns the status and the text.
+async fn scrape(
+    server: &MetricsServer<FakeIntegration, SystemClock>,
+    host: &str,
+) -> (StatusCode, String) {
+    let request = Request::get(METRICS_PATH)
+        .header("host", host)
+        .body(())
+        .expect("build the request");
+    let response = server.handle(&request);
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    let text = String::from_utf8(bytes.to_vec()).expect("the text is UTF-8");
+    (status, text)
 }
 
 /// Returns the structured content of a tool result and whether it is an error.
@@ -234,4 +256,37 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
     );
     h.settle().await;
     assert_eq!(h.publications(), 1, "the approval published more than once");
+
+    // The serving engine counts; the endpoint answers only `GET /metrics` with a known host.
+    let settings = MetricsConfig::new(
+        "127.0.0.1:0",
+        vec![HOST.to_owned()],
+        Duration::from_secs(10),
+        Duration::from_secs(10),
+        4,
+    )
+    .expect("the metrics settings are valid");
+    let metrics = MetricsServer::new(Arc::clone(&h.engine), &settings, CancellationToken::new());
+    let (status, _) = scrape(&metrics, "other.example.com").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a scrape with another host");
+    // The worker counts the completion after it published, so the scrape may come first.
+    let approved = "decision=\"approved_after_wait\"} 1";
+    h.wait_for_async("the published counter", async || {
+        scrape(&metrics, HOST).await.1.contains(approved)
+    })
+    .await;
+    let (status, text) = scrape(&metrics, HOST).await;
+    let sample = |prefix: &str| {
+        text.lines()
+            .find(|line| line.starts_with(prefix))
+            .map(str::to_owned)
+    };
+    let started = sample("autoreview_reviews_started_total{repository=\"acme/manual\"");
+    let published = sample("autoreview_reviews_published_total{repository=\"acme/manual\"");
+    assert!(
+        status == StatusCode::OK
+            && started.is_some_and(|line| line.ends_with("} 1"))
+            && published.is_some_and(|line| line.ends_with(approved)),
+        "metrics = {text}"
+    );
 }
