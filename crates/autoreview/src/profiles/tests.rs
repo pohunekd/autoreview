@@ -1,6 +1,8 @@
 //! Tests of `profiles install`: the rendered files, the flags and the decision on existing files.
 
+use std::ffi::OsStr;
 use std::fs;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -12,7 +14,7 @@ use super::render::{
 };
 use super::{
     Agent, Effort, InstallArguments, Outcome, PROFILE_FOREIGN, PROFILE_WRITE_FAILED, Pin, Runtime,
-    Settings, settings,
+    Settings, adapters_directory, agents_directory, settings,
 };
 use crate::CONFIGURATION_INVALID;
 use crate::error_response::COMMAND_INVALID;
@@ -76,6 +78,9 @@ fn claude_arguments(binary: &Path) -> InstallArguments {
         replace: false,
     }
 }
+
+/// A directory resolver of `profiles install`: `agents_directory` or `adapters_directory`.
+type Resolve = fn(Option<&OsStr>, Option<&OsStr>) -> Result<PathBuf, Error>;
 
 /// Returns the code and the name of a configuration error, or the code of another error.
 fn code_and_name(error: &Error) -> (&str, &str) {
@@ -195,6 +200,121 @@ fn settings_need_exactly_the_flags_of_the_agent() {
         code_and_name(&error),
         (CONFIGURATION_INVALID, "--agent-binary")
     );
+}
+
+#[test]
+fn directories_refuse_an_empty_xdg_home_and_default_an_unset_one() {
+    let agents: Resolve = agents_directory;
+    let adapters: Resolve = adapters_directory;
+    let home = Some(OsStr::new("/home/reviewer"));
+    let empty = Some(OsStr::new(""));
+    let relative = Some(OsStr::new("relative/home"));
+    let not_utf8 = Some(OsStr::from_bytes(b"/srv/\xff"));
+    let control = Some(OsStr::new("/srv/a\nb"));
+    let cases = [
+        (
+            "config set",
+            agents,
+            Some(OsStr::new("/srv/config")),
+            home,
+            Ok("/srv/config/pohunek/agents"),
+        ),
+        (
+            "config unset",
+            agents,
+            None,
+            home,
+            Ok("/home/reviewer/.config/pohunek/agents"),
+        ),
+        ("config empty", agents, empty, home, Err("XDG_CONFIG_HOME")),
+        (
+            "config empty, HOME unset",
+            agents,
+            empty,
+            None,
+            Err("XDG_CONFIG_HOME"),
+        ),
+        (
+            "config relative",
+            agents,
+            relative,
+            home,
+            Err("XDG_CONFIG_HOME"),
+        ),
+        (
+            "config not UTF-8",
+            agents,
+            not_utf8,
+            home,
+            Err("XDG_CONFIG_HOME"),
+        ),
+        (
+            "config control",
+            agents,
+            control,
+            home,
+            Err("XDG_CONFIG_HOME"),
+        ),
+        ("config and HOME unset", agents, None, None, Err("HOME")),
+        ("config unset, HOME empty", agents, None, empty, Err("HOME")),
+        (
+            "data set",
+            adapters,
+            Some(OsStr::new("/srv/data")),
+            home,
+            Ok("/srv/data/autoreview/adapters"),
+        ),
+        (
+            "data unset",
+            adapters,
+            None,
+            home,
+            Ok("/home/reviewer/.local/share/autoreview/adapters"),
+        ),
+        ("data empty", adapters, empty, home, Err("XDG_DATA_HOME")),
+        (
+            "data empty, HOME unset",
+            adapters,
+            empty,
+            None,
+            Err("XDG_DATA_HOME"),
+        ),
+        (
+            "data relative",
+            adapters,
+            relative,
+            home,
+            Err("XDG_DATA_HOME"),
+        ),
+        (
+            "data not UTF-8",
+            adapters,
+            not_utf8,
+            home,
+            Err("XDG_DATA_HOME"),
+        ),
+        (
+            "data control",
+            adapters,
+            control,
+            home,
+            Err("XDG_DATA_HOME"),
+        ),
+        ("data and HOME unset", adapters, None, None, Err("HOME")),
+        ("data unset, HOME empty", adapters, None, empty, Err("HOME")),
+    ];
+    for (label, resolve, variable, home, expected) in cases {
+        let actual = match resolve(variable, home) {
+            Ok(path) => Ok(path),
+            Err(error) => {
+                let (code, name) = code_and_name(&error);
+                assert_eq!(code, CONFIGURATION_INVALID, "{label}");
+                Err(name.to_owned())
+            }
+        };
+        let expected = expected.map(PathBuf::from).map_err(str::to_owned);
+        assert_eq!(actual, expected, "{label}");
+    }
 }
 
 #[test]

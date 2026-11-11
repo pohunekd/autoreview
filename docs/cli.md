@@ -157,8 +157,11 @@ pohunek session identity, `GH_TOKEN`, `MATRIX_ACCESS_TOKEN` and every
 the caller's `XDG_STATE_HOME` and `XDG_RUNTIME_DIR`, so it reaches the daemon of
 the user who runs it. The
 base runtime must be served by exactly one official package that is enabled,
-selected and healthy; the profile pins its package id and digest. `<config>` is `$XDG_CONFIG_HOME`, or `$HOME/.config`
-when that is unset, and `<data>` is `$XDG_DATA_HOME`, or `$HOME/.local/share`.
+selected and healthy; the profile pins its package id and digest.
+`<config>` is `$XDG_CONFIG_HOME`, or `$HOME/.config` when that is unset, and
+`<data>` is `$XDG_DATA_HOME`, or `$HOME/.local/share` when that is unset. A
+set but empty `XDG_CONFIG_HOME` or `XDG_DATA_HOME` is `configuration_invalid`
+before any pohunek call, because pohunek refuses it too.
 It writes these files, and creates their missing directories with mode 0700.
 `<config>/pohunek` must exist; the command creates only `agents` and
 `agents/manifests` in it, so a missing one is `profile_write_failed` naming
@@ -216,7 +219,7 @@ when every file was kept, so a second run with the same flags prints
 | Failure | Code | `configuration` field |
 |---|---|---|
 | `--config` given, a flag missing, an unknown agent or effort, a Codex flag that does not fit `--agent` | `command_invalid` | none |
-| `--host`, `--name`, `--model`, `--effort` or `--agent-binary` refused; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `HOME` relative, or neither set | `configuration_invalid` | the flag or the variable |
+| `--host`, `--name`, `--model`, `--effort` or `--agent-binary` refused; `XDG_CONFIG_HOME` or `XDG_DATA_HOME` set but empty; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `HOME` relative, or neither set | `configuration_invalid` | the flag or the variable |
 | A pohunek call fails or prints unexpected JSON | `pohunek_command_failed` | the pohunek command |
 | `--host` names another machine or cannot be inspected | `profile_host_not_local` | `--host` |
 | No single official, enabled and selected package serves the runtime | `runtime_package_missing` | the runtime; the message names the install command |
