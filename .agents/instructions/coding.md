@@ -302,6 +302,17 @@ What is not compatible, by decision:
   regression tests are
   `retarget_during_a_review_publishes_nothing_and_the_next_review_is_full` and
   `retarget_without_a_push_gets_a_full_review_of_the_same_head`.
+  A schedule record keeps the failed run it notified last as `handled_workflow`
+  and the retry count before that failure as `handled_retries` (#313), both
+  omitted when empty or zero. A retarget keeps them, and so does the completed
+  record of a return to the published base branch, so a return to the base
+  branch of that run handles the failure again without a notice; a manual
+  retry keeps `handled_workflow` and restarts `handled_retries` at 0. Go
+  ignores both fields and drops them when it rewrites the `schedule` entry; Go
+  has no retarget review, and after a return to Rust such a record notifies
+  that failure once more. The regression tests are
+  `retarget_is_reviewed_once_per_base_branch_and_ended_runs_never_block` and
+  `stopped_review_of_a_retarget_is_retried_by_head_prefix`.
 - **Codex results like Claude results (#23):** a `codex-envelope` report must
   carry `prior_findings` and the `blocking` flag of every finding, as the
   adapter in `adapters/codex/` writes them. A report without them is refused

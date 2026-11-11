@@ -175,15 +175,21 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 && published.covers(pr)
                 && !published.retargeted(pr)
             {
-                state.schedule.insert(
-                    key.clone(),
-                    Record {
-                        identity: pr.target().identity(),
-                        phase: phase::COMPLETED.to_owned(),
-                        workflow_id: published.workflow_id.clone(),
-                        ..Record::default()
-                    },
-                );
+                let mut completed = Record {
+                    identity: pr.target().identity(),
+                    phase: phase::COMPLETED.to_owned(),
+                    workflow_id: published.workflow_id.clone(),
+                    ..Record::default()
+                };
+                // A failure handled on another base branch stays known, so a return there does
+                // not notify it again or restart its retries.
+                if let Some(previous) = state.schedule.get(key)
+                    && previous.identity == completed.identity
+                {
+                    completed.handled_workflow = previous.handled_workflow.clone();
+                    completed.handled_retries = previous.handled_retries;
+                }
+                state.schedule.insert(key.clone(), completed);
                 continue;
             }
             // The head already has a review that waits for the user's approval.
@@ -567,6 +573,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         {
             forced.attempt = previous.attempt.wrapping_add(1);
             forced.workflow_id = previous.workflow_id.clone();
+            // The notified failure stays known; the retry count restarts, as a retry asks.
+            forced.handled_workflow = previous.handled_workflow.clone();
         }
         let mut latest_attempt = NO_ATTEMPT;
         for run in own {
