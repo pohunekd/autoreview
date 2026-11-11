@@ -133,8 +133,8 @@ host's outage ends on the first pass in which that host answers; its next
 outage, or an outage of another host while a review still waits, is announced
 again.
 
-A due review asks the hosts it may use. When no due review asked a host with a
-stored outage in a pass, the end of that pass asks the host once for its project
+A due review asks its hosts in order until one serves the repository. When no
+due review asked a host with a stored outage in a pass, the end of that pass asks the host once for its project
 list, so a host that recovers while no review waits ends its outage, and its
 next outage is announced again. The answer is logged as
 `review host answers again`; a failure is logged at WARN as
