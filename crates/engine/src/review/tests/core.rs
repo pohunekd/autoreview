@@ -267,11 +267,19 @@ async fn unusable_reviewer_output_gets_a_fresh_run() {
         .filter(|request| request.reviewer.id == "opus")
         .count();
     assert_eq!(runs, 2, "opus ran {runs} times");
+    // A wrapper refusal is not the model's mistake, so no request names a refused check.
+    let check = "the output check review_output_invalid";
+    assert!(
+        !started.iter().any(|request| request.prompt.contains(check)),
+        "a request names a refused check: {started:?}"
+    );
     h.stop_engine().await;
 }
 
 /// A reviewer output that passes the schema but fails the engine's own limits, such as a
 /// multiline title, is a model mistake that a fresh run can fix.
+///
+/// The request of the fresh run names the check that refused the run before.
 #[tokio::test]
 async fn reviewer_output_over_the_limits_gets_a_fresh_run() {
     let mut h = start_harness(|_| {}).await;
@@ -298,6 +306,21 @@ async fn reviewer_output_over_the_limits_gets_a_fresh_run() {
         .filter(|request| request.reviewer.id == "opus")
         .count();
     assert_eq!(runs, 2, "opus ran {runs} times");
+    let told: Vec<(i64, bool)> = started
+        .iter()
+        .filter(|request| request.reviewer.id == "opus")
+        .map(|request| {
+            let named = request
+                .prompt
+                .contains("refused by the output check review_output_invalid because");
+            (request.run, named)
+        })
+        .collect();
+    assert_eq!(
+        told,
+        vec![(1, false), (2, true)],
+        "opus runs and the named check"
+    );
     h.stop_engine().await;
 }
 

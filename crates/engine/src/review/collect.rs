@@ -20,6 +20,7 @@ use crate::error::{Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::Integrations;
 use crate::messages::started_message;
 use crate::model::review::milliseconds;
+use crate::protocol::request::build_reviewer_request;
 use crate::protocol::validate::reviewer_output_retryable;
 use crate::protocol::{go_utf8_lossy, parse_reviewer_output};
 use crate::store::{ReviewStep, StepOutcome};
@@ -84,6 +85,32 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         )?;
         slot.state.result = Some(result);
         Ok(())
+    }
+
+    /// Returns the prompt of the run after the run of `slot` that `refused` ended.
+    ///
+    /// The verifier gets `None`: its prompt stays as it is.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of `build_reviewer_request`.
+    fn retry_prompt(
+        &self,
+        id: SlotId,
+        slot: &ReviewerSlot,
+        refused: &Error,
+    ) -> Result<Option<String>, Error> {
+        match id {
+            SlotId::Reviewer(_) => build_reviewer_request(
+                &self.engine.config,
+                &self.input,
+                &slot.reviewer,
+                &self.discussion,
+                Some(refused),
+            )
+            .map(Some),
+            SlotId::Verifier => Ok(None),
+        }
     }
 
     /// Removes the sessions of finished slots and starts a session for each other slot.
@@ -207,10 +234,14 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                             self.remove_sessions(&[*id]).await?;
                             self.sleep(wait_of(milliseconds(limits.reviewer_run_retry_ms)))
                                 .await?;
+                            let prompt = self.retry_prompt(*id, &updated, &err)?;
                             let saved = match self.slot_mut(*id) {
                                 Some(slot) => {
                                     slot.state.run += 1;
                                     slot.state.start = 0;
+                                    if let Some(prompt) = prompt {
+                                        slot.request.prompt = prompt;
+                                    }
                                     slot.clone()
                                 }
                                 None => return Err(session_fault(WORKFLOW_FAILED)),
