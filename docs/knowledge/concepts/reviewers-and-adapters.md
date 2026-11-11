@@ -149,8 +149,9 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   output, the reason in `stderr_base64` and the field `refusal`:
   `head_unavailable` when the head commit is not in the repository (the engine
   stops the review with `review_head_unavailable`, without a fresh session), or
-  `checkout_invalid` (the engine reads `review_result_invalid` and starts a
-  fresh session). Claude Code does not run then. See
+  `checkout_invalid` (the engine reads `review_result_invalid`, logs the
+  message as its reason and starts a fresh session). A refusal before the run
+  starts no Claude Code; a refusal after it drops Claude Code's output. See
   [troubleshooting](../runbooks/troubleshooting.md#head-commit-unavailable).
 - `render_profile.py` writes a profile from a base Claude profile. It copies the
   runtime package pin, the arguments and the allowed environment keys (see

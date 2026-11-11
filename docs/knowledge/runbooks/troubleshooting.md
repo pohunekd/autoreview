@@ -35,6 +35,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts, or a Claude profile one that does not name the checkout it checked | [Reviewer output](#reviewer-output) |
 | `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
 | `review_result_invalid: Codex exited without a result: ...` in the log | The Codex program itself failed, for example on a model the account does not support, or the adapter refused what a Codex run left | [Codex program failed](#codex-program-failed) |
+| `review_result_invalid: Claude adapter refused the run: claude-adapter: ...` in the log | The Claude adapter refused the worktree, before or after Claude Code ran | [Codex checkout refused](#codex-checkout-refused) |
 | `review_wrapper_invalid`, `review_wrapper_invalid: Claude Code exited with status N: ...` in the log | A Claude result line was unusable, or Claude Code itself failed | [Claude Code failed](#claude-code-failed) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
@@ -209,6 +210,15 @@ missing head is `review_result_invalid`:
 | `review checkout HEAD is the pull request head or contains it` | A `base` request in a worktree at the pull request code | Check the pipeline's `checkout` and the session's branch on the review host |
 | `review checkout is not clean`, `review checkout HEAD changed during the review` | Something changed the worktree before or during the run | Find the process that writes into the reviewer worktree |
 
+For a Claude refusal, the engine logs the message in the `error` field of the
+warnings "retrying reviewer after unusable output" and "rejecting reviewer
+output", as `review_result_invalid: Claude adapter refused the run:
+claude-adapter: <message>`, bounded and neutralized as in
+[Claude Code failed](#claude-code-failed), and nowhere else: the recorded
+failure, the notifications and GitHub get only the code. A missing head stays
+`review_head_unavailable` without a reason. Every Claude adapter already
+writes the message, so no `autoreview profiles install` is needed for it.
+
 ### Codex program failed
 
 A Codex review keeps failing with `review_result_invalid`, and the session
@@ -371,7 +381,8 @@ A reviewer run ends in one of these codes:
   `result_max_bytes`, or reports another head or a status other than
   `completed`, or the adapter printed no result frame, as when it refuses the
   checkout (see [Codex checkout refused](#codex-checkout-refused)) or Codex
-  itself fails (see [Codex program failed](#codex-program-failed)).
+  itself fails (see [Codex program failed](#codex-program-failed)). A Claude
+  adapter refusal other than a missing head is `review_result_invalid` too.
 - `review_wrapper_invalid`: a Claude result line could not be read, or reports
   an exit code other than 0, output on stderr, or another protocol or mode (see
   [Claude Code failed](#claude-code-failed)).

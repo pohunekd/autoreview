@@ -194,6 +194,7 @@ pub(crate) fn parse_claude_output(
 /// the name of `checkout` is `review_adapter_outdated`, whatever its exit code: only an adapter
 /// that checked the review checkout writes it, outside the base64 output of the run. A
 /// `review_wrapper_invalid` of a run whose exit code is not 0 carries the end of its stderr.
+/// A `review_result_invalid` of a refusal carries the adapter's message from its stderr.
 pub(crate) fn decode_structured<T>(raw: &str, checkout: &Checkout) -> Result<T, Error>
 where
     T: DeserializeOwned + PartialEq + Default,
@@ -278,17 +279,31 @@ fn is_source_id(id: &str) -> bool {
 /// The error of a wrapper with a refusal, which never carries a review.
 ///
 /// Only the adapter's exact refusal of a missing head stops the review; any other refusal is
-/// a run that a fresh session may repeat.
+/// a run that a fresh session may repeat. Its cause is the end of the decoded stderr, where
+/// the adapter writes its message; the `refusal` field holds only the kind. The stderr is
+/// untrusted, so it is bounded and neutralized, and it only goes into the log line of the
+/// refused output.
 fn adapter_refusal(wrapper: &ClaudeWrapper) -> Error {
     if wrapper.protocol == CLAUDE_RESULT_PROTOCOL
         && wrapper.exit_code == EXIT_REFUSED
         && wrapper.stdout_base64.is_empty()
         && wrapper.refusal == REFUSAL_HEAD_UNAVAILABLE
     {
-        review_head_unavailable()
-    } else {
-        Error::workflow("review_result_invalid", true, None)
+        return review_head_unavailable();
     }
+    let reason = decode_go_base64(&wrapper.stderr_base64)
+        .map(|stderr| trailing_reason(&stderr))
+        .unwrap_or_default();
+    if reason.is_empty() {
+        return Error::workflow("review_result_invalid", true, None);
+    }
+    Error::workflow(
+        "review_result_invalid",
+        true,
+        Some(BoxError::from(format!(
+            "Claude adapter refused the run: {reason}"
+        ))),
+    )
 }
 
 /// Error of a refused wrapper, with the end of the stderr of a failed run.
@@ -387,7 +402,9 @@ mod tests {
     // A refusal envelope of the adapter names its reason. A head that is not in the review
     // checkout stops the review; a fresh run on the same repository cannot find it either (#253).
     // A result without the checkout that the adapter checked comes from an adapter that may not
-    // have checked it, and a fresh run of that adapter would write the same result.
+    // have checked it, and a fresh run of that adapter would write the same result. Any other
+    // refusal gets the adapter's message from its stderr, bounded and neutralized, as the
+    // cause of `review_result_invalid` (#323).
     #[test]
     fn adapter_refusal_of_a_missing_head_is_not_retried() {
         let pr = test_pull_request(3);
@@ -402,8 +419,8 @@ mod tests {
         let mut other_checkout = success.clone();
         other_checkout["checked_checkout"] = json!("head");
         success["refusal"] = json!("head_unavailable");
-        let refusal = |reason: &str, exit_code: i64| {
-            let stderr = STANDARD.encode("claude-adapter: the head is unavailable\n");
+        let refusal = |reason: &str, exit_code: i64, message: &str| {
+            let stderr = STANDARD.encode(format!("claude-adapter: {message}\n"));
             format!(
                 "{}\n",
                 json!({
@@ -416,39 +433,53 @@ mod tests {
                 })
             )
         };
+        let missing = "the head is unavailable";
+        let refused = "Claude adapter refused the run: claude-adapter: the head is unavailable";
         let cases = [
             (
                 "head unavailable",
-                refusal("head_unavailable", 64),
+                refusal("head_unavailable", 64, missing),
                 "review_head_unavailable",
+                None,
             ),
             (
                 "other refusal",
-                refusal("checkout_invalid", 64),
+                refusal("checkout_invalid", 64, missing),
                 "review_result_invalid",
+                Some(refused),
             ),
             (
                 "exit status 0",
-                refusal("head_unavailable", 0),
+                refusal("head_unavailable", 0, missing),
                 "review_result_invalid",
+                Some(refused),
             ),
             (
                 "refusal with a review",
                 format!("{success}\n"),
                 "review_result_invalid",
+                None,
             ),
             (
                 "no checked checkout",
                 format!("{unchecked}\n"),
                 "review_adapter_outdated",
+                None,
             ),
             (
                 "other checked checkout",
                 format!("{other_checkout}\n"),
                 "review_adapter_outdated",
+                None,
+            ),
+            (
+                "refusal message with control and format characters",
+                refusal("checkout_invalid", 64, "a\u{1b}[2J\u{202e}b\nc"),
+                "review_result_invalid",
+                Some("Claude adapter refused the run: claude-adapter: a?[2J?b?c"),
             ),
         ];
-        for (name, output, code) in cases {
+        for (name, output, code, cause) in cases {
             let err = parse_claude_output(&pr, &Checkout::Base, &output).expect_err(name);
             assert_eq!(error_code(&err), code, "{name}");
             assert_eq!(
@@ -456,6 +487,11 @@ mod tests {
                 code == "review_result_invalid",
                 "{name}"
             );
+            let message = match cause {
+                Some(cause) => format!("{code}: {cause}"),
+                None => code.to_owned(),
+            };
+            assert_eq!(err.to_string(), message, "{name}");
         }
         parse_claude_output(&pr, &Checkout::Head, &format!("{other_checkout}\n"))
             .expect("a head result is read on a head checkout");
