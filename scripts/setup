@@ -152,6 +152,61 @@ service_binary_state() {
     fi
 }
 
+# Prints how pohunek's trusted filesystem walk judges one entry of a path:
+# trusted, missing, link, kind (not a directory or file as $4 needs), foreign
+# or writable. $1 is the `stat -c '%u %a %F'` line of the entry (empty when it
+# is missing), $2 the uid of the user, $3 the owner uid of / and $4 the role:
+# `ancestor` for a directory the walk passes, `dir` for the directory it ends
+# in, `file` for the file it ends in. The walk never follows a link; a
+# directory on the way may also be root's when others cannot write it or it is
+# sticky, and the entry at the end must be the user's and not group- or
+# world-writable. Fails on a malformed line.
+path_trust() {
+    local owner mode type user=$2 root=$3 role=$4 state
+    if [ -z "$1" ]; then
+        echo missing
+        return
+    fi
+    read -r owner mode type <<<"$1"
+    [[ $owner =~ ^[0-9]+$ && $mode =~ ^[0-7]+$ ]] || return 1
+    mode=$((8#$mode))
+    case $role:$type in
+        *:"symbolic link") echo link ;;
+        file:"regular file" | file:"regular empty file")
+            if [ "$owner" != "$user" ]; then
+                echo foreign
+            elif ((mode & 8#022)); then
+                echo writable
+            else
+                echo trusted
+            fi
+            ;;
+        ancestor:directory | dir:directory)
+            if [ "$owner" = "$root" ] && ((mode & 8#1000)); then
+                state=trusted
+            elif [ "$owner" = "$user" ]; then
+                state=trusted
+                if ((mode & 8#022)); then
+                    state=writable
+                fi
+            elif [ "$owner" = "$root" ] && ! ((mode & 8#022)); then
+                state=trusted
+            else
+                state=foreign
+            fi
+            if [ "$role" = dir ] && [ "$state" = trusted ]; then
+                if ((mode & 8#022)); then
+                    state=writable
+                elif [ "$owner" != "$user" ]; then
+                    state=foreign
+                fi
+            fi
+            echo "$state"
+            ;;
+        *) echo kind ;;
+    esac
+}
+
 # Checks the pure functions above against fixed tables; reads nothing else.
 self_test() {
     local checks=0 failures=0
@@ -208,6 +263,47 @@ self_test() {
         "$(service_binary_state '' /h/.local/bin/autoreview)"
     check "pinned pohunek is kept" ok \
         "$(pohunek_state "$POHUNEK_VERSION" "$POHUNEK_MIN_VERSION" || echo error)"
+    check "trust of a missing path" missing "$(path_trust '' 1000 0 dir || echo error)"
+    check "trust of a group-writable directory" writable \
+        "$(path_trust '1000 775 directory' 1000 0 dir || echo error)"
+    check "trust of a group-writable directory on the way" writable \
+        "$(path_trust '1000 771 directory' 1000 0 ancestor || echo error)"
+    check "trust of a group-writable setgid directory" writable \
+        "$(path_trust '1000 2775 directory' 1000 0 dir || echo error)"
+    check "trust of a world-writable directory" writable \
+        "$(path_trust '1000 757 directory' 1000 0 dir || echo error)"
+    check "trust of a private directory" trusted \
+        "$(path_trust '1000 700 directory' 1000 0 dir || echo error)"
+    check "trust of a readable directory" trusted \
+        "$(path_trust '1000 755 directory' 1000 0 ancestor || echo error)"
+    check "trust of root's directory on the way" trusted \
+        "$(path_trust '0 755 directory' 1000 0 ancestor || echo error)"
+    check "trust of root's sticky directory on the way" trusted \
+        "$(path_trust '0 1777 directory' 1000 0 ancestor || echo error)"
+    check "trust of root's writable directory on the way" foreign \
+        "$(path_trust '0 777 directory' 1000 0 ancestor || echo error)"
+    check "trust of root's directory at the end" foreign \
+        "$(path_trust '0 755 directory' 1000 0 dir || echo error)"
+    check "trust of root's sticky directory at the end" writable \
+        "$(path_trust '0 1777 directory' 1000 0 dir || echo error)"
+    check "trust of another user's directory" foreign \
+        "$(path_trust '1001 755 directory' 1000 0 ancestor || echo error)"
+    check "trust of a root that is not uid 0" trusted \
+        "$(path_trust '5 755 directory' 1000 5 ancestor || echo error)"
+    check "trust of a symbolic link" link \
+        "$(path_trust '1000 777 symbolic link' 1000 0 ancestor || echo error)"
+    check "trust of a file where a directory belongs" kind \
+        "$(path_trust '1000 644 regular file' 1000 0 dir || echo error)"
+    check "trust of a group-writable file" writable \
+        "$(path_trust '1000 664 regular file' 1000 0 file || echo error)"
+    check "trust of an empty private file" trusted \
+        "$(path_trust '1000 600 regular empty file' 1000 0 file || echo error)"
+    check "trust of another user's file" foreign \
+        "$(path_trust '1001 644 regular file' 1000 0 file || echo error)"
+    check "trust of a directory where a file belongs" kind \
+        "$(path_trust '1000 755 directory' 1000 0 file || echo error)"
+    check "trust of a malformed stat line" error \
+        "$(path_trust 'x 755 directory' 1000 0 dir || echo error)"
     if [ "$failures" -ne 0 ]; then
         echo "self-test: $failures of $checks checks failed"
         return 1
@@ -223,8 +319,10 @@ self_test() {
 #                   (the rule of `autoreview profiles install`), else `absent`
 #   host_id         the host_id of `pohunek host governance inspect HOST --json`
 #   hooks           the hook state of the one agent of `pohunek integration
-#                   status --agent RUNTIME --json`, or `no-home` when its config
-#                   home does not exist
+#                   status --agent RUNTIME --json`, `refused` when pohunek asks
+#                   to repair its configuration first (an untrusted config home
+#                   or file), or `no-home` when its config home does not exist
+#   warnings        the warnings of that agent, one per line
 json_query() {
     python3 -I -c '
 import json
@@ -253,7 +351,14 @@ try:
         print(document["ok"]["host_id"])
     elif query == "hooks":
         (agent,) = document["ok"]["agents"]
-        print(agent["state"] if agent["available"] is True else "no-home")
+        if agent["recovery"] == "repair_configuration":
+            print("refused")
+        else:
+            print(agent["state"] if agent["available"] is True else "no-home")
+    elif query == "warnings":
+        (agent,) = document["ok"]["agents"]
+        for warning in agent["warnings"]:
+            print(warning)
     else:
         sys.exit(2)
 except (KeyError, TypeError, ValueError):
@@ -353,6 +458,91 @@ parse_arguments() {
     done
 }
 
+# Prints one line for each existing entry of path $1 that pohunek refuses, with
+# what to do. The entries from / down are judged as directories on the way and
+# $1 itself, when it exists, as the $2 (dir or file) the walk ends in; pohunek
+# creates a missing end below directories it judges on the way. A link ends the
+# walk. stat runs in the C locale, as %F is translated. Changes nothing.
+untrusted_lines() {
+    local target=$1 role current="" part line state owner mode reason i user root
+    local -a parts found=()
+    user=$(id -u)
+    root=$(stat -c %u /) || fail 3 "missing the owner of /; stat failed"
+    IFS=/ read -r -a parts <<<"${target#/}"
+    for part in "${parts[@]}"; do
+        [ -n "$part" ] || continue
+        current=$current/$part
+        [ -e "$current" ] || [ -L "$current" ] || break
+        found+=("$current")
+        [ ! -L "$current" ] || break
+    done
+    for i in "${!found[@]}"; do
+        current=${found[i]}
+        role=ancestor
+        [ "$current" != "$target" ] || role=$2
+        line=$(LC_ALL=C stat -c '%u %a %F' -- "$current") \
+            || fail 3 "missing the mode of $current; stat failed"
+        state=$(path_trust "$line" "$user" "$root" "$role") \
+            || fail 3 "missing the mode of $current; stat printed $line"
+        read -r owner mode _ <<<"$line"
+        case $state in
+            trusted) continue ;;
+            writable)
+                reason="mode $mode lets other users write; run chmod go-w $(printf %q "$current")"
+                ;;
+            foreign) reason="owned by uid $owner, not by you (uid $user); change its owner" ;;
+            link) reason="a symbolic link, which pohunek never follows; use the real directory" ;;
+            *) reason="not a directory" ;;
+        esac
+        if [ "$state" = kind ] && [ "$role" = file ]; then
+            reason="not a regular file"
+        fi
+        printf '  %q: %s\n' "$current" "$reason"
+    done
+}
+
+# Prints the untrusted_lines of the config home of agent $1 and of the files in
+# it that pohunek reads and writes.
+agent_trust_lines() {
+    local home=$HOME/.$1 name
+    untrusted_lines "$home" dir
+    case $1 in
+        claude)
+            untrusted_lines "$home/hooks" dir
+            untrusted_lines "$home/settings.json" file
+            ;;
+        codex)
+            for name in hooks.json config.toml; do
+                untrusted_lines "$home/$name" file
+            done
+            ;;
+    esac
+}
+
+# Stops when pohunek would refuse a path that the later steps use: the config,
+# data and state directories below which pohunek and setup write, the binary
+# directories, and the config home of each agent on PATH. Prints every such
+# path at once, with what to do. Changes nothing.
+check_trust() {
+    local target agent lines
+    lines=$({
+        for target in "$config_home/pohunek/agents" "$unit_dir" "${env_file%/*}" \
+            "$data_home/pohunek" "$data_home/autoreview/adapters" "$state_home/pohunek" \
+            "$HOME/.local/bin" "$HOME/.local/libexec/pohunek"; do
+            untrusted_lines "$target" dir
+        done
+        for agent in claude codex; do
+            if command -v "$agent" >/dev/null 2>&1; then
+                agent_trust_lines "$agent"
+            fi
+        done
+    } | sort -u) || exit "$?"
+    [ -n "$lines" ] || return 0
+    printf 'setup: pohunek and autoreview refuse these paths:\n%s\n' "$lines" >&2
+    fail 3 "missing safe permissions on the paths above; do what each line says," \
+        "then run setup again"
+}
+
 # Reads the platform, the tools and the locations. Changes nothing.
 detect_machine() {
     local system machine libc targets tool missing="" python systemd
@@ -393,13 +583,21 @@ detect_machine() {
     state_home=${XDG_STATE_HOME:-$HOME/.local/state}
     unit_path_safe "$config_home" \
         || fail 3 "missing an XDG_CONFIG_HOME of letters, digits, '.', '_', '-' and '/'"
-    [[ $state_home == /* ]] || fail 3 "missing an absolute XDG_STATE_HOME"
+    data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+    # pohunek refuses a path with an empty, '.' or '..' part or a trailing '/'.
+    [[ $state_home == /* && $state_home != *//* && $state_home != */ \
+        && ! $state_home =~ /\.\.?(/|$) ]] \
+        || fail 3 "missing an absolute XDG_STATE_HOME without an empty, '.' or '..' part or a trailing '/'"
+    [[ $data_home == /* && $data_home != *//* && $data_home != */ \
+        && ! $data_home =~ /\.\.?(/|$) ]] \
+        || fail 3 "missing an absolute XDG_DATA_HOME without an empty, '.' or '..' part or a trailing '/'"
     autoreview_bin=$HOME/.local/bin/autoreview
     env_file=$config_home/autoreview/autoreview.env
     unit_dir=$config_home/systemd/user
     agents_dir=$config_home/pohunek/agents
     service_config=$config_home/pohunek/service.toml
     user_name=$(id -un)
+    check_trust
 }
 
 # Sets autoreview_state from the installed binary.
@@ -495,8 +693,8 @@ package_state() {
     "$pohunek_bin" plugin list --json | json_query package "$1"
 }
 
-# Prints the hook state of runtime $1: current, not_installed, outdated or
-# no-home.
+# Prints the hook state of runtime $1: current, not_installed, outdated,
+# refused or no-home.
 hook_state() {
     "$pohunek_bin" integration status --agent "$1" --json | json_query hooks
 }
@@ -559,6 +757,7 @@ step_autoreview() {
     gh attestation verify "$work/$name.tar.gz" --repo "$AUTOREVIEW_REPOSITORY" \
         --signer-workflow "$AUTOREVIEW_WORKFLOW" --source-ref "refs/tags/v$AUTOREVIEW_VERSION" \
         --deny-self-hosted-runners >/dev/null || fail 5 "$name.tar.gz failed its attestation"
+    echo "$name.tar.gz: attestation verified"
     tar -xzf "$work/$name.tar.gz" -C "$work" || fail 5 "$name.tar.gz cannot be unpacked"
     { install -d -m 0755 "$HOME/.local/bin" \
         && install -m 0755 "$work/$name/autoreview" "$autoreview_bin"; } \
@@ -585,6 +784,7 @@ pohunek_archive_of() {
     gh attestation verify "$work/$name.tar.gz" --repo "$POHUNEK_REPOSITORY" \
         --signer-workflow "$POHUNEK_WORKFLOW" --source-ref "refs/tags/v$version" \
         --deny-self-hosted-runners >/dev/null || fail 5 "$name.tar.gz failed its attestation"
+    echo "$name.tar.gz: attestation verified"
     tar -xzf "$work/$name.tar.gz" -C "$work" || fail 5 "$name.tar.gz cannot be unpacked"
     [ -d "$work/$name" ] || fail 5 "$name.tar.gz holds no directory $name"
     pohunek_archive=$work/$name
@@ -807,6 +1007,15 @@ step_hooks() {
             no-home)
                 fail 3 "missing the config home of $agent; run $agent once," \
                     "then run $(rerun_command)"
+                ;;
+            refused)
+                echo "pohunek asks to repair the config home of $agent first:" >&2
+                "$pohunek_bin" integration status --agent "$agent" --json \
+                    | json_query warnings | sed 's/^/  /' >&2 \
+                    || fail 6 "pohunek integration status --agent $agent --json failed"
+                agent_trust_lines "$agent" | sort -u >&2
+                fail 3 "missing a config home of $agent that pohunek accepts;" \
+                    "do what the lines above say, then run $(rerun_command)"
                 ;;
         esac
         approve "hooks $agent (pohunek offers no dry run of this command)" \
@@ -1073,6 +1282,8 @@ plan_profiles() {
         state=$(hook_state "$agent") || state="unreadable"
         if [ "$state" = current ]; then
             plan "hooks $agent" "in place, skipped"
+        elif [ "$state" = refused ]; then
+            plan "hooks $agent" "stops: pohunek asks to repair its config home"
         else
             plan "hooks $agent" "will run ($state)"
         fi
