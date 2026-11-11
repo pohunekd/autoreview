@@ -1,4 +1,4 @@
-//! The HTTP side of the metrics endpoint: its settings, the `Host` check and `GET /metrics`.
+//! The HTTP side of the metrics endpoint: its settings and `GET /metrics`.
 
 // Rust guideline compliant 2026-06-26
 
@@ -7,8 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use http::header::{ALLOW, CONTENT_TYPE, HOST, ORIGIN};
-use http::uri::Authority;
+use http::header::{ALLOW, CONTENT_TYPE, ORIGIN};
 use http::{HeaderValue, Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Empty, Full};
 use tokio_util::sync::CancellationToken;
@@ -18,6 +17,7 @@ use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::mcp::ResponseBody;
 use crate::mcp::access::{MAX_CONNECTIONS_LIMIT, TIMEOUT_MAX, host_valid, invalid};
+use crate::mcp::host::AllowedHosts;
 
 /// The one path the endpoint answers on; every other path is not found.
 pub const METRICS_PATH: &str = "/metrics";
@@ -86,20 +86,21 @@ impl MetricsConfig {
     }
 }
 
-/// A host and an optional port, the host lowercased and without IPv6 brackets.
-type HostPort = (String, Option<u16>);
-
 /// The metrics endpoint: the `Host` check in front of the exposition of the engine.
 pub struct MetricsServer<I, C> {
     /// The engine whose store and counters the endpoint reads.
     engine: Arc<Engine<I, C>>,
-    /// The accepted `Host` values; an entry without a port accepts every port.
-    allowed_hosts: Vec<HostPort>,
+    /// The accepted `Host` values, checked as the MCP server checks them.
+    allowed_hosts: AllowedHosts,
     /// Stops the store reads of a scrape when the service shuts down.
     cancel: CancellationToken,
 }
 
-impl<I: Integrations, C: Clock> MetricsServer<I, C> {
+impl<I, C> MetricsServer<I, C>
+where
+    I: Integrations + Send + Sync + 'static,
+    C: Clock + 'static,
+{
     /// Creates the endpoint on `engine`; `cancel` stops the store reads of a scrape.
     #[must_use]
     pub fn new(
@@ -109,11 +110,7 @@ impl<I: Integrations, C: Clock> MetricsServer<I, C> {
     ) -> Self {
         Self {
             engine,
-            allowed_hosts: config
-                .allowed_hosts
-                .iter()
-                .filter_map(|host| authority(host))
-                .collect(),
+            allowed_hosts: AllowedHosts::new(&config.allowed_hosts),
             cancel,
         }
     }
@@ -122,24 +119,12 @@ impl<I: Integrations, C: Clock> MetricsServer<I, C> {
     ///
     /// A missing or malformed `Host` gets 400 and a `Host` that is not allowed gets 403, as the
     /// MCP server answers. A request with an `Origin` header gets 403, so a browser page cannot
-    /// read the endpoint. Another path gets 404 and another method 405. A failed store read
-    /// gets 500 and is logged with its code.
-    pub fn handle<B>(&self, request: &Request<B>) -> Response<ResponseBody> {
-        let host = request
-            .headers()
-            .get(HOST)
-            .and_then(|value| value.to_str().ok())
-            .and_then(authority);
-        let Some((name, port)) = host else {
-            tracing::warn!(reason = "host_invalid", "metrics request refused");
-            return empty(StatusCode::BAD_REQUEST);
-        };
-        let allowed = self.allowed_hosts.iter().any(|(allowed, allowed_port)| {
-            *allowed == name && allowed_port.is_none_or(|allowed_port| port == Some(allowed_port))
-        });
-        if !allowed {
-            tracing::warn!(reason = "host_not_allowed", "metrics request refused");
-            return empty(StatusCode::FORBIDDEN);
+    /// read the endpoint. Another path gets 404 and another method 405. The store is read on
+    /// a blocking thread, never on a runtime thread. A failed read gets 500 and is logged.
+    pub async fn handle<B>(&self, request: Request<B>) -> Response<ResponseBody> {
+        if let Err(refusal) = self.allowed_hosts.check(request.uri(), request.headers()) {
+            tracing::warn!(reason = refusal.as_str(), "metrics request refused");
+            return empty(refusal.status());
         }
         if request.headers().contains_key(ORIGIN) {
             tracing::warn!(reason = "origin_present", "metrics request refused");
@@ -155,30 +140,27 @@ impl<I: Integrations, C: Clock> MetricsServer<I, C> {
                 .insert(ALLOW, HeaderValue::from_static("GET"));
             return response;
         }
-        match self.engine.metrics_text(&self.cancel) {
-            Ok(text) => {
+        let engine = Arc::clone(&self.engine);
+        let cancel = self.cancel.clone();
+        let read = tokio::task::spawn_blocking(move || engine.metrics_text(&cancel)).await;
+        match read {
+            Ok(Ok(text)) => {
                 let mut response = Response::new(Full::new(Bytes::from(text)).boxed());
                 response
                     .headers_mut()
                     .insert(CONTENT_TYPE, HeaderValue::from_static(CONTENT_TYPE_TEXT));
                 response
             }
-            Err(err) => {
+            Ok(Err(err)) => {
                 tracing::error!(error_code = error_code(&err), "metrics not read");
+                empty(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            Err(err) => {
+                tracing::error!(error = %err, "metrics read did not finish");
                 empty(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }
     }
-}
-
-/// Reads a `Host` value or an `allowed_hosts` entry; `None` when it is no authority.
-fn authority(text: &str) -> Option<HostPort> {
-    let authority = text.parse::<Authority>().ok()?;
-    let host = authority
-        .host()
-        .trim_matches(['[', ']'])
-        .to_ascii_lowercase();
-    Some((host, authority.port_u16()))
 }
 
 /// Returns an empty response with `status`.

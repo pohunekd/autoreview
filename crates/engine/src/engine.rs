@@ -313,7 +313,7 @@ where
                 let review_id = stored.input.pull_request.review_id();
                 let result = engine.run_review(&cancel, stored).await;
                 match result {
-                    Ok(()) => engine.count_completed(&workflow_id),
+                    Ok(()) => engine.count_completed(&workflow_id).await,
                     Err(err) if is_shutdown(&err) || cancel.is_cancelled() => {}
                     Err(err) => {
                         // The review keeps its status, so the next tick resumes it.

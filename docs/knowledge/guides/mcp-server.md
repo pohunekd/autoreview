@@ -153,7 +153,8 @@ otherwise steer the agent into `approve` or `retry`; see the
 
 Every tool call writes one JSON log line `mcp tool call` with the client name, the tool,
 its arguments and the outcome (`ok` or the error code). A refused request writes
-`mcp request refused` with the reason `missing_token` or `unknown_token`, and a request over
+`mcp request refused` with the reason `missing_token` or `unknown_token`, or `host_invalid`
+or `host_not_allowed` for a `Host` the server does not accept, and a request over
 `mcp.request_timeout_seconds` writes `mcp request timed out` with the client name. The token
 is never logged.
 

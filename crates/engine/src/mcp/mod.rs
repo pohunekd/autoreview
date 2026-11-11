@@ -6,6 +6,7 @@
 // Rust guideline compliant 2026-06-26
 
 pub(crate) mod access;
+pub(crate) mod host;
 pub(crate) mod results;
 pub(crate) mod service;
 pub(crate) mod tools;

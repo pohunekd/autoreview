@@ -1,4 +1,4 @@
-//! The HTTP service of the MCP server: the path, the bearer token check, then rmcp.
+//! The HTTP service of the MCP server: the path, the token and `Host` checks, then rmcp.
 
 // Rust guideline compliant 2026-06-26
 
@@ -17,6 +17,7 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use tokio_util::sync::CancellationToken;
 
 use super::access::{McpClient, McpConfig, authorize};
+use super::host::AllowedHosts;
 use super::tools::{Caller, Tools};
 use crate::engine::{Clock, Engine};
 use crate::integrations::Integrations;
@@ -31,6 +32,8 @@ pub type ResponseBody = BoxBody<Bytes, Infallible>;
 pub struct McpServer<I, C> {
     /// The clients and their token digests.
     clients: Arc<[McpClient]>,
+    /// The accepted `Host` values, checked as the metrics endpoint checks them.
+    allowed_hosts: AllowedHosts,
     /// The rmcp service that runs the tools.
     inner: StreamableHttpService<Tools<I, C>, NeverSessionManager>,
     /// Longest time one request may take, from reading its body to its answer.
@@ -45,7 +48,8 @@ where
     /// Creates the server on `engine`; `cancel` stops every request in flight.
     ///
     /// It serves without sessions and answers with plain JSON, accepts only the configured
-    /// `Host` values and refuses every request that carries an `Origin` header.
+    /// `Host` values and refuses every request that carries an `Origin` header. rmcp keeps
+    /// its own `Host` check behind the shared one, so an rmcp upgrade can only refuse more.
     #[must_use]
     pub fn new(engine: Arc<Engine<I, C>>, config: &McpConfig, cancel: CancellationToken) -> Self {
         let settings = StreamableHttpServerConfig::default()
@@ -63,6 +67,7 @@ where
         );
         Self {
             clients: config.clients.clone().into(),
+            allowed_hosts: AllowedHosts::new(&config.allowed_hosts),
             inner,
             request_timeout: config.limits.request_timeout,
         }
@@ -71,7 +76,8 @@ where
     /// Answers one HTTP request.
     ///
     /// A request to another path gets 404. A request without a known bearer token gets 401
-    /// and never reaches a tool. The token is never logged and is removed before rmcp. A
+    /// and never reaches a tool. The token is never logged and is removed before rmcp. Then a
+    /// missing or malformed `Host` gets 400 and a `Host` that is not allowed gets 403. A
     /// request that takes longer than `mcp.request_timeout_seconds` gets 503; its tool call
     /// is cancelled.
     pub async fn handle<B>(&self, mut request: Request<B>) -> Response<ResponseBody>
@@ -98,6 +104,10 @@ where
                 return response;
             }
         };
+        if let Err(refusal) = self.allowed_hosts.check(request.uri(), request.headers()) {
+            tracing::warn!(reason = refusal.as_str(), "mcp request refused");
+            return empty(refusal.status());
+        }
         // The tools never need the token, so it does not travel further into rmcp.
         request.headers_mut().remove(AUTHORIZATION);
         request.extensions_mut().insert(Caller {

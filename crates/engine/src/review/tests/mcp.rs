@@ -91,7 +91,7 @@ async fn scrape(
         .header("host", host)
         .body(())
         .expect("build the request");
-    let response = server.handle(&request);
+    let response = server.handle(request).await;
     let status = response.status();
     let bytes = response
         .into_body()

@@ -83,7 +83,7 @@ pub(crate) async fn run(
             let _permit = permit;
             let service = service_fn(move |request| {
                 let server = Arc::clone(&server);
-                async move { Ok::<_, Infallible>(server.handle(&request)) }
+                async move { Ok::<_, Infallible>(server.handle(request).await) }
             });
             // Keep-alive off: hyper closes the connection after its first answer, so pipelined
             // requests get no answer and cannot fill the socket while the client does not read.

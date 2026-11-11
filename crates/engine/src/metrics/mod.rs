@@ -9,7 +9,7 @@ pub(crate) mod counts;
 pub(crate) mod exposition;
 pub(crate) mod server;
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio_util::sync::CancellationToken;
 
@@ -53,28 +53,18 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
     }
 
-    /// Counts the review `workflow_id` when its run completed it.
+    /// Reads the row of `workflow_id` and counts it when its run completed it.
     ///
-    /// Without counters it does nothing. A row that cannot be read is logged and not counted.
-    pub(crate) fn count_completed(&self, workflow_id: &str) {
+    /// # Errors
+    ///
+    /// The errors of `Store::get_review` and of counting the row.
+    fn count_completed_row(&self, workflow_id: &str) -> Result<(), Error> {
         let Some(metrics) = &self.metrics else {
-            return;
+            return Ok(());
         };
-        let counted = self
-            .store
-            .get_review(workflow_id)
-            .and_then(|row| match row {
-                Some(review) if review.status == REVIEW_COMPLETED => {
-                    metrics.lock().complete(&review)
-                }
-                _ => Ok(()),
-            });
-        if let Err(err) = counted {
-            tracing::warn!(
-                workflow_id,
-                error_code = error_code(&err),
-                "review not counted in the metrics"
-            );
+        match self.store.get_review(workflow_id)? {
+            Some(review) if review.status == REVIEW_COMPLETED => metrics.lock().complete(&review),
+            _ => Ok(()),
         }
     }
 
@@ -94,5 +84,37 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let none = Counts::default();
         let guard = self.metrics.as_ref().map(Metrics::lock);
         Ok(render(&gauges, guard.as_deref().unwrap_or(&none)))
+    }
+}
+
+impl<I, C> Engine<I, C>
+where
+    I: Integrations + Send + Sync + 'static,
+    C: Clock + 'static,
+{
+    /// Counts the review `workflow_id` when its run completed it.
+    ///
+    /// Without counters it does nothing. The row is read on a blocking thread, never on a
+    /// runtime thread. A row that cannot be read is logged and not counted.
+    pub(crate) async fn count_completed(self: &Arc<Self>, workflow_id: &str) {
+        if self.metrics.is_none() {
+            return;
+        }
+        let engine = Arc::clone(self);
+        let id = workflow_id.to_owned();
+        let counted = tokio::task::spawn_blocking(move || engine.count_completed_row(&id)).await;
+        match counted {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => tracing::warn!(
+                workflow_id,
+                error_code = error_code(&err),
+                "review not counted in the metrics"
+            ),
+            Err(err) => tracing::warn!(
+                workflow_id,
+                error = %err,
+                "review not counted in the metrics"
+            ),
+        }
     }
 }
