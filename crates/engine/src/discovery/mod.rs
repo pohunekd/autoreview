@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 
 use autoreview_policy::{Event, Level, Policy};
+use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::Record;
 use tokio_util::sync::CancellationToken;
 
@@ -30,9 +31,6 @@ const CONFIGURATION_INVALID: &str = "configuration_invalid";
 
 /// Configuration key named by the error of a missing policy.
 const POLICY_KEY: &str = "policy_file";
-
-/// Schedule phase of a review that waits for its next retry.
-const PHASE_RETRY_WAIT: &str = "retry_wait";
 
 /// Error code logged for a notification that a shutdown left unsent.
 pub(crate) const SHUTDOWN: &str = "shutdown";
@@ -206,7 +204,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 ///
 /// A record that waits for a retry is `retry_scheduled`; any other is `review_stopped`.
 pub(crate) fn record_event(record: &Record) -> Event {
-    if record.phase == PHASE_RETRY_WAIT {
+    if record.phase == phase::RETRY_WAIT {
         Event::RetryScheduled
     } else {
         Event::ReviewStopped

@@ -8,7 +8,7 @@ use autoreview_go_compat::go_time::format_rfc3339_seconds;
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime, UtcOffset, macros::datetime};
 
-use crate::{Error, diagnostic::failure_explanation};
+use crate::{Error, diagnostic::failure_explanation, phase};
 
 /// Characters of the head SHA that a notification shows, as Go's `%.12s`.
 const NOTIFICATION_HEAD_CHARS: usize = 12;
@@ -149,7 +149,7 @@ pub struct Decision {
 /// Applies durable completion evidence to a record after its workflows were cleaned up.
 pub fn reconcile_completed(mut record: Record, workflow_ids: &BTreeSet<String>) -> Record {
     if !record.workflow_id.is_empty() && workflow_ids.contains(&record.workflow_id) {
-        record.phase = "completed".to_owned();
+        record.phase = phase::COMPLETED.to_owned();
         record.error_code = String::new();
     }
     let mut retained = Vec::new();
@@ -182,15 +182,15 @@ pub fn plan(
     let now = now.to_offset(UtcOffset::UTC);
     let target_key = target.key();
     let target_identity = target.identity();
-    let fresh = previous.identity != target_identity || previous.phase == "withdrawn";
+    let fresh = previous.identity != target_identity || previous.phase == phase::WITHDRAWN;
     let mut r = if fresh {
         let mut blocking = previous.blocking_workflows.clone();
-        if previous.phase == "running" && !previous.workflow_id.is_empty() {
+        if previous.phase == phase::RUNNING && !previous.workflow_id.is_empty() {
             blocking.push(previous.workflow_id.clone());
         }
         Record {
             identity: target_identity.clone(),
-            phase: "waiting".to_owned(),
+            phase: phase::WAITING.to_owned(),
             due_at: due_after(now, policy.debounce)?,
             blocking_workflows: blocking,
             attempt: 0,
@@ -232,7 +232,7 @@ pub fn plan(
     blocked = blocked || !r.blocking_workflows.is_empty();
     if let Some(latest_run) = latest {
         // The dispatch is durable but may not yet be visible in the run history.
-        if !fresh && r.phase == "running" && r.attempt > latest_run.attempt {
+        if !fresh && r.phase == phase::RUNNING && r.attempt > latest_run.attempt {
             return Ok(Decision {
                 record: r,
                 dispatch: false,
@@ -240,7 +240,7 @@ pub fn plan(
             });
         }
         if latest_run.active() {
-            r.phase = "running".to_owned();
+            r.phase = phase::RUNNING.to_owned();
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             return Ok(Decision {
@@ -250,7 +250,7 @@ pub fn plan(
             });
         }
         if latest_run.result == "success" || latest_run.released {
-            r.phase = "completed".to_owned();
+            r.phase = phase::COMPLETED.to_owned();
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             return Ok(Decision {
@@ -260,13 +260,13 @@ pub fn plan(
             });
         }
         // Each terminal result is handled once; later polls keep its retry deadline.
-        if fresh || r.workflow_id != latest_run.workflow_id || r.phase == "running" {
+        if fresh || r.workflow_id != latest_run.workflow_id || r.phase == phase::RUNNING {
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             let code = failure_code(&latest_run.failure);
             // A superseded run left nothing behind; the head is reviewed anew.
             if superseded(&code) {
-                r.phase = "waiting".to_owned();
+                r.phase = phase::WAITING.to_owned();
                 r.attempt = latest_run.attempt.wrapping_add(1);
                 r.error_code = String::new();
                 r.due_at = due_after(now, policy.debounce)?;
@@ -283,7 +283,7 @@ pub fn plan(
                 notify: true,
             });
         }
-    } else if r.phase == "running" {
+    } else if r.phase == phase::RUNNING {
         r.error_code = "workflow_state_unknown".to_owned();
         return Ok(Decision {
             record: r,
@@ -291,14 +291,14 @@ pub fn plan(
             notify: false,
         });
     }
-    if blocked || (r.phase != "waiting" && r.phase != "retry_wait") || now < r.due_at {
+    if blocked || (r.phase != phase::WAITING && r.phase != phase::RETRY_WAIT) || now < r.due_at {
         return Ok(Decision {
             record: r,
             dispatch: false,
             notify: false,
         });
     }
-    r.phase = "running".to_owned();
+    r.phase = phase::RUNNING.to_owned();
     Ok(Decision {
         record: r,
         dispatch: true,
@@ -325,13 +325,13 @@ pub fn after_failure(
     if retryable(&r.error_code)
         && let Some(delay) = delay
     {
-        r.phase = "retry_wait".to_owned();
+        r.phase = phase::RETRY_WAIT.to_owned();
         r.due_at = due_after(now, *delay)?;
         r.retries = r.retries.wrapping_add(1);
         r.attempt = r.attempt.wrapping_add(1);
         return Ok(r);
     }
-    r.phase = "failed".to_owned();
+    r.phase = phase::FAILED.to_owned();
     Ok(r)
 }
 
@@ -340,7 +340,7 @@ pub fn after_failure(
 /// The record waits in `retry_wait` at its due time, so the next pass dispatches it again. The
 /// attempt and the retry budget stay as they are, because no review started.
 pub fn wait_for_host(mut r: Record, code: &str) -> Record {
-    r.phase = "retry_wait".to_owned();
+    r.phase = phase::RETRY_WAIT.to_owned();
     r.error_code = failure_code(code);
     r.awaits_host = true;
     r
@@ -411,7 +411,7 @@ pub fn notification(target: &Target, record: &Record) -> String {
         .take(NOTIFICATION_HEAD_CHARS)
         .collect();
     let next = record.attempt.wrapping_add(1);
-    if record.phase == "retry_wait" {
+    if record.phase == phase::RETRY_WAIT {
         let due = format_rfc3339_seconds(record.due_at);
         format!(
             "Review for {} at {}: {} Next automatic attempt: {} at {}. Diagnostic: {}.",

@@ -4,6 +4,7 @@
 
 pub mod diagnostic;
 pub mod metadata;
+pub mod phase;
 pub mod scheduler;
 
 /// Errors from schedule time arithmetic and review session metadata.

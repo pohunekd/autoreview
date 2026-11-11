@@ -10,12 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use autoreview_go_compat::go_time::{format_rfc3339_seconds, parse_rfc3339};
+use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::{Record, superseded};
 use serde::Serialize;
 use time::{Date, OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
-use crate::discovery::poll::{PHASE_FAILED, live};
+use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine};
 use crate::error::Error;
 use crate::integrations::Integrations;
@@ -500,7 +501,7 @@ pub fn compute(
 pub(crate) fn stopped(records: &BTreeMap<String, Record>) -> Result<BTreeMap<String, i64>, Error> {
     let mut repositories: BTreeMap<String, i64> = BTreeMap::new();
     for (key, record) in records {
-        if record.phase != PHASE_FAILED {
+        if record.phase != phase::FAILED {
             continue;
         }
         let Some((repository, _)) = key.rsplit_once('#') else {

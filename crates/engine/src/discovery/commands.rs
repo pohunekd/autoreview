@@ -4,6 +4,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::Record;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -18,9 +19,6 @@ use crate::model::{
     RetryResult, head_prefix_valid, repository_valid, sha_valid,
 };
 use crate::store::{ReviewFilter, StoredReview};
-
-/// Schedule phase of a review identity whose attempt is queued or running.
-const PHASE_RUNNING: &str = "running";
 
 /// Error code of a command whose repository or number is invalid.
 const REVIEW_IDENTITY_INVALID: &str = "review_identity_invalid";
@@ -90,7 +88,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             .await?;
         self.send_notices(cancel, notices).await;
         let record = record?;
-        let Some(record) = record.filter(|record| record.phase == PHASE_RUNNING) else {
+        let Some(record) = record.filter(|record| record.phase == phase::RUNNING) else {
             return Err(Error::workflow(REVIEW_RETRY_NOT_DISPATCHED, true, None));
         };
         // The identity is repository#number@head@request; the head is its second field.
