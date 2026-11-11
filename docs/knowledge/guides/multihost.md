@@ -110,7 +110,9 @@ timeout) is skipped, and the next host in `hosts` is asked. Each skip is logged
 at WARN as `review host skipped` with `host`, `repository`, `error_code` and
 `skipped_after_failure`. A host that failed is not asked again in the same
 discovery pass (`skipped_after_failure` is then `true`), so a dead host costs one
-`pohunek.timeout_seconds` per pass, not one per pull request.
+`pohunek.timeout_seconds` per pass, not one per pull request. A host whose outage
+was announced is asked once per pass even when no review is due, until it answers
+or leaves `hosts`, so its recovery ends the outage.
 
 A failing host never stops the reviews of repositories that other hosts serve.
 When no later host has the repository, the review waits for a review host, not
@@ -120,7 +122,8 @@ the outage lasts, and starts on the first discovery pass after a host answers,
 without `autoreview retry`. One `review_stopped` message per host outage says
 that reviews wait for a review host, names the failed hosts and the host error
 code, for example
-`Diagnostic: pohunek_request_timeout.` (see
+`Diagnostic: pohunek_request_timeout.`, and the review queue lists the review as
+`AI review waits for a review host: CODE` (see
 [waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host)).
 
 ## Register each repository

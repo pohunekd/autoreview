@@ -84,6 +84,48 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         .await
     }
 
+    /// Asks each stored outage host that this pass has not asked.
+    ///
+    /// A stored outage ends only on a pass in which its host answers, and a host is asked only
+    /// by a due review, so a host that recovers while no review waits is asked here. With no
+    /// project source no project matches, so the call only checks that the host answers. A host
+    /// that answers is added to `answers`; a host that fails logs one WARN line.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of a call at once when `cancel` is cancelled.
+    pub(crate) async fn probe_outage_hosts(
+        &self,
+        cancel: &CancellationToken,
+        outages: &BTreeMap<String, String>,
+        failures: &HostFailures,
+        answers: &mut HostAnswers,
+    ) -> Result<(), Error> {
+        for host in outages.keys() {
+            if !self.config.pohunek_hosts.contains(host)
+                || failures.contains_key(host)
+                || answers.contains(host)
+            {
+                continue;
+            }
+            match self.integration.host_routes(cancel, host, "", &[]).await {
+                Ok(_) => {
+                    tracing::info!(host = host.as_str(), "review host answers again");
+                    answers.insert(host.clone());
+                }
+                Err(err) if cancel.is_cancelled() => return Err(err),
+                Err(err) => {
+                    tracing::warn!(
+                        host = host.as_str(),
+                        error_code = error_code(&err),
+                        "review host still unavailable"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Returns the hosts that `repository` may use and that are in `failures`, in order.
     pub(crate) fn failed_route_hosts(
         &self,

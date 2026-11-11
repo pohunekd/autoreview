@@ -133,6 +133,20 @@ host's outage ends on the first pass in which that host answers; its next
 outage, or an outage of another host while a review still waits, is announced
 again.
 
+A due review asks the hosts it may use. When no due review asked a host with a
+stored outage in a pass, the end of that pass asks the host once for its project
+list, so a host that recovers while no review waits ends its outage, and its
+next outage is announced again. The answer is logged as
+`review host answers again`; a failure is logged at WARN as
+`review host still unavailable` with the host error code. With no stored outage
+no host is asked. While an outage is stored, a host that does not answer costs
+one `pohunek.timeout_seconds` per pass, until it answers or leaves
+`pohunek.hosts`.
+
+The [review queue](notifications.md#review-queue) lists a review that waits for
+a review host as `AI review waits for a review host: CODE`, with the host error
+code, and `autoreview review` shows its schedule record with `awaits_host: true`.
+
 A failure after a review started on a host (a session that could not start, a
 lost session, a failed base fetch) keeps the retry budget of the scheduler row
 above. A route error that the hosts answered is no outage: no host that answered

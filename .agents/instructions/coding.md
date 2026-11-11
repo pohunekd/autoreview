@@ -317,6 +317,12 @@ What is not compatible, by decision:
   a return to Rust announces a lasting outage again. Any other route error
   (`project_route_not_found`, `project_route_ambiguous`) still fails as in Go.
   The regression test is `review_waits_through_an_outage_of_every_review_host`.
+  A host with a `host:` key that no due review asked in a pass is asked once at
+  the end of the pass for its project list, so its answer removes the key
+  (#247), and the review queue lists a record with `awaits_host` as
+  `AI review waits for a review host: <code>`, where Go lists `AI review queued`.
+  The regression test is
+  `host_recovery_without_a_due_review_ends_the_announced_outage`.
 
 - **MCP server (#179):** `autoreview mcp` has no Go counterpart. The `mcp`
   section exists only in `config.yaml`, which Go does not read, and the server
