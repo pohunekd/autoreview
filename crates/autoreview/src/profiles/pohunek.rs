@@ -88,11 +88,9 @@ pub(super) async fn check_local(host: &str, timeout: Duration) -> Result<(), Err
     let named: Governance =
         pohunek_json(&["host", "governance", "inspect", host, "--json"], timeout)
             .await
-            .map_err(|error| {
-                Error::config(PROFILE_HOST_NOT_LOCAL, "--host", Some(Box::new(error)))
-            })?;
+            .map_err(|error| host_not_local(Some(Box::new(error))))?;
     if named.host_id != local.host_id {
-        return Err(Error::config(PROFILE_HOST_NOT_LOCAL, "--host", None));
+        return Err(host_not_local(None));
     }
     Ok(())
 }
@@ -116,7 +114,7 @@ pub(super) async fn package_pin(agent: Agent, timeout: Duration) -> Result<Pin, 
             && package.runtime_id.as_deref() == Some(agent.base())
     });
     let (Some(package), None) = (serving.next(), serving.next()) else {
-        return Err(Error::config(RUNTIME_PACKAGE_MISSING, agent.base(), None));
+        return Err(package_missing(agent.base()));
     };
     if !digest_valid(&package.digest) || !profile_name_valid(&package.package.id) {
         return Err(pohunek_failed("pohunek plugin list --json", None));
@@ -158,7 +156,26 @@ async fn pohunek_json<T: DeserializeOwned>(
         .map_err(|cause| pohunek_failed(&command, Some(cause)))
 }
 
+/// Returns the error of a `--host` that does not name the daemon of this machine.
+fn host_not_local(cause: Option<BoxError>) -> Error {
+    let name = "--host";
+    let message =
+        format!("{name} does not name this machine; run profiles install on the review host.");
+    Error::config_with_message(PROFILE_HOST_NOT_LOCAL, name, message, cause)
+}
+
+/// Returns the error of the base runtime `name` that no selected official package serves.
+fn package_missing(name: &str) -> Error {
+    let message = format!(
+        "No selected official pohunek package serves {name}. From the extracted pohunek \
+release, run: pohunek plugin install runtime/packages/{name}.tar.zst --catalog \
+runtime/runtime-catalog.json --yes"
+    );
+    Error::config_with_message(RUNTIME_PACKAGE_MISSING, name, message, None)
+}
+
 /// Returns the error of a pohunek CLI call that failed.
 fn pohunek_failed(command: &str, cause: Option<BoxError>) -> Error {
-    Error::config(POHUNEK_COMMAND_FAILED, command, cause)
+    let message = format!("{command} failed; check the pohunek daemon.");
+    Error::config_with_message(POHUNEK_COMMAND_FAILED, command, message, cause)
 }

@@ -351,14 +351,20 @@ fn remove_quietly(path: &Path) {
 
 /// Returns the error that names `path`, a file this command did not write.
 fn foreign(path: &Path, reason: &'static str) -> Error {
-    Error::config(PROFILE_FOREIGN, path.to_string_lossy(), Some(reason.into()))
+    let name = path.to_string_lossy();
+    let message = format!(
+        "{name} was not written by profiles install; move it away, or pass --replace \
+for a regular file."
+    );
+    Error::config_with_message(PROFILE_FOREIGN, name, message, Some(reason.into()))
 }
 
 /// Returns the error that names `path`, which cannot be checked, created or written.
 fn write_failed(path: &Path, cause: io::Error) -> Error {
-    Error::config(
-        PROFILE_WRITE_FAILED,
-        path.to_string_lossy(),
-        Some(Box::new(cause)),
-    )
+    let name = path.to_string_lossy();
+    let message = format!(
+        "{name} cannot be written; profiles install restored the files it had \
+rewritten and removed those it had created, and logged a warning for any it could not."
+    );
+    Error::config_with_message(PROFILE_WRITE_FAILED, name, message, Some(Box::new(cause)))
 }

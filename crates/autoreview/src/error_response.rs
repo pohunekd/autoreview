@@ -11,11 +11,6 @@ use autoreview_engine::stats::{STATS_RANGE_INVALID, STATS_RANGE_MAX_DAYS, STATS_
 use autoreview_engine::{Error, error_code};
 use serde::Serialize;
 
-use crate::profiles::{
-    POHUNEK_COMMAND_FAILED, PROFILE_FOREIGN, PROFILE_HOST_NOT_LOCAL, PROFILE_WRITE_FAILED,
-    RUNTIME_PACKAGE_MISSING,
-};
-
 /// Error code of a command with unknown or malformed arguments.
 pub(crate) const COMMAND_INVALID: &str = "command_invalid";
 
@@ -98,34 +93,10 @@ ranges."
         response.configuration = name.to_owned();
         response.message = match message {
             Some(message) => message.to_owned(),
-            None => config_message(config_code, name),
+            None => format!("Configuration is invalid or missing: {name}."),
         };
     }
     response
-}
-
-/// Returns the message of a configuration error with `code` for the key `name`.
-fn config_message(code: &str, name: &str) -> String {
-    match code {
-        PROFILE_HOST_NOT_LOCAL => {
-            format!("{name} does not name this machine; run profiles install on the review host.")
-        }
-        PROFILE_FOREIGN => format!(
-            "{name} was not written by profiles install; move it away, or pass --replace \
-for a regular file."
-        ),
-        PROFILE_WRITE_FAILED => format!(
-            "{name} cannot be written; profiles install restored the files it had \
-rewritten and removed those it had created, and logged a warning for any it could not."
-        ),
-        RUNTIME_PACKAGE_MISSING => format!(
-            "No selected official pohunek package serves {name}. From the extracted pohunek \
-release, run: pohunek plugin install runtime/packages/{name}.tar.zst --catalog \
-runtime/runtime-catalog.json --yes"
-        ),
-        POHUNEK_COMMAND_FAILED => format!("{name} failed; check the pohunek daemon."),
-        _ => format!("Configuration is invalid or missing: {name}."),
-    }
 }
 
 /// Returns the code, key and message of the first configuration error in the chain.
