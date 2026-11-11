@@ -768,6 +768,127 @@ async fn stopped_review_is_retried_after_an_approval_on_a_third_base_branch() {
     h.stop_engine().await;
 }
 
+// A return to a base branch whose approval GitHub dismissed at the retarget gets a review that
+// approves again; a return to one whose approval stands reviews nothing. Each return looks the
+// approval up once, and a settled pull request is not looked up again (#316).
+#[tokio::test]
+async fn dismissed_approval_is_replaced_after_a_retarget_away_and_back() {
+    let mut h = start_harness(|_| {}).await;
+    h.set_output(reviewer_output(Vec::new()));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the first approval", || h.publications() == 1)
+        .await;
+    let mut release = pr.clone();
+    release.base_branch = "release".to_owned();
+    release.base_sha = sha("e");
+    h.fake.open(release.clone(), h.rule(&pr.repository));
+    h.poll_until("the approval on release", || h.publications() == 2)
+        .await;
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.settle().await;
+    h.fake.open(release.clone(), h.rule(&pr.repository));
+    h.settle().await;
+    let standing = (h.started_count(), h.publications(), h.fake.lock().lookups);
+    h.fake.dismiss(0);
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.settle().await;
+    assert_eq!(
+        (standing, h.started_count()),
+        ((2, 2, 2), 3),
+        "returns to standing approvals must review nothing and look each up once, and the \
+         return to the dismissed approval must start a review ((sessions, publications, \
+         lookups) while standing, sessions after the dismissal)"
+    );
+    h.poll_until("the approval that replaces the dismissed one", || {
+        h.publications() == 3
+    })
+    .await;
+    h.settle().await;
+    let lookups = h.fake.lock().lookups;
+    h.poll().await;
+    h.poll().await;
+    let (published, _, started, _) = h.fake.snapshot();
+    assert_eq!(
+        (
+            published[2].decision.clone(),
+            published[2].body.contains("full review of"),
+            published[2].marker == published[0].marker,
+            started.len(),
+            h.fake.lock().lookups - lookups,
+        ),
+        (Decision::Approve, true, true, 3, 0),
+        "the review after the dismissal must post a new full approval for main and the settled \
+         pull request must not be looked up again (decision, full, marker of main, sessions, \
+         lookups of two more passes)"
+    );
+    h.stop_engine().await;
+}
+
+// A return from a base branch whose review stopped replaces a dismissed approval too, and a
+// replacement that stops can be retried by hand: the dismissed approval does not complete the
+// head (#316).
+#[tokio::test]
+async fn dismissed_approval_is_replaced_after_a_stopped_review_elsewhere() {
+    let mut h = start_harness(|_| {}).await;
+    h.set_output(reviewer_output(Vec::new()));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the first approval", || h.publications() == 1)
+        .await;
+    h.set_output(|_: &SessionRequest| "{\"protocol\":\"broken\"}\n".to_owned());
+    let mut release = pr.clone();
+    release.base_branch = "release".to_owned();
+    release.base_sha = sha("e");
+    h.fake.open(release, h.rule(&pr.repository));
+    let stop = "No further automatic attempt is scheduled";
+    let stops = || count_notes(&h.fake.snapshot().1, Level::Action, stop);
+    h.poll_until("the stop on release", || stops() == 1).await;
+    let reviews = || {
+        let (_, _, started, _) = h.fake.snapshot();
+        let mut workflows: Vec<String> = started
+            .iter()
+            .map(|request| request.workflow_id.clone())
+            .collect();
+        workflows.dedup();
+        workflows
+    };
+    h.fake.dismiss(0);
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.settle().await;
+    assert_eq!(
+        reviews().len(),
+        3,
+        "the return to main, whose approval was dismissed, must start a review"
+    );
+    h.poll_until("the stop of the replacing review", || stops() == 2)
+        .await;
+    h.set_output(reviewer_output(Vec::new()));
+    let retried = match h.retry(&pr).await {
+        Ok(result) if result.attempt == 3 => result.workflow_id,
+        other => panic!("the stopped replacing review must get attempt 3, retry = {other:?}"),
+    };
+    h.poll_until("the retried review", || h.publications() == 2)
+        .await;
+    h.settle().await;
+    let (published, _, _, _) = h.fake.snapshot();
+    let workflows = reviews();
+    assert_eq!(
+        (
+            stops(),
+            published[1].decision.clone(),
+            published[1].body.contains("full review of"),
+            published[1].marker == published[0].marker,
+            workflows.len(),
+            workflows.last() == Some(&retried),
+        ),
+        (2, Decision::Approve, true, true, 4, true),
+        "the retried review must post a new full approval for main (stop notices, decision, \
+         full, marker of main, reviews, last review retried)"
+    );
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn missing_previous_review_falls_back_to_a_full_review() {
     let mut h = start_harness(|_| {}).await;

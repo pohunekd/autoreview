@@ -78,6 +78,13 @@ prior findings; the log line `reviewed head scheduled again for a full review`
 carries the reason `base_branch_changed`. Neither case is incremental, and a
 retargeted hand-off is reviewed again instead of adopted.
 
+A pull request retargeted back to a base branch whose review approved the same
+head is not reviewed again while that approval stands. On the first discovery
+pass after the return, autoreview looks the approval up on GitHub; while it
+stands, not again. When GitHub dismissed it, the head gets a full review of that
+base branch again, and the log line carries the reason `approval_dismissed`. A
+request for changes or a comment is not looked up.
+
 autoreview does not dismiss the review it published before such a retarget. The
 branch protection setting that dismisses stale approvals removes an approval
 when the merge base brings new changes. Otherwise the earlier approval stays

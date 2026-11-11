@@ -121,6 +121,10 @@ pub(crate) struct FakeState {
     pub(crate) published: Vec<GitHubReview>,
     /// Head SHA of each review in `published`, in the same order.
     pub(crate) published_heads: Vec<String>,
+    /// Indexes into `published` of the reviews that GitHub dismissed.
+    pub(crate) dismissed: BTreeSet<usize>,
+    /// Number of lookups of a published review without a post.
+    pub(crate) lookups: usize,
     /// Pull requests whose review request a posted review answered, by `repository#number`.
     pub(crate) answered: BTreeSet<String>,
     /// Gate that every posted review waits on before it returns; `None` holds none.
@@ -157,6 +161,24 @@ pub(crate) struct FakeState {
     pub(crate) permission_reads: Vec<String>,
     /// Error code of each failing permission read, keyed by `repository login`.
     pub(crate) permission_fail: BTreeMap<String, String>,
+}
+
+impl FakeState {
+    /// Returns the index of the first published review that carries `marker` and stands.
+    ///
+    /// With `head`, the review must also have been posted on that head.
+    fn standing_review(&self, marker: &str, head: Option<&str>) -> Option<usize> {
+        self.published
+            .iter()
+            .zip(&self.published_heads)
+            .enumerate()
+            .find(|(index, (existing, published_head))| {
+                !self.dismissed.contains(index)
+                    && existing.body.contains(marker)
+                    && head.is_none_or(|head| head == published_head.as_str())
+            })
+            .map(|(index, _)| index)
+    }
 }
 
 /// The fake of the [`Integrations`] boundary.
@@ -221,6 +243,11 @@ impl FakeIntegration {
         let key = pr.key();
         state.candidates.remove(&key);
         state.closed.insert(key);
+    }
+
+    /// Dismisses the published review at `index`, as GitHub dismisses a stale approval.
+    pub(crate) fn dismiss(&self, index: usize) {
+        self.lock().dismissed.insert(index);
     }
 
     /// Returns how many candidate searches ran.
@@ -649,17 +676,14 @@ impl Integrations for FakeIntegration {
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send {
-        // An earlier review is reused when its body carries the marker, as the GitHub client
-        // finds it. A posted review answers the review request of the login, as on GitHub.
+        // An earlier review is reused when its body carries the marker and it is not dismissed,
+        // as the GitHub client finds it. A posted review answers the review request of the
+        // login, as on GitHub.
         let (result, gate) = {
             let mut state = self.lock();
             if let Some(code) = state.publish_fail.clone() {
                 (Err(Error::workflow(code, true, None)), None)
-            } else if let Some(index) = state
-                .published
-                .iter()
-                .position(|existing| existing.body.contains(&review.marker))
-            {
+            } else if let Some(index) = state.standing_review(&review.marker, None) {
                 let reused = PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,
@@ -698,14 +722,10 @@ impl Integrations for FakeIntegration {
         // The lookup of `publish_review`, which finds a review by the marker in its body. The
         // head must match too, as GitHub's lookup checks the commit of each review.
         let result = {
-            let state = self.lock();
+            let mut state = self.lock();
+            state.lookups += 1;
             state
-                .published
-                .iter()
-                .zip(&state.published_heads)
-                .position(|(existing, head)| {
-                    existing.body.contains(&review.marker) && *head == pull_request.head_sha
-                })
+                .standing_review(&review.marker, Some(&pull_request.head_sha))
                 .map(|index| PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,
