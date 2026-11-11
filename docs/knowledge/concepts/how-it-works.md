@@ -163,11 +163,19 @@ Every reviewer request states the summary, title and body limits, and a Claude
 request also the limit of each prior-finding note, so the reviewer knows them
 before it writes.
 
-Output that is incomplete, unusable or invalid gets a fresh session for that
-reviewer, up to `session.reviewer_run_max_attempts`. When the engine's output
-check refused the run (`review_output_invalid`), the request of the fresh run
-says so in one fixed sentence after the limits. Once the attempts are spent,
-the review fails and the scheduler decides what happens next.
+A reviewer whose output is empty or unusable, or breaks a check of this list,
+gets a fresh session, up to `session.reviewer_run_max_attempts`: the codes
+`review_output_incomplete`, `review_wrapper_invalid`, `review_result_invalid`
+and `review_output_invalid`. When the engine's output check refused the run
+(`review_output_invalid`), the request of the fresh run says so in one fixed
+sentence after the limits. Once the attempts are spent, the review fails and
+the scheduler decides what happens next. A Claude Code result message that
+cannot be used (`claude_result_invalid`) or whose prose disagrees with its
+structured output (`claude_result_mismatch`), an output over
+`session.output_max_bytes` (`review_output_too_large`) and an unusable answer
+of the review host to a read of the session output end the review at once,
+without a fresh session (see
+[troubleshooting](../runbooks/troubleshooting.md#reviewer-output)).
 
 Finding ids combine the reviewer's `finding_prefix` with a three-digit sequence
 number (for example `O001` for the first finding of the reviewer with prefix

@@ -62,7 +62,11 @@ the engine checks them again on the result:
   does not change it or the pull request. The generic prompt also tells the
   agent that it is a read-only reviewer.
 - **Schema-validated result.** A result that does not match the schema is
-  unusable and gets a fresh session, up to `session.reviewer_run_max_attempts`.
+  unusable. Whether it gets a fresh session, up to
+  `session.reviewer_run_max_attempts`, depends on its code: a Codex result
+  that cannot be read (`review_result_invalid`) does, a Claude Code result
+  message that does not decode (`claude_result_invalid`) ends the review at
+  once (see [troubleshooting](../runbooks/troubleshooting.md#reviewer-output)).
 - **No GitHub token.** The run receives no GitHub token. Only the engine's own `gh`
   calls receive one. See [secrets](../safety/secrets.md).
 - **No pohunek identity.** The variables that bind a call to a pohunek session
@@ -132,10 +136,13 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   variables (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
   `GITHUB_ENTERPRISE_TOKEN`), `MATRIX_ACCESS_TOKEN` and every `AUTOREVIEW_`
   variable. The adapter then stays alive so that the coordinator can read the
-  result before it removes the session. The engine refuses a result line with
-  an exit code other than 0 as `review_wrapper_invalid` and logs the end of its
-  stderr with it (see
-  [troubleshooting](../runbooks/troubleshooting.md#claude-code-failed)).
+  result before it removes the session. The engine refuses a result line
+  without a `refusal` whose exit code is not 0 as `review_wrapper_invalid` and
+  logs the end of its stderr with it, when it has one (see
+  [troubleshooting](../runbooks/troubleshooting.md#claude-code-failed)). A line
+  without a `refusal` whose protocol is `claude-otel-noninteractive/v2` and
+  whose `checked_checkout` is not the pipeline's checkout is
+  `review_adapter_outdated` instead, whatever its exit code.
   Before and after the run it checks the review checkout against the trusted
   lines of the request (`- Trusted head SHA:`, `- Trusted base SHA:`,
   `- Trusted checkout:`), as the [Codex adapter](#the-codex-adapter) does, with
