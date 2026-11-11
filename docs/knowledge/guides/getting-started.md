@@ -70,6 +70,10 @@ it never overwrites a configuration or an agent profile that it did not write.
 - Paths without spaces: the configuration directory, `HOME` and
   `XDG_CONFIG_HOME` may hold only letters, digits, `.`, `_`, `-` and `/`,
   because the unit files hold them as they are.
+- `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME` unset, for
+  `~/.config`, `~/.local/share` and `~/.local/state`, or set to an absolute
+  path: pohunek refuses one that is set but empty, so the detection step stops
+  on it with exit code 3.
 - Directories and files that only you can change. pohunek refuses a path when
   a directory on it, from `/` down, is a symbolic link, is group- or
   world-writable and yours, or belongs to another user (root's directories are
