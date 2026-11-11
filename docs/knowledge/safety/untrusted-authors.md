@@ -50,6 +50,10 @@ authors:
   `pipeline`, `on_findings` and `on_clean`.
 
 With `skip`, a pull request from an untrusted author is not reviewed.
+`autoreview candidates` lists it under `skipped`, `autoreview review` shows
+`"skipped": "untrusted_author"` once a discovery pass has skipped it, and the
+review queue shows `AI review skipped: untrusted_author` among the entries that
+need your action, because only a human reviews it.
 
 ## What an untrusted author gets
 
@@ -90,8 +94,11 @@ login is listed too.
 ## When the class is decided
 
 The author class is resolved when a review is dispatched, and it is stored with
-that review, like the rule itself. A change of the author's permission or of
-the policy applies to the next review, never to one in flight.
+that review, like the rule itself. `autoreview review`, `autoreview reviews` and
+the MCP review tools show it as the `author_class` of each review, and
+`autoreview candidates` shows the class and the rule that the next pass would
+use. A change of the author's permission or of the policy applies to the next
+review, never to one in flight.
 
 The permission is read once per author and repository in a discovery pass. If
 the read fails, the author's pull requests are not started and get a

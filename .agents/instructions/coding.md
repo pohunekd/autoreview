@@ -346,6 +346,11 @@ What is not compatible, by decision:
   hold. `testdata/review-policy.yaml` stays without the section for the Go tests;
   the Rust tests add `trusted: any` to its rules before parsing, and the golden
   case `fixture_via_load` loads such a copy from a temporary directory.
+  Each pass stores the pull requests it skips in the `rejected` discovery entry
+  under the keys `skipped:<repository#number>` with the reason `untrusted_author`,
+  so `review` and the review queue report them (#226); Go's `reportRejected`
+  (`discovery.go:45-63`) drops those keys on its first pass, and a return to Rust
+  stores them again on its next pass.
 - **Enterprise Managed User logins (#227):** the pull request decoder and
   `authors.trusted.logins` accept a managed user's login, `handle_shortcode`
   (`autoreview_policy::login_valid`): groups of letters and digits joined by

@@ -8,10 +8,11 @@ use autoreview_policy::{Checkout, Level, Permission};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::Engine;
-use crate::integrations::SessionRequest;
+use crate::integrations::{ReviewRequest, SessionRequest};
 use crate::model::PullRequest;
 use crate::model::review::Decision;
 use crate::protocol::fixtures::sha;
+use crate::review_queue::QueuePriority;
 use crate::testing::harness::{FakeClock, Harness, integration_pull_request, start_harness};
 
 /// Returns the sessions that were started for `pr`.
@@ -216,5 +217,69 @@ async fn failing_permission_read_rejects_only_its_pull_requests() {
             "gh api repos/public/widget/collaborators/member/permission"
         ) && !h.fake.has_note(Level::Action, "GitHub returned data"),
         "the stop notice names the permission read to check"
+    );
+}
+
+// A discovery pass stores the skip of a stranger's fork pull request under `untrusted: skip` and
+// dispatches only the one under an untrusted section; `review` and the review queue read the
+// skip back (#226).
+#[tokio::test]
+async fn skipped_untrusted_fork_is_reported_as_skipped() {
+    let mut h = start_harness(|cfg| {
+        cfg.schedule.debounce = time::Duration::ZERO;
+    })
+    .await;
+    h.stop_engine().await;
+    let engine = Engine::new(
+        h.config(),
+        Arc::clone(&h.store),
+        Arc::clone(&h.fake),
+        FakeClock::new(),
+    );
+    let mut skipped = integration_pull_request("strict/widget", &sha("a"));
+    let mut reviewed = integration_pull_request("public/widget", &sha("c"));
+    for pr in [&mut skipped, &mut reviewed] {
+        pr.author = "stranger".to_owned();
+        pr.author_type = "User".to_owned();
+        pr.fork = true;
+        h.fake.open(pr.clone(), h.rule(&pr.repository));
+        h.fake.lock().requests.push(ReviewRequest {
+            repository: pr.repository.clone(),
+            number: pr.number,
+            title: pr.title.clone(),
+            author: pr.author.clone(),
+            url: pr.url.clone(),
+        });
+    }
+    let cancel = CancellationToken::new();
+    let result = engine.poll(&cancel).await.expect("the pass succeeds");
+    assert_eq!(
+        result.dispatched, 1,
+        "only the untrusted section's review is dispatched"
+    );
+    let status = |pr: &PullRequest| {
+        engine
+            .pull_request_status(&cancel, &pr.repository, pr.number)
+            .expect("the status reads")
+    };
+    let skipped_status = status(&skipped);
+    let reviewed_status = status(&reviewed);
+    assert!(
+        skipped_status.skipped.as_deref() == Some("untrusted_author")
+            && skipped_status.reviews.is_empty()
+            && reviewed_status.skipped.is_none(),
+        "skipped = {skipped_status:?}, reviewed = {reviewed_status:?}"
+    );
+
+    let (entries, _) = engine
+        .queue_snapshot(&cancel)
+        .await
+        .expect("the queue reads");
+    let first = entries.first().expect("the queue lists the requests");
+    assert!(
+        entries.len() == 2
+            && first.request.number == skipped.number
+            && first.priority == QueuePriority::Skipped,
+        "queue = {entries:?}"
     );
 }

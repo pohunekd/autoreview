@@ -3,6 +3,7 @@
 // Rust guideline compliant 2026-06-26
 
 use autoreview_go_compat::go_time::format_rfc3339_nano;
+use autoreview_policy::AuthorClass;
 use autoreview_schedule::scheduler::Run;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, Row, Transaction, TransactionBehavior, params};
@@ -13,6 +14,7 @@ use time::OffsetDateTime;
 use super::discovery::DiscoveryState;
 use super::{Store, encode_go_json, store_error};
 use crate::Error;
+use crate::model::pull_request::is_unset_class;
 use crate::model::{ReviewInput, ReviewOutcome};
 
 /// Status of a review that is dispatched and waits to run.
@@ -51,13 +53,18 @@ pub enum ReviewFilter {
     },
 }
 
-/// One review row as the store returns it. The JSON keys are the Go field tags.
+/// One review row as the store returns it.
+///
+/// The JSON keys are the Go field tags, and `author_class`, which Go does not have.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct StoredReview {
     /// Workflow identifier of the review.
     pub workflow_id: String,
     /// The `repository#number` key of the pull request.
     pub key: String,
+    /// The author class stored in the input; omitted for a review stored before classes.
+    #[serde(skip_serializing_if = "is_unset_class")]
+    pub author_class: AuthorClass,
     /// The input the review runs with. Not serialized.
     #[serde(skip)]
     pub input: ReviewInput,
@@ -404,6 +411,7 @@ fn decode_review_row(row: ReviewRow) -> Result<StoredReview, Error> {
     Ok(StoredReview {
         workflow_id: row.workflow_id.clone(),
         key: row.key,
+        author_class: input.author_class.clone(),
         input,
         status: row.status,
         result: row.result.unwrap_or_default(),

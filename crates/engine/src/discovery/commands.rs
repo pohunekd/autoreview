@@ -48,6 +48,9 @@ pub struct PullRequestReviewStatus {
     /// Review that waits for approval, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) awaiting: Option<AwaitRecord>,
+    /// Why the last discovery pass skipped the pull request, such as `untrusted_author`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) skipped: Option<String>,
     /// Stored reviews of the pull request, newest first.
     pub(crate) reviews: Vec<StoredReview>,
 }
@@ -191,6 +194,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let schedule = state.schedule.remove(&key);
         let published = state.published.remove(&key);
         let awaiting = state.awaiting.remove(&key);
+        let skipped = state.skipped.remove(&key);
         live(cancel)?;
         let reviews = self.store.list_reviews(
             &ReviewFilter::ReviewKey(key.clone()),
@@ -201,6 +205,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             schedule,
             published,
             awaiting,
+            skipped,
             reviews,
         })
     }

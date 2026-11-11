@@ -148,7 +148,9 @@ and the name of the key that failed. Fix it and run `validate` again; see
 ## 9. Check what would be reviewed
 
 `candidates` is read-only. It prints the pull requests the next discovery
-pass would consider, per rule and trigger.
+pass would consider, per rule and trigger, with the author class of each one
+and, under `skipped`, the ones whose rule skips their author. It writes no
+state; on its first run it creates the empty store at `store.path`.
 
 ```sh
 autoreview candidates

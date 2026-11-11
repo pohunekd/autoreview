@@ -41,6 +41,7 @@ repositories:
     authors:
       trusted: {logins: [maintainer], permission: maintain}
       untrusted: {pipeline: dual, on_findings: comment, on_clean: comment}
+  - {match: strict/*, trigger: review-requested, pipeline: single, on_findings: request_changes, on_clean: approve, authors: {trusted: {logins: [maintainer]}, untrusted: skip}}
 unmatched: skip
 approval: {timeout_hours: 1}
 notes_handoff: {reminder_hours: 24}

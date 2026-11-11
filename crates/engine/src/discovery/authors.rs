@@ -10,7 +10,10 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::{Clock, Engine};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
-use crate::model::{Candidate, CandidateList, RejectedCandidate};
+use crate::model::{Candidate, ClassifiedCandidates, RejectedCandidate, SkippedCandidate};
+
+/// Reason of a pull request whose rule skips its untrusted author (`untrusted: skip`).
+pub(crate) const SKIPPED_UNTRUSTED_AUTHOR: &str = "untrusted_author";
 
 /// Returns the candidate with its author class, or `None` when the rule skips the author.
 ///
@@ -51,23 +54,24 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Lists the candidates and resolves the author class of each one.
     ///
     /// The permission is read only when it can change the class, once per author and
-    /// repository in a pass. A candidate whose rule skips untrusted authors, or that the policy
-    /// no longer covers, is dropped with a log line. A candidate whose permission read fails is
-    /// rejected with the read's code, so it is never reviewed as trusted and the other
-    /// candidates go on; the next pass reads it again.
+    /// repository in a pass. A candidate whose rule skips untrusted authors is listed as skipped,
+    /// and one that the policy no longer covers is dropped, each with a log line. A candidate
+    /// whose permission read fails is rejected with the read's code, so it is never reviewed as
+    /// trusted and the other candidates go on; the next pass reads it again.
     ///
     /// # Errors
     ///
     /// Returns the error of the search, the error of a permission read after a cancel, and
     /// `configuration_invalid` when the configuration has no policy.
-    pub(crate) async fn list_classified(
+    pub async fn list_classified(
         &self,
         cancel: &CancellationToken,
-    ) -> Result<CandidateList, Error> {
+    ) -> Result<ClassifiedCandidates, Error> {
         let listed = self.integration.list_candidates(cancel).await?;
         let policy = self.policy()?;
         let mut candidates = Vec::new();
         let mut rejected = listed.rejected;
+        let mut skipped = Vec::new();
         // A failed read is kept as its code, so a failing author costs one read per pass.
         let mut reads: BTreeMap<(String, String), Result<Option<Permission>, String>> =
             BTreeMap::new();
@@ -119,20 +123,31 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             } else {
                 None
             };
-            let fork = pr.fork;
+            let skip = SkippedCandidate {
+                repository: pr.repository.clone(),
+                number: pr.number,
+                author: pr.author.clone(),
+                fork: pr.fork,
+                author_class: AuthorClass::Untrusted,
+                reason: SKIPPED_UNTRUSTED_AUTHOR.to_owned(),
+            };
             match classify_candidate(authors, candidate, permission) {
                 Some(classified) => candidates.push(classified),
-                None => tracing::info!(
-                    review_id = %review_id,
-                    author_class = AuthorClass::Untrusted.as_str(),
-                    fork,
-                    "untrusted author skipped"
-                ),
+                None => {
+                    tracing::info!(
+                        review_id = %review_id,
+                        author_class = AuthorClass::Untrusted.as_str(),
+                        fork = skip.fork,
+                        "untrusted author skipped"
+                    );
+                    skipped.push(skip);
+                }
             }
         }
-        Ok(CandidateList {
+        Ok(ClassifiedCandidates {
             candidates,
             rejected,
+            skipped,
         })
     }
 }

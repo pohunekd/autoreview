@@ -95,11 +95,11 @@ Every tool takes a JSON object; unknown arguments are refused with `command_inva
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `list_reviews` | `status` (`queued`, `running`, `awaiting`, `completed`), `repository`, `limit`, all optional | The newest reviews, at most `limit` (default and maximum `cli.review_list_limit`) |
-| `review_detail` | `workflow_id` | The review, its head, decision, approval wait, publication with its URL, and its findings |
+| `list_reviews` | `status` (`queued`, `running`, `awaiting`, `completed`), `repository`, `limit`, all optional | The newest reviews, at most `limit` (default and maximum `cli.review_list_limit`), each with its `author_class` |
+| `review_detail` | `workflow_id` | The review with its `author_class`, its head, decision, approval wait, publication with its URL, and its findings |
 | `list_awaiting` | none | The reviews that wait for a human approval, as `autoreview awaiting` |
-| `pull_request_status` | `repository`, `number` | Everything the engine knows about one pull request, as `autoreview review` |
-| `review_queue` | none | The requested reviews with their engine status. Unlike `autoreview review-queue` it sends nothing |
+| `pull_request_status` | `repository`, `number` | Everything the engine knows about one pull request, as `autoreview review`: its reviews with their `author_class`, and `skipped` with the reason when discovery skips it |
+| `review_queue` | none | The requested reviews with their engine status, such as `AI review skipped: untrusted_author`. Unlike `autoreview review-queue` it sends nothing |
 | `review_stats` | `since`, `until`, both optional UTC days `YYYY-MM-DD` | The [review statistics](../../stats.md) document of `autoreview stats --json`, read from the store only |
 | `resolve` | `repository`, `number`, `head_prefix` | The waiting review at a head prefix of at least 12 characters, as `autoreview resolve` |
 | `approve` | `repository`, `number`, `head_sha` | The approval of the clean review that waits at the full head, as `autoreview approve` |

@@ -59,8 +59,9 @@ not error codes; they are listed in the [policy reference](../../policy.md#valid
 ## Nothing gets reviewed
 
 Work through the list in this order. `autoreview candidates` answers the first
-three questions directly: a pull request that is not in its output is not
-considered.
+three questions directly: a pull request that is not in its `candidates` list is
+not reviewed, and its `skipped` list names the ones that the author class leaves
+out.
 
 1. **Trigger.** A `review-requested` rule needs a review requested from the `login`
    of the credential that serves the repository. A `label:<name>` rule needs the
@@ -70,7 +71,8 @@ considered.
    `owner/repository` or `owner/*`; a repository in another case does not match.
    A pull request no rule matches is never reviewed (`unmatched: skip`).
 3. **Author class.** An untrusted author with `untrusted: skip` is not reviewed;
-   each pass logs `untrusted author skipped` with the `review_id` and `fork`. A
+   each pass logs `untrusted author skipped` with the `review_id` and `fork`, and
+   `autoreview review` and the review queue report the pull request as skipped. A
    fork pull request is untrusted unless its author is in `logins`. When the
    author's repository permission cannot be read, the pull request is not started
    and the `review_stopped` notice names the read to check with the engine's
