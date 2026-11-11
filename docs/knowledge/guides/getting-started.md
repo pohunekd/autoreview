@@ -83,7 +83,11 @@ it never overwrites a configuration or an agent profile that it did not write.
   directories below them that pohunek and the script use, and for Claude Code
   and Codex on your `PATH` their config home with its settings files. It lists
   every refused path at once, with `chmod go-w <path>` for a writable one, and
-  stops with exit code 3; the script never changes a mode itself.
+  stops with exit code 3; the script never changes a mode itself. Two refusals
+  of pohunek are not checked here and stop a later step with exit code 6: an
+  extended ACL on a directory of the path, and a private directory of pohunek
+  itself (such as its state directory) whose mode is wider than pohunek
+  requires; pohunek's error names the path.
 
 ## Run the script
 

@@ -460,10 +460,11 @@ parse_arguments() {
 
 # Prints one line for each existing entry of path $1 that pohunek refuses, with
 # what to do. The entries from / down are judged as directories on the way and
-# the deepest existing one as the $2 (dir or file) the walk ends in; a link
-# ends the walk. stat runs in the C locale, as %F is translated. Changes nothing.
+# $1 itself, when it exists, as the $2 (dir or file) the walk ends in; pohunek
+# creates a missing end below directories it judges on the way. A link ends the
+# walk. stat runs in the C locale, as %F is translated. Changes nothing.
 untrusted_lines() {
-    local target=$1 role current="" part line state owner mode reason i last user root
+    local target=$1 role current="" part line state owner mode reason i user root
     local -a parts found=()
     user=$(id -u)
     root=$(stat -c %u /) || fail 3 "missing the owner of /; stat failed"
@@ -475,14 +476,10 @@ untrusted_lines() {
         found+=("$current")
         [ ! -L "$current" ] || break
     done
-    last=$((${#found[@]} - 1))
     for i in "${!found[@]}"; do
         current=${found[i]}
         role=ancestor
-        if [ "$i" -eq "$last" ]; then
-            role=dir
-            [ "$current" != "$target" ] || role=$2
-        fi
+        [ "$current" != "$target" ] || role=$2
         line=$(LC_ALL=C stat -c '%u %a %F' -- "$current") \
             || fail 3 "missing the mode of $current; stat failed"
         state=$(path_trust "$line" "$user" "$root" "$role") \
