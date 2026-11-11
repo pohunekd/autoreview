@@ -545,7 +545,7 @@ check_trust() {
 
 # Reads the platform, the tools and the locations. Changes nothing.
 detect_machine() {
-    local system machine libc targets tool missing="" python systemd
+    local system machine libc targets tool missing="" python systemd name
     system=$(uname -s)
     machine=$(uname -m)
     libc=none
@@ -579,11 +579,16 @@ detect_machine() {
     [[ ${XDG_RUNTIME_DIR:-} == /* ]] \
         || fail 3 "missing XDG_RUNTIME_DIR; log in through a session that sets it"
     runtime_dir=$XDG_RUNTIME_DIR
-    config_home=${XDG_CONFIG_HOME:-$HOME/.config}
-    state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+    # pohunek uses the $HOME default only for an unset variable; it refuses an empty one.
+    for name in XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME; do
+        [ -n "${!name-unset}" ] \
+            || fail 3 "missing a non-empty $name; unset it or set it to an absolute path"
+    done
+    config_home=${XDG_CONFIG_HOME-$HOME/.config}
+    state_home=${XDG_STATE_HOME-$HOME/.local/state}
     unit_path_safe "$config_home" \
         || fail 3 "missing an XDG_CONFIG_HOME of letters, digits, '.', '_', '-' and '/'"
-    data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+    data_home=${XDG_DATA_HOME-$HOME/.local/share}
     # pohunek refuses a path with an empty, '.' or '..' part or a trailing '/'.
     [[ $state_home == /* && $state_home != *//* && $state_home != */ \
         && ! $state_home =~ /\.\.?(/|$) ]] \
