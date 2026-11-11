@@ -584,11 +584,13 @@ detect_machine() {
     unit_path_safe "$config_home" \
         || fail 3 "missing an XDG_CONFIG_HOME of letters, digits, '.', '_', '-' and '/'"
     data_home=${XDG_DATA_HOME:-$HOME/.local/share}
-    # pohunek's trusted walk refuses a path with an empty part or a trailing '/'.
-    [[ $state_home == /* && $state_home != *//* && $state_home != */ ]] \
-        || fail 3 "missing an absolute XDG_STATE_HOME without '//' or a trailing '/'"
-    [[ $data_home == /* && $data_home != *//* && $data_home != */ ]] \
-        || fail 3 "missing an absolute XDG_DATA_HOME without '//' or a trailing '/'"
+    # pohunek refuses a path with an empty, '.' or '..' part or a trailing '/'.
+    [[ $state_home == /* && $state_home != *//* && $state_home != */ \
+        && ! $state_home =~ /\.\.?(/|$) ]] \
+        || fail 3 "missing an absolute XDG_STATE_HOME without an empty, '.' or '..' part or a trailing '/'"
+    [[ $data_home == /* && $data_home != *//* && $data_home != */ \
+        && ! $data_home =~ /\.\.?(/|$) ]] \
+        || fail 3 "missing an absolute XDG_DATA_HOME without an empty, '.' or '..' part or a trailing '/'"
     autoreview_bin=$HOME/.local/bin/autoreview
     env_file=$config_home/autoreview/autoreview.env
     unit_dir=$config_home/systemd/user
