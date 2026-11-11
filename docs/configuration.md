@@ -271,11 +271,16 @@ How reviewer sessions are named, started, read and cleaned up.
 Bounds on what a reviewer may return and what autoreview publishes. A result
 over a bound is rejected and the reviewer gets a fresh session.
 
+Every reviewer request states the summary, title and body bounds. The schema of
+a `claude-structured` request also carries the summary bounds as `minLength`
+and `maxLength`, so Claude Code asks the reviewer again within the run when the
+summary is too short or too long.
+
 | Key | Meaning |
 |---|---|
 | `result_max_bytes` | Size of one reviewer result |
 | `max_findings`, `max_tests` | Entries in one result |
-| `min_summary_characters`, `max_summary_characters` | A summary must be substantive and bounded |
+| `min_summary_characters`, `max_summary_characters` | Summary length; stated to the reviewer |
 | `max_title_characters`, `max_body_characters` | Finding title and body |
 | `max_discussion_characters` | Discussion of earlier findings handed to a re-review |
 | `max_path_characters`, `max_test_characters` | Path and test entry |

@@ -34,11 +34,13 @@ blocking flag of each finding and one verdict per prior finding (see
 
 With `claude-structured` the runtime itself refuses output that does not match
 the schema, and the engine also checks the output against the request. The
-free-text answer of the run may be prose. When it is JSON it has to agree with
-the structured output, or the run is rejected. A result line without the
-checkout that the adapter checked, or with another checkout than the request
-names, comes from an older adapter and is refused with
-`review_adapter_outdated`, without a fresh session.
+schema bounds the summary by `limits.min_summary_characters` and
+`limits.max_summary_characters`, so the runtime asks the reviewer again within
+the run for a summary outside them. The free-text answer of the run may be
+prose. When it is JSON it has to agree with the structured output, or the run
+is rejected. A result line without the checkout that the adapter checked, or
+with another checkout than the request names, comes from an older adapter and
+is refused with `review_adapter_outdated`, without a fresh session.
 
 With `codex-envelope` the engine looks for one result frame at the end of the
 output and decodes it strictly. The frame must not be larger than
