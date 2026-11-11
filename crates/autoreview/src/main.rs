@@ -135,6 +135,8 @@ enum EngineCommand {
     },
     /// Prints everything the engine knows about one pull request.
     Review(ReviewArguments),
+    /// Prints the review statistics: the current state and, with `--since`, the daily counts.
+    Stats(StatsArguments),
     /// Writes a consistent copy of the store to a new absolute path.
     BackupDb {
         /// Absolute path of the copy; nothing may exist there yet.
@@ -149,6 +151,20 @@ struct ReviewArguments {
     /// The arguments in their order; `--repository` takes the next one as its value.
     #[arg(allow_hyphen_values = true, value_name = "ARGUMENTS", value_parser = raw_argument)]
     arguments: Vec<String>,
+}
+
+/// The options of `stats`.
+#[derive(Debug, Args)]
+struct StatsArguments {
+    /// First UTC day of the history, as YYYY-MM-DD; without it only the current state is shown.
+    #[arg(long, value_name = "DATE")]
+    since: Option<String>,
+    /// Last UTC day of the history, as YYYY-MM-DD; today (UTC) when absent.
+    #[arg(long, value_name = "DATE")]
+    until: Option<String>,
+    /// Prints the JSON document instead of the text summary.
+    #[arg(long)]
+    json: bool,
 }
 
 /// What `validate` prints: what the policy requires of the review hosts.
@@ -320,6 +336,15 @@ async fn run_engine(
         EngineCommand::Review(arguments) => {
             let (repository, number) = pull_request_arguments(&arguments.arguments)?;
             print_json(&engine.pull_request_status(cancel, &repository, number)?)
+        }
+        EngineCommand::Stats(arguments) => {
+            let (since, until) = (arguments.since.as_deref(), arguments.until.as_deref());
+            let document = engine.review_stats(cancel, since, until)?;
+            if arguments.json {
+                print_json(&document)
+            } else {
+                print_text(&document.to_string())
+            }
         }
         EngineCommand::BackupDb { path } => {
             store.backup_to(&path)?;
@@ -496,6 +521,19 @@ fn print_json<T: Serialize + ?Sized>(value: &T) -> Result<(), Error> {
     let text = go_json(value).map_err(failed)?;
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "{text}")
+        .and_then(|()| stdout.flush())
+        .map_err(failed)
+}
+
+/// Prints `text`, which ends with a newline, on stdout.
+///
+/// # Errors
+///
+/// Returns `workflow_failed` when stdout cannot be written.
+fn print_text(text: &str) -> Result<(), Error> {
+    let mut stdout = io::stdout().lock();
+    stdout
+        .write_all(text.as_bytes())
         .and_then(|()| stdout.flush())
         .map_err(failed)
 }

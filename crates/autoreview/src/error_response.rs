@@ -7,6 +7,7 @@
 use std::error::Error as StdError;
 
 use autoreview_engine::model::{HEAD_PREFIX_MIN_LEN, SHA_LEN};
+use autoreview_engine::stats::{STATS_RANGE_INVALID, STATS_RANGE_MAX_DAYS, STATS_RANGE_TOO_LONG};
 use autoreview_engine::{Error, error_code};
 use serde::Serialize;
 
@@ -31,7 +32,8 @@ const DISCOVERY_BUSY: &str = "discovery_busy";
 /// Commands and arguments that the message of `command_invalid` lists.
 const USAGE: &str = "usage: autoreview [--config PATH] serve | mcp | validate | poll | \
 retry|resolve|approve --repository OWNER/REPO NUMBER HEAD | review --repository OWNER/REPO \
-NUMBER | reviews [LIMIT] | candidates | awaiting | review-queue | backup-db PATH; \
+NUMBER | reviews [LIMIT] | stats [--since DATE [--until DATE]] [--json] | candidates | awaiting | \
+review-queue | backup-db PATH; \
 autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME [--store-path PATH] \
 [--gh-bin PATH] [--pohunek-bin PATH] [--pohunek-state-home PATH] [--pohunek-runtime-dir PATH] \
 [--matrix-homeserver-url URL] [--matrix-room ROOM] [--matrix-mention-user USER]; \
@@ -81,6 +83,15 @@ characters of the pull request head, as the Review ID of a notification shows."
         response.message = format!(
             "HEAD_SHA must be the full pull request head, {SHA_LEN} lowercase hexadecimal \
 characters; autoreview resolve prints it for a head prefix."
+        );
+    } else if code == STATS_RANGE_INVALID {
+        response.message = "--since and --until must be UTC days as YYYY-MM-DD; --until needs \
+--since and must not come before it."
+            .to_owned();
+    } else if code == STATS_RANGE_TOO_LONG {
+        response.message = format!(
+            "The stats range covers at most {STATS_RANGE_MAX_DAYS} days; split it into shorter \
+ranges."
         );
     }
     if let Some((config_code, name)) = first_config_error(error) {

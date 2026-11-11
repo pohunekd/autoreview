@@ -104,6 +104,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
     }
 
+    /// Returns the instant before which `prune` deletes completed reviews.
+    pub(crate) fn prune_cutoff(&self) -> OffsetDateTime {
+        // A retention beyond the range of `time::Duration` keeps every review.
+        let retention =
+            time::Duration::try_from(self.config.review_retention).unwrap_or(time::Duration::MAX);
+        self.clock.wall_now().saturating_sub(retention)
+    }
+
     /// Returns the retry policy of the workflow steps, read from the configuration.
     pub(crate) fn step_policy(&self) -> StepRetryPolicy {
         StepRetryPolicy {
@@ -240,10 +248,7 @@ where
     ///
     /// A failure after `cancel` is cancelled is not logged.
     fn prune(&self, cancel: &CancellationToken) {
-        // A retention beyond the range of `time::Duration` keeps every review.
-        let retention =
-            time::Duration::try_from(self.config.review_retention).unwrap_or(time::Duration::MAX);
-        let cutoff = self.clock.wall_now().saturating_sub(retention);
+        let cutoff = self.prune_cutoff();
         match live(cancel).and_then(|()| self.store.prune_reviews(cutoff)) {
             Err(err) => {
                 if !cancel.is_cancelled() {

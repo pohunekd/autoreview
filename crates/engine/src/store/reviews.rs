@@ -231,6 +231,40 @@ impl Store {
             .collect())
     }
 
+    /// Lists the reviews that the statistics count, oldest first.
+    ///
+    /// These are the reviews that are not completed and, with `range` (its first instant and
+    /// the first instant after it), those created or completed inside it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_state_invalid` when a stored row does not decode, and `store_unavailable`
+    /// when SQLite fails.
+    pub fn stats_reviews(
+        &self,
+        range: Option<(OffsetDateTime, OffsetDateTime)>,
+    ) -> Result<Vec<StoredReview>, Error> {
+        let connection = self.lock_connection()?;
+        let created = time_key("created_at");
+        let Some((start, end)) = range else {
+            let sql = format!(
+                "SELECT {REVIEW_COLUMNS} FROM reviews WHERE status != ?1 \
+                 ORDER BY {created}, workflow_id"
+            );
+            return collect_reviews(&connection, &sql, &[&REVIEW_COMPLETED]);
+        };
+        let completed = time_key("completed_at");
+        let (low, high) = (time_key("?2"), time_key("?3"));
+        let sql = format!(
+            "SELECT {REVIEW_COLUMNS} FROM reviews WHERE status != ?1 \
+             OR ({created} >= {low} AND {created} < {high}) \
+             OR (completed_at IS NOT NULL AND {completed} >= {low} AND {completed} < {high}) \
+             ORDER BY {created}, workflow_id"
+        );
+        let (start, end) = (format_rfc3339_nano(start), format_rfc3339_nano(end));
+        collect_reviews(&connection, &sql, &[&REVIEW_COMPLETED, &start, &end])
+    }
+
     /// Lists the reviews that can make progress, oldest first: queued and running reviews, and
     /// awaiting reviews that have a decision.
     ///

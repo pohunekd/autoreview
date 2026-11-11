@@ -1,4 +1,4 @@
-//! The MCP server against the fake integration: list, resolve and approve over HTTP.
+//! The MCP server against the fake integration: list, stats, resolve and approve over HTTP.
 
 // Rust guideline compliant 2026-06-26
 
@@ -151,6 +151,25 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
         .as_str()
         .expect("the review has a workflow ID")
         .to_owned();
+
+    let (status, _) = call(&server, None, "review_stats", json!({})).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "review_stats without a token"
+    );
+    let yesterday = OffsetDateTime::now_utc().date().previous_day();
+    let since = json!({ "since": yesterday.expect("a day before today").to_string() });
+    let (_, body) = call(&server, Some(READ_TOKEN), "review_stats", since).await;
+    let (content, failed) = structured(&body);
+    let stats = &content["result"];
+    assert!(
+        !failed
+            && stats["schema_version"] == json!(1)
+            && stats["current"]["awaiting"] == json!(1)
+            && stats["history"]["totals"]["started"] == json!(1),
+        "review_stats = {body}"
+    );
 
     let approve = json!({
         "repository": pr.repository,

@@ -31,5 +31,6 @@ knowledge bundle so pohunek.dev can render both.
   [secrets](safety/secrets.md).
 
 The reference pages are [policy](../policy.md),
-[configuration](../configuration.md) and [CLI](../cli.md); the
+[configuration](../configuration.md), [CLI](../cli.md) and
+[review statistics](../stats.md); the
 [features](../features.md) page maps everything.

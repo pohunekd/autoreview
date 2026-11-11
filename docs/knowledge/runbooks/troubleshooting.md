@@ -46,6 +46,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_superseded`, `approval_expired` | The wait ended and nothing was posted | [Approval errors](#approval-errors) |
 | `head_changed` | The head SHA given is no longer the pull request head | [Approval errors](#approval-errors) |
 | `head_prefix_invalid`, `head_sha_invalid` | The head argument of `retry`, `resolve` or `approve` has the wrong form | [Approval errors](#approval-errors) |
+| `stats_range_invalid`, `stats_range_too_long` | The range of `stats` or `review_stats` is not `YYYY-MM-DD` days in order, or covers more than 366 days | [Review statistics](../../stats.md#the-range) |
 | `review_already_running`, `review_retry_not_dispatched` | A retry is not needed or not possible now | [Retry and recovery](retry-and-recovery.md) |
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it | Fix the key, then run `validate` |
 | `pohunek_session_cleanup_failed` | A reviewer session could not be removed | [Stale sessions](stale-sessions-and-branches.md) |

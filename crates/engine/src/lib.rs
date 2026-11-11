@@ -16,6 +16,7 @@ pub(crate) mod protocol;
 pub mod publish;
 pub(crate) mod review;
 pub(crate) mod review_queue;
+pub mod stats;
 pub mod store;
 pub(crate) mod verify;
 
