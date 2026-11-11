@@ -303,7 +303,7 @@ events have their own route, is configured in [config.yaml](configuration.md#not
 | `approval_expired` | A wait for approval passed `approval.timeout_hours` |
 | `started` | A review started |
 | `retry_scheduled` | A failed review step is retried later |
-| `superseded` | A newer commit replaced a review, or the pull request stopped asking for one (review request or label removed, closed, back to draft) |
+| `superseded` | A newer commit or a retarget to another base branch replaced a review, or the pull request stopped asking for one (review request or label removed, closed, back to draft) |
 
 Events for a rejected or an expiring GitHub token are planned in #19.
 

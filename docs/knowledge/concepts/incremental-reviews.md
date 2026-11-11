@@ -49,6 +49,9 @@ findings, and the new head must extend the reviewed head in a straight line:
   branch is normal and keeps the review incremental. A review published by an
   earlier release or by the Go engine records no base branch, so it does not
   widen for this reason; the next published review records it.
+- A review that is still running when the pull request is retargeted publishes
+  nothing. It ends as `superseded` with the code `base_branch_changed`, the same
+  way a new head supersedes it, and the next review is full.
 - If the stored result is gone (for example after
   `store.review_retention_seconds` or after an upgrade of the engine), the review
   widens to full. The log records the reason as `previous_review_not_stored`.
@@ -61,10 +64,23 @@ findings, and the new head must extend the reviewed head in a straight line:
 - GitHub lists at most 250 commits of a comparison. An incomplete list proves
   nothing, so it counts as not linear.
 
-A head that a published review already covers is not reviewed again. The one
-exception is a renewed review request for the same head after a notes hand-off.
-That request adopts the stored result of the hand-off review (see
-[notes hand-off](decisions.md#notes-hand-off)). Neither case is incremental.
+A head that a published review already covers is not reviewed again, with two
+exceptions. A renewed review request for the same head after a notes hand-off
+adopts the stored result of the hand-off review (see
+[notes hand-off](decisions.md#notes-hand-off)). A pull request retarget to
+another base branch without a new commit gets a full review of the same head,
+once per base branch, with the blocking findings of the published review as
+prior findings; the log line `reviewed head scheduled again for a full review`
+carries the reason `base_branch_changed`. Neither case is incremental, and a
+retargeted hand-off is reviewed again instead of adopted.
+
+autoreview does not dismiss the review it published before such a retarget. The
+branch protection setting that dismisses stale approvals removes an approval
+when the merge base brings new changes. Otherwise the earlier approval stays
+next to the full review, which is the latest review of the account once it is
+published. A clean full review whose decision and blocking findings equal the
+earlier review reuses that GitHub review instead of posting a second one, also
+when GitHub dismissed it.
 
 Both steps and the collection of prior findings are the same for a
 `claude-structured` and a `codex-envelope` pipeline, with the same log reasons.

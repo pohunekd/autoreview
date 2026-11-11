@@ -397,6 +397,188 @@ async fn retargeted_pull_request_gets_a_full_review_before_it_is_approved() {
     h.stop_engine().await;
 }
 
+// A retarget while a review runs supersedes that review: it reads the diff against the old
+// base, so its approval would cover commits it never saw. The next review is full (#279).
+#[tokio::test]
+async fn retarget_during_a_review_publishes_nothing_and_the_next_review_is_full() {
+    let mut h = start_harness(|_| {}).await;
+    h.set_output(reviewer_output(Vec::new()));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the first approval", || h.publications() == 1)
+        .await;
+    h.set_output(|_: &SessionRequest| String::new());
+    let mut pushed = pr.clone();
+    pushed.head_sha = sha("c");
+    h.fake.open(pushed.clone(), h.rule(&pr.repository));
+    h.poll_until("the incremental review", || h.started_count() == 2)
+        .await;
+    let mut retargeted = pushed.clone();
+    retargeted.base_branch = "release".to_owned();
+    retargeted.base_sha = sha("e");
+    h.fake.open(retargeted, h.rule(&pr.repository));
+    h.set_output(reviewer_output(Vec::new()));
+    h.poll_until("the next approval", || h.publications() == 2)
+        .await;
+    let (published, _, started, _) = h.fake.snapshot();
+    let scopes: Vec<bool> = started
+        .iter()
+        .map(|request| request.prompt.contains("Review scope: incremental"))
+        .collect();
+    assert_eq!(
+        (scopes, published[1].body.contains("full review of")),
+        (vec![false, true, false], true),
+        "the review that ran during the retarget must publish nothing, and the review after it \
+         must be full (incremental per started review, full publication)"
+    );
+    assert!(
+        h.fake
+            .has_note(Level::Log, "superseded (base_branch_changed)"),
+        "the retarget must supersede the running review"
+    );
+    // The superseded review read `main` but published nothing, so `main` is reviewed again.
+    h.fake.open(pushed, h.rule(&pr.repository));
+    h.poll_until("the review after the retarget back", || {
+        h.started_count() == 4
+    })
+    .await;
+    h.settle().await;
+    let (_, _, started, _) = h.fake.snapshot();
+    assert!(
+        started.len() == 4 && !started[3].prompt.contains("Review scope: incremental"),
+        "the retarget back to main must get one full review, started {} sessions",
+        started.len()
+    );
+    h.stop_engine().await;
+}
+
+// A retarget without a push gets a full review of the same head: the diff gained commits that
+// no review read. It settles the findings of the published review and runs once (#280).
+#[tokio::test]
+async fn retarget_without_a_push_gets_a_full_review_of_the_same_head() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 3, "title": "Broken", "body": "It breaks.",
+    })]));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    h.set_output(reviewer_output(Vec::new()));
+    let mut retargeted = pr.clone();
+    retargeted.base_branch = "release".to_owned();
+    retargeted.base_sha = sha("e");
+    h.fake.open(retargeted, h.rule(&pr.repository));
+    h.poll_until("the review after the retarget", || h.publications() == 2)
+        .await;
+    h.settle().await;
+    let (published, _, started, _) = h.fake.snapshot();
+    let reviews: Vec<(Decision, bool)> = published
+        .iter()
+        .map(|review| {
+            (
+                review.decision.clone(),
+                review.body.contains("full review of"),
+            )
+        })
+        .collect();
+    let reads = h.fake.lock().discussion_reads.len();
+    assert_eq!(
+        (reviews, started.len(), reads),
+        (
+            vec![(Decision::RequestChanges, true), (Decision::Approve, true)],
+            2,
+            1
+        ),
+        "a retarget of the reviewed head must get one full review that settles the earlier \
+         findings (decision, full; sessions; discussion reads)"
+    );
+    h.stop_engine().await;
+}
+
+/// Requests changes on head `a`, retargets the pull request to `release` without a push and
+/// holds the review of the retarget; returns the retargeted pull request.
+///
+/// One more pass sees that review run, so the schedule record names it as a blocker.
+async fn hold_the_review_of_a_retarget(h: &Harness) -> PullRequest {
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 3, "title": "Broken", "body": "It breaks.",
+    })]));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    h.set_output(|_: &SessionRequest| String::new());
+    let mut retargeted = pr.clone();
+    retargeted.base_branch = "release".to_owned();
+    retargeted.base_sha = sha("e");
+    h.fake.open(retargeted.clone(), h.rule(&pr.repository));
+    h.poll_until("the review of the retarget", || h.started_count() == 2)
+        .await;
+    h.poll().await;
+    retargeted
+}
+
+/// Waits for the review that follows the superseded review of a retarget and checks it.
+///
+/// It must start, review the head in full and approve it, and no fourth review may follow.
+async fn expect_the_review_after_the_superseded_one(h: &Harness, code: &str) {
+    h.set_output(reviewer_output(Vec::new()));
+    h.poll_until("the review after the superseded one", || {
+        h.publications() == 2
+    })
+    .await;
+    h.settle().await;
+    let (published, _, started, _) = h.fake.snapshot();
+    assert_eq!(
+        (
+            published[1].decision.clone(),
+            published[1].body.contains("full review of"),
+            started.len(),
+            h.fake.has_note(Level::Log, &format!("superseded ({code})")),
+        ),
+        (Decision::Approve, true, 3, true),
+        "a superseded review of a retarget must leave the head to one new full review \
+         (decision, full, sessions, superseded note)"
+    );
+}
+
+// A second retarget supersedes the review of the first one; the head is then reviewed on the
+// new base branch, so the approval of the old one is not the last word (#280).
+#[tokio::test]
+async fn second_retarget_during_the_review_of_a_retarget_gets_a_full_review() {
+    let mut h = start_harness(|_| {}).await;
+    let retargeted = hold_the_review_of_a_retarget(&h).await;
+    let mut again = retargeted.clone();
+    again.base_branch = "next".to_owned();
+    again.base_sha = sha("f");
+    h.fake.open(again, h.rule(&retargeted.repository));
+    expect_the_review_after_the_superseded_one(&h, "base_branch_changed").await;
+    h.stop_engine().await;
+}
+
+// A label removed and restored at the same head and base branch supersedes the review of the
+// retarget; that review published nothing, so the head is reviewed again (#280).
+#[tokio::test]
+async fn readded_label_during_the_review_of_a_retarget_gets_a_full_review() {
+    let mut h = start_harness(|_| {}).await;
+    let retargeted = hold_the_review_of_a_retarget(&h).await;
+    h.fake.lapse(retargeted.clone(), "review_label_removed");
+    h.wait_for("the superseded review", || {
+        h.fake
+            .has_note(Level::Log, "superseded (review_label_removed)")
+    })
+    .await;
+    h.fake
+        .open(retargeted.clone(), h.rule(&retargeted.repository));
+    expect_the_review_after_the_superseded_one(&h, "review_label_removed").await;
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn missing_previous_review_falls_back_to_a_full_review() {
     let mut h = start_harness(|_| {}).await;

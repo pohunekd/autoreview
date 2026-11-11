@@ -2,7 +2,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_go_compat::go_time::format_rfc3339_seconds;
 use serde::{Deserialize, Serialize};
@@ -306,6 +306,95 @@ pub fn plan(
     })
 }
 
+/// What decides the review of a published head whose pull request targets another base branch.
+#[derive(Debug, Clone, Copy)]
+pub struct Retarget<'a> {
+    /// The base branch that the pull request targets.
+    pub base_branch: &'a str,
+    /// The base branch of the stored input of each run of the head, by workflow ID.
+    ///
+    /// A run without an entry, whose stored review is gone, only raises the attempt.
+    pub run_bases: &'a BTreeMap<String, String>,
+    /// The workflow ID of the published review.
+    pub published_workflow: &'a str,
+}
+
+/// Plans the review that a retarget of the published head of `target` asks for.
+///
+/// Returns `None` when a run of the head that was not superseded reviewed the current base
+/// branch: [`plan`] then plans the head from its runs. Otherwise the ended runs of the head
+/// count as no review; [`plan`] does not see them, and none of them stays a blocker. A record
+/// that follows a running run of the head keeps that run's attempt, which [`plan`] matches
+/// against the run history. Any other record gets an attempt above every run of the head,
+/// skipping the attempt whose `workflow_id` is the published workflow.
+///
+/// # Errors
+///
+/// Returns the error of [`plan`].
+pub fn plan_retarget(
+    previous: &Record,
+    target: &Target,
+    runs: &[Run],
+    retarget: &Retarget<'_>,
+    workflow_id: impl Fn(i64) -> String,
+    now: OffsetDateTime,
+    policy: &Policy,
+) -> Result<Option<Decision>, Error> {
+    let identity = target.identity();
+    let mut attempt = 0_i64;
+    let mut ended = BTreeSet::new();
+    for run in runs.iter().filter(|run| run.target.identity() == identity) {
+        attempt = attempt.max(run.attempt.wrapping_add(1));
+        if !run.active() {
+            ended.insert(run.workflow_id.as_str());
+            // A superseded run reviewed nothing, so its base branch still needs a review.
+            if superseded(&failure_code(&run.failure)) {
+                continue;
+            }
+        }
+        if retarget
+            .run_bases
+            .get(&run.workflow_id)
+            .is_some_and(|base| base == retarget.base_branch)
+        {
+            return Ok(None);
+        }
+    }
+    // The run of the published review may be pruned while its record is kept.
+    if workflow_id(attempt) == retarget.published_workflow {
+        attempt = attempt.wrapping_add(1);
+    }
+    let visible: Vec<Run> = runs
+        .iter()
+        .filter(|run| !ended.contains(run.workflow_id.as_str()))
+        .cloned()
+        .collect();
+    let mut record = previous.clone();
+    // `plan` drops a blocker when it sees its run ended; it does not see these runs.
+    record
+        .blocking_workflows
+        .retain(|id| !ended.contains(id.as_str()));
+    // A record that follows a run of the head starts afresh. The record of the retarget names
+    // no workflow until it dispatches; it is kept, so its debounce runs once.
+    if record.identity == identity && !record.workflow_id.is_empty() {
+        record = Record {
+            blocking_workflows: record.blocking_workflows,
+            ..Record::default()
+        };
+    }
+    let mut decision = plan(record, target, &visible, now, policy)?;
+    // A higher attempt on a running record would hide the end of its run from `plan`.
+    let follows_run = !decision.dispatch
+        && decision.record.phase == phase::RUNNING
+        && visible
+            .iter()
+            .any(|run| run.active() && run.workflow_id == decision.record.workflow_id);
+    if !follows_run {
+        decision.record.attempt = decision.record.attempt.max(attempt);
+    }
+    Ok(Some(decision))
+}
+
 /// Records a failed run and schedules its retry when the failure is retryable and budget remains.
 ///
 /// # Errors
@@ -391,6 +480,7 @@ pub fn superseded(code: &str) -> bool {
     matches!(
         code,
         "head_changed"
+            | "base_branch_changed"
             | "review_label_removed"
             | "review_request_changed"
             | "review_request_not_active"
@@ -464,12 +554,16 @@ fn due_after(now: OffsetDateTime, delay: Duration) -> Result<OffsetDateTime, Err
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use time::{Duration, OffsetDateTime};
 
-    use super::{Policy, Record, Run, Target, notification, plan, reconcile_completed, retryable};
+    use super::{
+        Policy, Record, Retarget, Run, Target, notification, plan, plan_retarget,
+        reconcile_completed, retryable,
+    };
     use crate::diagnostic::{diagnostic, failure_explanation};
+    use crate::phase;
 
     fn fixture() -> (Target, OffsetDateTime, Policy) {
         (
@@ -926,6 +1020,217 @@ mod tests {
             "supersedes consumed the retry budget: {:?}",
             decision.record
         );
+    }
+
+    #[test]
+    fn retarget_is_reviewed_once_per_base_branch_and_ended_runs_never_block() {
+        let (target, now, policy) = fixture();
+        let identity = target.identity();
+        let workflow = |attempt: i64| format!("wf-{attempt}");
+        let ended = |attempt: i64, failure: &str| Run {
+            target: target.clone(),
+            workflow_id: workflow(attempt),
+            attempt,
+            status: "completed".to_owned(),
+            result: if failure.is_empty() {
+                "success"
+            } else {
+                "failure"
+            }
+            .to_owned(),
+            failure: failure.to_owned(),
+            ..Run::default()
+        };
+        let running = |attempt: i64| Run {
+            target: target.clone(),
+            workflow_id: workflow(attempt),
+            attempt,
+            status: "running".to_owned(),
+            ..Run::default()
+        };
+        // The record that discovery holds for the head when the row starts.
+        let record = |phase: &str, attempt: i64, blocking: &[&str]| Record {
+            identity: identity.clone(),
+            phase: phase.to_owned(),
+            attempt,
+            workflow_id: workflow(attempt),
+            blocking_workflows: blocking.iter().map(|id| (*id).to_owned()).collect(),
+            ..Record::default()
+        };
+        let bases: BTreeMap<String, String> = [("wf-0", "main"), ("wf-1", "release")]
+            .into_iter()
+            .map(|(id, base)| (id.to_owned(), base.to_owned()))
+            .collect();
+        let superseded = "base_branch_changed: the base branch changed";
+        let label_removed = "review_label_removed: the review label was removed";
+        let session_lost = "pohunek_session_lost: the reviewer session was lost";
+        // Each pass runs one debounce after the one before and plans from its record; it gives
+        // (planned by `plan_retarget`, phase, attempt, blockers, dispatch, notify).
+        type Pass = (
+            Vec<Run>,
+            &'static str,
+            (bool, &'static str, i64, Vec<&'static str>, bool, bool),
+        );
+        let rows: Vec<(&str, Record, &str, Vec<Pass>)> = vec![
+            (
+                "plain retarget",
+                record(phase::COMPLETED, 0, &[]),
+                "wf-0",
+                vec![
+                    (
+                        vec![ended(0, "")],
+                        "release",
+                        (true, phase::WAITING, 1, vec![], false, false),
+                    ),
+                    (
+                        vec![ended(0, "")],
+                        "release",
+                        (true, phase::RUNNING, 1, vec![], true, false),
+                    ),
+                ],
+            ),
+            (
+                "retarget review still running",
+                record(phase::RUNNING, 1, &[]),
+                "wf-0",
+                vec![(
+                    vec![ended(0, ""), running(1)],
+                    "release",
+                    (false, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                )],
+            ),
+            (
+                "retarget review superseded at the same head",
+                record(phase::RUNNING, 1, &["wf-1"]),
+                "wf-0",
+                vec![
+                    (
+                        vec![ended(0, ""), ended(1, label_removed)],
+                        "release",
+                        (true, phase::WAITING, 2, vec![], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, label_removed)],
+                        "release",
+                        (true, phase::RUNNING, 2, vec![], true, false),
+                    ),
+                ],
+            ),
+            (
+                "second retarget while the retarget review runs",
+                record(phase::RUNNING, 1, &["wf-1"]),
+                "wf-0",
+                vec![
+                    (
+                        vec![ended(0, ""), running(1)],
+                        "next",
+                        (true, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, superseded)],
+                        "next",
+                        (true, phase::WAITING, 2, vec![], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, superseded)],
+                        "next",
+                        (true, phase::RUNNING, 2, vec![], true, false),
+                    ),
+                ],
+            ),
+            (
+                "back to the base branch of the running retarget review, which then fails",
+                record(phase::RUNNING, 1, &["wf-1"]),
+                "wf-0",
+                vec![
+                    (
+                        vec![ended(0, ""), running(1)],
+                        "next",
+                        (true, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), running(1)],
+                        "release",
+                        (false, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, session_lost)],
+                        "release",
+                        (false, phase::RETRY_WAIT, 2, vec![], false, true),
+                    ),
+                ],
+            ),
+            (
+                "back to a reviewed base branch",
+                record(phase::COMPLETED, 1, &[]),
+                "wf-1",
+                vec![(
+                    vec![ended(0, ""), ended(1, "")],
+                    "main",
+                    (false, phase::COMPLETED, 1, vec![], false, false),
+                )],
+            ),
+            (
+                "back to a base branch whose run was superseded",
+                record(phase::COMPLETED, 1, &[]),
+                "wf-1",
+                vec![(
+                    vec![ended(0, superseded), ended(1, "")],
+                    "main",
+                    (true, phase::WAITING, 2, vec![], false, false),
+                )],
+            ),
+            (
+                "runs pruned, published workflow kept",
+                Record::default(),
+                "wf-0",
+                vec![(
+                    vec![],
+                    "release",
+                    (true, phase::WAITING, 1, vec![], false, false),
+                )],
+            ),
+        ];
+        for (name, mut previous, published, passes) in rows {
+            let mut at = now;
+            for (index, (runs, base_branch, want)) in passes.into_iter().enumerate() {
+                let retarget = Retarget {
+                    base_branch,
+                    run_bases: &bases,
+                    published_workflow: published,
+                };
+                let planned =
+                    plan_retarget(&previous, &target, &runs, &retarget, workflow, at, &policy)
+                        .expect("plan_retarget");
+                let retargeted = planned.is_some();
+                let decision = match planned {
+                    Some(decision) => decision,
+                    None => plan(previous, &target, &runs, at, &policy).expect("plan"),
+                };
+                let record = &decision.record;
+                assert_eq!(
+                    (
+                        retargeted,
+                        record.phase.as_str(),
+                        record.attempt,
+                        record.blocking_workflows.clone(),
+                        decision.dispatch,
+                        decision.notify,
+                    ),
+                    (
+                        want.0,
+                        want.1,
+                        want.2,
+                        want.3.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>(),
+                        want.4,
+                        want.5,
+                    ),
+                    "{name}, pass {index}"
+                );
+                previous = decision.record;
+                at += policy.debounce;
+            }
+        }
     }
 
     #[test]

@@ -630,7 +630,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         Ok(())
     }
 
-    /// Reads the pull request again and fails with `head_changed` when its head moved.
+    /// Reads the pull request again and fails when it moved away from the reviewed diff.
+    ///
+    /// A new head fails with `head_changed`, another base branch with `base_branch_changed`.
     pub(crate) async fn current_pull_request(&self) -> Result<PullRequest, Error> {
         let repository = self.input.pull_request.repository.clone();
         let number = self.input.pull_request.number;

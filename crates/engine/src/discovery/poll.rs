@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_policy::Event;
 use autoreview_schedule::phase;
-use autoreview_schedule::scheduler::{self, Record, Run};
+use autoreview_schedule::scheduler::{self, Record, Retarget, Run, Target};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
@@ -173,6 +173,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             if let Some(published) = state.published.get(key)
                 && published.covers(pr)
+                && !published.retargeted(pr)
             {
                 state.schedule.insert(
                     key.clone(),
@@ -196,9 +197,43 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             let target = pr.target();
             // A key without a record plans from Go's zero record, which `Record::default` is.
             let previous = state.schedule.get(key).cloned().unwrap_or_default();
-            let mut decision =
-                scheduler::plan(previous, &target, &history, now, &self.config.schedule)
-                    .map_err(schedule_error)?;
+            // A published review that covers the head gets here only when it names another base
+            // branch.
+            let planned = match state.published.get(key) {
+                Some(published) if published.covers(pr) => {
+                    let run_bases = self.run_bases(cancel, &target, &history)?;
+                    let retarget = Retarget {
+                        base_branch: &pr.base_branch,
+                        run_bases: &run_bases,
+                        published_workflow: &published.workflow_id,
+                    };
+                    scheduler::plan_retarget(
+                        &previous,
+                        &target,
+                        &history,
+                        &retarget,
+                        |attempt| pr.workflow_id(attempt),
+                        now,
+                        &self.config.schedule,
+                    )
+                    .map_err(schedule_error)?
+                }
+                _ => None,
+            };
+            let retargeted = planned.is_some();
+            let mut decision = match planned {
+                Some(decision) => decision,
+                None => scheduler::plan(previous, &target, &history, now, &self.config.schedule)
+                    .map_err(schedule_error)?,
+            };
+            if retargeted && decision.dispatch {
+                tracing::info!(
+                    review_id = %pr.review_id(),
+                    reason = "base_branch_changed",
+                    base_branch = %pr.base_branch,
+                    "reviewed head scheduled again for a full review"
+                );
+            }
             if decision.notify {
                 let message = scheduler::notification(&target, &decision.record);
                 notices.push(self.notice(record_event(&decision.record), key, message)?);
@@ -312,6 +347,36 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             save_discovery(transaction, &state)
         })?;
         Ok(Pass { result, notices })
+    }
+
+    /// Returns the base branch of the stored input of each run of `target`, by workflow ID.
+    ///
+    /// A run whose stored review is gone has no entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store.
+    fn run_bases(
+        &self,
+        cancel: &CancellationToken,
+        target: &Target,
+        history: &[Run],
+    ) -> Result<BTreeMap<String, String>, Error> {
+        let identity = target.identity();
+        let mut bases = BTreeMap::new();
+        for run in history
+            .iter()
+            .filter(|run| run.target.identity() == identity)
+        {
+            live(cancel)?;
+            if let Some(review) = self.store.get_review(&run.workflow_id)? {
+                bases.insert(
+                    run.workflow_id.clone(),
+                    review.input.pull_request.base_branch,
+                );
+            }
+        }
+        Ok(bases)
     }
 
     /// Returns the waits that no longer match their pull request and drops ended waits.

@@ -163,12 +163,20 @@ fn validate_prior(input: &ReviewInput) -> Result<(), BoxError> {
     Ok(())
 }
 
-/// Fails with `head_changed` when the reviewed head is no longer the pull request head.
+/// Fails when the pull request moved away from the reviewed diff.
 ///
-/// A renewed review request of the same head keeps the running review.
+/// The code is `head_changed` for a new head and `base_branch_changed` for another base branch.
+/// A renewed review request of the same head keeps the running review, and an unknown base
+/// branch on either side is not a change.
 pub(crate) fn still_wanted(expected: &PullRequest, current: &PullRequest) -> Result<(), Error> {
     if current.head_sha != expected.head_sha {
         return Err(Error::workflow("head_changed", true, None));
+    }
+    if !expected.base_branch.is_empty()
+        && !current.base_branch.is_empty()
+        && current.base_branch != expected.base_branch
+    {
+        return Err(Error::workflow("base_branch_changed", true, None));
     }
     Ok(())
 }
@@ -250,7 +258,8 @@ mod tests {
         Pipeline, Protocol, Reviewer, Rule, Trigger, TriggerKind,
     };
 
-    use super::validate_input;
+    use super::{still_wanted, validate_input};
+    use crate::error::error_code;
     use crate::model::ids::INPUT_VERSION;
     use crate::model::pull_request::{SCOPE_FULL, SCOPE_INCREMENTAL};
     use crate::model::{
@@ -494,6 +503,33 @@ mod tests {
         assert!(
             validate_input(&input).is_err(),
             "a prior finding whose key does not name it was accepted"
+        );
+    }
+
+    // A retarget supersedes the running review; an unknown base branch does not (#279).
+    #[test]
+    fn still_wanted_refuses_only_a_known_base_branch_change() {
+        let expected = test_pull_request(1);
+        let mut retargeted = expected.clone();
+        retargeted.base_branch = "release".to_owned();
+        let mut unknown = expected.clone();
+        unknown.base_branch = String::new();
+        let mut moved = expected.clone();
+        moved.base_sha = sha("e");
+        let code = |expected: &PullRequest, current: &PullRequest| {
+            still_wanted(expected, current)
+                .err()
+                .map(|err| error_code(&err).to_owned())
+        };
+        assert_eq!(
+            [
+                code(&expected, &retargeted),
+                code(&expected, &unknown),
+                code(&unknown, &retargeted),
+                code(&expected, &moved),
+            ],
+            [Some("base_branch_changed".to_owned()), None, None, None],
+            "only a change between two known base branches supersedes the review"
         );
     }
 }
