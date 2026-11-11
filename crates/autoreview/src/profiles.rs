@@ -358,12 +358,13 @@ pub(crate) fn profile_name_valid(name: &str) -> bool {
 /// Returns the agents directory of the pohunek daemon from `XDG_CONFIG_HOME` and `HOME`.
 ///
 /// pohunek reads profiles from `$XDG_CONFIG_HOME/pohunek/agents`, or from
-/// `$HOME/.config/pohunek/agents` when `XDG_CONFIG_HOME` is unset or empty.
+/// `$HOME/.config/pohunek/agents` when `XDG_CONFIG_HOME` is unset. pohunek refuses a set but
+/// empty `XDG_CONFIG_HOME`, so this does too.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming the variable that is relative, not UTF-8 or holds a
-/// control character, or `HOME` when neither variable is set.
+/// Returns `configuration_invalid` naming the variable that is empty, relative, not UTF-8 or
+/// holds a control character, or `HOME` when the variable is unset and `HOME` is unset or empty.
 pub(crate) fn agents_directory(
     xdg_config_home: Option<&OsStr>,
     home: Option<&OsStr>,
@@ -375,7 +376,8 @@ pub(crate) fn agents_directory(
 /// Returns the directory of the installed adapters from `XDG_DATA_HOME` and `HOME`.
 ///
 /// The adapters live in `$XDG_DATA_HOME/autoreview/adapters`, or in
-/// `$HOME/.local/share/autoreview/adapters` when `XDG_DATA_HOME` is unset or empty.
+/// `$HOME/.local/share/autoreview/adapters` when `XDG_DATA_HOME` is unset. A set but empty
+/// `XDG_DATA_HOME` is refused, as pohunek refuses it.
 ///
 /// # Errors
 ///
@@ -389,15 +391,23 @@ pub(crate) fn adapters_directory(
 }
 
 /// Returns the XDG base directory: the variable when it is set, else `fallback` under `HOME`.
+///
+/// A set but empty variable is refused: pohunek refuses it rather than use the default.
 fn base_directory(
     (name, value): (&'static str, Option<&OsStr>),
     home: Option<&OsStr>,
     fallback: &str,
 ) -> Result<PathBuf, Error> {
     let (variable, base) = match (value, home) {
-        (Some(value), _) if !value.is_empty() => (name, PathBuf::from(value)),
-        (_, Some(value)) if !value.is_empty() => ("HOME", Path::new(value).join(fallback)),
-        _ => {
+        (Some(value), _) if value.is_empty() => {
+            return Err(invalid_flag(
+                name,
+                "must not be empty when set; unset it for the default under HOME",
+            ));
+        }
+        (Some(value), _) => (name, PathBuf::from(value)),
+        (None, Some(value)) if !value.is_empty() => ("HOME", Path::new(value).join(fallback)),
+        (None, _) => {
             return Err(invalid_flag(
                 "HOME",
                 "must be set to find the pohunek agents",
