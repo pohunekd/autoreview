@@ -7,12 +7,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_policy::Event;
+use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::{self, Record, Run};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
 use super::route::{HostAnswers, HostFailures, host_unavailable};
-use super::{Notice, PHASE_RETRY_WAIT, record_event};
+use super::{Notice, record_event};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
@@ -21,18 +22,6 @@ use crate::model::review::APPROVAL_KIND_SUPERSEDED;
 use crate::model::{Candidate, PollResult, RetryRequest, ReviewInput};
 use crate::store::discovery::save_discovery;
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
-
-/// Schedule phase of a review identity that waits for its debounce.
-const PHASE_WAITING: &str = "waiting";
-
-/// Schedule phase of a review identity whose last run ended.
-const PHASE_COMPLETED: &str = "completed";
-
-/// Schedule phase of a review identity that gets no automatic attempt.
-pub(crate) const PHASE_FAILED: &str = "failed";
-
-/// Schedule phase of a review identity that left every trigger.
-const PHASE_WITHDRAWN: &str = "withdrawn";
 
 /// Start value of the latest attempt, below every stored attempt.
 const NO_ATTEMPT: i64 = -1;
@@ -189,7 +178,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     key.clone(),
                     Record {
                         identity: pr.target().identity(),
-                        phase: PHASE_COMPLETED.to_owned(),
+                        phase: phase::COMPLETED.to_owned(),
                         workflow_id: published.workflow_id.clone(),
                         ..Record::default()
                     },
@@ -495,7 +484,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         // from a poll that saw the run before it ended.
         let mut forced = Record {
             identity: target.identity(),
-            phase: PHASE_RETRY_WAIT.to_owned(),
+            phase: phase::RETRY_WAIT.to_owned(),
             due_at: now,
             ..Record::default()
         };
@@ -547,11 +536,11 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 return true;
             }
             match record.phase.as_str() {
-                PHASE_WAITING | PHASE_RETRY_WAIT => {
-                    record.phase = PHASE_WITHDRAWN.to_owned();
+                phase::WAITING | phase::RETRY_WAIT => {
+                    record.phase = phase::WITHDRAWN.to_owned();
                     true
                 }
-                PHASE_WITHDRAWN | PHASE_COMPLETED | PHASE_FAILED => {
+                phase::WITHDRAWN | phase::COMPLETED | phase::FAILED => {
                     !record.blocking_workflows.is_empty()
                 }
                 _ => true,

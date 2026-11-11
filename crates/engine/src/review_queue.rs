@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_policy::{Policy, TriggerKind};
+use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::Record;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -342,9 +343,9 @@ pub(crate) fn queue_status(
     let pending = state
         .schedule
         .get(key)
-        .filter(|record| record.phase != "completed");
+        .filter(|record| record.phase != phase::COMPLETED);
     if let Some(record) = pending
-        && record.phase == "running"
+        && record.phase == phase::RUNNING
     {
         return schedule_status(record);
     }
@@ -381,17 +382,17 @@ pub(crate) fn queue_status(
 /// The status line and priority of a schedule record that has not completed.
 fn schedule_status(record: &Record) -> (String, QueuePriority) {
     match record.phase.as_str() {
-        "running" => ("AI review running".to_owned(), QueuePriority::Other),
-        "waiting" | "retry_wait" if record.awaits_host => (
+        phase::RUNNING => ("AI review running".to_owned(), QueuePriority::Other),
+        phase::WAITING | phase::RETRY_WAIT if record.awaits_host => (
             format!("AI review waits for a review host: {}", status_code(record)),
             QueuePriority::Other,
         ),
-        "waiting" | "retry_wait" => ("AI review queued".to_owned(), QueuePriority::Other),
-        "failed" => (
+        phase::WAITING | phase::RETRY_WAIT => ("AI review queued".into(), QueuePriority::Other),
+        phase::FAILED => (
             format!("AI review stopped: {}", status_code(record)),
             QueuePriority::Stopped,
         ),
-        "withdrawn" => ("AI review withdrawn".to_owned(), QueuePriority::Other),
+        phase::WITHDRAWN => ("AI review withdrawn".to_owned(), QueuePriority::Other),
         _ => (
             format!("AI review state unknown: {}", record.phase),
             QueuePriority::Other,
