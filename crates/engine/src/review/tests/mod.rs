@@ -7,4 +7,5 @@ mod authors;
 mod core;
 mod mcp;
 mod memory;
+mod steps;
 mod verify;

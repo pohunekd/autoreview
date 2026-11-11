@@ -4,6 +4,8 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::sync::atomic::AtomicI64;
+
 use autoreview_policy::{Event, OnClean, Reviewer};
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
@@ -29,7 +31,7 @@ use crate::publish::anchor::anchor_findings;
 use crate::publish::decision_text;
 use crate::publish::plan::{PublicationPlan, blocking_count, plan_publication, publication_event};
 use crate::publish::render::{RenderSettings, human_review_signals, render_review};
-use crate::store::{RESULT_SUCCESS, StoredReview};
+use crate::store::{RESULT_SUCCESS, ReviewStep, StoredReview};
 use crate::verify::{apply_verification, claims_of, verifier_reviewer};
 
 /// The stored time of a publication, written as Go writes a `time.Time`.
@@ -69,6 +71,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             verifier: None,
             discussion: Discussion::default(),
             approved: false,
+            retries: AtomicI64::new(0),
         };
         if let Err(err) = validate_input(&review.input) {
             return review
@@ -77,7 +80,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
         if !review.input.prior.is_empty() {
             let settled = review
-                .once::<Discussion, _>(STEP_DISCUSSION, || {
+                .once_recorded::<Discussion, _>(ReviewStep::Discussion, STEP_DISCUSSION, || {
                     let integration = &*self.integration;
                     let cancel = &review.cancel;
                     let input = &review.input;
@@ -90,7 +93,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 .await;
             match settled {
                 Ok(discussion) => review.discussion = discussion,
-                Err(err) => return review.fail(err).await,
+                Err(failure) => return review.fail_step(failure).await,
             }
         }
         for reviewer in review.input.reviewers.clone() {
@@ -198,8 +201,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Err(err) = self.current_pull_request().await {
             return self.fail(err).await;
         }
-        if let Err(err) = self.collect().await {
-            return self.fail(err).await;
+        if let Err(failure) = self.collect().await {
+            return self.fail_step(failure).await;
         }
         let mut results = Vec::with_capacity(self.slots.len());
         for slot in &self.slots {
@@ -263,7 +266,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if self.input.verifies() && !claims.is_empty() {
             let verification = match self.verify(&claims).await {
                 Ok(verification) => verification,
-                Err(err) => return self.fail(err).await,
+                Err(failure) => return self.fail_step(failure).await,
             };
             artifact = apply_verification(artifact, verification);
         }
@@ -412,7 +415,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 .await;
         }
         let result = self
-            .once::<PublishResult, _>(STEP_PUBLICATION, || {
+            .once_recorded::<PublishResult, _>(ReviewStep::Publication, STEP_PUBLICATION, || {
                 let integration = &*self.engine.integration;
                 let cancel = &self.cancel;
                 let review = &rendered.review;
@@ -421,7 +424,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             .await;
         let result = match result {
             Ok(result) => result,
-            Err(err) => return self.fail(err).await,
+            Err(failure) => return self.fail_step(failure).await,
         };
         let published_at = self
             .once::<PublishedAt, _>(STEP_PUBLISHED_AT, || async {

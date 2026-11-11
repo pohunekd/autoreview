@@ -86,7 +86,9 @@ What is compatible, as rules every slice that defines a persisted type must
 follow:
 
 - **R1 Schema.** Same DDL text and `PRAGMA user_version = 1` (`store.go:37-73`,
-  `128-143`); a newer version is refused with `store_version_unsupported`. Open
+  `128-143`), plus the additive Rust-only table `review_step_runs` (#270, under
+  "What is not compatible, by decision"); a newer version is refused with
+  `store_version_unsupported`. Open
   parameters as `store.go:89-124`: absolute path, directory mode 0700,
   `busy_timeout` 10000, `foreign_keys` on, WAL, `BEGIN IMMEDIATE` for every write
   transaction, one connection.
@@ -416,6 +418,18 @@ What is not compatible, by decision:
   `TestWriteParityGolden` compares it byte for byte. The regression tests are
   `repository_owner_follows_the_github_login_grammar` and
   `rule_match_owner_follows_the_github_login_grammar`.
+- **Step runs table (#270):** the store holds the additive table
+  `review_step_runs` (`crates/engine/src/store/steps.rs`), which Go's schema
+  lacks. Every open creates it with `CREATE TABLE IF NOT EXISTS` after the Go
+  schema, and `user_version` stays 1, so the Go store still opens the file. Go
+  neither writes nor reads the table; its prune deletes the rows with their
+  review through `ON DELETE CASCADE`, and reviews that Go runs after a rollback
+  count in no step. `go_store_golden_opens` leaves the table out of the Go golden
+  comparison and checks its SQL on its own; the golden is not regenerated. The
+  regression tests are `go_store_golden_opens`,
+  `review_records_its_steps_with_their_retries`,
+  `shutdown_after_the_last_reviewer_result_still_records_the_reviewers_step` and
+  `verifier_failure_before_its_verification_is_stored_records_the_resumed_run`.
 
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):

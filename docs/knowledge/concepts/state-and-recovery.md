@@ -20,7 +20,7 @@ retries happen at which layer, and what is deleted over time.
 
 ## What the store contains
 
-The file holds four kinds of data.
+The file holds five kinds of data.
 
 | Data | What it is for |
 |---|---|
@@ -28,6 +28,7 @@ The file holds four kinds of data.
 | Reviews | One row per review: its identity, the frozen input (rule, pipeline, route, scope, prior findings, reviewers), its status (`queued`, `running`, `awaiting`, `completed`), its result, the approval decision and deadline, and its outcome. |
 | Review steps | The output of each finished step of a review: the combined artifact, the discussion, the commentable lines, the publication plan, the rendered body, the GitHub publication, the publication time, and the verification. |
 | Review state | The progress of each reviewer slot and of the verifier slot: the session identity, the run and start counters, the stored result, and the verification. |
+| Step runs | How each run of a review step ended, with its retries and its duration, for the [statistics](../../stats.md#steps). The Go reference engine neither writes nor reads them. |
 
 The database holds the published text of reviews and the finding excerpts that
 refer to the repository. Protect it accordingly. Retention (below) limits how

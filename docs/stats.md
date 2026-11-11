@@ -2,7 +2,7 @@
 type: Reference
 id: reference/stats
 title: Review statistics
-description: The document that autoreview stats --json prints and the MCP tool review_stats returns - the current state of the reviews, daily counts over a range of UTC days, breakdowns per repository, rule and reviewer, how each count is defined, and a jq query for each part - and the Prometheus metrics of autoreview serve on the same numbers.
+description: The document that autoreview stats --json prints and the MCP tool review_stats returns - the current state of the reviews, daily counts over a range of UTC days, breakdowns per repository, rule and reviewer, the runs of each review step, how each count is defined, and a jq query for each part - and the Prometheus metrics of autoreview serve on the same numbers.
 source_kind: manual
 intents: [debug, help]
 ---
@@ -27,9 +27,10 @@ autoreview stats [--since DATE [--until DATE]] [--json]
 - The document is read from the store only. `stats` asks neither GitHub nor pohunek, and
   changes nothing. Both forms read the discovery state. Without `--since` they read the
   reviews that are not completed, through the status index. With `--since` they read the
-  whole `reviews` table, so the cost grows with `store.review_retention_seconds`, which
-  decides how many reviews the store keeps. The reviews and the discovery state come from
-  one read transaction, so all counts describe the same moment.
+  whole `reviews` and `review_step_runs` tables, so the cost grows with
+  `store.review_retention_seconds`, which decides how many reviews the store keeps. The
+  reviews, the step runs and the discovery state come from one read transaction, so all
+  counts describe the same moment.
 - `autoreview serve` can serve the same numbers to Prometheus; see
   [Prometheus metrics](#prometheus-metrics).
 
@@ -74,13 +75,18 @@ autoreview stats [--since DATE [--until DATE]] [--json]
     "by_repository": [{"key": "acme/widget", "...": "the counters of totals"}],
     "by_rule": [{"key": "acme/*", "...": "the counters of totals"}],
     "by_reviewer": [{"key": "opus", "...": "the counters of totals"}],
-    "failed_by_code": [{"key": "pohunek_session_start_failed", "failed": 1}]
+    "failed_by_code": [{"key": "pohunek_session_start_failed", "failed": 1}],
+    "steps": [
+      {"key": "publication", "runs": 3, "succeeded": 3, "superseded": 0, "failed": 0,
+       "retries": 0, "duration_median_ms": 1200, "duration_p90_ms": 2100},
+      {"key": "reviewers", "...": "the counts of each step"}
+    ]
   }
 }
 ```
 
-The `"..."` entries stand for the twelve counters of `totals`; the real document always
-writes all of them.
+The `"..."` entries stand for the twelve counters of `totals` and the seven counts of a
+step; the real document always writes all of them.
 
 ### Top level
 
@@ -138,6 +144,8 @@ autoreview stats --json | jq -r '.current.stopped_by_repository[] | "\(.key) \(.
   repository, per rule (its `match` value) and per reviewer ID, sorted by `key`. Only
   entries with a count appear. A review counts once for each of its reviewers, so the
   reviewer entries do not add up to `totals`.
+- `steps`: the runs of the review steps that ended in the range, per step; see
+  [Steps](#steps).
 - `failed_by_code`: the attempts that `failed` counts over the range, per stored error code
   (`key`), sorted by code. The entries add up to `totals.failed`; a superseding code such as
   `head_changed` counts in `superseded` and is not listed. The codes are those of the
@@ -193,13 +201,60 @@ autoreview stats --since 2026-11-01 --json \
         (if .published > 0 then .approved_without_human / .published else null end)}'
 ```
 
+### Steps
+
+`steps` counts the runs of the review steps that ended inside the range, one entry per step
+(`key`), sorted by step name. A step without a run in the range has no entry. The steps
+are a fixed set, in the order a review runs them:
+
+- `discussion`: reading the replies to the prior findings on GitHub; only a review with
+  prior findings has it.
+- `reviewers`: starting the reviewer sessions, polling them and checking their output,
+  until every reviewer has a result.
+- `verifier`: starting the verifier session and checking its verdicts; only a review with
+  blocking claims and a verifier has it.
+- `publication`: publishing the rendered review on GitHub.
+
+Each entry has these counts:
+
+- `runs`: runs of the step, counted on the UTC day they ended, whatever their outcome.
+- `succeeded`: runs that finished the work of the step.
+- `superseded`: runs stopped because a newer state of the pull request replaced the review,
+  with a superseding code such as `head_changed`.
+- `failed`: runs that failed for any other reason. A failed `verifier` run does not fail
+  the review: its claims are published unverified.
+- `retries`: repeated attempts inside the runs: a retried GitHub or pohunek call (logged as
+  `step failed, retrying`), a session start after a failed one, and a fresh reviewer run
+  after an unusable output.
+- `duration_median_ms`, `duration_p90_ms`: the median and the 90th percentile, by nearest
+  rank, of the milliseconds of the succeeded runs; `null` without a succeeded run. A
+  `reviewers` run includes the whole wait for the reviewer sessions.
+
+A review attempt records each step it runs once, in the store write that keeps the
+outcome of the step: a succeeded step with its stored result, a failed `verifier` run with
+its unverified claims, and any other failed or superseded run with the failed review. A
+run that a shutdown interrupts before that write records nothing; when the resumed review
+reaches the step, the step records the time and the retries of its resumed part only. A
+step whose outcome is stored keeps its record, and the resumed review does not run it
+again. A record that cannot be written fails that write like any other store error.
+
+The step runs are deleted with their review (see `pruned_before`). Reviews that an engine
+before this version ran have no step runs, so they count in no step; a review that such an
+engine started records only the steps that end after the update.
+
+```sh
+autoreview stats --since 2026-11-01 --json \
+  | jq -r '.history.steps[] | [.key, .runs, .failed, .retries, .duration_p90_ms] | @tsv'
+```
+
 ## Not in the document
 
 The store does not keep these, so the document leaves them out:
 
 - notes handed off per day, and stops per day: `stopped` is a current count, because the
   schedule record does not keep the time of the stop;
-- the duration of each reviewer run and of the verifier, and retries per step;
+- the duration of each reviewer on its own: the `reviewers` step covers every reviewer of
+  a review, and the work between the steps (combining, anchoring, rendering) is in no step;
 - token or cost data, which pohunek does not report to autoreview;
 - days before `pruned_before`, which need a rollup table that outlives the retention.
 
@@ -217,6 +272,8 @@ History 2026-11-09 to 2026-11-10 (UTC days):
   published: approved without a human 1, approved after a wait 1, changes requested 1, commented 0
   failed by code: pohunek_session_start_failed 1
   time to publication: median 750 s, p90 9000 s
+  step publication: 3 runs, 0 failed, 0 superseded, 0 retries, median 1200 ms, p90 2100 ms
+  step reviewers: 4 runs, 1 failed, 0 superseded, 2 retries, median 512000 ms, p90 840000 ms
   completed reviews last updated before 2026-10-12T05:47:56Z may be pruned
 ```
 

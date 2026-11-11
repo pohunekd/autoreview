@@ -1,8 +1,8 @@
 //! Review statistics: the current state and a daily history, read from the store only.
 //!
 //! One review row is one attempt: a retry is a new row, so `started` and `failed` count
-//! attempts. The counts come from the `reviews` table and the schedule records of the
-//! discovery state; nothing asks GitHub or pohunek.
+//! attempts. The counts come from the `reviews` and `review_step_runs` tables and the schedule
+//! records of the discovery state; nothing asks GitHub or pohunek.
 
 // Rust guideline compliant 2026-06-26
 
@@ -24,7 +24,7 @@ use crate::model::review::APPROVAL_KIND_APPROVE;
 use crate::model::{Decision, Outcome, ReviewOutcome};
 use crate::store::{
     RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
-    REVIEW_RUNNING, StoredReview,
+    REVIEW_RUNNING, StepOutcome, StepRun, StoredReview,
 };
 
 /// Version of the statistics document; a changed field gets a new version.
@@ -229,6 +229,27 @@ pub struct History {
     pub by_reviewer: Vec<Keyed<Counters>>,
     /// The `failed` attempts of the range per stored error code, sorted by code.
     pub failed_by_code: Vec<Keyed<FailedCount>>,
+    /// The runs of each review step that ended in the range, sorted by step name.
+    pub steps: Vec<Keyed<StepCounts>>,
+}
+
+/// Counts of the runs of one review step that ended in the range.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct StepCounts {
+    /// Runs of the step, whatever their outcome.
+    pub runs: i64,
+    /// Runs that finished the work of the step.
+    pub succeeded: i64,
+    /// Runs stopped because a newer state of the pull request replaced the review.
+    pub superseded: i64,
+    /// Runs that failed for any other reason.
+    pub failed: i64,
+    /// Repeated attempts inside the runs: retried calls, session starts and reviewer runs.
+    pub retries: i64,
+    /// Median milliseconds of the succeeded runs.
+    pub duration_median_ms: Option<i64>,
+    /// 90th percentile of the same milliseconds, nearest rank.
+    pub duration_p90_ms: Option<i64>,
 }
 
 /// Counts of review attempts that started or completed in one bucket.
@@ -339,6 +360,40 @@ impl Tally {
         self.counters.publication_median_seconds = nearest_rank(&self.seconds, MEDIAN_PERCENT);
         self.counters.publication_p90_seconds = nearest_rank(&self.seconds, P90_PERCENT);
         self.counters
+    }
+}
+
+/// The counts of one step while the runs are read, with the durations of the succeeded runs.
+#[derive(Debug, Default)]
+struct StepTally {
+    /// The counts; the two percentiles are filled by `finish`.
+    counts: StepCounts,
+    /// Milliseconds of every succeeded run.
+    durations: Vec<i64>,
+}
+
+impl StepTally {
+    /// Counts one run of the step.
+    fn add(&mut self, run: &StepRun) {
+        let counts = &mut self.counts;
+        counts.runs += 1;
+        counts.retries += run.retries;
+        match run.outcome {
+            StepOutcome::Succeeded => {
+                counts.succeeded += 1;
+                self.durations.push(run.duration_ms);
+            }
+            StepOutcome::Superseded => counts.superseded += 1,
+            StepOutcome::Failed => counts.failed += 1,
+        }
+    }
+
+    /// Returns the counts with the median and the 90th percentile of the durations.
+    fn finish(mut self) -> StepCounts {
+        self.durations.sort_unstable();
+        self.counts.duration_median_ms = nearest_rank(&self.durations, MEDIAN_PERCENT);
+        self.counts.duration_p90_ms = nearest_rank(&self.durations, P90_PERCENT);
+        self.counts
     }
 }
 
@@ -459,13 +514,14 @@ impl HistoryTally {
     }
 }
 
-/// Builds the document from review rows and schedule records.
+/// Builds the document from review rows, step runs and schedule records.
 ///
-/// The rows and the schedule records are those of one `Store::stats_snapshot`. The current
-/// state counts every queued and running row, every awaiting row without an approval
-/// decision, and every schedule record in phase `failed`. With `range`, an attempt
+/// The rows, the step runs and the schedule records are those of one `Store::stats_snapshot`.
+/// The current state counts every queued and running row, every awaiting row without an
+/// approval decision, and every schedule record in phase `failed`. With `range`, an attempt
 /// counts as started on the UTC day of `created_at` and as completed on the UTC day of
-/// `completed_at`, each only inside the range.
+/// `completed_at`, each only inside the range, and every step run in `steps` counts; the
+/// snapshot holds only the runs that ended inside the range.
 ///
 /// # Errors
 ///
@@ -473,6 +529,7 @@ impl HistoryTally {
 /// completed row without `completed_at`, and for a schedule key without `#`.
 pub fn compute(
     reviews: &[StoredReview],
+    steps: &[StepRun],
     schedule: &BTreeMap<String, Record>,
     range: Option<&StatsRange>,
     generated_at: OffsetDateTime,
@@ -480,7 +537,7 @@ pub fn compute(
 ) -> Result<StatsDocument, Error> {
     let current = current_state(reviews, schedule)?;
     let history = match range {
-        Some(range) => Some(history(reviews, range, pruned_before)?),
+        Some(range) => Some(history(reviews, steps, range, pruned_before)?),
         None => None,
     };
     Ok(StatsDocument {
@@ -575,9 +632,10 @@ fn current_state(
     })
 }
 
-/// Counts the starts and completions inside `range`.
+/// Counts the starts and completions inside `range`, and the step runs of `steps`.
 fn history(
     reviews: &[StoredReview],
+    steps: &[StepRun],
     range: &StatsRange,
     pruned_before: OffsetDateTime,
 ) -> Result<History, Error> {
@@ -608,6 +666,10 @@ fn history(
             *tally.failures.entry(review.failure.clone()).or_default() += 1;
         }
     }
+    let mut step_tallies: BTreeMap<&str, StepTally> = BTreeMap::new();
+    for run in steps {
+        step_tallies.entry(run.step.as_str()).or_default().add(run);
+    }
     Ok(History {
         since: range.since.to_string(),
         until: range.until.to_string(),
@@ -618,6 +680,7 @@ fn history(
         by_rule: keyed(tally.rules, Tally::finish),
         by_reviewer: keyed(tally.reviewers, Tally::finish),
         failed_by_code: keyed(tally.failures, |failed| FailedCount { failed }),
+        steps: keyed(step_tallies, StepTally::finish),
     })
 }
 
@@ -689,6 +752,20 @@ impl fmt::Display for StatsDocument {
             seconds_text(totals.publication_median_seconds),
             seconds_text(totals.publication_p90_seconds)
         )?;
+        for entry in &history.steps {
+            let counts = &entry.counts;
+            writeln!(
+                f,
+                "  step {}: {} runs, {} failed, {} superseded, {} retries, median {}, p90 {}",
+                entry.key,
+                counts.runs,
+                counts.failed,
+                counts.superseded,
+                counts.retries,
+                milliseconds_text(counts.duration_median_ms),
+                milliseconds_text(counts.duration_p90_ms)
+            )?;
+        }
         writeln!(
             f,
             "  completed reviews last updated before {} may be pruned",
@@ -710,6 +787,11 @@ fn seconds_text(seconds: Option<i64>) -> String {
     seconds.map_or_else(|| "none".to_owned(), |value| format!("{value} s"))
 }
 
+/// Returns milliseconds as text, or `none` without a succeeded run.
+fn milliseconds_text(milliseconds: Option<i64>) -> String {
+    milliseconds.map_or_else(|| "none".to_owned(), |value| format!("{value} ms"))
+}
+
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the statistics document of the store; `since` and `until` are UTC days.
     ///
@@ -728,9 +810,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let range = StatsRange::parse(since, until, now.date())?;
         live(cancel)?;
         let bounds = range.map(|range| (range.start, range.end));
-        let (reviews, discovery) = self.store.stats_snapshot(bounds)?;
+        let (reviews, discovery, steps) = self.store.stats_snapshot(bounds)?;
         compute(
             &reviews,
+            &steps,
             &discovery.schedule,
             range.as_ref(),
             now,
@@ -750,7 +833,7 @@ mod tests {
 
     use super::{StatsRange, compute};
     use crate::error_code;
-    use crate::store::StoredReview;
+    use crate::store::{ReviewStep, StepOutcome, StepRun, StoredReview};
 
     /// The counter names in the order of the arrays that `counters` takes.
     const COUNTER_NAMES: [&str; 10] = [
@@ -857,6 +940,39 @@ mod tests {
                 (key.to_owned(), record)
             })
             .collect()
+    }
+
+    /// The step runs of the table test that ended inside its range, one per case.
+    fn step_runs() -> Vec<StepRun> {
+        let run = |step, outcome, retries, duration_ms| StepRun {
+            step,
+            outcome,
+            retries,
+            duration_ms,
+        };
+        let (reviewers, verifier) = (ReviewStep::Reviewers, ReviewStep::Verifier);
+        let (succeeded, failed) = (StepOutcome::Succeeded, StepOutcome::Failed);
+        vec![
+            run(reviewers, succeeded, 0, 4000),
+            // Two session starts or reviewer runs repeated; the median takes the lower one.
+            run(reviewers, succeeded, 2, 1000),
+            // A failed run counts its retries but not its duration.
+            run(reviewers, failed, 1, 9000),
+            run(reviewers, StepOutcome::Superseded, 0, 500),
+            run(ReviewStep::Publication, succeeded, 1, 800),
+            // A verifier without a succeeded run has no duration.
+            run(verifier, failed, 0, 20_000),
+        ]
+    }
+
+    /// Returns one step entry: its key, five counts, then the two percentiles.
+    fn step(key: &str, counts: [i64; 5], median: Option<i64>, p90: Option<i64>) -> Value {
+        let [runs, succeeded, superseded, failed, retries] = counts;
+        json!({
+            "key": key, "runs": runs, "succeeded": succeeded, "superseded": superseded,
+            "failed": failed, "retries": retries, "duration_median_ms": median,
+            "duration_p90_ms": p90,
+        })
     }
 
     /// The fixed store of the table test: one row per case that the counters distinguish.
@@ -989,7 +1105,7 @@ mod tests {
         ]
     }
 
-    /// The counters and percentiles of every bucket over the fixed store.
+    /// The counters and percentiles of every bucket and step over the fixed store.
     #[test]
     fn review_stats_count_every_bucket_of_a_fixed_store() {
         let range = StatsRange::parse(
@@ -1001,6 +1117,7 @@ mod tests {
         .expect("the range is set");
         let document = compute(
             &rows(),
+            &step_runs(),
             &schedule(),
             Some(&range),
             datetime!(2026-11-03 08:00:00.25 UTC),
@@ -1078,6 +1195,12 @@ mod tests {
                 "failed_by_code": [
                     { "key": "github_request_failed", "failed": 1 },
                     { "key": "pohunek_session_start_failed", "failed": 1 },
+                ],
+                // Sorted by step name; a step without a run in the range has no entry.
+                "steps": [
+                    step("publication", [1, 1, 0, 0, 1], Some(800), Some(800)),
+                    step("reviewers", [4, 2, 1, 1, 3], Some(1000), Some(4000)),
+                    step("verifier", [1, 0, 0, 1, 0], None, None),
                 ],
             },
         });

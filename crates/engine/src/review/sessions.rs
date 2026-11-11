@@ -6,7 +6,8 @@
 
 use std::error::Error as StdError;
 use std::future::Future;
-use std::time::Duration;
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, Instant};
 
 use autoreview_policy::{Event, Reviewer};
 use autoreview_schedule::diagnostic::{diagnostic, start_diagnostic};
@@ -29,7 +30,7 @@ use crate::messages::{
 };
 use crate::model::review::milliseconds;
 use crate::model::{Discussion, PullRequest, ReviewInput, RunLimits};
-use crate::store::RESULT_FAILURE;
+use crate::store::{RESULT_FAILURE, ReviewStep, StepOutcome, StepRun};
 
 /// Step name of the read of the current pull request in the retry log.
 const STEP_CURRENT_PULL_REQUEST: &str = "current_pull_request";
@@ -50,6 +51,22 @@ pub(crate) struct SessionFault {
     /// The error of the failed session read, kept as the diagnostic of the fault.
     #[source]
     source: Option<Error>,
+}
+
+/// The error that ended a recorded step, with the run that the failed review records.
+#[derive(Debug)]
+pub(crate) struct StepFailure {
+    /// The error the step ended with.
+    pub(crate) error: Error,
+    /// The run of the step; `None` when a shutdown ended it or it had ended before.
+    pub(crate) run: Option<StepRun>,
+}
+
+impl StepFailure {
+    /// Returns the failure with `error` of a step that has no run to record.
+    pub(crate) fn without_run(error: Error) -> Self {
+        Self { error, run: None }
+    }
 }
 
 /// Returns the error of a review interrupted by an engine shutdown.
@@ -163,6 +180,8 @@ pub(crate) struct Review<'a, I, C> {
     pub(crate) discussion: Discussion,
     /// Set once the user approved a waiting review.
     pub(crate) approved: bool,
+    /// Repeated attempts since the current step started.
+    pub(crate) retries: AtomicI64,
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
@@ -204,54 +223,149 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         T: Serialize + DeserializeOwned,
         Fut: Future<Output = Result<T, Error>>,
     {
-        let loaded = live(&self.cancel)
-            .and_then(|()| self.engine.store.load_step::<T>(&self.workflow_id, name))?;
-        if let Some(value) = loaded {
+        if let Some(value) = self.stored::<T>(name)? {
             return Ok(value);
         }
-        match retry_step(
-            name,
-            self.retry_policy(),
-            &self.engine.clock,
-            &self.cancel,
-            step,
-        )
-        .await
-        {
-            Ok(value) => {
-                live(&self.cancel)?;
-                self.engine
-                    .store
-                    .save_step(&self.workflow_id, name, &value)?;
-                Ok(value)
-            }
-            Err(err) => Err(self.interrupted(err)),
+        self.run_and_save(name, step).await
+    }
+
+    /// Runs `step` as `once` does and records the run as the step `recorded`.
+    ///
+    /// The run is recorded in the transaction that stores the output, so a stored output has
+    /// its record and a resumed review that reads it records nothing. A failed run is
+    /// recorded when the review completes as failed.
+    pub(crate) async fn once_recorded<T, Fut>(
+        &self,
+        recorded: ReviewStep,
+        name: &str,
+        step: impl FnMut() -> Fut,
+    ) -> Result<T, StepFailure>
+    where
+        T: Serialize + DeserializeOwned,
+        Fut: Future<Output = Result<T, Error>>,
+    {
+        let started = self.step_started();
+        if let Some(value) = self.stored::<T>(name).map_err(StepFailure::without_run)? {
+            return Ok(value);
         }
+        let saved = match self.fresh(name, step).await {
+            Ok(value) => {
+                let run = self.step_run(recorded, started, StepOutcome::Succeeded);
+                live(&self.cancel)
+                    .and_then(|()| {
+                        self.engine
+                            .store
+                            .save_step_recorded(&self.workflow_id, name, &value, &run)
+                    })
+                    .map(|()| value)
+            }
+            Err(err) => Err(err),
+        };
+        saved.map_err(|err| self.step_failure(recorded, started, err))
+    }
+
+    /// Reads the stored output of the step `name`, or `None` when it has not been saved.
+    fn stored<T: DeserializeOwned>(&self, name: &str) -> Result<Option<T>, Error> {
+        live(&self.cancel).and_then(|()| self.engine.store.load_step::<T>(&self.workflow_id, name))
+    }
+
+    /// Runs `step` with step retries and stores its output under `name`.
+    async fn run_and_save<T, Fut>(&self, name: &str, step: impl FnMut() -> Fut) -> Result<T, Error>
+    where
+        T: Serialize,
+        Fut: Future<Output = Result<T, Error>>,
+    {
+        let value = self.fresh(name, step).await?;
+        live(&self.cancel)?;
+        self.engine
+            .store
+            .save_step(&self.workflow_id, name, &value)?;
+        Ok(value)
     }
 
     /// Runs `step` with step retries under `name` and never stores its output.
     ///
-    /// It serves reads whose current answer matters on every resume.
+    /// It serves reads whose current answer matters on every resume. Every call of `step` after
+    /// the first counts as a retry of the current step.
     pub(crate) async fn fresh<T, Fut>(
         &self,
         name: &str,
-        step: impl FnMut() -> Fut,
+        mut step: impl FnMut() -> Fut,
     ) -> Result<T, Error>
     where
         Fut: Future<Output = Result<T, Error>>,
     {
+        let mut retry = false;
+        let counted = || {
+            if retry {
+                self.count_retry();
+            }
+            retry = true;
+            step()
+        };
         match retry_step(
             name,
             self.retry_policy(),
             &self.engine.clock,
             &self.cancel,
-            step,
+            counted,
         )
         .await
         {
             Ok(value) => Ok(value),
             Err(err) => Err(self.interrupted(err)),
         }
+    }
+
+    /// Counts one repeated attempt inside the current step.
+    pub(crate) fn count_retry(&self) {
+        self.retries.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Starts a step: clears the retry count and returns the instant the step starts at.
+    pub(crate) fn step_started(&self) -> Instant {
+        self.retries.store(0, Ordering::Relaxed);
+        self.engine.clock.now()
+    }
+
+    /// Returns the run of `step` that started at `started` and ends now with `outcome`.
+    ///
+    /// The caller writes it with the stored outcome of the step, never on its own.
+    pub(crate) fn step_run(
+        &self,
+        step: ReviewStep,
+        started: Instant,
+        outcome: StepOutcome,
+    ) -> StepRun {
+        let elapsed = self.engine.clock.now().saturating_duration_since(started);
+        StepRun {
+            step,
+            outcome,
+            retries: self.retries.load(Ordering::Relaxed),
+            duration_ms: i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
+        }
+    }
+
+    /// Returns the failure of `step`, started at `started`, that ends now with `error`.
+    ///
+    /// A run that a shutdown ends has no run to record: the resumed review runs the step
+    /// again. A superseding code makes the run superseded, any other code failed.
+    pub(crate) fn step_failure(
+        &self,
+        step: ReviewStep,
+        started: Instant,
+        error: Error,
+    ) -> StepFailure {
+        // An error during a shutdown may come from it, such as a cancelled host call.
+        let outcome = if is_shutdown(&error) || self.cancel.is_cancelled() {
+            None
+        } else if superseded(error_code(&error)) {
+            Some(StepOutcome::Superseded)
+        } else {
+            Some(StepOutcome::Failed)
+        };
+        let run = outcome.map(|outcome| self.step_run(step, started, outcome));
+        StepFailure { error, run }
     }
 
     /// Waits for `delay`, or fails with [`shutdown_error`] when the engine shuts down.
@@ -346,6 +460,19 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         self.engine
             .store
             .set_state(&self.workflow_id, &name, &slot.state)
+    }
+
+    /// Stores the progress of `slot` as `save_slot` does and records `run` with it.
+    pub(crate) fn save_slot_recorded(
+        &self,
+        slot: &ReviewerSlot,
+        run: &StepRun,
+    ) -> Result<(), Error> {
+        let name = format!("{SLOT_STATE_PREFIX}{}", slot.reviewer.id);
+        live(&self.cancel)?;
+        self.engine
+            .store
+            .set_state_recorded(&self.workflow_id, &name, &slot.state, run)
     }
 
     /// Stores whether the review may still own open sessions.
@@ -537,6 +664,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                         self.remove_orphaned_sessions(&request, attempt).await?;
                         return Err(session_fault(&code));
                     }
+                    self.count_retry();
                     self.sleep(wait_of(milliseconds(limits.session_start_retry_ms)))
                         .await?;
                 }
@@ -659,6 +787,15 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// A shutdown returns `cause` unchanged. A superseded review is reported quietly; any other
     /// cause is logged, and the scheduler retries or reports it.
     pub(crate) async fn fail(&mut self, cause: Error) -> Result<(), Error> {
+        self.fail_step(StepFailure::without_run(cause)).await
+    }
+
+    /// Ends the review as `fail` does with the error of `failure`, and records its run.
+    ///
+    /// The run is written in the transaction that completes the review, so a shutdown before
+    /// that leaves no record and the resumed review runs the step again.
+    pub(crate) async fn fail_step(&mut self, failure: StepFailure) -> Result<(), Error> {
+        let StepFailure { error: cause, run } = failure;
         if is_shutdown(&cause) {
             return Err(cause);
         }
@@ -688,9 +825,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             .await?;
         }
         live(&self.cancel)?;
-        self.engine
-            .store
-            .complete_review(&self.workflow_id, RESULT_FAILURE, &code, None)
+        let (store, id) = (&self.engine.store, self.workflow_id.as_str());
+        match run {
+            Some(run) => store.complete_review_recorded(id, RESULT_FAILURE, &code, None, &run),
+            None => store.complete_review(id, RESULT_FAILURE, &code, None),
+        }
     }
 
     /// Returns the deadline stored under `key`, storing one on the first call.

@@ -5,13 +5,14 @@
 // Rust guideline compliant 2026-06-26
 
 use super::input::{STATE_VERIFIER_DEADLINE, STEP_VERIFICATION};
-use super::sessions::{Review, ReviewerSlot, SlotId, is_session_fault};
+use super::sessions::{Review, ReviewerSlot, SlotId, StepFailure, is_session_fault};
 use crate::discovery::poll::live;
 use crate::engine::Clock;
 use crate::error::{Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::Integrations;
 use crate::model::Verification;
 use crate::protocol::go_utf8_lossy;
+use crate::store::{ReviewStep, StepOutcome};
 use crate::verify::{
     VERDICT_CONFIRMED, VERDICT_NOT_BLOCKING, VERDICT_REFUTED, VERDICT_REOPENED, VERDICT_UPHELD,
     VerificationClaims, build_verifier_request, parse_verifier_output,
@@ -37,10 +38,12 @@ fn verdict_count(verification: &Verification, verdict: &str) -> usize {
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
-    /// Runs the verifier on `claims` once per review and stores the verification.
+    /// Runs the verifier on `claims` once per review, stores the verification and records the
+    /// run of the verifier step with it.
     ///
     /// A verifier session that fails leaves every claim as the reviewers made it, so the review
-    /// still publishes. An error of the review itself, such as a newer head, stops it.
+    /// still publishes; its run is recorded as failed. An error of the review itself, such as a
+    /// newer head, stops it, and its run is recorded when the review completes as failed.
     ///
     /// # Errors
     ///
@@ -49,27 +52,33 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     pub(crate) async fn verify(
         &mut self,
         claims: &VerificationClaims,
-    ) -> Result<Verification, Error> {
-        let loaded = live(&self.cancel).and_then(|()| {
-            self.engine
-                .store
-                .load_step::<Verification>(&self.workflow_id, STEP_VERIFICATION)
-        })?;
+    ) -> Result<Verification, StepFailure> {
+        let loaded = live(&self.cancel)
+            .and_then(|()| {
+                self.engine
+                    .store
+                    .load_step::<Verification>(&self.workflow_id, STEP_VERIFICATION)
+            })
+            .map_err(StepFailure::without_run)?;
         if let Some(stored) = loaded {
             return Ok(stored);
         }
-        let prompt = build_verifier_request(&self.input, claims, &self.discussion)?;
+        let prompt = build_verifier_request(&self.input, claims, &self.discussion)
+            .map_err(StepFailure::without_run)?;
         let Some(slot) = self.verifier.as_mut() else {
-            return Err(Error::workflow(WORKFLOW_FAILED, true, None));
+            let error = Error::workflow(WORKFLOW_FAILED, true, None);
+            return Err(StepFailure::without_run(error));
         };
         slot.request.prompt = prompt;
         let reviewer_label = slot.reviewer.label.clone();
         let ids = [SlotId::Verifier];
+        let started = self.step_started();
         let run = match self.start_slots(&ids, verifier_done).await {
             Ok(()) => {
                 self.await_slots(
                     &ids,
                     STATE_VERIFIER_DEADLINE,
+                    None,
                     verifier_done,
                     |review: &Self, slot: &mut ReviewerSlot, output: &[u8]| {
                         review.parse_verifier(claims, slot, output)
@@ -79,21 +88,21 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
             Err(err) => Err(err),
         };
+        let checked = run.and_then(|()| {
+            self.verifier
+                .as_ref()
+                .and_then(|slot| slot.state.verification.clone())
+                .ok_or_else(|| Error::workflow(WORKFLOW_FAILED, true, None))
+        });
         let mut verification = Verification {
             reviewer_label,
             findings: Vec::new(),
             prior: Vec::new(),
             error_code: String::new(),
         };
-        match run {
-            Ok(()) => {
-                let result = self
-                    .verifier
-                    .as_ref()
-                    .and_then(|slot| slot.state.verification.clone());
-                let Some(result) = result else {
-                    return Err(Error::workflow(WORKFLOW_FAILED, true, None));
-                };
+        let step = ReviewStep::Verifier;
+        let recorded = match checked {
+            Ok(result) => {
                 verification.findings = result.findings;
                 verification.prior = result.prior;
                 tracing::info!(
@@ -105,22 +114,34 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                     reopened = verdict_count(&verification, VERDICT_REOPENED),
                     "review verified"
                 );
+                self.step_run(step, started, StepOutcome::Succeeded)
             }
             Err(err) if is_session_fault(&err) => {
-                self.remove_sessions(&ids).await?;
+                // Measured before the session cleanup, which is not part of the run.
+                let failed = self.step_run(step, started, StepOutcome::Failed);
+                if let Err(cleanup) = self.remove_sessions(&ids).await {
+                    return Err(self.step_failure(step, started, cleanup));
+                }
                 verification.error_code = error_code(&err).to_owned();
                 tracing::warn!(
                     review_id = %self.input.pull_request.review_id(),
                     error_code = %verification.error_code.as_str(),
                     "verification did not finish, publishing the claims unverified"
                 );
+                failed
             }
-            Err(err) => return Err(err),
-        }
-        live(&self.cancel)?;
-        self.engine
-            .store
-            .save_step(&self.workflow_id, STEP_VERIFICATION, &verification)?;
+            Err(err) => return Err(self.step_failure(step, started, err)),
+        };
+        live(&self.cancel)
+            .and_then(|()| {
+                self.engine.store.save_step_recorded(
+                    &self.workflow_id,
+                    STEP_VERIFICATION,
+                    &verification,
+                    &recorded,
+                )
+            })
+            .map_err(|err| self.step_failure(step, started, err))?;
         Ok(verification)
     }
 
