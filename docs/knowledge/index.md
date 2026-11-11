@@ -16,7 +16,7 @@ knowledge bundle so pohunek.dev can render both.
   [GitHub identity](concepts/github-identity.md) and
   [state and recovery](concepts/state-and-recovery.md).
 - **Guides** are use cases with a complete policy each. Start with
-  [getting started](guides/getting-started.md), the
+  [getting started](guides/getting-started.md) (after 0.2.0), the
   [quickstart](guides/quickstart.md) and the [use case chooser](guides/index.md);
   [combining patterns](guides/combining.md) layers them in one policy.
 - **Runbooks** fix things in operation:

@@ -28,6 +28,7 @@ SYSTEMD_MIN_VERSION=255
 # The reviewer adapters need Python 3.11 or newer.
 PYTHON_MIN_VERSION="3.11.0"
 POHUNEK_REPOSITORY="zajca/pohunek"
+POHUNEK_WORKFLOW="zajca/pohunek/.github/workflows/release-evidence.yml"
 AUTOREVIEW_REPOSITORY="pohunekd/autoreview"
 AUTOREVIEW_WORKFLOW="pohunekd/autoreview/.github/workflows/release.yml"
 EXAMPLES=(auto-approve coding-agent-drafts human-approval notes-handoff org-wildcard
@@ -135,6 +136,22 @@ systemd_version_of() {
     fi
 }
 
+# Prints the state of a running service whose main process runs the file that
+# /proc/<pid>/exe names as $1 (empty when unreadable), with $2 the resolved path
+# of the installed binary: current, stale (another or a replaced file) or
+# unknown. The binary path holds no space (unit_path_safe), so " (deleted)",
+# which the kernel appends to a replaced file, cannot be part of it.
+service_binary_state() {
+    local running=$1 installed=$2
+    if [ -z "$running" ]; then
+        echo unknown
+    elif [ "$running" = "$installed" ]; then
+        echo current
+    else
+        echo stale
+    fi
+}
+
 # Checks the pure functions above against fixed tables; reads nothing else.
 self_test() {
     local checks=0 failures=0
@@ -181,6 +198,14 @@ self_test() {
     check "systemd 255" 255 "$(systemd_version_of 'systemd 255 (255.4-1ubuntu8)' || echo error)"
     check "systemd 257" 257 "$(systemd_version_of 'systemd 257 (257.9-arch1-1)' || echo error)"
     check "systemd other text" error "$(systemd_version_of 'not systemd 255' || echo error)"
+    check "service on the binary" current \
+        "$(service_binary_state /h/.local/bin/autoreview /h/.local/bin/autoreview)"
+    check "service on a replaced binary" stale \
+        "$(service_binary_state '/h/.local/bin/autoreview (deleted)' /h/.local/bin/autoreview)"
+    check "service on another binary" stale \
+        "$(service_binary_state /opt/autoreview /h/.local/bin/autoreview)"
+    check "service binary unreadable" unknown \
+        "$(service_binary_state '' /h/.local/bin/autoreview)"
     check "pinned pohunek is kept" ok \
         "$(pohunek_state "$POHUNEK_VERSION" "$POHUNEK_MIN_VERSION" || echo error)"
     if [ "$failures" -ne 0 ]; then
@@ -283,6 +308,11 @@ approve() {
     changed=1
 }
 
+# Prints the command that runs setup again on the configuration directory.
+rerun_command() {
+    printf "%q --dir '%s'\n" "$0" "$dir"
+}
+
 # Prints that step $1 is in place.
 in_place() {
     printf '%s: in place, skipped\n' "$1"
@@ -338,7 +368,8 @@ detect_machine() {
         || fail 2 "only Linux x86_64 and aarch64 are supported, not $system $machine"
     read -r autoreview_target pohunek_target <<<"$targets"
     platform="$machine with the $libc C library"
-    for tool in curl tar sha256sum gh python3 systemctl systemd-run loginctl install diff stat; do
+    for tool in curl tar sha256sum gh python3 systemctl systemd-run loginctl install diff stat \
+        readlink; do
         command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
     done
     [ -z "$missing" ] || fail 3 "missing$missing; install them with the package manager"
@@ -551,8 +582,9 @@ pohunek_archive_of() {
     fi
     work_dir
     download_checked "$POHUNEK_REPOSITORY" "$name.tar.gz" "$version"
-    gh attestation verify "$work/$name.tar.gz" --repo "$POHUNEK_REPOSITORY" >/dev/null \
-        || fail 5 "$name.tar.gz failed its attestation"
+    gh attestation verify "$work/$name.tar.gz" --repo "$POHUNEK_REPOSITORY" \
+        --signer-workflow "$POHUNEK_WORKFLOW" --source-ref "refs/tags/v$version" \
+        --deny-self-hosted-runners >/dev/null || fail 5 "$name.tar.gz failed its attestation"
     tar -xzf "$work/$name.tar.gz" -C "$work" || fail 5 "$name.tar.gz cannot be unpacked"
     [ -d "$work/$name" ] || fail 5 "$name.tar.gz holds no directory $name"
     pohunek_archive=$work/$name
@@ -563,7 +595,8 @@ pohunek_archive_commands() {
     local name="pohunek-daemon-$1-$pohunek_target"
     download_commands "$POHUNEK_REPOSITORY" "$name.tar.gz" "$1"
     printf '%s\n' "gh attestation verify $name.tar.gz --repo $POHUNEK_REPOSITORY" \
-        "tar -xzf $name.tar.gz"
+        "  --signer-workflow $POHUNEK_WORKFLOW" \
+        "  --source-ref refs/tags/v$1 --deny-self-hosted-runners" "tar -xzf $name.tar.gz"
 }
 
 step_pohunek() {
@@ -580,7 +613,12 @@ step_pohunek() {
     approve "pohunek $POHUNEK_VERSION" "${commands[@]}" "sh $name/packaging/install-daemon.sh"
     pohunek_archive_of "$POHUNEK_VERSION"
     sh "$pohunek_archive/packaging/install-daemon.sh" \
-        || fail 6 "pohunek packaging/install-daemon.sh failed; its message above names the cause"
+        || fail 6 "pohunek packaging/install-daemon.sh failed; its message above names the cause." \
+            "When it lists live sessions that the upgrade would not carry over, end them" \
+            "(pohunek session list shows them) and run setup again, or download and verify" \
+            "$name.tar.gz by hand as the pohunek install guide describes and run its" \
+            "packaging/install-daemon.sh --accept-runtime-loss; the copy that its message" \
+            "names is removed when setup exits"
     detect_pohunek
     [ "$pohunek_state" = ok ] \
         || fail 6 "pohunek packaging/install-daemon.sh left no pohunek" \
@@ -645,7 +683,7 @@ step_validate() {
     check_secrets
     [ -z "$secrets_missing" ] \
         || fail 9 "${secrets_missing# } is not set in $env_file;" \
-            "write NAME=value lines into it with an editor, then run setup again"
+            "write NAME=value lines into it with an editor, then run $(rerun_command)"
     if ! run_validate; then
         printf '%s\n' "$validate_output" >&2
         fail 9 "validate failed: $(error_code_of "$validate_output")"
@@ -666,7 +704,7 @@ ask_profile() {
     is_one_of "$agent" claude codex || fail 1 "the agent of $profile must be claude or codex"
     binary=$(command -v "$agent") || binary=""
     [[ $binary == /* ]] \
-        || fail 3 "missing $agent on PATH; install it and run it once, then run setup again"
+        || fail 3 "missing $agent on PATH; install it and run it once, then run $(rerun_command)"
     ask model "Model of profile $profile"
     [[ $model =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
         || fail 1 "the model of $profile must match [A-Za-z0-9][A-Za-z0-9._-]*"
@@ -767,7 +805,8 @@ step_hooks() {
                 continue
                 ;;
             no-home)
-                fail 3 "missing the config home of $agent; run $agent once, then run setup again"
+                fail 3 "missing the config home of $agent; run $agent once," \
+                    "then run $(rerun_command)"
                 ;;
         esac
         approve "hooks $agent (pohunek offers no dry run of this command)" \
@@ -839,10 +878,11 @@ WantedBy=timers.target
 }
 
 # Sets units_missing and units_changed to the unit files that are absent or
-# hold other text, and units_running to 1 when the service and the timer are
-# enabled and the service is active.
+# hold other text, units_running to 1 when the service and the timer are
+# enabled and the service is active, and service_binary to the
+# service_binary_state of the running service (unknown when it is not running).
 detect_units() {
-    local i file
+    local i file pid running="" installed
     render_units
     units_missing=() units_changed=()
     for i in "${!unit_names[@]}"; do
@@ -859,6 +899,15 @@ detect_units() {
         && [ "$(systemctl --user is-active autoreview.service 2>/dev/null)" = active ]; then
         units_running=1
     fi
+    service_binary=unknown
+    if [ "$units_running" -eq 1 ]; then
+        pid=$(systemctl --user show -p MainPID --value autoreview.service 2>/dev/null) || pid=""
+        if [[ $pid =~ ^[1-9][0-9]*$ ]]; then
+            running=$(readlink "/proc/$pid/exe" 2>/dev/null) || running=""
+        fi
+        installed=$(readlink -f "$autoreview_bin" 2>/dev/null) || installed=""
+        service_binary=$(service_binary_state "$running" "$installed")
+    fi
 }
 
 step_service() {
@@ -866,12 +915,16 @@ step_service() {
     detect_units
     if [ "${#units_missing[@]}" -eq 0 ] && [ "${#units_changed[@]}" -eq 0 ] \
         && [ "$units_running" -eq 1 ]; then
-        if [ "$autoreview_installed" -eq 1 ]; then
-            approve "restarting autoreview.service on the new binary" \
+        if [ "$autoreview_installed" -eq 1 ] || [ "$service_binary" = stale ]; then
+            approve "restarting autoreview.service on the installed binary $autoreview_bin" \
                 "systemctl --user restart autoreview.service"
             systemctl --user restart autoreview.service \
                 || fail 10 "systemctl --user restart failed"
             return
+        fi
+        if [ "$service_binary" = unknown ]; then
+            echo "autoreview.service: its running binary is unreadable;" \
+                "after an upgrade of autoreview, run systemctl --user restart autoreview.service"
         fi
         in_place "user service autoreview.service"
         return
@@ -965,7 +1018,12 @@ print_plan() {
     detect_units
     if [ "${#units_missing[@]}" -eq 0 ] && [ "${#units_changed[@]}" -eq 0 ] \
         && [ "$units_running" -eq 1 ]; then
-        plan "user service autoreview.service and the queue timer" "in place, skipped"
+        if [ "$service_binary" = stale ] || [ "$autoreview_state" = older ]; then
+            plan "user service autoreview.service and the queue timer" \
+                "will run (restart on the installed binary)"
+        else
+            plan "user service autoreview.service and the queue timer" "in place, skipped"
+        fi
     else
         plan "user service autoreview.service and the queue timer" "will run"
     fi
@@ -1032,7 +1090,8 @@ run_steps() {
         echo
         echo "setup: edit $dir/policy.yaml first: the example reviews other people's repositories;"
         echo "set the repositories you want reviewed. Then write each secret as a NAME=value line"
-        echo "into $env_file with an editor, and run scripts/setup again."
+        echo "into $env_file with an editor, and run setup again with the same --dir:"
+        echo "  $(rerun_command)"
         return
     fi
     step_validate

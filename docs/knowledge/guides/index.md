@@ -94,7 +94,7 @@ Two dimensions are not in a policy: the GitHub account (the `login` of the crede
 ## Where to go next
 
 - [Getting started](getting-started.md) sets up one Linux machine with
-  `scripts/setup`.
+  `scripts/setup` (after 0.2.0).
 - [Quickstart](quickstart.md) runs the first review on one repository.
 - [Combining patterns](combining.md) lists recipes and the rules that
   interact when two scenarios share one policy.

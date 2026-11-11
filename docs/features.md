@@ -99,7 +99,7 @@ clean up are reported. [State and recovery](knowledge/concepts/state-and-recover
 | Start here | |
 |---|---|
 | [Install](install.md) | Binary, container (planned in #40), first configuration, first review |
-| [Getting started](knowledge/guides/getting-started.md) | One Linux machine set up by `scripts/setup` |
+| [Getting started](knowledge/guides/getting-started.md) | One Linux machine set up by `scripts/setup` (after 0.2.0) |
 | [Quickstart](knowledge/guides/quickstart.md) | One repository, one reviewer, comments only |
 | [Use cases](knowledge/guides/index.md) | Pick a scenario and combine them |
 

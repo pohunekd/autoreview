@@ -21,7 +21,7 @@ repository to a host by hand.
 A single host needs none of this: list it in `pohunek.hosts`, register each
 repository there, and skip the rest of the guide.
 [Getting started](getting-started.md) sets up such a machine with
-`scripts/setup`.
+`scripts/setup` (after 0.2.0).
 
 ## Deployment layout
 
@@ -37,7 +37,7 @@ review host by its pohunek name over an overlay network (see
 [below](#reach-a-remote-host-over-an-overlay-network)), and `pohunek.hosts`
 lists those names. autoreview itself opens no connection to a review host.
 
-`scripts/setup` sets up one machine with both roles. On several machines its
+`scripts/setup` (after 0.2.0) sets up one machine with both roles. On several machines its
 steps split like this:
 
 | Step of `scripts/setup` | Autoreview server | Review host |

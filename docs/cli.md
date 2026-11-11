@@ -70,8 +70,8 @@ complete file of the [configuration reference](configuration.md#complete-file),
 with `policy_file`, the credential `login`, `pohunek.hosts` and the given layout
 flags set; every value it sets is written as a double-quoted string. Without the
 layout flags, edit its paths and its placeholder `matrix` backend before the
-first start. [`scripts/setup`](knowledge/guides/getting-started.md) passes every
-layout flag.
+first start. [`scripts/setup`](knowledge/guides/getting-started.md) (after 0.2.0)
+passes every layout flag.
 
 `init` loads the example's policy and checks every path before it writes
 anything, and never overwrites. `--dir` and `prompts/` must be real directories

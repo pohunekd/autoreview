@@ -14,9 +14,9 @@ Docs group:
    parses.
 2. `shellcheck` (`shellcheck scripts/setup`): skipped with a reason when
    `shellcheck` is not on `PATH`, except in CI (`CI` set), where it fails.
-3. `setup-self-test` (`scripts/setup --self-test`): the version comparison and
-   the target choice of the setup script, over fixed tables; it reads nothing
-   else.
+3. `setup-self-test` (`scripts/setup --self-test`): the version comparison,
+   the target choice and the running-binary check of the setup script, over
+   fixed tables; it reads nothing else.
 
 Adapters group:
 

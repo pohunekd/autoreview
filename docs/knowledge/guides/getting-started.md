@@ -58,7 +58,7 @@ it never overwrites a configuration or an agent profile that it did not write.
   on `aarch64` the script stops unless pohunek and the packages are in place.
 - systemd 255 or newer with a user manager and a session bus (on minimal
   Debian systems the `dbus-user-session` package), and `XDG_RUNTIME_DIR` set.
-- `curl`, `tar`, `sha256sum`, `install`, `diff`, `stat`, `loginctl`,
+- `curl`, `tar`, `sha256sum`, `install`, `diff`, `stat`, `readlink`, `loginctl`,
   `systemd-run`, Python 3.11 or newer as `python3`, and `gh` logged in
   (`gh auth login`): the script verifies every download with
   `gh attestation verify`.
@@ -120,7 +120,8 @@ repositories of other people. Edit `<dir>/policy.yaml` and set the
 repositories you want reviewed, then write each secret as a `NAME=value` line
 into the secrets file with an editor (`AUTOREVIEW_GH_TOKEN` and
 `AUTOREVIEW_MATRIX_TOKEN` in every example). Never type a token on a command
-line. Then run the script again; it goes on with:
+line. Then run the script again with the same `--dir`, as the stop message
+prints it; it goes on with:
 
 6. **Secrets and validate.** Reads the variable names of the `*_env` keys of
    `config.yaml` and prints each as `set` or `missing` in the secrets file; it
@@ -148,13 +149,14 @@ line. Then run the script again; it goes on with:
     `autoreview-queue.timer` (hourly, 08:00 to 20:00) with the secrets file as
     their `EnvironmentFile`, and runs `systemctl --user daemon-reload` and
     `enable --now`. A unit file with other text is shown as a diff and replaced
-    only after its own question. When this run installed a new autoreview, the
-    running service is restarted, after a question.
+    only after its own question. When the running service does not run the
+    installed autoreview binary (this run or an earlier one replaced it), it is
+    restarted, after a question.
 12. **Lingering.** Without it, systemd stops pohunek and autoreview when you log
     out and starts them only at the next login.
 
-A third run on the finished setup prints every step as `in place, skipped`,
-asks nothing and ends with `setup: nothing to change`.
+A third run with the same `--dir` on the finished setup prints every step as
+`in place, skipped`, asks nothing and ends with `setup: nothing to change`.
 
 ## Exit codes
 
@@ -166,7 +168,7 @@ asks nothing and ends with `setup: nothing to change`.
 | 3 | A missing tool or condition | Do what the message names after `;`, then run again |
 | 4 | You declined a step, or stdin is not a terminal | Nothing of that step changed; run again in a terminal |
 | 5 | A download, its checksum or its attestation failed | Check the network and the release; never install an archive that failed |
-| 6 | A pohunek command failed | Read pohunek's message above it; `pohunek doctor` and the pohunek install guide help |
+| 6 | A pohunek command failed | Read pohunek's message above it; `pohunek doctor` and the pohunek install guide help. When its installer lists live sessions that an upgrade would not carry over, end them (`pohunek session list` shows them) and run the script again, or download and verify the daemon archive by hand as the pohunek install guide describes and run its `packaging/install-daemon.sh --accept-runtime-loss`; the temporary copy that its message names is removed when the script exits |
 | 7 | Installing autoreview failed | Check that `~/.local/bin` is writable |
 | 8 | `autoreview init` or `profiles install` refused | Look up the code in the [CLI error codes](../../cli.md#error-codes) |
 | 9 | A secret is missing, the secrets file is not mode 0600, or `validate` failed | Fill the file with an editor, or fix the key that the code names |

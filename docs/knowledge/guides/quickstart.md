@@ -37,7 +37,7 @@ which can be the same machine.
 ## 2. Install the binary
 
 On one Linux machine that also runs the pohunek daemon,
-[`scripts/setup`](getting-started.md) does steps 2 to 8 of this guide and
+[`scripts/setup`](getting-started.md) (after 0.2.0) does steps 2 to 8 of this guide and
 installs the service; continue with step 9 after it. By hand: install the
 `autoreview` binary from the release page of
 [pohunekd/autoreview](https://github.com/pohunekd/autoreview). Confirm it
@@ -221,8 +221,8 @@ answered. See [incremental reviews](../concepts/incremental-reviews.md).
 ## 15. Run as a service
 
 Once one review works, run autoreview as a long-running service so it reviews
-without manual polls. [`scripts/setup`](getting-started.md) writes and starts user
-units on one machine. On a server, write the systemd units of install path b, or use the
+without manual polls. [`scripts/setup`](getting-started.md) (after 0.2.0) writes and
+starts user units on one machine. On a server, write the systemd units of install path b, or use the
 container image that is planned in #40, as described in
 [install](../../install.md), and let `autoreview serve` run until you stop it.
 Reviews that are running at shutdown resume after the next start.

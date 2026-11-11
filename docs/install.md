@@ -43,7 +43,7 @@ pohunek daemon runs and the repositories are registered.
 ## Choose an install path
 
 To run autoreview and the pohunek daemon together on one Linux machine as your
-own user, run `scripts/setup` from a checkout of the repository: it installs
+own user, run `scripts/setup` (after 0.2.0) from a checkout of the repository: it installs
 both from their release archives, writes the configuration and the user
 service, and asks before every change. See
 [getting started](knowledge/guides/getting-started.md). The paths below are for
