@@ -4,7 +4,7 @@
 
 use autoreview_policy::{Checkout, Protocol, Reviewer};
 use serde::Serialize;
-use serde::de::IgnoredAny;
+use serde_json::Value;
 
 use crate::config::Config;
 use crate::error::Error;
@@ -16,6 +16,7 @@ pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "claude-otel-noninteractive/req
 /// The schema that a claude-structured reviewer must satisfy.
 ///
 /// It is a copy of the Go reference's schema, because `go:embed` cannot reach it from here.
+/// `review_schema` sets the summary bounds of the configuration on it for each request.
 const REVIEW_SCHEMA: &[u8] = include_bytes!("../../schemas/review-schema.json");
 
 /// Instructions that tell a reviewer how to settle the prior findings.
@@ -37,15 +38,16 @@ const PRIOR_INSTRUCTIONS: &str = concat!(
 
 /// Builds the session input of one reviewer.
 ///
-/// A claude-structured reviewer receives a JSON request that carries the schema. A
-/// codex-envelope reviewer receives the plain prompt. Both state the output limits of `cfg` and
-/// carry the prior findings with the discussion, which both protocols settle.
+/// A claude-structured reviewer receives a JSON request that carries the schema, whose
+/// summary is bounded by `cfg`. A codex-envelope reviewer receives the plain prompt. Both state
+/// the output limits of `cfg` and carry the prior findings with the discussion, which both
+/// protocols settle.
 ///
 /// # Errors
 ///
 /// Returns `review_protocol_invalid` for a protocol without a request format,
-/// `embedded_asset_invalid` when the schema is not JSON, and `review_request_invalid` when
-/// the prior findings or the discussion cannot be encoded.
+/// `embedded_asset_invalid` when the schema is not JSON or has no summary object, and
+/// `review_request_invalid` when the prior findings or the discussion cannot be encoded.
 pub(crate) fn build_reviewer_request(
     cfg: &Config,
     input: &ReviewInput,
@@ -54,7 +56,8 @@ pub(crate) fn build_reviewer_request(
 ) -> Result<String, Error> {
     match reviewer.protocol {
         Protocol::ClaudeStructured => {
-            claude_request(input, reviewer, discussion, &output_limits(cfg))
+            let schema = review_schema(cfg)?;
+            claude_request(input, reviewer, discussion, &output_limits(cfg), &schema)
         }
         Protocol::CodexEnvelope => codex_prompt(input, discussion, &output_limits(cfg)),
         Protocol::Unset | Protocol::Other(_) => {
@@ -81,6 +84,25 @@ fn output_limits(cfg: &Config) -> String {
     )
 }
 
+/// Returns the compact review schema with the summary bounds of `cfg`.
+///
+/// Claude Code checks the structured output against the schema and asks the reviewer again
+/// within the run when the summary is out of bounds. JSON Schema counts characters, as the
+/// engine does; the engine's check of the minimum on the trimmed summary stays in force.
+fn review_schema(cfg: &Config) -> Result<String, Error> {
+    let mut schema: Value = serde_json::from_slice(REVIEW_SCHEMA)
+        .map_err(|error| Error::workflow("embedded_asset_invalid", true, Some(Box::new(error))))?;
+    let Some(summary) = schema
+        .pointer_mut("/properties/summary")
+        .and_then(Value::as_object_mut)
+    else {
+        return Err(Error::workflow("embedded_asset_invalid", true, None));
+    };
+    summary.insert("minLength".to_owned(), cfg.min_summary_characters.into());
+    summary.insert("maxLength".to_owned(), cfg.max_summary_characters.into());
+    go_json(&schema).map_err(request_invalid)
+}
+
 /// Returns the instructions, the prior findings and the discussion that settle them.
 ///
 /// Both are one line of compact JSON, so no untrusted text starts a line of the prompt.
@@ -99,10 +121,8 @@ fn claude_request(
     reviewer: &Reviewer,
     discussion: &Discussion,
     limits: &str,
+    schema: &str,
 ) -> Result<String, Error> {
-    if serde_json::from_slice::<IgnoredAny>(REVIEW_SCHEMA).is_err() {
-        return Err(Error::workflow("embedded_asset_invalid", true, None));
-    }
     let scope = if input.scope.incremental() {
         format!(
             concat!(
@@ -141,7 +161,6 @@ Head SHA: {}\nReviewer: {}\nReview scope: {}\n{}\n\n{}\n",
     if !input.prior.is_empty() {
         prompt.push_str(&format!("\n{}\n", prior_section(input, discussion)?));
     }
-    let schema = compact_schema(REVIEW_SCHEMA)?;
     let prompt_json = go_json(&prompt).map_err(request_invalid)?;
     let protocol_json = go_json(CLAUDE_REQUEST_PROTOCOL).map_err(request_invalid)?;
     Ok(format!(
@@ -432,6 +451,31 @@ reviewed_head_sha to {}.",
             prompt.contains(&format!("\n\n{limits}\n\nTrusted review context:\n")),
             "codex prompt = {prompt}"
         );
+    }
+
+    #[test]
+    fn claude_request_schema_bounds_the_summary_by_the_configuration() {
+        let mut cfg = test_config();
+        cfg.min_summary_characters = 25;
+        cfg.max_summary_characters = 600;
+        let raw = build_reviewer_request(
+            &cfg,
+            &test_input(&opus(), test_pull_request(9)),
+            &opus(),
+            &Discussion::default(),
+        )
+        .expect("claude request builds");
+        let request: serde_json::Value =
+            serde_json::from_str(&raw).expect("claude request is JSON");
+        let summary = &request["json_schema"]["properties"]["summary"];
+        assert_eq!(
+            summary,
+            &serde_json::json!({"type": "string", "minLength": 25, "maxLength": 600})
+        );
+        let mut embedded: serde_json::Value =
+            serde_json::from_slice(REVIEW_SCHEMA).expect("embedded schema is JSON");
+        embedded["properties"]["summary"] = summary.clone();
+        assert_eq!(request["json_schema"], embedded);
     }
 
     #[test]
