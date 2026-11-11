@@ -8,6 +8,7 @@ use time::{Duration, OffsetDateTime};
 use tokio_util::sync::CancellationToken;
 
 use crate::integrations::SessionRequest;
+use crate::model::PullRequest;
 use crate::protocol::fixtures::sha;
 use crate::testing::fake::{reviewer_output, verifying};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
@@ -156,26 +157,54 @@ async fn shutdown_after_the_last_reviewer_result_still_records_the_reviewers_ste
     h.stop_engine().await;
 }
 
-/// A review-request review stopped after its review is posted completes as published.
+/// A review stopped after its review is posted completes as published, whatever superseded it.
 ///
-/// The posted review answered the review request, and the engine stops before the publication
-/// is stored. The resumed review finds the review by its marker and records the publication.
+/// The engine stops before the publication is stored, and the pull request changes as the row
+/// says before the restart. The resumed review finds the review on the reviewed head by its
+/// marker and records the publication.
 #[tokio::test]
 async fn review_posted_before_a_restart_completes_as_published() {
-    let mut h = start_harness(|_| {}).await;
-    let gate = h.fake.hold_publications();
-    let pr = integration_pull_request("claude/base", &sha("a"));
-    h.fake.open(pr.clone(), h.rule(&pr.repository));
-    h.poll_until("the held publication", || h.publications() == 1)
-        .await;
-    // The engine is cancelled before the post returns, so the publication is not stored.
-    tokio::join!(biased; h.stop_engine(), async { gate.add_permits(1) });
-    h.fake.lock().held_publications = None;
-    h.start();
-    completed_as_published(&h).await;
-    assert!(h.fake.has_note(Level::Digest, APPROVED_NOTE));
-    assert!(!h.fake.has_note(Level::Log, "was superseded"));
-    h.stop_engine().await;
+    let rows: [(&str, i64, Change, &str); 3] = [
+        // The posted review answered the review request: `review_request_not_active`.
+        ("claude/base", 11, |_, _| {}, APPROVED_NOTE),
+        // A push moved the head of a labelled pull request: `head_changed`.
+        ("solo/tool", 0, push, "Commented on solo/tool PR"),
+        // The pull request was merged: `pull_request_not_open`.
+        (
+            "claude/base",
+            11,
+            |h, pr| h.fake.lapse(pr.clone(), "pull_request_not_open"),
+            APPROVED_NOTE,
+        ),
+    ];
+    for (repository, review_request_id, change, note) in rows {
+        let mut h = start_harness(|_| {}).await;
+        let gate = h.fake.hold_publications();
+        let mut pr = integration_pull_request(repository, &sha("a"));
+        pr.review_request_id = review_request_id;
+        h.fake.open(pr.clone(), h.rule(&pr.repository));
+        h.poll_until("the held publication", || h.publications() == 1)
+            .await;
+        // The engine is cancelled before the post returns, so the publication is not stored.
+        tokio::join!(biased; h.stop_engine(), async { gate.add_permits(1) });
+        h.fake.lock().held_publications = None;
+        change(&h, &pr);
+        h.start();
+        completed_as_published(&h).await;
+        assert!(h.fake.has_note(Level::Digest, note), "{repository}: {note}");
+        assert!(!h.fake.has_note(Level::Log, "was superseded"), "{note}");
+        h.stop_engine().await;
+    }
+}
+
+/// Changes the pull request between the stop and the restart.
+type Change = fn(&Harness, &PullRequest);
+
+/// Moves the head of `pr` to a new commit, as a push does.
+fn push(h: &Harness, pr: &PullRequest) {
+    let mut pushed = pr.clone();
+    pushed.head_sha = sha("c");
+    h.fake.lock().current.insert(pr.key(), pushed);
 }
 
 /// A review-request review stopped after its publication is stored completes as published.
