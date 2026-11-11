@@ -323,9 +323,10 @@ pub struct Retarget<'a> {
 ///
 /// Returns `None` when a run of the head that was not superseded reviewed the current base
 /// branch: [`plan`] then plans the head from its runs. Otherwise the ended runs of the head
-/// count as no review; [`plan`] does not see them, and none of them stays a blocker. The
-/// attempt follows every run of the head and is never the one whose `workflow_id` is the
-/// published workflow.
+/// count as no review; [`plan`] does not see them, and none of them stays a blocker. A record
+/// that follows a running run of the head keeps that run's attempt, which [`plan`] matches
+/// against the run history. Any other record gets an attempt above every run of the head,
+/// skipping the attempt whose `workflow_id` is the published workflow.
 ///
 /// # Errors
 ///
@@ -382,7 +383,15 @@ pub fn plan_retarget(
         };
     }
     let mut decision = plan(record, target, &visible, now, policy)?;
-    decision.record.attempt = decision.record.attempt.max(attempt);
+    // A higher attempt on a running record would hide the end of its run from `plan`.
+    let follows_run = !decision.dispatch
+        && decision.record.phase == phase::RUNNING
+        && visible
+            .iter()
+            .any(|run| run.active() && run.workflow_id == decision.record.workflow_id);
+    if !follows_run {
+        decision.record.attempt = decision.record.attempt.max(attempt);
+    }
     Ok(Some(decision))
 }
 
@@ -1054,12 +1063,13 @@ mod tests {
             .collect();
         let superseded = "base_branch_changed: the base branch changed";
         let label_removed = "review_label_removed: the review label was removed";
+        let session_lost = "pohunek_session_lost: the reviewer session was lost";
         // Each pass runs one debounce after the one before and plans from its record; it gives
-        // (planned by `plan_retarget`, phase, attempt, blockers, dispatch).
+        // (planned by `plan_retarget`, phase, attempt, blockers, dispatch, notify).
         type Pass = (
             Vec<Run>,
             &'static str,
-            (bool, &'static str, i64, Vec<&'static str>, bool),
+            (bool, &'static str, i64, Vec<&'static str>, bool, bool),
         );
         let rows: Vec<(&str, Record, &str, Vec<Pass>)> = vec![
             (
@@ -1070,12 +1080,12 @@ mod tests {
                     (
                         vec![ended(0, "")],
                         "release",
-                        (true, phase::WAITING, 1, vec![], false),
+                        (true, phase::WAITING, 1, vec![], false, false),
                     ),
                     (
                         vec![ended(0, "")],
                         "release",
-                        (true, phase::RUNNING, 1, vec![], true),
+                        (true, phase::RUNNING, 1, vec![], true, false),
                     ),
                 ],
             ),
@@ -1086,7 +1096,7 @@ mod tests {
                 vec![(
                     vec![ended(0, ""), running(1)],
                     "release",
-                    (false, phase::RUNNING, 1, vec!["wf-1"], false),
+                    (false, phase::RUNNING, 1, vec!["wf-1"], false, false),
                 )],
             ),
             (
@@ -1097,12 +1107,12 @@ mod tests {
                     (
                         vec![ended(0, ""), ended(1, label_removed)],
                         "release",
-                        (true, phase::WAITING, 2, vec![], false),
+                        (true, phase::WAITING, 2, vec![], false, false),
                     ),
                     (
                         vec![ended(0, ""), ended(1, label_removed)],
                         "release",
-                        (true, phase::RUNNING, 2, vec![], true),
+                        (true, phase::RUNNING, 2, vec![], true, false),
                     ),
                 ],
             ),
@@ -1114,17 +1124,39 @@ mod tests {
                     (
                         vec![ended(0, ""), running(1)],
                         "next",
-                        (true, phase::RUNNING, 2, vec!["wf-1"], false),
+                        (true, phase::RUNNING, 1, vec!["wf-1"], false, false),
                     ),
                     (
                         vec![ended(0, ""), ended(1, superseded)],
                         "next",
-                        (true, phase::WAITING, 2, vec![], false),
+                        (true, phase::WAITING, 2, vec![], false, false),
                     ),
                     (
                         vec![ended(0, ""), ended(1, superseded)],
                         "next",
-                        (true, phase::RUNNING, 2, vec![], true),
+                        (true, phase::RUNNING, 2, vec![], true, false),
+                    ),
+                ],
+            ),
+            (
+                "back to the base branch of the running retarget review, which then fails",
+                record(phase::RUNNING, 1, &["wf-1"]),
+                "wf-0",
+                vec![
+                    (
+                        vec![ended(0, ""), running(1)],
+                        "next",
+                        (true, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), running(1)],
+                        "release",
+                        (false, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, session_lost)],
+                        "release",
+                        (false, phase::RETRY_WAIT, 2, vec![], false, true),
                     ),
                 ],
             ),
@@ -1135,7 +1167,7 @@ mod tests {
                 vec![(
                     vec![ended(0, ""), ended(1, "")],
                     "main",
-                    (false, phase::COMPLETED, 1, vec![], false),
+                    (false, phase::COMPLETED, 1, vec![], false, false),
                 )],
             ),
             (
@@ -1145,14 +1177,18 @@ mod tests {
                 vec![(
                     vec![ended(0, superseded), ended(1, "")],
                     "main",
-                    (true, phase::WAITING, 2, vec![], false),
+                    (true, phase::WAITING, 2, vec![], false, false),
                 )],
             ),
             (
                 "runs pruned, published workflow kept",
                 Record::default(),
                 "wf-0",
-                vec![(vec![], "release", (true, phase::WAITING, 1, vec![], false))],
+                vec![(
+                    vec![],
+                    "release",
+                    (true, phase::WAITING, 1, vec![], false, false),
+                )],
             ),
         ];
         for (name, mut previous, published, passes) in rows {
@@ -1179,6 +1215,7 @@ mod tests {
                         record.attempt,
                         record.blocking_workflows.clone(),
                         decision.dispatch,
+                        decision.notify,
                     ),
                     (
                         want.0,
@@ -1186,6 +1223,7 @@ mod tests {
                         want.2,
                         want.3.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>(),
                         want.4,
+                        want.5,
                     ),
                     "{name}, pass {index}"
                 );
