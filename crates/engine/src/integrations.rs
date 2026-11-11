@@ -233,6 +233,16 @@ pub trait Integrations {
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send;
 
+    /// Returns the review with the marker of `review` already on the head, without posting.
+    ///
+    /// It is the lookup that [`Integrations::publish_review`] makes before it posts.
+    fn find_published_review(
+        &self,
+        cancel: &CancellationToken,
+        pull_request: &PullRequest,
+        review: &GitHubReview,
+    ) -> impl Future<Output = Result<Option<PublishResult>, Error>> + Send;
+
     /// Sends a notification of `level` to the backends of `route`.
     ///
     /// The level decides the mention and whether a failure is dropped.

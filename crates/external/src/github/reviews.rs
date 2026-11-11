@@ -245,6 +245,20 @@ impl GitHub {
         posted_result(&output, review.decision.clone())
     }
 
+    /// Returns the review whose marker is already on the head, and never posts one.
+    ///
+    /// A review without its marker is refused first, as [`GitHub::publish_review`] refuses it:
+    /// an empty marker would match every review of the login on the head.
+    pub(crate) async fn published_review(
+        &self,
+        cancel: &CancellationToken,
+        pr: &PullRequest,
+        review: &GitHubReview,
+    ) -> Result<Option<PublishResult>, Error> {
+        check_review_marker(review)?;
+        self.find_published_review(cancel, pr, review).await
+    }
+
     /// Returns the published review that carries the marker, reading every page
     /// (`github.go:766-793`).
     async fn find_published_review(
