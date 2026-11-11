@@ -5,12 +5,20 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::borrow::Cow;
+
 use http::header::HOST;
 use http::uri::Authority;
-use http::{HeaderMap, StatusCode, Uri};
+use http::{HeaderMap, HeaderValue, StatusCode, Uri};
 
 /// A host and an optional port, the host lowercased and without IPv6 brackets.
 type HostPort = (String, Option<u16>);
+
+/// The most bytes of the host that a refusal log line carries.
+///
+/// A valid `host:port` has at most 259 bytes (a DNS name of 253 bytes and `:65535`), so only a
+/// host that cannot be a real name is cut.
+const LOGGED_HOST_MAX_BYTES: usize = 260;
 
 /// Why the `Host` of a request was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,16 +76,7 @@ impl AllowedHosts {
     /// Returns `Invalid` for a `Host` header that is not UTF-8 or not an authority, or for no
     /// header and no authority in the target, and `NotAllowed` for a host no entry accepts.
     pub(crate) fn check(&self, uri: &Uri, headers: &HeaderMap) -> Result<(), HostRefusal> {
-        let (host, port) = match headers.get(HOST) {
-            Some(value) => {
-                let text = value.to_str().map_err(|_| HostRefusal::Invalid)?;
-                let authority = text
-                    .parse::<Authority>()
-                    .map_err(|_| HostRefusal::Invalid)?;
-                normalize(&authority)
-            }
-            None => normalize(uri.authority().ok_or(HostRefusal::Invalid)?),
-        };
+        let (host, port) = read_host(uri, headers)?;
         let allowed = self.entries.iter().any(|(allowed, allowed_port)| {
             *allowed == host && allowed_port.is_none_or(|allowed_port| port == Some(allowed_port))
         });
@@ -86,6 +85,50 @@ impl AllowedHosts {
         } else {
             Err(HostRefusal::NotAllowed)
         }
+    }
+}
+
+/// Returns the host that [`AllowedHosts::check`] reads from a request, for its refusal log line.
+///
+/// A host that parses is written as the check compares it: lowercased, IPv6 in brackets, with
+/// its port if it has one. Otherwise it is the raw `Host` header as lossy UTF-8, or empty
+/// without a header. Either is cut to its first [`LOGGED_HOST_MAX_BYTES`] bytes.
+pub(crate) fn logged_host(uri: &Uri, headers: &HeaderMap) -> String {
+    let read: Cow<'_, [u8]> = match read_host(uri, headers) {
+        Ok((host, port)) => {
+            let host = if host.contains(':') {
+                format!("[{host}]")
+            } else {
+                host
+            };
+            let text = match port {
+                Some(port) => format!("{host}:{port}"),
+                None => host,
+            };
+            Cow::Owned(text.into_bytes())
+        }
+        Err(_) => Cow::Borrowed(headers.get(HOST).map_or(&[], HeaderValue::as_bytes)),
+    };
+    let cut = read.get(..LOGGED_HOST_MAX_BYTES).unwrap_or(&read);
+    String::from_utf8_lossy(cut).into_owned()
+}
+
+/// Reads the host of a request: the first `Host` header, else the target's authority.
+///
+/// # Errors
+///
+/// Returns `Invalid` for a `Host` header that is not UTF-8 or not an authority, or for no
+/// header and no authority in the target.
+fn read_host(uri: &Uri, headers: &HeaderMap) -> Result<HostPort, HostRefusal> {
+    match headers.get(HOST) {
+        Some(value) => {
+            let text = value.to_str().map_err(|_| HostRefusal::Invalid)?;
+            let authority = text
+                .parse::<Authority>()
+                .map_err(|_| HostRefusal::Invalid)?;
+            Ok(normalize(&authority))
+        }
+        None => Ok(normalize(uri.authority().ok_or(HostRefusal::Invalid)?)),
     }
 }
 
@@ -103,8 +146,6 @@ fn normalize(authority: &Authority) -> HostPort {
 
 #[cfg(test)]
 mod tests {
-    use http::HeaderValue;
-
     use super::*;
 
     /// One request: its target, its `Host` header values in order, and the expected result.
@@ -113,6 +154,17 @@ mod tests {
         &'static [&'static [u8]],
         Result<(), HostRefusal>,
     );
+
+    /// Returns a request target and its `Host` header values in order.
+    fn request(target: &str, hosts: &[&[u8]]) -> (Uri, HeaderMap) {
+        let uri = target.parse::<Uri>().expect("the target parses");
+        let mut headers = HeaderMap::new();
+        for host in hosts {
+            let value = HeaderValue::from_bytes(host).expect("the header value is valid");
+            headers.append(HOST, value);
+        }
+        (uri, headers)
+    }
 
     /// Each row is the answer of the MCP server with rmcp 3.9.0 alone, which the check keeps.
     #[test]
@@ -176,13 +228,36 @@ mod tests {
             ("/metrics", &[b"127.0.0.1:99999"], other),
         ];
         for (target, hosts, expected) in cases {
-            let uri = target.parse::<Uri>().expect("the target parses");
-            let mut headers = HeaderMap::new();
-            for host in hosts {
-                let value = HeaderValue::from_bytes(host).expect("the header value is valid");
-                headers.append(HOST, value);
-            }
+            let (uri, headers) = request(target, hosts);
             let found = allowed.check(&uri, &headers);
+            assert_eq!(found, expected, "target {target}, hosts {hosts:?}");
+        }
+        let long = "x ".repeat(LOGGED_HOST_MAX_BYTES);
+        let long_name = "x".repeat(2 * LOGGED_HOST_MAX_BYTES);
+        let logged: [(&str, &[&[u8]], &str); 6] = [
+            ("/metrics", &[b"127.0.0.1:8444"], "127.0.0.1:8444"),
+            ("/metrics", &[b"[::ABCD]:5"], "[::abcd]:5"),
+            (
+                "/metrics",
+                &[b"caf\xe9.example.com"],
+                "caf\u{fffd}.example.com",
+            ),
+            (
+                "/metrics",
+                &[long.as_bytes()],
+                &long[..LOGGED_HOST_MAX_BYTES],
+            ),
+            (
+                "/metrics",
+                &[long_name.as_bytes()],
+                &long_name[..LOGGED_HOST_MAX_BYTES],
+            ),
+            ("/metrics", &[], ""),
+        ];
+        for (target, hosts, expected) in logged {
+            let (uri, headers) = request(target, hosts);
+            assert!(allowed.check(&uri, &headers).is_err(), "hosts {hosts:?}");
+            let found = logged_host(&uri, &headers);
             assert_eq!(found, expected, "target {target}, hosts {hosts:?}");
         }
         let hex = AllowedHosts::new(&["[::abcd]".to_owned()]);

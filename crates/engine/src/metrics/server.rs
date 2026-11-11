@@ -17,7 +17,7 @@ use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::mcp::ResponseBody;
 use crate::mcp::access::{MAX_CONNECTIONS_LIMIT, TIMEOUT_MAX, host_valid, invalid};
-use crate::mcp::host::AllowedHosts;
+use crate::mcp::host::{AllowedHosts, logged_host};
 
 /// The one path the endpoint answers on; every other path is not found.
 pub const METRICS_PATH: &str = "/metrics";
@@ -123,7 +123,12 @@ where
     /// a blocking thread, never on a runtime thread. A failed read gets 500 and is logged.
     pub async fn handle<B>(&self, request: Request<B>) -> Response<ResponseBody> {
         if let Err(refusal) = self.allowed_hosts.check(request.uri(), request.headers()) {
-            tracing::warn!(reason = refusal.as_str(), "metrics request refused");
+            let host = logged_host(request.uri(), request.headers());
+            tracing::warn!(
+                reason = refusal.as_str(),
+                host = host.as_str(),
+                "metrics request refused"
+            );
             return empty(refusal.status());
         }
         if request.headers().contains_key(ORIGIN) {

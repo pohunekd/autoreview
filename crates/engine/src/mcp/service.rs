@@ -17,7 +17,7 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use tokio_util::sync::CancellationToken;
 
 use super::access::{McpClient, McpConfig, authorize};
-use super::host::AllowedHosts;
+use super::host::{AllowedHosts, logged_host};
 use super::tools::{Caller, Tools};
 use crate::engine::{Clock, Engine};
 use crate::integrations::Integrations;
@@ -105,7 +105,12 @@ where
             }
         };
         if let Err(refusal) = self.allowed_hosts.check(request.uri(), request.headers()) {
-            tracing::warn!(reason = refusal.as_str(), "mcp request refused");
+            let host = logged_host(request.uri(), request.headers());
+            tracing::warn!(
+                reason = refusal.as_str(),
+                host = host.as_str(),
+                "mcp request refused"
+            );
             return empty(refusal.status());
         }
         // The tools never need the token, so it does not travel further into rmcp.
