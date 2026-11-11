@@ -152,7 +152,11 @@ follow:
   gates read it (`publish.go:232-236`). The finding heading that
   `discussion.go:29` matches, the signature rule (`config.go:342-352`,
   `discussion.go:51-62`) and `republishedPrefix` `P` (`prior.go:11`) are
-  unchanged. #7 changes the marker after cutover and reads both forms.
+  unchanged. #7 changes the marker after cutover and reads both forms. The body
+  still starts with the unchanged marker; a comment that names the base branch
+  follows it on the same line and does not start with the marker's prefix, so a
+  reader that matches the marker as a substring is unaffected (#297, see "What
+  is not compatible, by decision").
 - **R13 Policy digest.** `digestOf` (`policy.go:657-686`) is reproduced byte for
   byte, including Go's `%s` of `Trigger` (`policy.go:60-65`); checked by golden.
 - **R14 Go semantics.** `fmt` `%.12s` truncates by runes (all its inputs are
@@ -430,6 +434,21 @@ What is not compatible, by decision:
   `review_records_its_steps_with_their_retries`,
   `shutdown_after_the_last_reviewer_result_still_records_the_reviewers_step` and
   `verifier_failure_before_its_verification_is_stored_records_the_resumed_run`.
+- **Review reuse across base branches (#297):** the review body carries
+  `<!-- hermes-pr-review-base:v1:<hex SHA-256 of the base branch name> -->`
+  right after the legacy marker. The Rust lookup (`review_page_step`,
+  `crates/external/src/github/reviews.rs`) searches for the whole stored marker
+  text, which includes that comment, so it does not reuse a review of the same
+  head for another base branch, and it does not match a review that carries the
+  legacy marker alone (published by Go or by a binary built before #297): it
+  posts a new review where Go reuses that one. It skips a review GitHub
+  dismissed, reuses a later match, and otherwise posts the review again; Go
+  reuses a dismissed review (`github.go:781`). A review rendered by a binary
+  built before #297 carries the legacy marker alone. On a rollback Go finds
+  Rust's reviews by the legacy marker as a substring, so it reuses a review
+  made for another base branch and a dismissed one. The regression tests are
+  `retarget_without_a_push_publishes_a_new_approval` and
+  `dismissed_review_is_skipped_and_a_later_match_is_reused`.
 
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):
