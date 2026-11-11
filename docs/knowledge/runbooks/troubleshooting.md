@@ -34,7 +34,8 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts, or a Claude profile one that does not name the checkout it checked | [Reviewer output](#reviewer-output) |
 | `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
-| `review_result_invalid: Codex exited without a result: ...` in the log | The Codex program itself failed, for example on a model the account does not support | [Codex program failed](#codex-program-failed) |
+| `review_result_invalid: Codex exited without a result: ...` in the log | The Codex program itself failed, for example on a model the account does not support, or the adapter refused what a Codex run left | [Codex program failed](#codex-program-failed) |
+| `review_wrapper_invalid`, `review_wrapper_invalid: Claude Code exited with status N: ...` in the log | A Claude result line was unusable, or Claude Code itself failed | [Claude Code failed](#claude-code-failed) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
@@ -188,12 +189,14 @@ request. See [the Codex adapter](../concepts/reviewers-and-adapters.md#the-codex
 ### Codex checkout refused
 
 A Codex review keeps failing with `review_result_invalid`, and the session
-output ends with a `codex-adapter: ...` line and
-`[pohunek-codex-review exited with status 64]` without a result frame. The
-engine reads that output at once, starts a fresh session up to
-`session.reviewer_run_max_attempts`, then records the failure. The adapter
-checks the worktree against the trusted lines of the request before and after
-the Codex run. The Claude adapter runs the same `base` checks with the same
+output holds a `codex-adapter: ...` line and ends with
+`[pohunek-codex-review exited with status 64]` without a result frame. A
+refusal after the Codex run also puts that message on the reason line right
+before the exit line (see [Codex program failed](#codex-program-failed)), so
+the engine logs it. The engine reads that output at once, starts a fresh
+session up to `session.reviewer_run_max_attempts`, then records the failure.
+The adapter checks the worktree against the trusted lines of the request before
+and after the Codex run. The Claude adapter runs the same `base` checks with the same
 messages, and on a `head` checkout only the `HEAD` check; its refusal is one
 result line whose `stderr_base64` holds the message. Every refusal but a
 missing head is `review_result_invalid`:
@@ -223,10 +226,40 @@ reviewer after unusable output" and "rejecting reviewer output", as
 else: the recorded failure, the notifications and GitHub get only the code. The
 reason comes from Codex's output, so read it as a hint, not as a verdict. Fix
 what it names (the `model` of the profile, the Codex login on the review host,
-the Codex version), then `autoreview retry` the pull request. A profile whose
-adapter was written by an older autoreview prints no reason line; run
-`autoreview profiles install` with the same flags on the review host to write
-the adapter in `adapters/codex/`.
+the Codex version), then `autoreview retry` the pull request.
+
+The adapter prints the reason line with exit status 64 too when it refuses what
+a Codex run with status 0 left: no report (`Codex did not produce a review
+result`), a report that is not valid or names another head, or a checkout that
+changed during the run (see [Codex checkout refused](#codex-checkout-refused)).
+The reason is then its own message, `codex-adapter: <message>`, and the log
+shows `review_result_invalid: Codex exited without a result: codex-adapter:
+<message>`. When the head commit is missing after the run, the head marker
+still comes last, right before the exit line, and the review stops with
+`review_head_unavailable`. A profile whose adapter was written by an older
+autoreview prints no reason line; run `autoreview profiles install` with the
+same flags on the review host to write the adapter in `adapters/codex/`.
+
+### Claude Code failed
+
+A Claude reviewer or verifier keeps failing with `review_wrapper_invalid`: the
+adapter's result line reports an exit code other than 0, output on stderr, or
+another protocol or mode. When Claude Code exited with a status other than 0,
+the engine logs the end of its stderr in the `error` field of the warnings
+"retrying reviewer after unusable output" and "rejecting reviewer output", as
+`review_wrapper_invalid: Claude Code exited with status N: <reason>`, and
+nowhere else: the recorded failure, the notifications and GitHub get only the
+code. The reason is the last 512 bytes of Claude Code's stderr, without blank
+space at either end, starting at a character boundary, with line breaks,
+control characters, format characters and line or paragraph separators shown
+as `?`. It comes from Claude Code's output, so read it as a hint, not as a
+verdict. Fix what it names (the Claude Code login on the review host, the
+`model` of the profile, the Claude Code version), then `autoreview retry` the
+pull request. A bare `review_wrapper_invalid` has no such reason: for example a
+run with status 0 that wrote to stderr, a failed run with an empty stderr, an
+unreadable result line, or one of another protocol or mode. The result line in
+the session output holds the whole stderr in `stderr_base64`. The engine reads the stderr that every Claude adapter already
+sends, so no `autoreview profiles install` is needed for this reason.
 
 ### Head commit unavailable
 
@@ -336,6 +369,9 @@ A reviewer run ends in one of these codes:
   `completed`, or the adapter printed no result frame, as when it refuses the
   checkout (see [Codex checkout refused](#codex-checkout-refused)) or Codex
   itself fails (see [Codex program failed](#codex-program-failed)).
+- `review_wrapper_invalid`: a Claude result line could not be read, or reports
+  an exit code other than 0, output on stderr, or another protocol or mode (see
+  [Claude Code failed](#claude-code-failed)).
 - `review_head_unavailable`: the adapter refused a base checkout run because
   the pull request head commit is not in the review host's repository (see
   [Head commit unavailable](#head-commit-unavailable)). The review stops

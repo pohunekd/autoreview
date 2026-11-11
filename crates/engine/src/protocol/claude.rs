@@ -7,8 +7,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::Error;
+use crate::error::{BoxError, Error};
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
+use crate::protocol::reason::trailing_reason;
 use crate::protocol::request::checkout_name;
 use crate::protocol::validate::{
     review_adapter_outdated, review_head_unavailable, reviewer_output_invalid,
@@ -191,7 +192,8 @@ pub(crate) fn parse_claude_output(
 /// refusal of the adapter is `review_head_unavailable` for a missing head, and
 /// `review_result_invalid` otherwise. A wrapper of the protocol whose `checked_checkout` is not
 /// the name of `checkout` is `review_adapter_outdated`, whatever its exit code: only an adapter
-/// that checked the review checkout writes it, outside the base64 output of the run.
+/// that checked the review checkout writes it, outside the base64 output of the run. A
+/// `review_wrapper_invalid` of a run whose exit code is not 0 carries the end of its stderr.
 pub(crate) fn decode_structured<T>(raw: &str, checkout: &Checkout) -> Result<T, Error>
 where
     T: DeserializeOwned + PartialEq + Default,
@@ -216,7 +218,7 @@ where
         || wrapper.mode != "structured"
         || wrapper.exit_code != 0
     {
-        return Err(wrapper_invalid());
+        return Err(wrapper_refused(wrapper.exit_code, stderr.as_deref()));
     }
     let stdout = decode_go_base64(&wrapper.stdout_base64).ok_or_else(wrapper_invalid)?;
     let text = go_utf8_lossy(&stdout);
@@ -287,6 +289,28 @@ fn adapter_refusal(wrapper: &ClaudeWrapper) -> Error {
     } else {
         Error::workflow("review_result_invalid", true, None)
     }
+}
+
+/// Error of a refused wrapper, with the end of the stderr of a failed run.
+///
+/// The end of the decoded `stderr` of a run whose `exit_code` is not 0 is the cause. It quotes
+/// Claude Code's output, which is untrusted, so it is bounded and neutralized. It only goes
+/// into the log line of the refused output: the recorded failure keeps only the code.
+fn wrapper_refused(exit_code: i64, stderr: Option<&[u8]>) -> Error {
+    let reason = match stderr {
+        Some(bytes) if exit_code != 0 => trailing_reason(bytes),
+        _ => String::new(),
+    };
+    if reason.is_empty() {
+        return wrapper_invalid();
+    }
+    Error::workflow(
+        "review_wrapper_invalid",
+        true,
+        Some(BoxError::from(format!(
+            "Claude Code exited with status {exit_code}: {reason}"
+        ))),
+    )
 }
 
 /// The wrapper of a Claude session that the engine refuses.
@@ -435,5 +459,86 @@ mod tests {
         }
         parse_claude_output(&pr, &Checkout::Head, &format!("{other_checkout}\n"))
             .expect("a head result is read on a head checkout");
+    }
+
+    // A Claude Code run that exits with a status other than 0 gets the end of its stderr,
+    // bounded and neutralized, as the cause of `review_wrapper_invalid`; any other wrapper
+    // that the engine refuses keeps the bare code (#304).
+    #[test]
+    fn failed_claude_run_carries_the_bounded_end_of_its_stderr() {
+        let pr = test_pull_request(3);
+        let wrapper = |exit_code: i64, stderr: String| {
+            format!(
+                "{}\n",
+                json!({
+                    "protocol": CLAUDE_RESULT_PROTOCOL,
+                    "mode": "structured",
+                    "exit_code": exit_code,
+                    "stdout_base64": "",
+                    "stderr_base64": stderr,
+                    "checked_checkout": "base"
+                })
+            )
+        };
+        let failed = |stderr: &[u8]| wrapper(1, STANDARD.encode(stderr));
+        let long = format!("{}\nError: last", "x".repeat(600));
+        let cut = ["\u{e9}".as_bytes(), &b"y".repeat(511)].concat();
+        let cases = [
+            (
+                "last error line",
+                failed(b"Warning: slow network\nError: Invalid API key\n"),
+                Some("status 1: Warning: slow network?Error: Invalid API key".to_owned()),
+            ),
+            (
+                "status of a signal",
+                wrapper(-9, STANDARD.encode("Killed\n")),
+                Some("status -9: Killed".to_owned()),
+            ),
+            (
+                "control and format characters",
+                failed("a\u{1b}[31mb\u{202e}c\u{85}d\te\u{200b}f\u{2028}g".as_bytes()),
+                Some("status 1: a?[31mb?c?d?e?f?g".to_owned()),
+            ),
+            (
+                "invalid bytes",
+                failed(b"Error: \xff\xfe x"),
+                Some("status 1: Error: \u{FFFD}\u{FFFD} x".to_owned()),
+            ),
+            (
+                "end of a long stderr",
+                failed(long.as_bytes()),
+                Some(format!("status 1: {}?Error: last", "x".repeat(500))),
+            ),
+            (
+                "cut inside a character",
+                failed(&cut),
+                Some(format!("status 1: {}", "y".repeat(511))),
+            ),
+            (
+                "replacement characters over the bound",
+                failed(&[0xFF; 200]),
+                Some(format!("status 1: {}", "\u{FFFD}".repeat(170))),
+            ),
+            ("empty stderr", failed(b""), None),
+            ("blank stderr", failed(b" \n\t\r\n"), None),
+            (
+                "stderr of a run with status 0",
+                wrapper(0, STANDARD.encode("Error: x\n")),
+                None,
+            ),
+            ("invalid base64", wrapper(1, "%%".to_owned()), None),
+        ];
+        for (name, output, reason) in cases {
+            let err = parse_claude_output(&pr, &Checkout::Base, &output).expect_err(name);
+            assert_eq!(error_code(&err), "review_wrapper_invalid", "{name}");
+            assert!(reviewer_output_retryable(&err), "{name}");
+            let message = match reason {
+                Some(reason) => {
+                    format!("review_wrapper_invalid: Claude Code exited with {reason}")
+                }
+                None => "review_wrapper_invalid".to_owned(),
+            };
+            assert_eq!(err.to_string(), message, "{name}");
+        }
     }
 }

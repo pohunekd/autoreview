@@ -132,7 +132,10 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   variables (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
   `GITHUB_ENTERPRISE_TOKEN`), `MATRIX_ACCESS_TOKEN` and every `AUTOREVIEW_`
   variable. The adapter then stays alive so that the coordinator can read the
-  result before it removes the session.
+  result before it removes the session. The engine refuses a result line with
+  an exit code other than 0 as `review_wrapper_invalid` and logs the end of its
+  stderr with it (see
+  [troubleshooting](../runbooks/troubleshooting.md#claude-code-failed)).
   Before and after the run it checks the review checkout against the trusted
   lines of the request (`- Trusted head SHA:`, `- Trusted base SHA:`,
   `- Trusted checkout:`), as the [Codex adapter](#the-codex-adapter) does, with
@@ -258,7 +261,9 @@ Python standard library (Python 3.11 or newer). It has two parts:
   exits with a status other than 0, the line
   `[pohunek-codex-review-reason-v1:<base64>]` comes right before the exit line,
   with the reason that the engine logs next to `review_result_invalid` (see
-  [troubleshooting](../runbooks/troubleshooting.md#codex-program-failed)).
+  [troubleshooting](../runbooks/troubleshooting.md#codex-program-failed)). A
+  refusal after the run prints the same line with its own message,
+  `codex-adapter: <reason>`, before the head marker of a missing head.
   After the run the checkout gets
   the same check again, and a base checkout must still be at the `HEAD`
   recorded before the run.

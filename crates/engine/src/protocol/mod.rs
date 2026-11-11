@@ -15,6 +15,7 @@ use crate::model::{Discussion, ReviewInput, ReviewerResult};
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod combine;
+mod reason;
 pub(crate) mod request;
 pub(crate) mod validate;
 

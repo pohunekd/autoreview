@@ -174,6 +174,26 @@ class WrapperTests(unittest.TestCase):
         )
         self.assertEqual(wrapper.reason_marker(b""), "[pohunek-codex-review-reason-v1:]")
 
+    def test_refusal_after_the_run_names_its_message_on_a_reason_line(self) -> None:
+        missing = wrapper.HeadUnavailableError("head is unavailable")
+        unread = wrapper.InputFrameError("Codex did not produce a review result")
+        head_marker = "[pohunek-codex-review-refused-v1:head_unavailable]"
+        reason = base64.b64encode(
+            b"codex-adapter: Codex did not produce a review result"
+        ).decode("ascii")
+        missing_reason = base64.b64encode(b"codex-adapter: head is unavailable").decode("ascii")
+        cases = (
+            ("refusal before the run", unread, False, ""),
+            ("missing head before the run", missing, False, head_marker),
+            ("refusal after the run", unread, True,
+             f"[pohunek-codex-review-reason-v1:{reason}]"),
+            ("missing head after the run", missing, True,
+             f"[pohunek-codex-review-reason-v1:{missing_reason}]\n{head_marker}"),
+        )
+        for name, error, after_run, marker in cases:
+            with self.subTest(name=name):
+                self.assertEqual(wrapper.refusal_marker(error, after_run), marker)
+
     def write_result(self, directory: str, value: object) -> Path:
         result = Path(directory) / "result.json"
         result.write_text(json.dumps(value), encoding="utf-8")
@@ -486,6 +506,7 @@ class BaseCheckoutTests(unittest.TestCase):
             ("pull request head", self.head_sha, "", "is the pull request head or contains it"),
             ("rewritten base", self.rewritten_sha, "", "does not descend from the trusted"),
             ("moved by the run", self.tip_sha, moved, "HEAD changed during the review"),
+            ("no result", self.tip_sha, "exit 0", "did not produce a review result"),
         ):
             with self.subTest(name=name):
                 if name != "head not fetched":
@@ -504,6 +525,15 @@ class BaseCheckoutTests(unittest.TestCase):
                 self.assertEqual(
                     refused + exit_line in stdout, name == "head not fetched", stdout
                 )
+                # A refusal after the run names its message on the line before the exit line.
+                lines = stdout.splitlines()
+                after_run = name in ("moved by the run", "no result")
+                self.assertEqual(
+                    lines[-2].startswith("[pohunek-codex-review-reason-v1:"), after_run, stdout
+                )
+                if after_run:
+                    encoded = lines[-2].removeprefix("[pohunek-codex-review-reason-v1:")
+                    self.assertIn(message, base64.b64decode(encoded[:-1]).decode("utf-8"))
                 # The engine reads the output as finished only at the exit line.
                 self.assertIn(wrapper.EXIT_LINE_FORMAT.format(wrapper.EXIT_USAGE), stdout)
 
