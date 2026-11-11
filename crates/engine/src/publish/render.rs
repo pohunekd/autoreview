@@ -6,7 +6,7 @@ use autoreview_policy::{HumanReview, OnFindings, Reviewer, match_glob};
 
 use super::neutralize::{closes_fence, neutralize, opening_fence};
 use super::plan::{PublicationPlan, blocking_count};
-use super::review_marker;
+use super::publication_marker;
 use crate::error::Error;
 use crate::integrations::{GitHubReview, InlineComment};
 use crate::messages::excerpt;
@@ -49,7 +49,7 @@ pub(crate) fn render_review(
     let pull_request = &input.pull_request;
     let (blocking, notes) = input.split_findings(&artifact.findings);
     let open = artifact.open_prior();
-    let marker = review_marker(pull_request, &plan.decision, &blocking, &open);
+    let marker = publication_marker(pull_request, &plan.decision, &blocking, &open);
     let mut sections = vec![
         marker.clone(),
         "## Automated code review".to_owned(),
@@ -414,6 +414,7 @@ mod tests {
         Artifact, Decision, Finding, PriorFinding, PriorResult, PriorVerdict, PullRequest,
         ReviewInput, ReviewScope,
     };
+    use crate::publish::base_marker;
     use crate::publish::plan::{PublicationPlan, plan_publication};
     use crate::verify::VERDICT_REFUTED;
 
@@ -674,7 +675,7 @@ mod tests {
         );
         assert!(
             review.body.starts_with(&review.marker)
-                && review.body.matches("<!--").count() == 1
+                && review.body.matches("<!--").count() == review.marker.matches("<!--").count()
                 && review.body.contains("`src/b.go:9`")
                 && !review.body.contains("@someone"),
             "body = {}",
@@ -871,7 +872,9 @@ mod tests {
     const NOTES_AND_VALIDATIONS_BODY: &str = concat!(
         "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ":decision=REQUEST_CHANGES:findings=1",
-        ":digest=dbbc1688fe7e375abe23494336f8d6d50a22fa8863ecb124165e865a59e0b09f -->\n\n",
+        ":digest=dbbc1688fe7e375abe23494336f8d6d50a22fa8863ecb124165e865a59e0b09f -->",
+        "<!-- hermes-pr-review-base:v1:",
+        "0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605 -->\n\n",
         "## Automated code review\n\n",
         "Reviewed by Opus, full review of `aaaaaaaaaaaa`.\n\n",
         "**Opus:** Reviewed the change.\n\n",
@@ -1197,13 +1200,18 @@ mod tests {
                 (None, Some(want)) => {
                     let review = result.expect("golden case renders");
                     assert_eq!(review.decision, want.decision, "case {}", case.name);
-                    let mut body = want.body.clone();
+                    // Go writes the legacy marker alone; the marker of the base branch
+                    // follows it (#297).
+                    let base = base_marker(&case.input.input.pull_request.base_branch);
+                    let marker = format!("{}{base}", want.marker);
+                    assert!(want.body.starts_with(&want.marker), "case {}", case.name);
+                    let mut body = want.body.replacen(&want.marker, &marker, 1);
                     if case.name == NOTE_BODY_CASE {
                         assert!(body.contains(GO_NOTE_BODY), "case {}", case.name);
                         body = body.replacen(GO_NOTE_BODY, "", 1);
                     }
                     assert_eq!(review.body, body, "case {}", case.name);
-                    assert_eq!(review.marker, want.marker, "case {}", case.name);
+                    assert_eq!(review.marker, marker, "case {}", case.name);
                     let comments: Vec<GoComment> = review
                         .comments
                         .iter()

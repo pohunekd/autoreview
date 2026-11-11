@@ -626,6 +626,8 @@ impl Integrations for FakeIntegration {
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send {
+        // An earlier review is reused when its body carries the marker, as the GitHub client
+        // finds it.
         let result = {
             let mut state = self.lock();
             if let Some(code) = state.publish_fail.clone() {
@@ -633,7 +635,7 @@ impl Integrations for FakeIntegration {
             } else if let Some(index) = state
                 .published
                 .iter()
-                .position(|existing| existing.marker == review.marker)
+                .position(|existing| existing.body.contains(&review.marker))
             {
                 Ok(PublishResult {
                     decision: review.decision.clone(),

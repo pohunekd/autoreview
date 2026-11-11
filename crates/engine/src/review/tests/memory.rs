@@ -499,6 +499,52 @@ async fn retarget_without_a_push_gets_a_full_review_of_the_same_head() {
     h.stop_engine().await;
 }
 
+// A clean full review after a retarget without a push publishes a new approval. The approval on
+// the old base branch is not reused: GitHub may have dismissed it with the retarget (#297).
+#[tokio::test]
+async fn retarget_without_a_push_publishes_a_new_approval() {
+    let mut h = start_harness(|_| {}).await;
+    h.set_output(reviewer_output(Vec::new()));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the first approval", || h.publications() == 1)
+        .await;
+    let mut retargeted = pr.clone();
+    retargeted.base_branch = "release".to_owned();
+    retargeted.base_sha = sha("e");
+    h.fake.open(retargeted, h.rule(&pr.repository));
+    h.poll_until("the approval on the new base branch", || {
+        h.publications() == 2
+    })
+    .await;
+    h.settle().await;
+    let (published, _, started, _) = h.fake.snapshot();
+    let reviews: Vec<(Decision, bool)> = published
+        .iter()
+        .map(|review| {
+            (
+                review.decision.clone(),
+                review.body.contains("full review of"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        (
+            reviews,
+            started.len(),
+            published[0].marker != published[1].marker
+        ),
+        (
+            vec![(Decision::Approve, true), (Decision::Approve, true)],
+            2,
+            true
+        ),
+        "a clean full review of the same head on a new base branch must publish its own \
+         approval (decision, full; sessions; distinct markers)"
+    );
+    h.stop_engine().await;
+}
+
 /// Requests changes on head `a`, retargets the pull request to `release` without a push and
 /// holds the review of the retarget; returns the retargeted pull request.
 ///

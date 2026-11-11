@@ -237,7 +237,10 @@ The review submitted to GitHub contains:
 - A hidden marker, `<!-- autoreview:v1:<repo>#<n>@<head>:decision=...:findings=N:digest=... -->`,
   that names the publication, its decision and its number of blocking findings.
   The marker is also how a retry finds a review that was posted before its
-  acknowledgement was lost, so the same review is never posted twice.
+  acknowledgement was lost, so the same review is never posted twice. A second
+  hidden marker right after it carries the SHA-256 digest of the base branch, so
+  a review of the same head for another base branch is never taken for it. A
+  review that GitHub dismissed is never reused; the review is posted again.
 
 Model text is neutralized before it is rendered:
 

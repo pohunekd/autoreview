@@ -78,9 +78,9 @@ autoreview does not dismiss the review it published before such a retarget. The
 branch protection setting that dismisses stale approvals removes an approval
 when the merge base brings new changes. Otherwise the earlier approval stays
 next to the full review, which is the latest review of the account once it is
-published. A clean full review whose decision and blocking findings equal the
-earlier review reuses that GitHub review instead of posting a second one, also
-when GitHub dismissed it.
+published. The full review is always posted as a new GitHub review, also when
+its decision and blocking findings equal the earlier review: the hidden marker
+of a review names its base branch, and a dismissed review is never reused.
 
 Both steps and the collection of prior findings are the same for a
 `claude-structured` and a `codex-envelope` pipeline, with the same log reasons.
