@@ -237,7 +237,9 @@ scrape_configs:
 ```
 
 - The endpoint answers only `GET /metrics` whose `Host` header is in
-  `metrics.allowed_hosts` (400 without a valid `Host`, 403 for another one). A request with
+  `metrics.allowed_hosts`, with the check of the MCP server (400 without a valid `Host`, 403
+  for another one; a request without `Host` whose target is absolute, such as
+  `http://127.0.0.1:9464/metrics`, is checked by the host of its target). A request with
   an `Origin` header gets 403, another path 404 and another method 405. It has no token:
   keep `listen` on loopback and see the [threat model](knowledge/safety/threat-model.md).
 - The gauges are read from the store at each scrape, with the read of `stats` without
