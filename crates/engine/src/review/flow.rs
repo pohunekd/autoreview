@@ -6,7 +6,8 @@
 
 use std::sync::atomic::AtomicI64;
 
-use autoreview_policy::{Event, OnClean, Reviewer, TriggerKind};
+use autoreview_policy::{Event, OnClean, Reviewer};
+use autoreview_schedule::scheduler::superseded;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
@@ -33,9 +34,6 @@ use crate::publish::plan::{PublicationPlan, blocking_count, plan_publication, pu
 use crate::publish::render::{RenderSettings, human_review_signals, render_review};
 use crate::store::{RESULT_SUCCESS, ReviewStep, StepOutcome, StoredReview};
 use crate::verify::{apply_verification, claims_of, verifier_reviewer};
-
-/// Error code of a pull request that no longer requests a review of the login.
-const REVIEW_REQUEST_NOT_ACTIVE: &str = "review_request_not_active";
 
 /// Step name of the lookup of a review posted before a restart, in the retry log.
 const STEP_PUBLISHED_REVIEW: &str = "published_review";
@@ -380,10 +378,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Reads the pull request that a resumed review publishes its stored plan on.
     ///
-    /// A posted review answers the review request, so a resumed review of a request finds it
-    /// inactive. When its publication is stored, or its rendered review is found on the head,
-    /// the reviewed pull request is returned and the review completes as published. A found
-    /// review is stored with a succeeded publication run of the lookup.
+    /// A review posted before a stop may meet a superseding code on resume: its own answer to
+    /// the review request, a push, a merge. When its publication is stored, or its rendered
+    /// review is found on the reviewed head, the reviewed pull request is returned and the
+    /// review completes as published. A found review is stored with a succeeded publication
+    /// run of the lookup.
     ///
     /// # Errors
     ///
@@ -394,11 +393,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             Ok(current) => return Ok(current),
             Err(cause) => cause,
         };
-        if self.input.rule.trigger.kind != TriggerKind::ReviewRequested
-            || error_code(&cause) != REVIEW_REQUEST_NOT_ACTIVE
-        {
+        if !superseded(error_code(&cause)) {
             return Err(StepFailure::without_run(cause));
         }
+        // The review was posted on the reviewed head, which a push may have moved.
         let reviewed = self.input.pull_request.clone();
         let stored = live(&self.cancel).and_then(|()| {
             self.engine

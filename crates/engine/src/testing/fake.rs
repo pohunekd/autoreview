@@ -119,6 +119,8 @@ pub(crate) struct FakeState {
     pub(crate) rejected: Vec<RejectedCandidate>,
     /// Every review submission that was published.
     pub(crate) published: Vec<GitHubReview>,
+    /// Head SHA of each review in `published`, in the same order.
+    pub(crate) published_heads: Vec<String>,
     /// Pull requests whose review request a posted review answered, by `repository#number`.
     pub(crate) answered: BTreeSet<String>,
     /// Gate that every posted review waits on before it returns; `None` holds none.
@@ -667,6 +669,7 @@ impl Integrations for FakeIntegration {
                 (Ok(reused), None)
             } else {
                 state.published.push(review.clone());
+                state.published_heads.push(pull_request.head_sha.clone());
                 state.answered.insert(pull_request.key());
                 let posted = PublishResult {
                     decision: review.decision.clone(),
@@ -692,13 +695,17 @@ impl Integrations for FakeIntegration {
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<Option<PublishResult>, Error>> + Send {
-        // The lookup of `publish_review`, which finds a review by the marker in its body.
+        // The lookup of `publish_review`, which finds a review by the marker in its body. The
+        // head must match too, as GitHub's lookup checks the commit of each review.
         let result = {
             let state = self.lock();
             state
                 .published
                 .iter()
-                .position(|existing| existing.body.contains(&review.marker))
+                .zip(&state.published_heads)
+                .position(|(existing, head)| {
+                    existing.body.contains(&review.marker) && *head == pull_request.head_sha
+                })
                 .map(|index| PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,

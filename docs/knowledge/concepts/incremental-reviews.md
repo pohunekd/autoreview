@@ -51,7 +51,11 @@ findings, and the new head must extend the reviewed head in a straight line:
   widen for this reason; the next published review records it.
 - A review that is still running when the pull request is retargeted publishes
   nothing. It ends as `superseded` with the code `base_branch_changed`, the same
-  way a new head supersedes it, and the next review is full.
+  way a new head supersedes it, and the next review is full. A review whose
+  review was posted before a restart is already on GitHub: it completes as
+  published when it resumes
+  ([resume after restart](state-and-recovery.md#resume-after-restart)), and the
+  next review is full too.
 - If the stored result is gone (for example after
   `store.review_retention_seconds` or after an upgrade of the engine), the review
   widens to full. The log records the reason as `previous_review_not_stored`.
