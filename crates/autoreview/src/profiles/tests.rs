@@ -211,6 +211,11 @@ fn directories_refuse_an_empty_xdg_home_and_default_an_unset_one() {
     let relative = Some(OsStr::new("relative/home"));
     let not_utf8 = Some(OsStr::from_bytes(b"/srv/\xff"));
     let control = Some(OsStr::new("/srv/a\nb"));
+    let empty_part = Some(OsStr::new("/srv//home"));
+    let dot_part = Some(OsStr::new("/srv/./home"));
+    let dot_dot_part = Some(OsStr::new("/srv/../home"));
+    let trailing_slash = Some(OsStr::new("/srv/home/"));
+    let dotted_names = Some(OsStr::new("/srv/.home/..home"));
     let cases = [
         (
             "config set",
@@ -254,6 +259,69 @@ fn directories_refuse_an_empty_xdg_home_and_default_an_unset_one() {
             control,
             home,
             Err("XDG_CONFIG_HOME"),
+        ),
+        (
+            "config empty part",
+            agents,
+            empty_part,
+            home,
+            Err("XDG_CONFIG_HOME"),
+        ),
+        (
+            "config dot part",
+            agents,
+            dot_part,
+            home,
+            Err("XDG_CONFIG_HOME"),
+        ),
+        (
+            "config dot-dot part",
+            agents,
+            dot_dot_part,
+            home,
+            Err("XDG_CONFIG_HOME"),
+        ),
+        (
+            "config trailing slash",
+            agents,
+            trailing_slash,
+            home,
+            Err("XDG_CONFIG_HOME"),
+        ),
+        (
+            "config dotted names",
+            agents,
+            dotted_names,
+            home,
+            Ok("/srv/.home/..home/pohunek/agents"),
+        ),
+        (
+            "config unset, HOME empty part",
+            agents,
+            None,
+            empty_part,
+            Err("HOME"),
+        ),
+        (
+            "config unset, HOME dot part",
+            agents,
+            None,
+            dot_part,
+            Err("HOME"),
+        ),
+        (
+            "config unset, HOME dot-dot part",
+            agents,
+            None,
+            dot_dot_part,
+            Err("HOME"),
+        ),
+        (
+            "config unset, HOME trailing slash",
+            agents,
+            None,
+            trailing_slash,
+            Err("HOME"),
         ),
         ("config and HOME unset", agents, None, None, Err("HOME")),
         ("config unset, HOME empty", agents, None, empty, Err("HOME")),
@@ -299,6 +367,69 @@ fn directories_refuse_an_empty_xdg_home_and_default_an_unset_one() {
             control,
             home,
             Err("XDG_DATA_HOME"),
+        ),
+        (
+            "data empty part",
+            adapters,
+            empty_part,
+            home,
+            Err("XDG_DATA_HOME"),
+        ),
+        (
+            "data dot part",
+            adapters,
+            dot_part,
+            home,
+            Err("XDG_DATA_HOME"),
+        ),
+        (
+            "data dot-dot part",
+            adapters,
+            dot_dot_part,
+            home,
+            Err("XDG_DATA_HOME"),
+        ),
+        (
+            "data trailing slash",
+            adapters,
+            trailing_slash,
+            home,
+            Err("XDG_DATA_HOME"),
+        ),
+        (
+            "data dotted names",
+            adapters,
+            dotted_names,
+            home,
+            Ok("/srv/.home/..home/autoreview/adapters"),
+        ),
+        (
+            "data unset, HOME empty part",
+            adapters,
+            None,
+            empty_part,
+            Err("HOME"),
+        ),
+        (
+            "data unset, HOME dot part",
+            adapters,
+            None,
+            dot_part,
+            Err("HOME"),
+        ),
+        (
+            "data unset, HOME dot-dot part",
+            adapters,
+            None,
+            dot_dot_part,
+            Err("HOME"),
+        ),
+        (
+            "data unset, HOME trailing slash",
+            adapters,
+            None,
+            trailing_slash,
+            Err("HOME"),
         ),
         ("data and HOME unset", adapters, None, None, Err("HOME")),
         ("data unset, HOME empty", adapters, None, empty, Err("HOME")),
