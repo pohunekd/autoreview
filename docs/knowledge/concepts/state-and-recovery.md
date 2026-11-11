@@ -37,7 +37,9 @@ long it keeps completed reviews.
 
 Two engine processes must never run against one database. `autoreview serve`
 takes an exclusive lock on a file next to the database when it starts. A second
-`serve` on the same database fails with `engine_already_running` and exits.
+`serve` on the same database fails with `engine_already_running` and exits. With
+a [`metrics` section](../../configuration.md#metrics) it fails earlier, with
+`metrics_listen_failed`, because the first `serve` holds `metrics.listen`.
 
 Discovery has its own lock, on another file next to the database. A discovery
 pass runs under that lock. The engine's own loop and `autoreview poll` both take

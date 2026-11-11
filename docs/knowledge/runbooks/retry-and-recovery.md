@@ -64,7 +64,8 @@ Reviews are durable. All state is in the SQLite store at `store.path`.
 
 - A review running when the service stops resumes from its stored steps on the
   next `serve`.
-- A second `serve` on the same database is refused with `engine_already_running`.
+- A second `serve` on the same database is refused with `engine_already_running`,
+  or with `metrics_listen_failed` when the configuration has a `metrics` section.
   Stop the old process first, and do not delete the database to get past the error.
 - `autoreview poll` may run while `serve` runs. Passes take turns on a lock.
 - Each published decision carries its own `publication_status` (`pending` or

@@ -261,7 +261,7 @@ pub struct Counters {
 
 /// How one completed attempt ended, as its row records it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Ending {
+pub(crate) enum Ending {
     /// Published a review on GitHub.
     Published {
         /// Decision of the publication.
@@ -281,7 +281,7 @@ enum Ending {
 
 /// The decision of a published attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Published {
+pub(crate) enum Published {
     /// Approved without an approval wait.
     ApprovedWithoutHuman,
     /// Approved after the `approve` command decided its wait.
@@ -362,6 +362,31 @@ fn stored_instant(
 fn state_invalid(review: &StoredReview, reason: &str) -> Error {
     let cause = format!("review {} {reason}", review.workflow_id);
     Error::workflow("store_state_invalid", true, Some(cause.into()))
+}
+
+/// Reads the completion instant of a completed review.
+fn completed_instant(review: &StoredReview) -> Result<OffsetDateTime, Error> {
+    if review.completed_at.is_empty() {
+        return Err(state_invalid(review, "is completed without completed_at"));
+    }
+    stored_instant(review, "completed_at", &review.completed_at)
+}
+
+/// Returns the whole seconds from `created` to `completed`; `None` when the clock went back.
+fn elapsed_seconds(created: OffsetDateTime, completed: OffsetDateTime) -> Option<i64> {
+    let elapsed = (completed - created).whole_seconds();
+    (elapsed >= 0).then_some(elapsed)
+}
+
+/// Reads how a completed review ended, with its seconds from creation to completion.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` as `compute` does for the same row.
+pub(crate) fn completed_ending(review: &StoredReview) -> Result<Ending, Error> {
+    let created = stored_instant(review, "created_at", &review.created_at)?;
+    let completed = completed_instant(review)?;
+    ending(review, elapsed_seconds(created, completed))
 }
 
 /// Reads how a completed attempt ended from its result, failure, approval and outcome.
@@ -472,7 +497,7 @@ pub fn compute(
 /// # Errors
 ///
 /// Returns `store_state_invalid` for a key without `#`.
-fn stopped(records: &BTreeMap<String, Record>) -> Result<BTreeMap<String, i64>, Error> {
+pub(crate) fn stopped(records: &BTreeMap<String, Record>) -> Result<BTreeMap<String, i64>, Error> {
     let mut repositories: BTreeMap<String, i64> = BTreeMap::new();
     for (key, record) in records {
         if record.phase != PHASE_FAILED {
@@ -491,13 +516,35 @@ fn stopped(records: &BTreeMap<String, Record>) -> Result<BTreeMap<String, i64>, 
     Ok(repositories)
 }
 
+/// Reports whether `review` counts in the current state.
+///
+/// A queued or running row counts. An awaiting row counts only while it waits for a decision,
+/// as `autoreview awaiting` lists it; a decided wait that `serve` has not continued yet counts
+/// nowhere.
+pub(crate) fn counts_now(review: &StoredReview) -> bool {
+    match review.status.as_str() {
+        REVIEW_QUEUED | REVIEW_RUNNING => true,
+        REVIEW_AWAITING => review.awaits_decision(),
+        _ => false,
+    }
+}
+
+impl StateCounts {
+    /// Counts one review of the current state under its `status`.
+    pub(crate) fn add(&mut self, status: &str) {
+        match status {
+            REVIEW_QUEUED => self.queued += 1,
+            REVIEW_RUNNING => self.running += 1,
+            REVIEW_AWAITING => self.awaiting += 1,
+            _ => {}
+        }
+    }
+}
+
 /// Counts the current state of the rows and the schedule records.
 ///
-/// The queued, running and undecided awaiting rows count in total, per repository and per
-/// host; the stopped pull requests of `schedule` count per repository.
-///
-/// An awaiting row counts only while it waits for a decision, as `autoreview awaiting` lists
-/// it; a decided wait that `serve` has not continued yet counts nowhere.
+/// The rows that `counts_now` takes count in total, per repository and per host; the stopped
+/// pull requests of `schedule` count per repository.
 fn current_state(
     reviews: &[StoredReview],
     schedule: &BTreeMap<String, Record>,
@@ -505,26 +552,17 @@ fn current_state(
     let mut total = StateCounts::default();
     let mut repositories: BTreeMap<String, StateCounts> = BTreeMap::new();
     let mut hosts: BTreeMap<String, StateCounts> = BTreeMap::new();
-    for review in reviews {
-        if review.status == REVIEW_COMPLETED
-            || (review.status == REVIEW_AWAITING && !review.awaits_decision())
-        {
-            continue;
-        }
-        let count = |counts: &mut StateCounts| match review.status.as_str() {
-            REVIEW_QUEUED => counts.queued += 1,
-            REVIEW_RUNNING => counts.running += 1,
-            REVIEW_AWAITING => counts.awaiting += 1,
-            _ => {}
-        };
-        count(&mut total);
+    for review in reviews.iter().filter(|review| counts_now(review)) {
         let input = &review.input;
-        count(
-            repositories
-                .entry(input.pull_request.repository.clone())
-                .or_default(),
-        );
-        count(hosts.entry(input.route.host.clone()).or_default());
+        total.add(&review.status);
+        repositories
+            .entry(input.pull_request.repository.clone())
+            .or_default()
+            .add(&review.status);
+        hosts
+            .entry(input.route.host.clone())
+            .or_default()
+            .add(&review.status);
     }
     let stopped = stopped(schedule)?;
     Ok(CurrentState {
@@ -559,15 +597,11 @@ fn history(
         if review.status != REVIEW_COMPLETED {
             continue;
         }
-        if review.completed_at.is_empty() {
-            return Err(state_invalid(review, "is completed without completed_at"));
-        }
-        let completed = stored_instant(review, "completed_at", &review.completed_at)?;
+        let completed = completed_instant(review)?;
         if !range.contains(completed.date()) {
             continue;
         }
-        let elapsed = (completed - created).whole_seconds();
-        let ending = ending(review, (elapsed >= 0).then_some(elapsed))?;
+        let ending = ending(review, elapsed_seconds(created, completed))?;
         tally.add(review, completed.date(), |bucket| bucket.complete(ending));
         if ending == Ending::Failed {
             *tally.failures.entry(review.failure.clone()).or_default() += 1;

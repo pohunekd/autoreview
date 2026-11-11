@@ -403,6 +403,37 @@ The configuration never holds a token, only its digest. A missing or invalid
 client field is reported with its index, for example
 `configuration_missing: mcp.clients[1].scope`.
 
+## metrics
+
+Optional; see [Prometheus metrics](stats.md#prometheus-metrics). Without it
+`serve` opens no metrics port and counts nothing for it. When the section is
+present, every command validates it at load, so a broken section stops `serve`
+and `validate` too, and every key is required. Only `autoreview serve` runs the
+endpoint.
+
+| Key | Meaning |
+|---|---|
+| `listen` | `IP:PORT` the endpoint listens on; keep it on loopback, such as `127.0.0.1` |
+| `allowed_hosts` | `Host` header values the endpoint accepts, at least one |
+| `allowed_hosts` entries | Each a bare `host` or `host:port`; a `host` alone accepts any port |
+| `header_timeout_seconds` | Longest time a client may take to send the headers. From 1 to 86400 |
+| `max_connections` | Most connections served at once; more wait to be accepted. From 1 to 4096 |
+
+```yaml
+metrics:
+  listen: "127.0.0.1:9464"
+  allowed_hosts: ["127.0.0.1"]
+  header_timeout_seconds: 10
+  max_connections: 4
+```
+
+The endpoint checks no token: it serves counts and the names of repositories,
+review hosts, rules and error codes only. Put a reverse proxy with
+authentication in front of it when a scraper on another host reads it; see the
+[threat model](knowledge/safety/threat-model.md). The endpoint is bound before
+the engine lock, so a second `serve` with the same section fails with
+`metrics_listen_failed`; see [`autoreview serve`](cli.md#autoreview-serve).
+
 ## Cross-key rules
 
 Besides each key's own range, `validate` enforces:

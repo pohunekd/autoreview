@@ -41,6 +41,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `configuration_invalid` naming `github.credentials` | More than one credential, or a `match` other than `["*"]` | [Credential errors](#credential-errors) |
 | A fine-grained token sees nothing | Organization approval pending, wrong resource owner, or repository not selected | [A fine-grained token sees nothing](#a-fine-grained-token-sees-nothing) |
 | `engine_already_running` | Another `serve` uses the same database | Stop the other process |
+| `metrics_listen_failed` | A second `serve` or another process holds `metrics.listen` | Stop it |
 | `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message | [Notifier failures](#notifier-failures) |
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a human | [Approval errors](#approval-errors) |
 | `review_superseded`, `approval_expired` | The wait ended and nothing was posted | [Approval errors](#approval-errors) |

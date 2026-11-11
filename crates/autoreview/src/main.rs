@@ -9,6 +9,7 @@ mod error_response;
 mod init;
 mod logging;
 mod mcp_server;
+mod metrics_server;
 mod profiles;
 
 use std::ffi::OsString;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use autoreview_engine::config::Config;
 use autoreview_engine::integrations::Integrations;
 use autoreview_engine::mcp::McpConfig;
+use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::model::{
     ApproveRequest, ResolveRequest, RetryRequest, head_prefix_valid, repository_valid, sha_valid,
 };
@@ -112,7 +114,7 @@ enum Command {
 /// The commands that open the store and build the engine first.
 #[derive(Debug, Subcommand)]
 enum EngineCommand {
-    /// Runs discovery and reviews until SIGINT or SIGTERM.
+    /// Runs discovery and reviews, and the metrics endpoint when configured, until a signal.
     Serve,
     /// Serves the MCP tools over Streamable HTTP until SIGINT or SIGTERM.
     Mcp,
@@ -260,22 +262,33 @@ fn report(error: &Error) {
 async fn run(config_path: Option<PathBuf>, command: Command) -> Result<(), Error> {
     let environment = std::env::var_os(CONFIG_ENV);
     let path = config_file::resolve_path(config_path.as_deref(), environment.as_deref())?;
-    let (config, mcp) = config_file::load(&path)?;
+    let (config, mcp, metrics) = config_file::load(&path)?;
     let external = Arc::new(External::new(config.clone())?);
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;
     match command {
         Command::Validate => validate(&config),
         Command::Candidates => print_json(&external.list_candidates(&cancel).await?),
-        Command::Engine(command) => run_engine(command, config, mcp, external, &cancel).await,
+        Command::Engine(command) => {
+            let sections = Sections { mcp, metrics };
+            run_engine(command, config, sections, external, &cancel).await
+        }
     }
+}
+
+/// The optional sections of the configuration that only one command needs.
+struct Sections {
+    /// The `mcp` section of `autoreview mcp`.
+    mcp: Option<McpConfig>,
+    /// The `metrics` section of `autoreview serve`.
+    metrics: Option<MetricsConfig>,
 }
 
 /// Opens the store, builds the engine and runs `command` on them (`main.go:53-152`).
 async fn run_engine(
     command: EngineCommand,
     config: Config,
-    mcp: Option<McpConfig>,
+    sections: Sections,
     external: Arc<External>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
@@ -285,16 +298,25 @@ async fn run_engine(
         Path::new(&config.state_db_path),
         Box::new(OffsetDateTime::now_utc),
     )?);
-    let engine = Arc::new(Engine::new(
+    let engine = Engine::new(
         config,
         Arc::clone(&store),
         Arc::clone(&external),
         SystemClock,
-    ));
+    );
+    // Only the process that runs the reviews counts them, and only for its endpoint.
+    let counted = matches!(command, EngineCommand::Serve) && sections.metrics.is_some();
+    let engine = Arc::new(if counted {
+        engine.with_metrics()
+    } else {
+        engine
+    });
     match command {
-        EngineCommand::Serve => serve(&engine, &external, &github_login, cancel).await,
+        EngineCommand::Serve => {
+            serve(&engine, &external, &github_login, sections.metrics, cancel).await
+        }
         EngineCommand::Mcp => {
-            let Some(mcp) = mcp else {
+            let Some(mcp) = sections.mcp else {
                 return Err(Error::config(CONFIGURATION_MISSING, MCP_KEY, None));
             };
             mcp_server::serve(engine, &mcp, cancel).await
@@ -369,11 +391,14 @@ fn validate(config: &Config) -> Result<(), Error> {
 
 /// Runs the engine after checking that the token belongs to the configured login.
 ///
-/// A review panic ends the process, as a goroutine panic ends Go's.
+/// With `metrics`, the endpoint is bound after the login check and before the engine takes
+/// its lock, and it stops when the engine stops. A review panic ends the process, as a
+/// goroutine panic ends Go's.
 async fn serve(
     engine: &Arc<Engine<External, SystemClock>>,
     external: &External,
     github_login: &str,
+    metrics: Option<MetricsConfig>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
     let login = external.viewer_login(cancel).await?;
@@ -384,7 +409,22 @@ async fn serve(
             Some(format!("token belongs to {login}").into()),
         ));
     }
-    engine.serve(cancel).await
+    let Some(metrics) = metrics else {
+        return engine.serve(cancel).await;
+    };
+    let listener = metrics_server::bind(&metrics).await?;
+    let stop = cancel.child_token();
+    let endpoint = tokio::spawn(metrics_server::run(
+        listener,
+        Arc::clone(engine),
+        metrics,
+        stop.clone(),
+    ));
+    let result = engine.serve(cancel).await;
+    stop.cancel();
+    let stopped = endpoint.await;
+    result?;
+    stopped.map_err(failed)
 }
 
 /// Cancels `cancel` on the first SIGINT or SIGTERM, as Go's `signal.NotifyContext` does.

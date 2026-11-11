@@ -14,6 +14,7 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, MatrixRooms, RouteOverride, SECRET_ENV_PREFIX};
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
+use autoreview_engine::metrics::MetricsConfig;
 use autoreview_policy::{EVENTS, Event, Policy};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -163,6 +164,22 @@ pub(crate) struct FileConfig {
     notify: Option<NotifyFile>,
     /// The `mcp` section; only `autoreview mcp` needs it.
     mcp: Option<McpFile>,
+    /// The `metrics` section; without it `serve` runs no metrics endpoint.
+    metrics: Option<MetricsFile>,
+}
+
+/// The `metrics` section.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MetricsFile {
+    /// Address the metrics endpoint listens on, as `IP:PORT`.
+    listen: Option<Value>,
+    /// `Host` header values the endpoint accepts.
+    allowed_hosts: Option<Value>,
+    /// Longest time a client may take to send the request headers, in seconds.
+    header_timeout_seconds: Option<Value>,
+    /// Most connections served at once.
+    max_connections: Option<Value>,
 }
 
 /// The `mcp` section.
@@ -487,15 +504,19 @@ pub(crate) fn resolve_path(
 /// Returns the errors of [`parse`], and `configuration_invalid` naming `config` when the file
 /// cannot
 /// be read.
-pub(crate) fn load(path: &Path) -> Result<(Config, Option<McpConfig>), Error> {
+pub(crate) fn load(
+    path: &Path,
+) -> Result<(Config, Option<McpConfig>, Option<MetricsConfig>), Error> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         Error::config(CONFIGURATION_INVALID, DOCUMENT_NAME, Some(Box::new(error)))
     })?;
     let config = parse(&text, environment_secret, |policy_path| {
         autoreview_policy::load(policy_path).map_err(|error| Box::new(error) as _)
     })?;
-    let mcp = mcp_section(&parse_file(&text)?)?;
-    Ok((config, mcp))
+    let file = parse_file(&text)?;
+    let mcp = mcp_section(&file)?;
+    let metrics = metrics_section(&file)?;
+    Ok((config, mcp, metrics))
 }
 
 /// Reads the `mcp` section; `None` when the configuration has none.
@@ -526,6 +547,26 @@ pub(crate) fn mcp_section(file: &FileConfig) -> Result<Option<McpConfig>, Error>
         max_connections: count(&mcp.max_connections, "mcp.max_connections")?,
     };
     McpConfig::new(&listen, allowed_hosts, &entries, limits).map(Some)
+}
+
+/// Reads the `metrics` section; `None` when the configuration has none.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for an absent key of the section, and the errors of
+/// [`MetricsConfig::new`].
+pub(crate) fn metrics_section(file: &FileConfig) -> Result<Option<MetricsConfig>, Error> {
+    let Some(metrics) = &file.metrics else {
+        return Ok(None);
+    };
+    let listen = text(&metrics.listen, "metrics.listen")?;
+    let allowed_hosts = text_list(&metrics.allowed_hosts, "metrics.allowed_hosts")?;
+    let header_timeout = seconds(
+        &metrics.header_timeout_seconds,
+        "metrics.header_timeout_seconds",
+    )?;
+    let max_connections = count(&metrics.max_connections, "metrics.max_connections")?;
+    MetricsConfig::new(&listen, allowed_hosts, header_timeout, max_connections).map(Some)
 }
 
 /// Reads a positive integer that counts items or bytes.
@@ -1943,6 +1984,10 @@ pub(crate) mod tests {
             mcp_section(&file).is_ok_and(|mcp| mcp.is_none()),
             "the example keeps the MCP server off"
         );
+        assert!(
+            metrics_section(&file).is_ok_and(|metrics| metrics.is_none()),
+            "the example keeps the metrics endpoint off"
+        );
     }
 
     /// Reads a prompt of the example in `directory` as its README installs it.
@@ -2686,5 +2731,81 @@ pub(crate) mod tests {
                 "without {removed:?}"
             );
         }
+    }
+
+    #[test]
+    fn metrics_section_is_optional_and_every_key_is_required() {
+        let section = concat!(
+            "metrics:\n  listen: \"127.0.0.1:9464\"\n  allowed_hosts: [metrics.example.com]\n",
+            "  header_timeout_seconds: 10\n  max_connections: 4\n",
+        );
+        let full = format!("{EXAMPLE}{section}");
+        let loaded = metrics_section(&parse_file(&full).expect("valid YAML"))
+            .expect("the section is valid")
+            .expect("the section is present");
+        assert_eq!(loaded.allowed_hosts, ["metrics.example.com"]);
+        let host = "configuration_invalid: metrics.allowed_hosts: must list hosts or host:port, \
+                    without scheme, path or user";
+        let cases = [
+            (
+                "  listen: \"127.0.0.1:9464\"\n",
+                "",
+                "configuration_missing: metrics.listen",
+            ),
+            (
+                "  allowed_hosts: [metrics.example.com]\n",
+                "",
+                "configuration_missing: metrics.allowed_hosts",
+            ),
+            (
+                "  header_timeout_seconds: 10\n",
+                "",
+                "configuration_missing: metrics.header_timeout_seconds",
+            ),
+            (
+                "  max_connections: 4\n",
+                "",
+                "configuration_missing: metrics.max_connections",
+            ),
+            (
+                "[metrics.example.com]",
+                "[\"https://metrics.example.com\"]",
+                host,
+            ),
+            ("[metrics.example.com]", "[]", host),
+            (
+                "\"127.0.0.1:9464\"",
+                "\"localhost:9464\"",
+                "configuration_invalid: metrics.listen: must be an IP address and port",
+            ),
+            (
+                "header_timeout_seconds: 10",
+                "header_timeout_seconds: 86401",
+                concat!(
+                    "configuration_invalid: metrics.header_timeout_seconds: ",
+                    "must be from 1 to 86400 seconds"
+                ),
+            ),
+            (
+                "max_connections: 4",
+                "max_connections: 4097",
+                "configuration_invalid: metrics.max_connections: must be from 1 to 4096",
+            ),
+        ];
+        for (old, new, expected) in cases {
+            // The example holds a commented copy of the section, so only the section changes.
+            let text = format!("{EXAMPLE}{}", section.replacen(old, new, 1));
+            let result = metrics_section(&parse_file(&text).expect("valid YAML"));
+            assert_eq!(
+                result.expect_err("the section is refused").to_string(),
+                expected,
+                "{old:?} -> {new:?}"
+            );
+        }
+        let unknown = format!("{full}  bearer_token_env: AUTOREVIEW_METRICS_TOKEN\n");
+        assert!(
+            parse_file(&unknown).is_err(),
+            "the section refuses a key it does not know"
+        );
     }
 }

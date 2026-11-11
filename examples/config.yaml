@@ -128,3 +128,10 @@ notify:
 #     - name: hermes
 #       scope: write
 #       token_sha256: "<sha256 of the token>"
+
+# Optional: the Prometheus endpoint of `autoreview serve`. See docs/stats.md.
+# metrics:
+#   listen: "127.0.0.1:9464"
+#   allowed_hosts: ["127.0.0.1"]
+#   header_timeout_seconds: 10
+#   max_connections: 4
