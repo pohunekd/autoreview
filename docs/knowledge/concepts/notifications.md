@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # Notifications
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 autoreview tells people about reviews that need them, and it records the rest.
 Each **event** has a **level**. Each level goes to one or more **backends**. The

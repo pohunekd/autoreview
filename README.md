@@ -2,7 +2,7 @@
 
 Policy-driven AI pull request review on top of [pohunek](https://github.com/zajca/pohunek) sessions.
 
-> **Status: 0.1.0.** autoreview 0.1.0 is the first release. It ships static
+> **Status: 0.2.0.** autoreview 0.2.0 is the current release. It ships static
 > Linux binaries for `x86_64` and `aarch64` as release archives, each with a
 > `.sha256` file and a build provenance attestation; see [install](docs/install.md).
 > It does not implement the whole v0.1 design yet. The [Rough plan](#rough-plan)
@@ -36,10 +36,12 @@ one GitHub review with inline comments.
 
 ## Documentation
 
-The documentation describes autoreview 0.1.0; parts marked planned are not in
-0.1.0.
+The documentation describes autoreview 0.2.0; parts marked planned are not in
+0.2.0.
 
 - [Features](docs/features.md) - what it does and a map of every page
+- [Getting started](docs/knowledge/guides/getting-started.md): `scripts/setup`
+  (after 0.2.0) sets up one Linux machine
 - [Quickstart](docs/knowledge/guides/quickstart.md) and
   [use cases](docs/knowledge/guides/index.md), each with a complete policy in
   [examples/](examples/)
@@ -96,7 +98,9 @@ scenarios are guides without a policy of their own:
 - pohunek daemon on one or more review hosts with the repositories registered
 - `gh` CLI and one GitHub token (tokens per owner or repository are planned in #13)
 - Claude Code and/or Codex CLI on the review hosts
-- Linux on `x86_64` or `aarch64`; the systemd units are written by hand from the
+- Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` (after 0.2.0)
+  writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the system units
+  of a server user are written by hand from the
   install page (shipped units are planned in #39, the container image in #40
   and the workflow plugin in #41)
 

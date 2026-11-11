@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Comment on one repository
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 This is the first setup to run. One repository, one reviewer, a label that
 starts a review, and only comments on the pull request. Nothing is approved and

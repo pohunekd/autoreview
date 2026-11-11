@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Approve from chat with Hermes
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 A rule with `on_clean: await` waits for a person before its clean review is
 approved on GitHub. Today the person approves from the CLI with

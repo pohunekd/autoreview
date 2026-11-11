@@ -9,8 +9,8 @@ intents: [setup, project, help]
 
 # Organisation rules
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 One rule covers every repository of an organisation, and more specific rules
 above it cover the repositories that need their own pipeline and prompt. This

@@ -55,8 +55,15 @@ check_fmt() {
     fi
 }
 
+# CI sets CI, so there a missing shellcheck fails the gate instead of skipping it.
 docs_gates() {
     run_gate check-docs python3 -I scripts/check-docs
+    if command -v shellcheck >/dev/null 2>&1 || [ -n "${CI:-}" ]; then
+        run_gate shellcheck shellcheck scripts/setup
+    else
+        skip_gate shellcheck "shellcheck is not on PATH"
+    fi
+    run_gate setup-self-test scripts/setup --self-test
 }
 
 # Every adapters/<name>/tests directory is a gate of its own, so a new adapter

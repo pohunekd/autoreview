@@ -12,6 +12,11 @@ Docs group:
    anchors, YAML code blocks, the status line of each page, forbidden words and
    emoji in `docs/` (never `docs/plan/`), and that every `examples/**/*.yaml`
    parses.
+2. `shellcheck` (`shellcheck scripts/setup`): skipped with a reason when
+   `shellcheck` is not on `PATH`, except in CI (`CI` set), where it fails.
+3. `setup-self-test` (`scripts/setup --self-test`): the version comparison,
+   the target choice and the running-binary check of the setup script, over
+   fixed tables; it reads nothing else.
 
 Adapters group:
 
@@ -22,18 +27,18 @@ Adapters group:
 
 Rust group, on the toolchain pinned in `rust-toolchain.toml`:
 
-2. `rust-fmt`: `cargo fmt --all --check`
-3. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
-4. `rust-test`: `cargo test --workspace --locked`
-5. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
+4. `rust-fmt`: `cargo fmt --all --check`
+5. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
+6. `rust-test`: `cargo test --workspace --locked`
+7. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
 
 Go group (the Go reference), skipped with a reason while the repository has no
 `go.mod`:
 
-6. `fmt`: `gofmt -l .` lists no file.
-7. `vet`: `go vet ./...`
-8. `staticcheck`: the version pinned in `scripts/gates`, run with `go run`.
-9. `test`: `go test ./...`
+8. `fmt`: `gofmt -l .` lists no file.
+9. `vet`: `go vet ./...`
+10. `staticcheck`: the version pinned in `scripts/gates`, run with `go run`.
+11. `test`: `go test ./...`
 
 Planned, not a gate yet: validation of the example policies. It lands with M1,
 which also decides how `validate` can run in CI without tokens or a running

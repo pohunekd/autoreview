@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Use cases
 
-> **Status: 0.1.0.** These pages describe autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** These pages describe autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 Every scenario below is a policy file plus a config file. Start from the
 closest scenario, copy its example, and change the repository names. The
@@ -93,6 +93,8 @@ Two dimensions are not in a policy: the GitHub account (the `login` of the crede
 
 ## Where to go next
 
+- [Getting started](getting-started.md) sets up one Linux machine with
+  `scripts/setup` (after 0.2.0).
 - [Quickstart](quickstart.md) runs the first review on one repository.
 - [Combining patterns](combining.md) lists recipes and the rules that
   interact when two scenarios share one policy.

@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Combining patterns
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 The recipes layer the [scenario guides](index.md) in one `policy.yaml`. Each
 shows only the parts that change; the top-level keys are as in the

@@ -9,9 +9,9 @@ intents: [setup, help]
 
 # Quickstart
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0. The container image this page
-> mentions comes after 0.1.0 and is planned in #40.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0. The container image this page
+> mentions is not in 0.2.0 and is planned in #40.
 
 This guide takes one repository from nothing to a review comment posted by
 autoreview. It uses one reviewer and comments only, so nothing is approved
@@ -36,7 +36,10 @@ which can be the same machine.
 
 ## 2. Install the binary
 
-Install the `autoreview` binary from the release page of
+On one Linux machine that also runs the pohunek daemon,
+[`scripts/setup`](getting-started.md) (after 0.2.0) does steps 2 to 8 of this guide and
+installs the service; continue with step 9 after it. By hand: install the
+`autoreview` binary from the release page of
 [pohunekd/autoreview](https://github.com/pohunekd/autoreview). Confirm it
 runs:
 
@@ -66,7 +69,8 @@ autoreview init --dir "$AUTOREVIEW_HOME" --login <your-login> \
 
 `init` sets `policy_file`, the `login` of the credential and `pohunek.hosts`. In
 `$AUTOREVIEW_HOME/config.yaml`, set `store.path` to a file under
-`$AUTOREVIEW_HOME`.
+`$AUTOREVIEW_HOME`. After 0.2.0, `init` takes `--store-path` and the other
+[layout flags](../../cli.md#autoreview-init) instead.
 
 ## 5. Point the policy at your repository
 
@@ -217,8 +221,9 @@ answered. See [incremental reviews](../concepts/incremental-reviews.md).
 ## 15. Run as a service
 
 Once one review works, run autoreview as a long-running service so it reviews
-without manual polls. Write the systemd units of install path b, or use the
-container image that comes after 0.1.0 (planned in #40), as described in
+without manual polls. [`scripts/setup`](getting-started.md) (after 0.2.0) writes and
+starts user units on one machine. On a server, write the systemd units of install path b, or use the
+container image that is planned in #40, as described in
 [install](../../install.md), and let `autoreview serve` run until you stop it.
 Reviews that are running at shutdown resume after the next start.
 

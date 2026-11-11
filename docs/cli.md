@@ -9,8 +9,8 @@ intents: [setup, debug, help]
 
 # CLI reference
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 ```
 autoreview [--config <path>] <command> [arguments]
@@ -30,11 +30,14 @@ with status 1, so scripts and agents can branch on the code.
 ### `autoreview init`
 
 ```
-autoreview init --dir <DIR> --login <LOGIN> --pohunek-host <HOST> --example <NAME>
+autoreview init --dir <DIR> --login <LOGIN> --pohunek-host <HOST> --example <NAME> \
+  [--store-path <PATH>] [--gh-bin <PATH>] [--pohunek-bin <PATH>] \
+  [--pohunek-state-home <PATH>] [--pohunek-runtime-dir <PATH>] \
+  [--matrix-homeserver-url <URL>] [--matrix-room <ROOM>] [--matrix-mention-user <USER>]
 ```
 
 Writes a new configuration directory from one of the [examples](../examples/README.md).
-It asks nothing and reads no configuration; `--config` is refused. Every flag is
+It asks nothing and reads no configuration; `--config` is refused. These flags are
 required:
 
 | Flag | Meaning |
@@ -44,11 +47,31 @@ required:
 | `--pohunek-host` | The pohunek host that runs the reviewers |
 | `--example` | The example directory under `examples/`, for example `single-repo-comment` |
 
+The layout flags are optional and come after 0.2.0. Each one replaces one value of
+the reference file; without it the reference value is written:
+
+| Flag | Key | Reference value |
+|---|---|---|
+| `--store-path` | `store.path` | `/var/lib/autoreview/autoreview.db` |
+| `--gh-bin` | `github.gh_bin` | `/usr/bin/gh` |
+| `--pohunek-bin` | `pohunek.bin` | `/usr/local/bin/pohunek` |
+| `--pohunek-state-home` | `pohunek.state_home` | `/var/lib/autoreview/.local/state` |
+| `--pohunek-runtime-dir` | `pohunek.runtime_dir` | `/run/autoreview` |
+| `--matrix-homeserver-url` | `homeserver_url` of the `matrix` backend | `https://matrix.example.org` |
+| `--matrix-room` | `room` of the `matrix` backend | `!roomid:example.org` |
+| `--matrix-mention-user` | `mention_user` of the `matrix` backend | `@you:example.org` |
+
+A path flag must be a clean absolute path; a Matrix flag must be non-empty text
+without control characters. `init` checks neither for existence.
+
 It writes `config.yaml`, `policy.yaml`, `prompts/generic.md`, `prompts/verifier.md`
 and the prompts the example adds. `config.yaml` is `examples/config.yaml`, the
 complete file of the [configuration reference](configuration.md#complete-file),
-with `policy_file`, the credential `login` and `pohunek.hosts` set from the flags.
-Edit its paths and its placeholder `matrix` backend before the first start.
+with `policy_file`, the credential `login`, `pohunek.hosts` and the given layout
+flags set; every value it sets is written as a double-quoted string. Without the
+layout flags, edit its paths and its placeholder `matrix` backend before the
+first start. [`scripts/setup`](knowledge/guides/getting-started.md) (after 0.2.0)
+passes every layout flag.
 
 `init` loads the example's policy and checks every path before it writes
 anything, and never overwrites. `--dir` and `prompts/` must be real directories
@@ -61,7 +84,7 @@ it did not create.
 | Failure | Code | `configuration` field |
 |---|---|---|
 | `--config` given, a flag missing, an unknown example | `command_invalid` | none |
-| `--dir` relative or unclean, or its parent missing; `--login` or `--pohunek-host` malformed | `configuration_invalid` | `--dir`, `--login` or `--pohunek-host` |
+| `--dir` relative or unclean, or its parent missing; `--login`, `--pohunek-host` or a layout flag malformed | `configuration_invalid` | the flag |
 | A path of the set is in the way | `init_file_exists` | the path |
 | A path cannot be checked, created or written (permissions, disk full) | `init_write_failed` | the path |
 

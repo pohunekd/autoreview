@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Human approval
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 The reviewers do the reading; a person makes the decision. Two Claude reviewers
 review the core repository, a verifier re-checks blocking findings, and a clean

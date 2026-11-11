@@ -8,8 +8,8 @@ use autoreview_engine::{Error, error_code};
 use clap::ValueEnum;
 
 use super::{
-    Example, INIT_FILE_EXISTS, INIT_WRITE_FAILED, InitArguments, SetupFile, agent_profiles, render,
-    render_config, write,
+    Example, INIT_FILE_EXISTS, INIT_WRITE_FAILED, InitArguments, Layout, SetupFile, agent_profiles,
+    render, render_config, write,
 };
 use crate::config_file;
 
@@ -34,6 +34,7 @@ fn arguments(directory: &Path, example: Example) -> InitArguments {
         login: LOGIN.to_owned(),
         pohunek_host: HOST.to_owned(),
         example,
+        layout: Layout::default(),
     }
 }
 
