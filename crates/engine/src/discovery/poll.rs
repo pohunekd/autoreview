@@ -205,7 +205,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             let previous = state.schedule.get(key).cloned().unwrap_or_default();
             // A published review that covers the head gets here only when it names another base
             // branch.
-            let planned = match state.published.get(key) {
+            let (retargeted, mut decision) = match state.published.get(key) {
                 Some(published) if published.covers(pr) => {
                     let run_bases = self.run_bases(cancel, &target, &history)?;
                     let retarget = Retarget {
@@ -213,24 +213,39 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                         run_bases: &run_bases,
                         published_workflow: &published.workflow_id,
                     };
-                    scheduler::plan_retarget(
+                    let workflow_id = |attempt: i64| pr.workflow_id(attempt);
+                    let planned = scheduler::plan_retarget(
                         &previous,
                         &target,
                         &history,
                         &retarget,
-                        |attempt| pr.workflow_id(attempt),
+                        workflow_id,
                         now,
                         &self.config.schedule,
                     )
-                    .map_err(schedule_error)?
+                    .map_err(schedule_error)?;
+                    match planned {
+                        Some(decision) => (true, decision),
+                        None => (
+                            false,
+                            scheduler::plan_on_base(
+                                previous,
+                                &target,
+                                &history,
+                                &retarget,
+                                workflow_id,
+                                now,
+                                &self.config.schedule,
+                            )
+                            .map_err(schedule_error)?,
+                        ),
+                    }
                 }
-                _ => None,
-            };
-            let retargeted = planned.is_some();
-            let mut decision = match planned {
-                Some(decision) => decision,
-                None => scheduler::plan(previous, &target, &history, now, &self.config.schedule)
-                    .map_err(schedule_error)?,
+                _ => (
+                    false,
+                    scheduler::plan(previous, &target, &history, now, &self.config.schedule)
+                        .map_err(schedule_error)?,
+                ),
             };
             if retargeted && decision.dispatch {
                 tracing::info!(
