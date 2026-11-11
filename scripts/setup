@@ -469,12 +469,6 @@ untrusted_lines() {
     user=$(id -u)
     root=$(stat -c %u /) || fail 3 "missing the owner of /; stat failed"
     IFS=/ read -r -a parts <<<"${target#/}"
-    # The walk compares entries with the target without empty parts, as pohunek
-    # reads `a//b/` as `a/b`.
-    target=""
-    for part in "${parts[@]}"; do
-        [ -z "$part" ] || target=$target/$part
-    done
     for part in "${parts[@]}"; do
         [ -n "$part" ] || continue
         current=$current/$part
@@ -590,8 +584,11 @@ detect_machine() {
     unit_path_safe "$config_home" \
         || fail 3 "missing an XDG_CONFIG_HOME of letters, digits, '.', '_', '-' and '/'"
     data_home=${XDG_DATA_HOME:-$HOME/.local/share}
-    [[ $state_home == /* ]] || fail 3 "missing an absolute XDG_STATE_HOME"
-    [[ $data_home == /* ]] || fail 3 "missing an absolute XDG_DATA_HOME"
+    # pohunek's trusted walk refuses a path with an empty part or a trailing '/'.
+    [[ $state_home == /* && $state_home != *//* && $state_home != */ ]] \
+        || fail 3 "missing an absolute XDG_STATE_HOME without '//' or a trailing '/'"
+    [[ $data_home == /* && $data_home != *//* && $data_home != */ ]] \
+        || fail 3 "missing an absolute XDG_DATA_HOME without '//' or a trailing '/'"
     autoreview_bin=$HOME/.local/bin/autoreview
     env_file=$config_home/autoreview/autoreview.env
     unit_dir=$config_home/systemd/user
