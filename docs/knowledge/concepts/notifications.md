@@ -155,6 +155,11 @@ Rules for the queue:
 - A pull request whose rule skips its untrusted author (`untrusted: skip`) is
   listed as `AI review skipped: untrusted_author`, after the pull requests that
   AI review does not cover and before the stopped reviews: only a human reviews it.
+- A review that waits for a review host is listed as
+  `AI review waits for a review host: CODE`, with the host error code, among the
+  entries that wait for the engine; any other review that waits to start is
+  `AI review queued`. See
+  [waiting for a review host](state-and-recovery.md#waiting-for-a-review-host).
 - Pull requests whose notes were handed to the author are listed with the state
   **Waiting on author**. These are listed apart from the other requests, because
   the author has to act first.

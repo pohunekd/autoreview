@@ -18,7 +18,8 @@ review that still fails after its retries stops with the event
 codes not listed here are in the [troubleshooting runbook](troubleshooting.md).
 
 A review that waits for a review host did not stop. Its `review_stopped` message
-says "Reviews wait for a review host"; fix the host, and the review starts on the
+says "Reviews wait for a review host", and the review queue lists it as
+`AI review waits for a review host: CODE`; fix the host, and the review starts on the
 next discovery pass without `autoreview retry` (see
 [waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host)).
 

@@ -111,7 +111,8 @@ no later host has the repository, the review waits for a review host, not
 on every discovery pass, and starts on the first pass after a host answers,
 without `autoreview retry`. One `review_stopped` message announces each host
 outage: "Reviews wait for a review host", with the failed hosts and the host
-error code after `Diagnostic:`.
+error code after `Diagnostic:`. The review queue lists the review as
+`AI review waits for a review host: CODE`.
 Check the tunnel to the host, the pohunek versions of the CLI and the daemon, and
 the `pohunek.timeout_seconds` value. See
 [waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host).

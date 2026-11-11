@@ -293,6 +293,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             state.schedule.insert(key.clone(), decision.record);
         }
+        self.probe_outage_hosts(
+            cancel,
+            &state.host_outages,
+            &host_failures,
+            &mut host_answers,
+        )
+        .await?;
         // An outage ends when its host answers or leaves `pohunek.hosts`; a host that answered
         // and then failed in this pass is still out.
         state.host_outages.retain(|host, _| {

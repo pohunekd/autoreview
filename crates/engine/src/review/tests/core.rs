@@ -615,6 +615,54 @@ async fn review_waits_through_an_outage_of_every_review_host() {
     h.stop_engine().await;
 }
 
+// A host with a stored outage is asked on a pass that no due review asks it, so its recovery
+// ends the outage and its next outage is announced again (#247).
+#[tokio::test]
+async fn host_recovery_without_a_due_review_ends_the_announced_outage() {
+    let mut h = start_harness(|cfg| {
+        cfg.pohunek_hosts = vec!["host-a".to_owned()];
+    })
+    .await;
+    h.fake
+        .lock()
+        .host_fail
+        .insert("host-a".to_owned(), "pohunek_request_failed".to_owned());
+    let fake = Arc::clone(&h.fake);
+    let waits = move || {
+        let (_, notes, _, _) = fake.snapshot();
+        count_notes(&notes, Level::Action, "wait for a review host")
+    };
+    let first = integration_pull_request("acme/widget", &sha("a"));
+    h.fake.open(first.clone(), h.rule(&first.repository));
+    h.poll_until("the notice of the first outage", || waits() == 1)
+        .await;
+    h.fake.close(first);
+    h.fake.lock().host_fail.remove("host-a");
+    let asked = h.fake.lock().route_queries.len();
+    h.poll().await;
+    let queries = h.fake.lock().route_queries[asked..].to_vec();
+    assert_eq!(
+        queries,
+        ["host-a".to_owned()],
+        "the pass without a due review asks the host of the stored outage"
+    );
+    let state = h.store.load_discovery().expect("the discovery state loads");
+    assert!(
+        state.host_outages.is_empty(),
+        "the answer ends the outage: {:?}",
+        state.host_outages
+    );
+    h.fake
+        .lock()
+        .host_fail
+        .insert("host-a".to_owned(), "pohunek_request_failed".to_owned());
+    let second = integration_pull_request("acme/widget", &sha("c"));
+    h.fake.open(second.clone(), h.rule(&second.repository));
+    h.poll_until("the notice of the second outage", || waits() == 2)
+        .await;
+    h.stop_engine().await;
+}
+
 // A notification backend that always fails neither stalls discovery nor keeps it from saving:
 // the first notice gets one attempt after the save, the second one of the same level none, and
 // the due review is queued (#210).

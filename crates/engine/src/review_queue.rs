@@ -382,20 +382,29 @@ pub(crate) fn queue_status(
 fn schedule_status(record: &Record) -> (String, QueuePriority) {
     match record.phase.as_str() {
         "running" => ("AI review running".to_owned(), QueuePriority::Other),
+        "waiting" | "retry_wait" if record.awaits_host => (
+            format!("AI review waits for a review host: {}", status_code(record)),
+            QueuePriority::Other,
+        ),
         "waiting" | "retry_wait" => ("AI review queued".to_owned(), QueuePriority::Other),
-        "failed" => {
-            let code = if record.error_code.is_empty() {
-                "unknown"
-            } else {
-                record.error_code.as_str()
-            };
-            (format!("AI review stopped: {code}"), QueuePriority::Stopped)
-        }
+        "failed" => (
+            format!("AI review stopped: {}", status_code(record)),
+            QueuePriority::Stopped,
+        ),
         "withdrawn" => ("AI review withdrawn".to_owned(), QueuePriority::Other),
         _ => (
             format!("AI review state unknown: {}", record.phase),
             QueuePriority::Other,
         ),
+    }
+}
+
+/// Returns the record's error code, or `unknown` when it is empty.
+fn status_code(record: &Record) -> &str {
+    if record.error_code.is_empty() {
+        "unknown"
+    } else {
+        record.error_code.as_str()
     }
 }
 
@@ -708,6 +717,20 @@ notifications:
                         .insert(key.to_owned(), record("retry_wait", ""));
                 },
                 "AI review queued",
+                QueuePriority::Other,
+            ),
+            // Rust only (#247): Go keeps no `awaits_host` and lists the wait as queued.
+            (
+                "waiting for a review host",
+                connection,
+                |state, key| {
+                    let waiting = Record {
+                        awaits_host: true,
+                        ..record("retry_wait", "pohunek_request_failed")
+                    };
+                    state.schedule.insert(key.to_owned(), waiting);
+                },
+                "AI review waits for a review host: pohunek_request_failed",
                 QueuePriority::Other,
             ),
             (
