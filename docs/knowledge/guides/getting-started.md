@@ -70,6 +70,20 @@ it never overwrites a configuration or an agent profile that it did not write.
 - Paths without spaces: the configuration directory, `HOME` and
   `XDG_CONFIG_HOME` may hold only letters, digits, `.`, `_`, `-` and `/`,
   because the unit files hold them as they are.
+- Directories and files that only you can change. pohunek refuses a path when
+  a directory on it, from `/` down, is a symbolic link, is group- or
+  world-writable and yours, or belongs to another user (root's directories are
+  fine when others cannot write them or they are sticky, as `/tmp` is), and
+  when the directory or file at its end is not yours or is group- or
+  world-writable. Systems that give each user a private group (Ubuntu, for
+  example) set the umask `0002`, so directories that programs create there are
+  group-writable. The detection step checks `$XDG_CONFIG_HOME`
+  (`~/.config`), `$XDG_DATA_HOME` (`~/.local/share`), `$XDG_STATE_HOME`
+  (`~/.local/state`), `~/.local/bin`, `~/.local/libexec/pohunek`, the
+  directories below them that pohunek and the script use, and for Claude Code
+  and Codex on your `PATH` their config home with its settings files. It lists
+  every refused path at once, with `chmod go-w <path>` for a writable one, and
+  stops with exit code 3; the script never changes a mode itself.
 
 ## Run the script
 
@@ -94,8 +108,9 @@ step that is in place is skipped without a question.
 
 ## The steps
 
-1. **Detection.** The platform, the tools, systemd, `gh auth status` and the
-   paths. It only reads.
+1. **Detection.** The platform, the tools, systemd, `gh auth status`, the
+   paths, and the paths that pohunek refuses
+   ([before you start](#before-you-start)). It only reads.
 2. **autoreview.** Downloads the archive of `AUTOREVIEW_VERSION` and its
    `.sha256`, checks the checksum and the attestation of the release workflow
    (as [install](../../install.md#a-release-binary) does) and installs the
@@ -165,7 +180,7 @@ A third run with the same `--dir` on the finished setup prints every step as
 | 0 | Done, nothing to change, a dry run, or the stop after the configuration was written | After that stop: edit the policy, fill the secrets file, run the script again |
 | 1 | A bad flag or an empty answer | Run again with the flag or the answer |
 | 2 | A platform the release archives do not cover | Install pohunek by hand; the script supports Linux `x86_64` |
-| 3 | A missing tool or condition | Do what the message names after `;`, then run again |
+| 3 | A missing tool or condition, or a path that pohunek refuses ([before you start](#before-you-start)) | Do what the message names after `;` and each listed path names (`chmod go-w <path>` for a writable one), then run again. The hooks step stops the same way, with pohunek's reason, when pohunek refuses the config home it uses for an agent |
 | 4 | You declined a step, or stdin is not a terminal | Nothing of that step changed; run again in a terminal |
 | 5 | A download, its checksum or its attestation failed | Check the network and the release; never install an archive that failed |
 | 6 | A pohunek command failed | Read pohunek's message above it; `pohunek doctor` and the pohunek install guide help. When its installer lists live sessions that an upgrade would not carry over, end them (`pohunek session list` shows them) and run the script again, or download and verify the daemon archive by hand as the pohunek install guide describes and run its `packaging/install-daemon.sh --accept-runtime-loss`; the temporary copy that its message names is removed when the script exits |
