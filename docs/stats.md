@@ -25,7 +25,8 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   document in the `result` field of its answer; see the
   [MCP server](knowledge/guides/mcp-server.md#tools).
 - The document is read from the store only. `stats` asks neither GitHub nor pohunek, and
-  changes nothing.
+  changes nothing. Each call reads the whole `reviews` table, so its cost grows with
+  `store.review_retention_seconds`, which decides how many reviews the store keeps.
 
 ## The range
 
@@ -35,10 +36,11 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   The current state is what a dashboard polls most often, and it needs no range.
 - `--since` starts the daily history; `--until` ends it and is today (UTC) when absent.
   Both days are included.
-- `--until` without `--since`, `--until` before `--since`, and any other form of a day are
-  refused with `stats_range_invalid`.
-- A range of more than 366 days is refused with `stats_range_too_long`, so one call reads a
-  bounded part of the store.
+- `--since` after today (UTC), `--until` after today, `--until` without `--since`,
+  `--until` before `--since`, and any other form of a day are refused with
+  `stats_range_invalid`.
+- A range of more than 366 days is refused with `stats_range_too_long`, so one document
+  holds a bounded number of days.
 
 ## The document
 
@@ -77,7 +79,7 @@ writes all of them.
 
 - `schema_version`: `1`. A change to a field's name or meaning gets a new version.
 - `generated_at`: when the document was computed, RFC 3339 in UTC.
-- `current`: the reviews that are not completed.
+- `current`: the queued and running reviews and the approval waits without a decision.
 - `history`: the counts of the range, or `null` without `--since`.
 
 ```sh
@@ -89,7 +91,8 @@ autoreview stats --json | jq '{schema_version, generated_at}'
 - `queued`: reviews that are dispatched and wait for a worker.
 - `running`: reviews that a worker runs, including one that resumes after a restart.
 - `awaiting`: clean reviews that wait for an approval decision or its deadline
-  (`on_clean: await`).
+  (`on_clean: await`), the reviews that `autoreview awaiting` lists. A wait that is already
+  decided (approved, expired or superseded) counts nowhere until `serve` continues it.
 - `by_repository` and `by_host`: the same three counts per repository and per review host,
   sorted by `key`. The host is the one chosen when the review was dispatched.
 

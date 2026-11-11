@@ -18,6 +18,7 @@ use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine};
 use crate::error::Error;
 use crate::integrations::Integrations;
+use crate::model::review::APPROVAL_KIND_APPROVE;
 use crate::model::{Decision, Outcome, ReviewOutcome};
 use crate::store::{
     RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
@@ -27,7 +28,7 @@ use crate::store::{
 /// Version of the statistics document; a changed field gets a new version.
 pub const STATS_SCHEMA_VERSION: i64 = 1;
 
-/// Most UTC days one history covers, so one call reads a bounded part of the store.
+/// Most UTC days one history covers, so one document holds a bounded number of days.
 pub const STATS_RANGE_MAX_DAYS: i64 = 366;
 
 /// Error code of a `since` or `until` that is not a valid range of UTC days.
@@ -35,9 +36,6 @@ pub const STATS_RANGE_INVALID: &str = "stats_range_invalid";
 
 /// Error code of a range longer than `STATS_RANGE_MAX_DAYS`.
 pub const STATS_RANGE_TOO_LONG: &str = "stats_range_too_long";
-
-/// Approval decision of a wait that the `approve` command (CLI or MCP) approved.
-const APPROVAL_APPROVE: &str = "approve";
 
 /// Byte length of a UTC day written as `YYYY-MM-DD`.
 const DAY_TEXT_LEN: usize = 10;
@@ -71,9 +69,9 @@ impl StatsRange {
     ///
     /// # Errors
     ///
-    /// Returns `stats_range_invalid` for a day that is not `YYYY-MM-DD`, for `until` without
-    /// `since` and for `until` before `since`, and `stats_range_too_long` for a range of
-    /// more than `STATS_RANGE_MAX_DAYS` days.
+    /// Returns `stats_range_invalid` for a day that is not `YYYY-MM-DD`, for `since` or
+    /// `until` after `today`, for `until` without `since` and for `until` before `since`, and
+    /// `stats_range_too_long` for a range of more than `STATS_RANGE_MAX_DAYS` days.
     pub fn parse(
         since: Option<&str>,
         until: Option<&str>,
@@ -86,10 +84,16 @@ impl StatsRange {
             };
         };
         let since = parse_day(since)?;
+        if since > today {
+            return Err(range_invalid("since is after today"));
+        }
         let until = match until {
             Some(text) => parse_day(text)?,
             None => today,
         };
+        if until > today {
+            return Err(range_invalid("until is after today"));
+        }
         if until < since {
             return Err(range_invalid("until is before since"));
         }
@@ -143,13 +147,13 @@ pub struct StatsDocument {
     pub schema_version: i64,
     /// When the document was computed, RFC 3339 in UTC without a fraction.
     pub generated_at: String,
-    /// The reviews that are not completed yet.
+    /// The queued and running reviews and the waits without a decision.
     pub current: CurrentState,
     /// The daily counts of the range; `null` without `since`.
     pub history: Option<History>,
 }
 
-/// Counts of the reviews that are not completed, by status.
+/// Counts of the queued and running reviews and the waits without a decision, by status.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct StateCounts {
     /// Reviews dispatched that no worker runs yet.
@@ -163,7 +167,7 @@ pub struct StateCounts {
 /// The current state: totals, then per repository and per review host.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct CurrentState {
-    /// Counts over every review that is not completed.
+    /// Counts over every queued, running and undecided awaiting review.
     #[serde(flatten)]
     pub total: StateCounts,
     /// Counts per repository, sorted by name.
@@ -354,7 +358,7 @@ fn ending(review: &StoredReview, seconds: Option<i64>) -> Result<Ending, Error> 
     Ok(match (outcome.outcome, outcome.publication) {
         (Outcome::Published, Some(publication)) => Ending::Published {
             decision: match publication.decision {
-                Decision::Approve if review.approval == APPROVAL_APPROVE => {
+                Decision::Approve if review.approval == APPROVAL_KIND_APPROVE => {
                     Published::ApprovedAfterWait
                 }
                 Decision::Approve if review.approval.is_empty() => Published::ApprovedWithoutHuman,
@@ -406,9 +410,9 @@ impl HistoryTally {
 
 /// Builds the document from the review rows that `Store::stats_reviews` returns.
 ///
-/// The current state counts every queued, running and awaiting row. With `range`, an
-/// attempt counts as started on the UTC day of `created_at` and as completed on the UTC
-/// day of `completed_at`, each only inside the range.
+/// The current state counts every queued and running row and every awaiting row without an
+/// approval decision. With `range`, an attempt counts as started on the UTC day of
+/// `created_at` and as completed on the UTC day of `completed_at`, each only inside the range.
 ///
 /// # Errors
 ///
@@ -433,13 +437,19 @@ pub fn compute(
     })
 }
 
-/// Counts the rows that are not completed, in total, per repository and per host.
+/// Counts the queued, running and undecided awaiting rows, in total, per repository and per
+/// host.
+///
+/// An awaiting row counts only while it waits for a decision, as `autoreview awaiting` lists
+/// it; a decided wait that `serve` has not continued yet counts nowhere.
 fn current_state(reviews: &[StoredReview]) -> CurrentState {
     let mut total = StateCounts::default();
     let mut repositories: BTreeMap<String, StateCounts> = BTreeMap::new();
     let mut hosts: BTreeMap<String, StateCounts> = BTreeMap::new();
     for review in reviews {
-        if review.status == REVIEW_COMPLETED {
+        if review.status == REVIEW_COMPLETED
+            || (review.status == REVIEW_AWAITING && !review.awaits_decision())
+        {
             continue;
         }
         let count = |counts: &mut StateCounts| match review.status.as_str() {
@@ -719,6 +729,9 @@ mod tests {
         running.input.rule.match_glob = gadget.to_owned();
         let mut awaiting = review("a1", widget, "2026-11-01T10:00:00Z");
         awaiting.status = "awaiting".to_owned();
+        let mut decided = review("a2", widget, "2026-10-30T10:00:00Z");
+        decided.status = "awaiting".to_owned();
+        decided.approval = "approve".to_owned();
         let mut both = review("p1", widget, "2026-11-01T00:00:00Z");
         both.input.reviewers = reviewers(&["opus", "sonnet"]);
         let mut waited = review("p2", widget, "2026-11-01T01:00:00Z");
@@ -740,6 +753,8 @@ mod tests {
             review("q1", widget, "2026-11-02T09:00:00Z"),
             running,
             awaiting,
+            // A decided wait that serve has not continued yet; not in the current state.
+            decided,
             // 100 seconds; an approval that never waited.
             done(
                 both,
@@ -922,7 +937,7 @@ mod tests {
     #[test]
     fn stats_range_takes_whole_utc_days_up_to_the_limit() {
         let today = date!(2026 - 11 - 10);
-        let cases: [RangeCase; 14] = [
+        let cases: [RangeCase; 17] = [
             (None, None, Ok(None)),
             (None, Some("2026-11-01"), Err("stats_range_invalid")),
             (
@@ -942,9 +957,14 @@ mod tests {
             ),
             (Some("2025-11-09"), None, Err("stats_range_too_long")),
             (
+                Some("2025-11-08"),
+                Some("2026-11-09"),
+                Err("stats_range_too_long"),
+            ),
+            (
                 Some("2026-11-01"),
                 Some("2027-11-02"),
-                Err("stats_range_too_long"),
+                Err("stats_range_invalid"),
             ),
             (
                 Some("2026-11-02"),
@@ -952,6 +972,16 @@ mod tests {
                 Err("stats_range_invalid"),
             ),
             (Some("2026-11-11"), None, Err("stats_range_invalid")),
+            (
+                Some("2026-11-01"),
+                Some("2026-11-11"),
+                Err("stats_range_invalid"),
+            ),
+            (
+                Some("2026-11-11"),
+                Some("2026-11-12"),
+                Err("stats_range_invalid"),
+            ),
             (Some("2026-02-30"), None, Err("stats_range_invalid")),
             (Some("2026-1-01"), None, Err("stats_range_invalid")),
             (Some("+2026-11-0"), None, Err("stats_range_invalid")),

@@ -90,6 +90,14 @@ pub struct StoredReview {
     pub completed_at: String,
 }
 
+impl StoredReview {
+    /// Reports whether the review is awaiting with no approval decision yet, the row form of
+    /// `ReviewFilter::AwaitingUndecided` (a NULL `approval` decodes as empty).
+    pub(crate) fn awaits_decision(&self) -> bool {
+        self.status == REVIEW_AWAITING && self.approval.is_empty()
+    }
+}
+
 impl Store {
     /// Records a dispatched review. A repeated workflow identifier keeps the existing review.
     ///

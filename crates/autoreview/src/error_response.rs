@@ -85,8 +85,8 @@ characters of the pull request head, as the Review ID of a notification shows."
 characters; autoreview resolve prints it for a head prefix."
         );
     } else if code == STATS_RANGE_INVALID {
-        response.message = "--since and --until must be UTC days as YYYY-MM-DD; --until needs \
---since and must not come before it."
+        response.message = "--since and --until must be UTC days as YYYY-MM-DD, neither after \
+today (UTC); --until needs --since and must not come before it."
             .to_owned();
     } else if code == STATS_RANGE_TOO_LONG {
         response.message = format!(
