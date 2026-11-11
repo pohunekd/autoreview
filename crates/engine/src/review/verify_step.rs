@@ -37,6 +37,12 @@ fn verdict_count(verification: &Verification, verdict: &str) -> usize {
             .count()
 }
 
+/// Returns `failure` with the run, if it records one, lasting `duration_ms`.
+fn measured_at(failure: StepFailure, duration_ms: i64) -> StepFailure {
+    let run = failure.run.map(|run| StepRun { duration_ms, ..run });
+    StepFailure { run, ..failure }
+}
+
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Runs the verifier on `claims` once per review, stores the verification and records the
     /// run of the verifier step with it.
@@ -122,11 +128,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 if let Err(cleanup) = self.remove_sessions(&ids).await {
                     // A failed cleanup ends the step, and the run keeps its time before it.
                     let failure = self.step_failure(step, started, cleanup);
-                    let run = failure.run.map(|run| StepRun {
-                        duration_ms: failed.duration_ms,
-                        ..run
-                    });
-                    return Err(StepFailure { run, ..failure });
+                    return Err(measured_at(failure, failed.duration_ms));
                 }
                 verification.error_code = error_code(&err).to_owned();
                 tracing::warn!(
@@ -147,7 +149,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                     &recorded,
                 )
             })
-            .map_err(|err| self.step_failure(step, started, err))?;
+            // A failed write ends the step, and the run keeps the time measured with its result.
+            .map_err(|err| {
+                measured_at(self.step_failure(step, started, err), recorded.duration_ms)
+            })?;
         if inserted {
             self.engine.count_step(&recorded);
         }
