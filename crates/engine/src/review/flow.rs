@@ -102,6 +102,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 &review.input,
                 &reviewer,
                 &review.discussion,
+                None,
             ) {
                 Ok(prompt) => prompt,
                 Err(err) => return review.fail(err).await,

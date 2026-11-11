@@ -360,7 +360,10 @@ A reviewer run ends in one of these codes:
   of two log warnings: "retrying reviewer after unusable output" before a fresh
   run, and "rejecting reviewer output" when the run limit is used up. An
   unreadable output and a broken prior-finding verdict have no reason there.
-  Common cause of an unreadable output: an output larger than
+  The request of the reviewer's fresh run adds one fixed sentence: the output
+  check `review_output_invalid` refused the run before. It carries neither the
+  reason nor any text of the refused output, and no other code in this list
+  adds a sentence. Common cause of an unreadable output: an output larger than
   `session.output_max_bytes`. Codex keeps its transcript in the output, so
   raise that bound for Codex. For a broken limit, tighten the prompt so the
   reviewer stays within it, or raise the bound in `limits` with care.

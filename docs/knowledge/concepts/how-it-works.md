@@ -164,8 +164,10 @@ request also the limit of each prior-finding note, so the reviewer knows them
 before it writes.
 
 Output that is incomplete, unusable or invalid gets a fresh session for that
-reviewer, up to `session.reviewer_run_max_attempts`. Once the attempts are
-spent, the review fails and the scheduler decides what happens next.
+reviewer, up to `session.reviewer_run_max_attempts`. When the engine's output
+check refused the run (`review_output_invalid`), the request of the fresh run
+says so in one fixed sentence after the limits. Once the attempts are spent,
+the review fails and the scheduler decides what happens next.
 
 Finding ids combine the reviewer's `finding_prefix` with a three-digit sequence
 number (for example `O001` for the first finding of the reviewer with prefix
