@@ -14,12 +14,15 @@ use tokio_util::sync::CancellationToken;
 
 use super::route::{HostAnswers, HostFailures, host_unavailable};
 use super::{Notice, record_event};
-use crate::engine::{Clock, Engine, retry_step};
+use crate::engine::{Clock, Engine, STEP_PUBLICATION, is_permanent, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::messages::{go_elapsed_nanos, handoff_reminder_message};
 use crate::model::review::APPROVAL_KIND_SUPERSEDED;
-use crate::model::{Candidate, PollResult, RetryRequest, ReviewInput};
+use crate::model::{
+    Candidate, Decision, PollResult, PublishResult, PullRequest, RetryRequest, ReviewInput,
+};
+use crate::review::input::{RenderOutcome, STEP_RENDERED};
 use crate::store::discovery::save_discovery;
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
 
@@ -59,6 +62,15 @@ const STEP_READ_PULL_REQUEST: &str = "read_pull_request";
 /// Step name of the read of a handed-off pull request's state, in the retry log.
 pub(crate) const STEP_READ_PULL_REQUEST_STATE: &str = "read_pull_request_state";
 
+/// Step name of the lookup of a published approval on GitHub, in the retry log.
+const STEP_FIND_APPROVAL: &str = "find_published_approval";
+
+/// Log reason of a head scheduled again because it targets another base branch.
+const REASON_BASE_BRANCH_CHANGED: &str = "base_branch_changed";
+
+/// Log reason of a head scheduled again because GitHub dismissed its approval.
+const REASON_APPROVAL_DISMISSED: &str = "approval_dismissed";
+
 /// Read error codes of a pull request that left the candidates after the search.
 const SKIPPABLE_CANDIDATE_CODES: [&str; 4] = [
     "pull_request_not_open",
@@ -73,6 +85,16 @@ struct Dispatch {
     workflow_id: String,
     /// Input of the queued attempt.
     input: ReviewInput,
+}
+
+/// What GitHub shows of an approval that completes a head on its base branch.
+enum Approval {
+    /// The approval stands, or the run published no approval.
+    Stands,
+    /// GitHub dismissed the approval, or it is gone.
+    Dismissed,
+    /// The lookup failed; the next pass asks again.
+    Unknown,
 }
 
 /// One saved discovery pass: its counts and the notices it leaves to send.
@@ -171,9 +193,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             if !state.schedule.contains_key(key) && entries >= self.config.state_entry_limit {
                 return Err(Error::workflow(STATE_ENTRY_LIMIT_EXCEEDED, true, None));
             }
+            // A record that follows another run came back from another base branch, where
+            // GitHub may have dismissed the published approval; it is planned below.
             if let Some(published) = state.published.get(key)
                 && published.covers(pr)
                 && !published.retargeted(pr)
+                && !state.schedule.get(key).is_some_and(|previous| {
+                    follows_another_run(previous, &pr.target(), &published.workflow_id)
+                })
             {
                 let mut completed = Record {
                     identity: pr.target().identity(),
@@ -203,9 +230,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             let target = pr.target();
             // A key without a record plans from Go's zero record, which `Record::default` is.
             let previous = state.schedule.get(key).cloned().unwrap_or_default();
-            // A published review that covers the head gets here only when it names another base
-            // branch.
-            let (retargeted, mut decision) = match state.published.get(key) {
+            // A published review that covers the head gets here when it names another base
+            // branch or when the head came back from one.
+            let (reason, mut decision) = match state.published.get(key) {
                 Some(published) if published.covers(pr) => {
                     let run_bases = self.run_bases(cancel, &target, &history)?;
                     let retarget = Retarget {
@@ -225,11 +252,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     )
                     .map_err(schedule_error)?;
                     match planned {
-                        Some(decision) => (true, decision),
-                        None => (
-                            false,
-                            scheduler::plan_on_base(
-                                previous,
+                        Some(decision) => (Some(REASON_BASE_BRANCH_CHANGED), decision),
+                        None => {
+                            let on_base = scheduler::plan_on_base(
+                                previous.clone(),
                                 &target,
                                 &history,
                                 &retarget,
@@ -237,20 +263,57 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                                 now,
                                 &self.config.schedule,
                             )
-                            .map_err(schedule_error)?,
-                        ),
+                            .map_err(schedule_error)?;
+                            // A completion on a run of this base branch that the record did not
+                            // follow asks GitHub once whether the run's approval still stands.
+                            let run = on_base.record.workflow_id.as_str();
+                            let returned = on_base.record.phase == phase::COMPLETED
+                                && follows_another_run(&previous, &target, run)
+                                && run_bases
+                                    .get(run)
+                                    .is_some_and(|base| *base == pr.base_branch);
+                            // A record that stopped before any run stays stopped without a
+                            // lookup: its route failed, and `retry` dispatches it again.
+                            let approval = if !returned {
+                                Approval::Stands
+                            } else if failed_before_run(&previous, &target) {
+                                Approval::Dismissed
+                            } else {
+                                self.approval_stands(cancel, pr, run).await?
+                            };
+                            match approval {
+                                Approval::Stands => (None, on_base),
+                                // The previous record stays, so the next pass asks again.
+                                Approval::Unknown => continue,
+                                Approval::Dismissed => (
+                                    Some(REASON_APPROVAL_DISMISSED),
+                                    scheduler::plan_unreviewed(
+                                        &previous,
+                                        &target,
+                                        &history,
+                                        &retarget,
+                                        workflow_id,
+                                        now,
+                                        &self.config.schedule,
+                                    )
+                                    .map_err(schedule_error)?,
+                                ),
+                            }
+                        }
                     }
                 }
                 _ => (
-                    false,
+                    None,
                     scheduler::plan(previous, &target, &history, now, &self.config.schedule)
                         .map_err(schedule_error)?,
                 ),
             };
-            if retargeted && decision.dispatch {
+            if let Some(reason) = reason
+                && decision.dispatch
+            {
                 tracing::info!(
                     review_id = %pr.review_id(),
-                    reason = "base_branch_changed",
+                    reason,
                     base_branch = %pr.base_branch,
                     "reviewed head scheduled again for a full review"
                 );
@@ -400,6 +463,68 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         Ok(bases)
     }
 
+    /// Reports whether the approval that `workflow_id` published on the head of `pr` stands.
+    ///
+    /// The lookup is the one of the publication, by the marker of the run's stored rendered
+    /// review; GitHub's `DISMISSED` state does not match. A run that published no approval
+    /// stands. A failed lookup is `Unknown`; a permanent failure keeps the approval standing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store, or the lookup error when `cancel` is cancelled.
+    async fn approval_stands(
+        &self,
+        cancel: &CancellationToken,
+        pr: &PullRequest,
+        workflow_id: &str,
+    ) -> Result<Approval, Error> {
+        live(cancel)?;
+        let published = self
+            .store
+            .load_step::<PublishResult>(workflow_id, STEP_PUBLICATION)?;
+        if !published.is_some_and(|result| result.decision == Decision::Approve) {
+            return Ok(Approval::Stands);
+        }
+        live(cancel)?;
+        let rendered = self
+            .store
+            .load_step::<RenderOutcome>(workflow_id, STEP_RENDERED)?;
+        let Some(rendered) = rendered.filter(|rendered| rendered.error_code.is_empty()) else {
+            return Ok(Approval::Stands);
+        };
+        let found = retry_step(
+            STEP_FIND_APPROVAL,
+            self.step_policy(),
+            &self.clock,
+            cancel,
+            || {
+                self.integration
+                    .find_published_review(cancel, pr, &rendered.review)
+            },
+        )
+        .await;
+        match found {
+            Ok(Some(_)) => Ok(Approval::Stands),
+            Ok(None) => Ok(Approval::Dismissed),
+            Err(err) if cancel.is_cancelled() => Err(err),
+            Err(err) => {
+                let permanent = is_permanent(&err);
+                tracing::warn!(
+                    review_id = %pr.review_id(),
+                    workflow_id,
+                    error_code = error_code(&err),
+                    permanent,
+                    "published approval lookup failed"
+                );
+                if permanent {
+                    Ok(Approval::Stands)
+                } else {
+                    Ok(Approval::Unknown)
+                }
+            }
+        }
+    }
+
     /// Returns the waits that no longer match their pull request and drops ended waits.
     ///
     /// A pull request missing from search is read directly first, because search lags behind.
@@ -547,7 +672,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Turns the failed latest attempt of a pull request head into a due retry.
     ///
     /// Only a run that reviewed the current base branch completes the head. A run whose stored
-    /// input names another base branch does not; one without a stored base branch does.
+    /// input names another base branch does not; one without a stored base branch does. A later
+    /// failed run stored for the current base branch, as of a review that replaced a dismissed
+    /// approval, leaves the head to retry.
     ///
     /// # Errors
     ///
@@ -592,6 +719,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             forced.handled_workflow = previous.handled_workflow.clone();
         }
         let mut latest_attempt = NO_ATTEMPT;
+        // The latest attempts of the current base branch that completed and that failed.
+        let mut completed_here = NO_ATTEMPT;
+        let mut failed_here = NO_ATTEMPT;
         for run in own {
             if run.target.key() != key {
                 continue;
@@ -602,22 +732,40 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             if run.target.identity() != forced.identity {
                 continue;
             }
+            let other_base = run_bases
+                .get(&run.workflow_id)
+                .is_some_and(|base| !base.is_empty() && base != base_branch);
             if run.result == RESULT_SUCCESS || run.released {
-                let other_base = run_bases
-                    .get(&run.workflow_id)
-                    .is_some_and(|base| !base.is_empty() && base != base_branch);
                 if !other_base {
-                    return Err(Error::workflow(REVIEW_ALREADY_COMPLETED, true, None));
+                    completed_here = completed_here.max(run.attempt);
                 }
-                // A review of another base branch is not retried; it only raises the attempt.
+                // A completed review is not retried; it only raises the attempt.
                 forced.attempt = forced.attempt.max(run.attempt.wrapping_add(1));
                 continue;
+            }
+            // Only a failure stored for this base branch reopens it; an unknown one does not.
+            if run_bases.get(&run.workflow_id) == Some(base_branch) {
+                failed_here = failed_here.max(run.attempt);
             }
             if run.attempt > latest_attempt {
                 latest_attempt = run.attempt;
                 forced.workflow_id = run.workflow_id.clone();
                 forced.attempt = forced.attempt.max(run.attempt.wrapping_add(1));
             }
+        }
+        // A dispatch that failed at its route left no run; its attempt is a failure here. After
+        // a completion here the planner does not see the other failed runs, so the forced record
+        // names no run, as the stopped one did.
+        if let Some(previous) = state.schedule.get(&key)
+            && failed_before_run(previous, &target)
+        {
+            failed_here = failed_here.max(previous.attempt);
+            if completed_here > NO_ATTEMPT {
+                forced.workflow_id = String::new();
+            }
+        }
+        if completed_here > failed_here {
+            return Err(Error::workflow(REVIEW_ALREADY_COMPLETED, true, None));
         }
         state.schedule.insert(key, forced);
         Ok(())
@@ -654,6 +802,24 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 .is_ok_and(|elapsed| elapsed > retention)
         });
     }
+}
+
+/// Reports whether `previous`, the record of the head of `target`, follows another run.
+///
+/// The record of a head that completed on `workflow_id` names that run. A record of the head
+/// that names another run, or none, came back from another base branch.
+fn follows_another_run(previous: &Record, target: &Target, workflow_id: &str) -> bool {
+    previous.identity == target.identity() && previous.workflow_id != workflow_id
+}
+
+/// Reports whether `previous`, the record of the head of `target`, stopped before any run.
+///
+/// A dispatch whose route fails with a code that is not retried leaves a `failed` record that
+/// names no run.
+fn failed_before_run(previous: &Record, target: &Target) -> bool {
+    previous.identity == target.identity()
+        && previous.phase == phase::FAILED
+        && previous.workflow_id.is_empty()
 }
 
 /// Reports a pull request that changed between the search and its detail read.

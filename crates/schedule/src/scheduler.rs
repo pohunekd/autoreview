@@ -350,13 +350,7 @@ pub struct Retarget<'a> {
 /// Plans the review that a retarget of the published head of `target` asks for.
 ///
 /// Returns `None` when a run of the head that was not superseded reviewed the current base
-/// branch: [`plan_on_base`] then plans the head. Otherwise the ended runs of the head
-/// count as no review; [`plan`] does not see them, and none of them stays a blocker. A record
-/// that follows a running run of the head keeps that run's attempt, which [`plan`] matches
-/// against the run history. Any other record gets an attempt above every run of the head,
-/// skipping the attempt whose `workflow_id` is the published workflow. A record that starts
-/// afresh keeps `handled_workflow` and `handled_retries`, so [`plan`] handles that failure
-/// again without a notice when the pull request returns to the base branch of its run.
+/// branch: [`plan_on_base`] then plans the head. Otherwise [`plan_unreviewed`] plans it.
 ///
 /// # Errors
 ///
@@ -371,14 +365,10 @@ pub fn plan_retarget(
     policy: &Policy,
 ) -> Result<Option<Decision>, Error> {
     let identity = target.identity();
-    let mut ended = BTreeSet::new();
     for run in runs.iter().filter(|run| run.target.identity() == identity) {
-        if !run.active() {
-            ended.insert(run.workflow_id.as_str());
-            // A superseded run reviewed nothing, so its base branch still needs a review.
-            if superseded(&failure_code(&run.failure)) {
-                continue;
-            }
+        // A superseded run reviewed nothing, so its base branch still needs a review.
+        if !run.active() && superseded(&failure_code(&run.failure)) {
+            continue;
         }
         if retarget
             .run_bases
@@ -388,6 +378,36 @@ pub fn plan_retarget(
             return Ok(None);
         }
     }
+    plan_unreviewed(previous, target, runs, retarget, workflow_id, now, policy).map(Some)
+}
+
+/// Plans a head whose ended runs count as no review of the current base branch.
+///
+/// [`plan`] does not see the ended runs of the head, and none of them stays a blocker. A record
+/// that follows a running run of the head keeps that run's attempt, which [`plan`] matches
+/// against the run history. Any other record gets an attempt above every run of the head,
+/// skipping the attempt whose `workflow_id` is the published workflow. A record that starts
+/// afresh keeps `handled_workflow` and `handled_retries`, so [`plan`] handles that failure
+/// again without a notice when the pull request returns to the base branch of its run.
+///
+/// # Errors
+///
+/// Returns the error of [`plan`].
+pub fn plan_unreviewed(
+    previous: &Record,
+    target: &Target,
+    runs: &[Run],
+    retarget: &Retarget<'_>,
+    workflow_id: impl Fn(i64) -> String,
+    now: OffsetDateTime,
+    policy: &Policy,
+) -> Result<Decision, Error> {
+    let identity = target.identity();
+    let ended: BTreeSet<&str> = runs
+        .iter()
+        .filter(|run| run.target.identity() == identity && !run.active())
+        .map(|run| run.workflow_id.as_str())
+        .collect();
     let attempt = free_attempt(runs, &identity, retarget.published_workflow, &workflow_id);
     let visible: Vec<Run> = runs
         .iter()
@@ -424,7 +444,7 @@ pub fn plan_retarget(
     if !follows_run {
         decision.record.attempt = decision.record.attempt.max(attempt);
     }
-    Ok(Some(decision))
+    Ok(decision)
 }
 
 /// Plans a head on a base branch that one of its runs reviewed.

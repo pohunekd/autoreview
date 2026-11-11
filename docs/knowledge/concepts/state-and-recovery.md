@@ -97,7 +97,7 @@ attempts and stops when its limit is reached.
 | Session start | Starting one reviewer session | `session.start_max_attempts`, waiting `session.start_retry_seconds` between them | The review attempt fails and goes to the scheduler. |
 | Reviewer run | A reviewer whose run ended in `review_output_incomplete`, `review_output_invalid` (of a complete output), `review_wrapper_invalid` or `review_result_invalid`; every other code ends the reviewer's runs at once | `session.reviewer_run_max_attempts` fresh sessions | The reviewer has no result, and the review fails. For the verifier, the claims are published unverified and the review goes on. |
 
-Two more rules apply to these layers:
+These rules also apply to the layers:
 
 - **Each start attempt gets its own branch.** A session start that fails leaves a
   branch behind. The next start uses another branch name, so it begins from the
@@ -115,6 +115,11 @@ Two more rules apply to these layers:
   failed review: back there, the review stays stopped or waits for its retry.
   `autoreview review` shows the failed run as `handled_workflow` in the schedule
   record.
+- **A dismissed approval is replaced.** A pull request retargeted back to a base
+  branch whose review approved the head counts as reviewed there only while
+  GitHub still shows that approval. When GitHub dismissed it, for example by the
+  branch protection setting for stale approvals at the retarget, the head is
+  reviewed again on that base branch, with a new attempt number.
 
 A failure that is not in the retryable list is not retried by the scheduler. The
 policy's notifications tell the user that the review stopped, and
