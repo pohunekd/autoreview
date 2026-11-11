@@ -45,6 +45,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a human | [Approval errors](#approval-errors) |
 | `review_superseded`, `approval_expired` | The wait ended and nothing was posted | [Approval errors](#approval-errors) |
 | `head_changed` | The head SHA given is no longer the pull request head | [Approval errors](#approval-errors) |
+| `head_prefix_invalid`, `head_sha_invalid` | The head argument of `retry`, `resolve` or `approve` has the wrong form | [Approval errors](#approval-errors) |
 | `review_already_running`, `review_retry_not_dispatched` | A retry is not needed or not possible now | [Retry and recovery](retry-and-recovery.md) |
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it | Fix the key, then run `validate` |
 | `pohunek_session_cleanup_failed` | A reviewer session could not be removed | [Stale sessions](stale-sessions-and-branches.md) |
@@ -204,6 +205,10 @@ retry the pull request:
 git -C <project repository> fetch origin refs/pull/<n>/head
 autoreview retry --repository <owner>/<repo> <n> <head prefix>
 ```
+
+`<head prefix>` is 12 to 40 lowercase hexadecimal characters of the head SHA,
+such as the head in the notification's Review ID; any other form is
+`head_prefix_invalid`.
 
 A new push to the pull request starts a new review, which stops the same way
 until its head is in the repository.
@@ -395,6 +400,8 @@ resolve it first: `autoreview resolve --repository <owner/repo> <number> <prefix
 | `review_superseded` | A newer commit replaced the review, or the pull request stopped asking for one (review request or label removed, closed, back to draft). Nothing was posted. The new head is reviewed. |
 | `approval_expired` | `approval.timeout_hours` passed. Nothing was posted. See [retry and recovery](retry-and-recovery.md#expired-waits) for the open question about a fresh review. |
 | `head_changed` | The HEAD_SHA given is not the pull request head any more. Resolve the current head and check the diff before you approve it. |
+| `head_prefix_invalid` | The head prefix of `retry` or `resolve` is not 12 to 40 lowercase hexadecimal characters. Copy at least the 12 characters after `@` of the Review ID. |
+| `head_sha_invalid` | The HEAD_SHA of `approve` is not the full head, 40 lowercase hexadecimal characters. Run `autoreview resolve` with the prefix and approve the `head_sha` it prints. |
 
 Approving twice is safe. Check the outcome with `autoreview review` and look for
 `publication_status: published` with a `github_review_id`.

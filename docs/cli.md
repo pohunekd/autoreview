@@ -294,8 +294,9 @@ autoreview approve --repository OWNER/REPO NUMBER HEAD_SHA
 ```
 
 Approves a clean review that waits for a human (`on_clean: await`). `HEAD_SHA`
-is the full head commit; the approval applies only if it is still the pull
-request head. The engine publishes on its next tick:
+is the full head commit, 40 lowercase hexadecimal characters; any other form is
+`head_sha_invalid`. The approval applies only if it is still the pull request
+head. The engine publishes on its next tick:
 
 ```json
 {"publication_status": "pending", "review_id": "zajca/pohunek#PR1450@3f2a9c1d0b7e"}
@@ -312,9 +313,10 @@ In both cases nothing is posted.
 autoreview resolve --repository OWNER/REPO NUMBER HEAD_PREFIX
 ```
 
-Finds the waiting review for a head prefix of at least 12 characters (the form
-notifications show in `Review ID`) and prints its full `head_sha`. Read-only.
-Chat integrations use it before `approve`.
+Finds the waiting review for a head prefix and prints its full `head_sha`.
+`HEAD_PREFIX` is 12 to 40 lowercase hexadecimal characters of the head commit,
+such as the 12 that notifications show in `Review ID`; any other form is
+`head_prefix_invalid`. Read-only. Chat integrations use it before `approve`.
 
 ### `autoreview retry`
 
@@ -323,7 +325,9 @@ autoreview retry --repository OWNER/REPO NUMBER HEAD_PREFIX
 ```
 
 Starts a new attempt of a review that stopped after its retries
-(`review_stopped`). The head must still be the pull request head.
+(`review_stopped`). `HEAD_PREFIX` takes the same form as for `resolve`: 12 to 40
+lowercase hexadecimal characters of the head commit, otherwise
+`head_prefix_invalid`. The head must still be the pull request head.
 
 ## Maintenance
 
@@ -348,7 +352,9 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `profile_host_not_local`, `runtime_package_missing` | `profiles install` was run on the wrong host, or the official runtime package is missing |
 | `profile_foreign`, `profile_write_failed` | `profiles install` found a file it did not write, or could not write the path it names |
 | `pohunek_command_failed` | `profiles install` could not read the answer of a pohunek command |
-| `repository_not_allowed`, `review_identity_invalid` | Malformed repository, number or head |
+| `repository_not_allowed`, `review_identity_invalid` | Malformed repository or pull request number, or an approval whose identity differs from the stored review |
+| `head_prefix_invalid` | `HEAD_PREFIX` of `retry` or `resolve` (`head_prefix` of the MCP tools) is not 12 to 40 lowercase hexadecimal characters |
+| `head_sha_invalid` | `HEAD_SHA` of `approve` (`head_sha` of the MCP tool) is not the full head commit, 40 lowercase hexadecimal characters |
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for an approval |
 | `review_superseded`, `approval_expired` | The wait ended without a publication |
 | `head_changed` | The pull request has a newer head than the one given |

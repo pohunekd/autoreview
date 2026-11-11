@@ -31,10 +31,10 @@ pub(crate) const VERIFIER_VERSION: i64 = 5;
 const REVIEW_ID_HEAD_CHARS: usize = 12;
 
 /// Length of a full commit SHA in hex digits.
-const SHA_LEN: usize = 40;
+pub const SHA_LEN: usize = 40;
 
 /// Shortest head SHA prefix a command accepts.
-const HEAD_PREFIX_MIN_LEN: usize = 12;
+pub const HEAD_PREFIX_MIN_LEN: usize = 12;
 
 /// Longest repository owner name.
 const OWNER_MAX_LEN: usize = 39;
