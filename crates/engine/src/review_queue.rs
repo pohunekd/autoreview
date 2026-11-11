@@ -654,6 +654,8 @@ notifications:
             due_at: OffsetDateTime::UNIX_EPOCH,
             error_code: error_code.to_owned(),
             awaits_host: false,
+            handled_workflow: String::new(),
+            handled_retries: 0,
         }
     }
 

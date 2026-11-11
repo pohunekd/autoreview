@@ -94,6 +94,13 @@ Two more rules apply to these layers:
   request is retargeted to another base branch, or the trigger stops asking, the
   attempt ends quietly. The pull request is reviewed again after the debounce
   time, with a new attempt number.
+- **A failure is notified once.** A pull request retargeted away from the base
+  branch of a failed review and back before a new review runs gets no second
+  notice for that failure. The review keeps its retry count: a review stopped
+  by that failure stays stopped, and its retry is due one retry delay after the
+  return. A review of the other base branch starts with its own retries.
+  `autoreview review` shows the failed run as `handled_workflow` in the schedule
+  record.
 
 A failure that is not in the retryable list is not retried by the scheduler. The
 policy's notifications tell the user that the review stopped, and
