@@ -14,7 +14,7 @@ use serde::de::{self, Deserializer, Unexpected, Visitor};
 use serde_saphyr::granit_parser::{Event as YamlEvent, Parser, ScalarStyle, Tag};
 
 use crate::Error;
-use crate::authors::{Authors, FileAuthors, parse_authors};
+use crate::authors::{Authors, FileAuthors, parse_authors, user_login_valid};
 use crate::digest::digest_of;
 use crate::human_review::{FileHumanReview, parse_human_review};
 use crate::types::{
@@ -1012,11 +1012,13 @@ fn same_reviewers(left: &[Reviewer], right: &[Reviewer]) -> bool {
 }
 
 /// Reports whether pattern is owner/repository or owner/* in lowercase.
+///
+/// The owner is a user or organization login, a managed user's `handle_shortcode` included.
 fn valid_match(pattern: &str) -> bool {
     let Some((owner, name)) = pattern.split_once('/') else {
         return false;
     };
-    if !is_owner(owner) {
+    if !user_login_valid(owner) {
         return false;
     }
     if name == "*" {
@@ -1576,6 +1578,48 @@ notifications:
                 Err(error) => assert!(
                     error.to_string().contains(&want),
                     "{login}: error = {error}, want it to mention {want:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn rule_match_owner_follows_the_github_login_grammar() {
+        // The solo/* rule is the only one that publishes a comment on a clean review.
+        let document = |pattern: &str| {
+            VALID_POLICY.replacen("match: solo/*", &format!("match: \"{pattern}\""), 1)
+        };
+        let accepted = [
+            ("mona-cat_octo/*", "mona-cat_octo/widget"),
+            ("mona-cat_octo/widget", "mona-cat_octo/widget"),
+            ("octo_admin/*", "octo_admin/tools"),
+        ];
+        let refused = [
+            "_octo/*",
+            "mona_/*",
+            "mona__octo/*",
+            "mona_cat_octo/*",
+            "mona-_octo/widget",
+            "Mona-Cat_octo/*",
+            "mona-cat_octo[bot]/*",
+        ];
+        for (pattern, repository) in accepted {
+            match parse(document(pattern).as_bytes(), prompts) {
+                Ok(parsed) => assert_eq!(
+                    parsed.resolve(repository).map(|rule| rule.on_clean.clone()),
+                    Some(OnClean::Comment),
+                    "{pattern}: {repository} must resolve to its rule"
+                ),
+                Err(error) => panic!("{pattern}: {error}"),
+            }
+        }
+        for pattern in refused {
+            let want = "match must be owner/repository or owner/* in lowercase";
+            match parse(document(pattern).as_bytes(), prompts) {
+                Ok(_) => panic!("{pattern}: parse succeeded, want an error mentioning {want:?}"),
+                Err(error) => assert!(
+                    error.to_string().contains(want),
+                    "{pattern}: error = {error}, want it to mention {want:?}"
                 ),
             }
         }

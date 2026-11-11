@@ -402,6 +402,20 @@ What is not compatible, by decision:
   `example_passes_the_loader_and_the_engine_validation`,
   `init_login_follows_the_user_login_grammar` and
   `permission_is_read_from_the_role_name`.
+- **Repositories of Enterprise Managed Users (#294):** `repository_valid`
+  (`crates/engine/src/model/ids.rs`) and the policy's rule `match` check the
+  owner with `autoreview_policy::user_login_valid`, so a managed user's
+  `handle_shortcode/name` is accepted; every other owner keeps Go's grammar.
+  Go's `repositoryPattern` (`cmd/autoreview/config.go:147`) and `ownerPattern`
+  (`policy/policy.go:213`, applied at `policy.go:639`) refuse the underscore.
+  On a rollback to Go a policy with such a `match` does not load, such a
+  `pohunek.route_overrides` key stops the start (`config.go:304`), and a stored
+  review of such a repository fails `reviewIdentityValid` (`model.go:539`,
+  called from `review.go:40` and `discovery.go:540`). No stored row changes
+  shape. `testdata/parity/ids.json` gets no case: Go writes it, and
+  `TestWriteParityGolden` compares it byte for byte. The regression tests are
+  `repository_owner_follows_the_github_login_grammar` and
+  `rule_match_owner_follows_the_github_login_grammar`.
 
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):
