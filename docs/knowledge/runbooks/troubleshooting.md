@@ -213,8 +213,9 @@ Codex itself failed, for example on a model that the account does not support
 or on an argument that its version does not know. The adapter prints the reason
 line whenever Codex exits with a status other than 0. Its reason is the last
 line of Codex's stderr that starts with `ERROR:` or `error:`, else the last
-line that is not blank, cut to 512 bytes, with control and format characters
-shown as `?`. The engine logs it in the `error` field of the warnings "retrying
+line that is not blank, with control characters, format characters and line or
+paragraph separators shown as `?`, cut to 512 bytes at a character boundary.
+The engine logs it in the `error` field of the warnings "retrying
 reviewer after unusable output" and "rejecting reviewer output", as
 `review_result_invalid: Codex exited without a result: <reason>`, and nowhere
 else: the recorded failure, the notifications and GitHub get only the code. The

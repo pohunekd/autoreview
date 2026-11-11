@@ -156,9 +156,13 @@ class WrapperTests(unittest.TestCase):
             ("control and format characters",
              "ERROR: a\x1b[31mb\u202ec\u0085d\te\u200bf".encode("utf-8"),
              "ERROR: a?[31mb?c?d?e?f"),
+            ("soft hyphen, tag and separator characters",
+             "ERROR: a\u00adb\U000e0041c\u2028d\u2029e\u180ef\ufff9g\u0600h".encode("utf-8"),
+             "ERROR: a?b?c?d?e?f?g?h"),
             ("invalid bytes", b"ERROR: \xff\xfe x", "ERROR: \ufffd\ufffd x"),
             ("cut inside a character", b"x" * (bound - 1) + "\u00e9tail".encode("utf-8"),
-             "x" * (bound - 1) + "\ufffd"),
+             "x" * (bound - 1)),
+            ("replacement characters over the bound", b"\xff" * 200, "\ufffd" * 170),
             ("exactly the bound", b"y" * bound + b"z", "y" * bound),
         )
         for name, stderr, reason in cases:

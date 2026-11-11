@@ -30,20 +30,40 @@ const EXIT_LINE_PREFIX: &str = "[pohunek-codex-review exited with status ";
 /// Opens the adapter's base64 reason line before the exit line of a failed run.
 const REASON_MARKER: &str = "[pohunek-codex-review-reason-v1:";
 
-/// Most bytes of a reason that the engine logs, as the adapter's `REASON_MAX_BYTES`.
+/// Most UTF-8 bytes of a reason that the engine logs, as the adapter's `REASON_MAX_BYTES`.
 const REASON_MAX_BYTES: usize = 512;
 
-/// Format characters that a logged reason shows as `?`, as control characters.
+/// Every character of general category Cf (format) in Unicode 16.0, as inclusive ranges.
 ///
-/// Bidi controls and invisible separators could make a log line read differently than it is.
-const FORMAT_CHARACTERS: [(char, char); 6] = [
+/// A logged reason shows them as `?`: bidi controls, soft hyphens, tags and invisible
+/// characters could make a log line read differently than it is. The adapter neutralizes by
+/// Python's Unicode data, which may be another version; the engine applies this table anyway.
+const FORMAT_CHARACTERS: [(char, char); 21] = [
+    ('\u{00AD}', '\u{00AD}'),
+    ('\u{0600}', '\u{0605}'),
     ('\u{061C}', '\u{061C}'),
+    ('\u{06DD}', '\u{06DD}'),
+    ('\u{070F}', '\u{070F}'),
+    ('\u{0890}', '\u{0891}'),
+    ('\u{08E2}', '\u{08E2}'),
+    ('\u{180E}', '\u{180E}'),
     ('\u{200B}', '\u{200F}'),
-    ('\u{2028}', '\u{202E}'),
+    ('\u{202A}', '\u{202E}'),
     ('\u{2060}', '\u{2064}'),
-    ('\u{2066}', '\u{2069}'),
+    ('\u{2066}', '\u{206F}'),
     ('\u{FEFF}', '\u{FEFF}'),
+    ('\u{FFF9}', '\u{FFFB}'),
+    ('\u{110BD}', '\u{110BD}'),
+    ('\u{110CD}', '\u{110CD}'),
+    ('\u{13430}', '\u{1343F}'),
+    ('\u{1BCA0}', '\u{1BCA3}'),
+    ('\u{1D173}', '\u{1D17A}'),
+    ('\u{E0001}', '\u{E0001}'),
+    ('\u{E0020}', '\u{E007F}'),
 ];
+
+/// The line separator (Zl) and the paragraph separator (Zp), the only characters of either.
+const LINE_SEPARATORS: [char; 2] = ['\u{2028}', '\u{2029}'];
 
 /// Line breaks that may separate the report from the exit line.
 const SEPARATORS: [&str; 6] = ["\n", "\r\n", "\n\n", "\n\r\n", "\r\n\n", "\r\n\r\n"];
@@ -323,12 +343,13 @@ fn failed_status(status: &str) -> bool {
         && digits.bytes().any(|byte| byte != b'0')
 }
 
-/// Returns `bytes` cut to `REASON_MAX_BYTES`, decoded lossily and neutralized.
+/// Returns the reason that `bytes` carry: decoded lossily, neutralized and cut to the bound.
 ///
-/// Each control or format character becomes `?`.
+/// Each character that `is_neutralized` names becomes `?`; the text is then cut to
+/// `REASON_MAX_BYTES` UTF-8 bytes at a character boundary, as the adapter cuts it.
 fn bounded_reason(bytes: &[u8]) -> String {
     let cut = bytes.get(..REASON_MAX_BYTES).unwrap_or(bytes);
-    go_utf8_lossy(cut)
+    let mut reason: String = go_utf8_lossy(cut)
         .chars()
         .map(|character| {
             if is_neutralized(character) {
@@ -337,12 +358,17 @@ fn bounded_reason(bytes: &[u8]) -> String {
                 character
             }
         })
-        .collect()
+        .collect();
+    reason.truncate(reason.floor_char_boundary(REASON_MAX_BYTES));
+    reason
 }
 
 /// Reports whether a logged reason shows `character` as `?`.
+///
+/// Controls (Cc), format characters (Cf) and the line and paragraph separators (Zl, Zp).
 fn is_neutralized(character: char) -> bool {
     character.is_control()
+        || LINE_SEPARATORS.contains(&character)
         || FORMAT_CHARACTERS
             .iter()
             .any(|(low, high)| (*low..=*high).contains(&character))
@@ -464,9 +490,24 @@ mod tests {
                 Some("a?[31mb?c?d?e?f".to_owned()),
             ),
             (
+                "soft hyphen, tag and separator characters",
+                format!(
+                    "{}\n{failed}\n",
+                    line(
+                        "a\u{ad}b\u{e0041}c\u{2028}d\u{2029}e\u{180e}f\u{fff9}g\u{600}h".as_bytes()
+                    )
+                ),
+                Some("a?b?c?d?e?f?g?h".to_owned()),
+            ),
+            (
                 "cut inside a character",
                 format!("{}\n{failed}\n", line(&long)),
-                Some(format!("{}\u{FFFD}", "x".repeat(511))),
+                Some("x".repeat(511)),
+            ),
+            (
+                "replacement characters over the bound",
+                format!("{}\n{failed}\n", line(&[0xFF; 200])),
+                Some("\u{FFFD}".repeat(170)),
             ),
             (
                 "adapter without the reason line",

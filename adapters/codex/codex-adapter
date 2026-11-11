@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import tty
+import unicodedata
 from pathlib import Path
 from typing import BinaryIO, NoReturn
 
@@ -35,25 +36,21 @@ REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
 # Right before the exit line of a failed Codex run, it holds the base64 of the reason
 # that `exit_reason` takes from Codex's stderr; empty when stderr has no line.
 REASON_MARKER_FORMAT = "[pohunek-codex-review-reason-v1:{}]"
-# Most bytes of the stderr line that the reason keeps; the engine applies the same bound.
+# Most UTF-8 bytes of a reason, as the engine's bound; a longer one is cut at a character.
 REASON_MAX_BYTES = 512
 # Codex prints a failed turn as `ERROR: ...`; its argument parser prints `error: ...`.
 ERROR_LINE_PREFIXES = (b"ERROR:", b"error:")
-# Most bytes of Codex's stderr that the adapter keeps to find the reason in.
+# Most bytes of Codex's stderr that the adapter keeps to find the reason in. Not a tunable:
+# it bounds the adapter's own memory, and no operator decision depends on it.
 STDERR_TAIL_BYTES = 65536
 # Longest wait for the end of Codex's stderr after Codex exited: a process that Codex
-# started may keep the pipe open, and the exit line must not wait for it.
+# started may keep the pipe open, and the exit line must not wait for it. Not a tunable:
+# it bounds the wait for such a process, and no operator decision depends on it.
 STDERR_DRAIN_SECONDS = 5
-# Format characters that a reason shows as `?`, as C0 and C1 controls: bidi controls and
-# invisible separators, which could make a log line read differently than it is.
-FORMAT_CHARACTERS = (
-    (0x061C, 0x061C),
-    (0x200B, 0x200F),
-    (0x2028, 0x202E),
-    (0x2060, 0x2064),
-    (0x2066, 0x2069),
-    (0xFEFF, 0xFEFF),
-)
+# Unicode general categories that a reason shows as `?`: controls, format characters such
+# as bidi controls, soft hyphens and tags, and the line and paragraph separators, which
+# could make a log line read differently than it is.
+NEUTRALIZED_CATEGORIES = ("Cc", "Cf", "Zl", "Zp")
 # Codex runtimes declare pohunek's `manifest_idle` input readiness: the initial
 # input is written only once the detection manifest reads idle, and any
 # non-blank terminal title without a leading spinner glyph reads idle. The
@@ -277,28 +274,26 @@ def refuse(error: InputFrameError, retention_seconds: int) -> NoReturn:
 
 
 def is_neutralized(character: str) -> bool:
-    """Reports whether a reason shows `character` as `?`: a control or format character."""
-    code = ord(character)
-    return (
-        code < 0x20
-        or 0x7F <= code <= 0x9F
-        or any(low <= code <= high for low, high in FORMAT_CHARACTERS)
-    )
+    """Reports whether a reason shows `character` as `?`: see `NEUTRALIZED_CATEGORIES`."""
+    return unicodedata.category(character) in NEUTRALIZED_CATEGORIES
 
 
 def exit_reason(stderr: bytes) -> str:
     """Returns the line of Codex's `stderr` that names why the run failed, bounded and neutralized.
 
     The last line that starts with one of `ERROR_LINE_PREFIXES` wins, else the last line that
-    is not blank, else the reason is empty. The line is cut to `REASON_MAX_BYTES` before it is
-    decoded, so a cut character becomes U+FFFD.
+    is not blank, else the reason is empty. The first `REASON_MAX_BYTES` bytes of the line are
+    decoded, invalid bytes as U+FFFD, and neutralized; the text is then cut to
+    `REASON_MAX_BYTES` UTF-8 bytes at a character boundary.
     """
     lines = [line.strip() for line in stderr.split(b"\n")]
     lines = [line for line in lines if line]
     errors = [line for line in lines if line.startswith(ERROR_LINE_PREFIXES)]
     chosen = (errors or lines or [b""])[-1]
     text = chosen[:REASON_MAX_BYTES].decode("utf-8", errors="replace")
-    return "".join("?" if is_neutralized(character) else character for character in text)
+    neutralized = "".join("?" if is_neutralized(character) else character for character in text)
+    # The text holds no surrogates, so "ignore" drops only a character that the cut split.
+    return neutralized.encode("utf-8")[:REASON_MAX_BYTES].decode("utf-8", errors="ignore")
 
 
 def reason_marker(stderr: bytes) -> str:
