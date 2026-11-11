@@ -385,7 +385,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `init_write_failed` | `init` could not check, create or write a path; the `configuration` field names it |
 | `profile_host_not_local`, `runtime_package_missing` | `profiles install` was run on the wrong host, or the official runtime package is missing |
 | `profile_foreign`, `profile_write_failed` | `profiles install` found a file it did not write, or could not write the path it names |
-| `pohunek_command_failed` | `profiles install` could not read the answer of a pohunek command, or the command ran past `--pohunek-timeout-seconds` |
+| `pohunek_command_failed` | `profiles install` could not read the answer of a pohunek command about the local daemon, or that command ran past `--pohunek-timeout-seconds`; a failed or timed-out check of a named `--host` is `profile_host_not_local` |
 | `repository_not_allowed`, `review_identity_invalid` | Malformed repository or pull request number, or an approval whose identity differs from the stored review |
 | `head_prefix_invalid` | `HEAD_PREFIX` of `retry` or `resolve` (`head_prefix` of the MCP tools) is not 12 to 40 lowercase hexadecimal characters |
 | `head_sha_invalid` | `HEAD_SHA` of `approve` (`head_sha` of the MCP tool) is not the full head commit, 40 lowercase hexadecimal characters |

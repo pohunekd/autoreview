@@ -176,7 +176,8 @@ profile whose program sets no title, such as an adapter written by an older
 autoreview or a wrapper of your own, never becomes ready. Neither does a program
 that exits before its title because it refuses the `--no-daemon` that pohunek
 appends to every Codex launch. Run
-`autoreview profiles install` with the same flags on the review host (with
+`autoreview profiles install` with the same flags on the review host (an upgrade
+from 0.3.0 or earlier adds `--pohunek-timeout-seconds`; with
 `--replace` when the command did not write the profile; it prints `updated`
 when it rewrote only the adapter), then `autoreview retry` for the pull
 request. See [the Codex adapter](../concepts/reviewers-and-adapters.md#the-codex-adapter).

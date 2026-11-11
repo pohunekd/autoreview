@@ -162,7 +162,7 @@ pub(crate) fn local_environment(
 /// Runs the pohunek CLI `program` with `arguments` for the caller's own daemon.
 ///
 /// It returns the `ok` value of the answer, decoded as the engine's calls decode it. The child
-/// gets the [`local_environment`] of this process and is killed when `timeout` elapses.
+/// gets the `local_environment` of this process and is killed when `timeout` elapses.
 ///
 /// # Errors
 ///
