@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Coding-agent drafts
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 Some coding agents open their pull requests as drafts and never mark them ready.
 GitHub does not count a draft as a request for review, so an unmarked draft would

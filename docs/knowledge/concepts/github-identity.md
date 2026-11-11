@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # GitHub identity
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 autoreview acts on GitHub through **credentials**. A credential is one GitHub
 token, the account (its **login**) that the token belongs to, and the

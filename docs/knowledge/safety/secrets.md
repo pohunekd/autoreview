@@ -9,9 +9,9 @@ intents: [setup, help]
 
 # Secrets
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0. The container image this page
-> mentions comes after 0.1.0 and is planned in #40.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0. The container image this page
+> mentions is not in 0.2.0 and is planned in #40.
 
 autoreview has two kinds of secrets: the GitHub token of the
 [credential](../concepts/github-identity.md) and the Matrix token of the
@@ -57,7 +57,7 @@ With the systemd units, the secrets sit in `/etc/autoreview/autoreview.env`:
 - Stays out of repositories, shared dotfiles and any backup that leaves the host
   unencrypted.
 
-With the container image, which comes after 0.1.0 (planned in #40), the same
+With the container image, which is planned in #40, the same
 file is passed through `env_file`. Keep it on the host with mode `0600`,
 outside the mounted config directory, which is read-only and holds no secrets.
 

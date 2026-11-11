@@ -9,9 +9,9 @@ intents: [setup, help]
 
 # Features
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0. The container image this page
-> mentions comes after 0.1.0 and is planned in #40.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0. The container image this page
+> mentions is not in 0.2.0 and is planned in #40.
 
 autoreview is a small service that reviews GitHub pull requests with coding
 agents you already run. It finds pull requests that ask for a review, runs one
@@ -92,13 +92,14 @@ clean up are reported. [State and recovery](knowledge/concepts/state-and-recover
 - The GitHub CLI and one token, of your own account or a machine user; several
   tokens are planned in #13. [GitHub identity](knowledge/concepts/github-identity.md)
 - Linux with systemd, or a container runtime for the container image that comes
-  after 0.1.0 (planned in #40); the pohunek workflow plugin is planned in #41.
+  planned in #40; the pohunek workflow plugin is planned in #41.
 
 ## Documentation map
 
 | Start here | |
 |---|---|
-| [Install](install.md) | Binary, container (after 0.1.0, planned in #40), first configuration, first review |
+| [Install](install.md) | Binary, container (planned in #40), first configuration, first review |
+| [Getting started](knowledge/guides/getting-started.md) | One Linux machine set up by `scripts/setup` |
 | [Quickstart](knowledge/guides/quickstart.md) | One repository, one reviewer, comments only |
 | [Use cases](knowledge/guides/index.md) | Pick a scenario and combine them |
 

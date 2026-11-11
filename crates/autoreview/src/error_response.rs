@@ -25,7 +25,9 @@ const DISCOVERY_BUSY: &str = "discovery_busy";
 const USAGE: &str = "usage: autoreview [--config PATH] serve | mcp | validate | poll | \
 retry|resolve|approve --repository OWNER/REPO NUMBER HEAD | review --repository OWNER/REPO \
 NUMBER | reviews [LIMIT] | candidates | awaiting | review-queue | backup-db PATH; \
-autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME; \
+autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME [--store-path PATH] \
+[--gh-bin PATH] [--pohunek-bin PATH] [--pohunek-state-home PATH] [--pohunek-runtime-dir PATH] \
+[--matrix-homeserver-url URL] [--matrix-room ROOM] [--matrix-mention-user USER]; \
 autoreview profiles install --host HOST --agent claude|codex --name NAME --model MODEL \
 --effort EFFORT --agent-binary PATH --maximum-input-bytes BYTES [--maximum-result-bytes BYTES \
 --maximum-retention-seconds SECONDS] [--replace]";

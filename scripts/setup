@@ -1,0 +1,1077 @@
+#!/usr/bin/env bash
+# Sets up autoreview on one Linux machine that also runs the pohunek daemon:
+# autoreview, pohunek, the configuration, the secrets file, the runtime
+# packages, the hooks, the agent profiles and the user service.
+#
+# usage: scripts/setup [--dry-run] [--dir DIR] [--login LOGIN]
+#                      [--pohunek-host HOST] [--example NAME]
+#                      [--matrix-homeserver-url URL] [--matrix-room ROOM]
+#                      [--matrix-mention-user USER]
+#        scripts/setup --self-test
+#
+# Detection only reads. Each step that changes the machine prints its commands
+# and asks first; a step that is in place is skipped without a question, so a
+# run on a finished setup changes nothing. A missing answer is asked and an
+# empty answer stops the run. No value of a secret is read into the script,
+# printed or written. The exit codes are listed in
+# docs/knowledge/guides/getting-started.md.
+set -euo pipefail
+
+# The pohunek release that a missing or too old pohunek is replaced with.
+POHUNEK_VERSION="0.41.0"
+# The oldest pohunek release that is kept.
+POHUNEK_MIN_VERSION="0.41.0"
+# The autoreview release that is installed; it must know the init layout flags.
+AUTOREVIEW_VERSION="0.3.0"
+# pohunek's login service needs systemd 255 or newer.
+SYSTEMD_MIN_VERSION=255
+# The reviewer adapters need Python 3.11 or newer.
+PYTHON_MIN_VERSION="3.11.0"
+POHUNEK_REPOSITORY="zajca/pohunek"
+AUTOREVIEW_REPOSITORY="pohunekd/autoreview"
+AUTOREVIEW_WORKFLOW="pohunekd/autoreview/.github/workflows/release.yml"
+EXAMPLES=(auto-approve coding-agent-drafts human-approval notes-handoff org-wildcard
+    public-repositories single-repo-comment solo-maintainer)
+EFFORTS=(low medium high xhigh max)
+PROFILE_MARKER="# Written by autoreview profiles install; sha256="
+# The config.yaml keys that name a secret variable.
+SECRET_KEYS='^[[:space:]]*(token_env|access_token_env|url_env):'
+
+# Prints `setup: <message>` on stderr and exits with code $1.
+fail() {
+    local code=$1
+    shift
+    printf 'setup: %s\n' "$*" >&2
+    exit "$code"
+}
+
+# Prints the first X.Y.Z token of $1; fails when it holds none.
+version_of() {
+    if [[ $1 =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+        printf '%s\n' "${BASH_REMATCH[0]}"
+    else
+        return 1
+    fi
+}
+
+# Prints -1, 0 or 1 when version $1 is lower than, equal to or higher than $2.
+# Both are X.Y.Z; anything else fails.
+version_compare() {
+    local pattern='^[0-9]+\.[0-9]+\.[0-9]+$'
+    [[ $1 =~ $pattern && $2 =~ $pattern ]] || return 1
+    local -a left right
+    IFS=. read -r -a left <<<"$1"
+    IFS=. read -r -a right <<<"$2"
+    local i
+    for i in 0 1 2; do
+        if ((10#${left[i]} < 10#${right[i]})); then
+            echo -1
+            return
+        fi
+        if ((10#${left[i]} > 10#${right[i]})); then
+            echo 1
+            return
+        fi
+    done
+    echo 0
+}
+
+# Prints the state of a release that is pinned to $2, with $1 installed (empty
+# when absent): missing, older, current or newer. A newer one is kept.
+release_state() {
+    local installed=$1 pinned=$2
+    if [ -z "$installed" ]; then
+        echo missing
+        return
+    fi
+    case $(version_compare "$installed" "$pinned") in
+        -1) echo older ;;
+        0) echo current ;;
+        1) echo newer ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints the state of pohunek $1 (empty when absent) against the minimum $2:
+# missing, too-old or ok.
+pohunek_state() {
+    local installed=$1 minimum=$2
+    if [ -z "$installed" ]; then
+        echo missing
+        return
+    fi
+    case $(version_compare "$installed" "$minimum") in
+        -1) echo too-old ;;
+        0 | 1) echo ok ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints "<autoreview target> <pohunek target>" for `uname -s` $1, `uname -m`
+# $2 and the C library $3 (gnu, musl or none). The pohunek target is `-` where
+# pohunek publishes no Linux archive. Fails where autoreview publishes none.
+choose_targets() {
+    local system=$1 machine=$2 libc=$3
+    [ "$system" = Linux ] || return 1
+    case $machine in
+        x86_64)
+            case $libc in
+                gnu) echo "x86_64-unknown-linux-musl x86_64-unknown-linux-gnu" ;;
+                musl) echo "x86_64-unknown-linux-musl x86_64-unknown-linux-musl" ;;
+                *) echo "x86_64-unknown-linux-musl -" ;;
+            esac
+            ;;
+        aarch64) echo "aarch64-unknown-linux-musl -" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints the systemd version N of the first line `systemd N ...` of $1.
+systemd_version_of() {
+    if [[ $1 =~ ^systemd\ ([0-9]+) ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    else
+        return 1
+    fi
+}
+
+# Checks the pure functions above against fixed tables; reads nothing else.
+self_test() {
+    local checks=0 failures=0
+    check() {
+        checks=$((checks + 1))
+        if [ "$2" != "$3" ]; then
+            failures=$((failures + 1))
+            printf 'FAIL %s: expected "%s", got "%s"\n' "$1" "$2" "$3"
+        fi
+    }
+    check "version of pohunek output" 0.41.0 "$(version_of 'pohunek 0.41.0' || echo error)"
+    check "version of autoreview output" 0.2.0 "$(version_of 'autoreview 0.2.0' || echo error)"
+    check "version of a tag" 1.20.3 "$(version_of 'v1.20.3-rc.1' || echo error)"
+    check "version of four parts" 1.2.3 "$(version_of 'tool 1.2.3.4' || echo error)"
+    check "version of no version" error "$(version_of 'pohunek dev' || echo error)"
+    check "version of two parts" error "$(version_of 'gh 2.6' || echo error)"
+    check "compare equal" 0 "$(version_compare 0.41.0 0.41.0 || echo error)"
+    check "compare patch lower" -1 "$(version_compare 0.40.1 0.41.0 || echo error)"
+    check "compare minor as number" 1 "$(version_compare 0.100.0 0.41.0 || echo error)"
+    check "compare major first" 1 "$(version_compare 1.0.0 0.99.99 || echo error)"
+    check "compare leading zero" 0 "$(version_compare 0.08.0 0.8.0 || echo error)"
+    check "compare patch higher" 1 "$(version_compare 0.41.1 0.41.0 || echo error)"
+    check "compare malformed" error "$(version_compare 0.41 0.41.0 || echo error)"
+    check "compare suffix" error "$(version_compare 0.41.0-rc1 0.41.0 || echo error)"
+    check "release missing" missing "$(release_state '' 0.2.0 || echo error)"
+    check "release 0.0.0" older "$(release_state 0.0.0 0.2.0 || echo error)"
+    check "release older" older "$(release_state 0.1.0 0.2.0 || echo error)"
+    check "release current" current "$(release_state 0.2.0 0.2.0 || echo error)"
+    check "release newer kept" newer "$(release_state 0.10.0 0.2.0 || echo error)"
+    check "pohunek missing" missing "$(pohunek_state '' 0.41.0 || echo error)"
+    check "pohunek too old" too-old "$(pohunek_state 0.40.1 0.41.0 || echo error)"
+    check "pohunek minimum" ok "$(pohunek_state 0.41.0 0.41.0 || echo error)"
+    check "pohunek newer" ok "$(pohunek_state 0.42.0 0.41.0 || echo error)"
+    check "x86_64 glibc" "x86_64-unknown-linux-musl x86_64-unknown-linux-gnu" \
+        "$(choose_targets Linux x86_64 gnu || echo error)"
+    check "x86_64 musl" "x86_64-unknown-linux-musl x86_64-unknown-linux-musl" \
+        "$(choose_targets Linux x86_64 musl || echo error)"
+    check "x86_64 no libc" "x86_64-unknown-linux-musl -" \
+        "$(choose_targets Linux x86_64 none || echo error)"
+    check "aarch64" "aarch64-unknown-linux-musl -" \
+        "$(choose_targets Linux aarch64 gnu || echo error)"
+    check "armv7" error "$(choose_targets Linux armv7l gnu || echo error)"
+    check "macOS" error "$(choose_targets Darwin arm64 none || echo error)"
+    check "systemd 255" 255 "$(systemd_version_of 'systemd 255 (255.4-1ubuntu8)' || echo error)"
+    check "systemd 257" 257 "$(systemd_version_of 'systemd 257 (257.9-arch1-1)' || echo error)"
+    check "systemd other text" error "$(systemd_version_of 'not systemd 255' || echo error)"
+    check "pinned pohunek is kept" ok \
+        "$(pohunek_state "$POHUNEK_VERSION" "$POHUNEK_MIN_VERSION" || echo error)"
+    if [ "$failures" -ne 0 ]; then
+        echo "self-test: $failures of $checks checks failed"
+        return 1
+    fi
+    echo "self-test: $checks checks passed"
+}
+
+# Reads the JSON document on stdin and prints what query $1 asks for:
+#   profiles        the agent_profiles of an init or validate result, one per line
+#   error           the error code of a failed autoreview command
+#   package RUNTIME `present` when exactly one official, enabled, selected and
+#                   healthy package serves RUNTIME in `pohunek plugin list --json`
+#                   (the rule of `autoreview profiles install`), else `absent`
+#   host_id         the host_id of `pohunek host governance inspect HOST --json`
+#   hooks           the hook state of the one agent of `pohunek integration
+#                   status --agent RUNTIME --json`, or `no-home` when its config
+#                   home does not exist
+json_query() {
+    python3 -I -c '
+import json
+import sys
+
+query = sys.argv[1]
+try:
+    document = json.load(sys.stdin)
+    if query == "profiles":
+        for name in document["agent_profiles"]:
+            print(name)
+    elif query == "error":
+        print(document["error"])
+    elif query == "package":
+        serving = [
+            package
+            for package in document["ok"]["packages"]
+            if package.get("origin") == "official"
+            and package.get("enabled") is True
+            and package.get("selected") is True
+            and package.get("fault") is None
+            and package.get("runtime_id") == sys.argv[2]
+        ]
+        print("present" if len(serving) == 1 else "absent")
+    elif query == "host_id":
+        print(document["ok"]["host_id"])
+    elif query == "hooks":
+        (agent,) = document["ok"]["agents"]
+        print(agent["state"] if agent["available"] is True else "no-home")
+    else:
+        sys.exit(2)
+except (KeyError, TypeError, ValueError):
+    sys.exit("setup: the JSON answer does not have the expected shape")
+' "$@"
+}
+
+# Prints the error code of the autoreview error document $1, or `unknown`.
+error_code_of() {
+    json_query error <<<"$1" 2>/dev/null || echo unknown
+}
+
+# Reports whether $1 is an absolute path that a systemd unit line can hold as
+# it is: letters, digits, `.`, `_`, `-` and `/`, no empty, `.` or `..` part.
+unit_path_safe() {
+    [[ $1 =~ ^(/[A-Za-z0-9._-]+)+$ && ! $1 =~ /\.\.?(/|$) ]]
+}
+
+# Sets the variable named $1 to the answer of question $2 unless it holds one.
+# An empty answer stops the run.
+ask() {
+    local _name=$1 _question=$2 _reply
+    if [ -n "${!_name}" ]; then
+        return
+    fi
+    read -r -p "$_question: " _reply || _reply=
+    [ -n "$_reply" ] || fail 1 "$_question needs an answer"
+    printf -v "$_name" '%s' "$_reply"
+}
+
+# Reports whether $1 equals one of $2...
+is_one_of() {
+    local value=$1 item
+    shift
+    for item in "$@"; do
+        [ "$value" = "$item" ] && return 0
+    done
+    return 1
+}
+
+# Prints step $1 and the commands $2..., then asks; only y or yes goes on.
+approve() {
+    local step=$1 reply
+    shift
+    printf '\n%s will run:\n' "$step"
+    printf '  %s\n' "$@"
+    read -r -p "Proceed? [y/N] " reply || reply=
+    case $reply in
+        y | yes) ;;
+        *) fail 4 "stopped before $step; nothing of this step was changed" ;;
+    esac
+    changed=1
+}
+
+# Prints that step $1 is in place.
+in_place() {
+    printf '%s: in place, skipped\n' "$1"
+}
+
+usage() {
+    fail 1 "usage: scripts/setup [--dry-run] [--dir DIR] [--login LOGIN]" \
+        "[--pohunek-host HOST] [--example NAME] [--matrix-homeserver-url URL]" \
+        "[--matrix-room ROOM] [--matrix-mention-user USER] | --self-test"
+}
+
+parse_arguments() {
+    dry_run=0
+    dir="" login="" pohunek_host="" example=""
+    matrix_url="" matrix_room="" matrix_user=""
+    while [ "$#" -gt 0 ]; do
+        case $1 in
+            --dry-run) dry_run=1 ;;
+            --dir | --login | --pohunek-host | --example | --matrix-homeserver-url | \
+                --matrix-room | --matrix-mention-user)
+                if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                    usage
+                fi
+                case $1 in
+                    --dir) dir=$2 ;;
+                    --login) login=$2 ;;
+                    --pohunek-host) pohunek_host=$2 ;;
+                    --example) example=$2 ;;
+                    --matrix-homeserver-url) matrix_url=$2 ;;
+                    --matrix-room) matrix_room=$2 ;;
+                    --matrix-mention-user) matrix_user=$2 ;;
+                esac
+                shift
+                ;;
+            *) usage ;;
+        esac
+        shift
+    done
+}
+
+# Reads the platform, the tools and the locations. Changes nothing.
+detect_machine() {
+    local system machine libc targets tool missing="" python systemd
+    system=$(uname -s)
+    machine=$(uname -m)
+    libc=none
+    if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+        libc=gnu
+    elif [ -e "/lib/ld-musl-$machine.so.1" ]; then
+        libc=musl
+    fi
+    targets=$(choose_targets "$system" "$machine" "$libc") \
+        || fail 2 "only Linux x86_64 and aarch64 are supported, not $system $machine"
+    read -r autoreview_target pohunek_target <<<"$targets"
+    platform="$machine with the $libc C library"
+    for tool in curl tar sha256sum gh python3 systemctl systemd-run loginctl install diff stat; do
+        command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+    done
+    [ -z "$missing" ] || fail 3 "missing$missing; install them with the package manager"
+    python=$(python3 -I -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')
+    [ "$(version_compare "$python" "$PYTHON_MIN_VERSION")" != -1 ] \
+        || fail 3 "missing Python $PYTHON_MIN_VERSION or newer as python3 (found $python)"
+    systemd=$(systemd_version_of "$(systemctl --version | head -n 1)") \
+        || fail 3 "missing a readable systemd version; systemctl --version did not name one"
+    [ "$systemd" -ge "$SYSTEMD_MIN_VERSION" ] \
+        || fail 3 "missing systemd $SYSTEMD_MIN_VERSION or newer (found $systemd)"
+    systemctl --user show-environment >/dev/null 2>&1 \
+        || fail 3 "missing a systemd user manager with a session bus;" \
+            "install dbus-user-session and log in again"
+    gh auth status >/dev/null 2>&1 || fail 3 "missing a gh login; run gh auth login"
+    gh_bin=$(command -v gh)
+    unit_path_safe "${HOME:-}" || fail 3 "missing a HOME of letters, digits, '.', '_', '-' and '/'"
+    [[ ${XDG_RUNTIME_DIR:-} == /* ]] \
+        || fail 3 "missing XDG_RUNTIME_DIR; log in through a session that sets it"
+    runtime_dir=$XDG_RUNTIME_DIR
+    config_home=${XDG_CONFIG_HOME:-$HOME/.config}
+    state_home=${XDG_STATE_HOME:-$HOME/.local/state}
+    unit_path_safe "$config_home" \
+        || fail 3 "missing an XDG_CONFIG_HOME of letters, digits, '.', '_', '-' and '/'"
+    [[ $state_home == /* ]] || fail 3 "missing an absolute XDG_STATE_HOME"
+    autoreview_bin=$HOME/.local/bin/autoreview
+    env_file=$config_home/autoreview/autoreview.env
+    unit_dir=$config_home/systemd/user
+    agents_dir=$config_home/pohunek/agents
+    service_config=$config_home/pohunek/service.toml
+    user_name=$(id -un)
+}
+
+# Sets autoreview_state from the installed binary.
+detect_autoreview() {
+    local output="" version=""
+    if [ -x "$autoreview_bin" ]; then
+        output=$("$autoreview_bin" --version 2>/dev/null) || output=""
+        version=$(version_of "$output") || version=""
+    fi
+    autoreview_state=$(release_state "$version" "$AUTOREVIEW_VERSION")
+}
+
+# Sets pohunek_bin, pohunek_version and pohunek_state. pohunek counts as
+# installed only with its login service (service.toml) and a CLI that names
+# its version.
+detect_pohunek() {
+    local output=""
+    pohunek_bin="" pohunek_version=""
+    if [ -x "$HOME/.local/bin/pohunek" ]; then
+        pohunek_bin=$HOME/.local/bin/pohunek
+    elif command -v pohunek >/dev/null 2>&1; then
+        pohunek_bin=$(command -v pohunek)
+    fi
+    if [ -n "$pohunek_bin" ] && [ -f "$service_config" ]; then
+        output=$("$pohunek_bin" --version 2>/dev/null) || output=""
+        pohunek_version=$(version_of "$output") \
+            || fail 3 "missing a readable pohunek version; $pohunek_bin --version printed none"
+    fi
+    pohunek_state=$(pohunek_state "$pohunek_version" "$POHUNEK_MIN_VERSION")
+}
+
+# Prints the variable names that the *_env keys of config.yaml name, one per
+# line. A name that is not AUTOREVIEW_<A-Z0-9_> stops the run without printing
+# it, because a token pasted into the key would be printed with it.
+secret_names() {
+    local line name
+    while IFS= read -r line; do
+        name=$(sed -E 's/^[^:]*:[[:space:]]*//; s/[[:space:]]+$//; s/^"(.*)"$/\1/' <<<"$line")
+        [[ $name =~ ^AUTOREVIEW_[A-Z0-9_]+$ ]] \
+            || fail 9 "a *_env key of $dir/config.yaml does not name an AUTOREVIEW_ variable"
+        printf '%s\n' "$name"
+    done < <(grep -E "$SECRET_KEYS" "$dir/config.yaml" || true)
+}
+
+# Prints each secret variable with `set` or `missing` and sets secrets_missing
+# to the names without a line NAME=<value> in the secrets file. The value is
+# never read into the script.
+check_secrets() {
+    local name listed
+    local -a names
+    secrets_missing=""
+    listed=$(secret_names | sort -u) || exit "$?"
+    mapfile -t names <<<"$listed"
+    for name in "${names[@]}"; do
+        [ -n "$name" ] || continue
+        if [ -f "$env_file" ] && grep -Eq "^$name=." "$env_file"; then
+            printf '  %s: set\n' "$name"
+        else
+            printf '  %s: missing\n' "$name"
+            secrets_missing="$secrets_missing $name"
+        fi
+    done
+}
+
+# Runs validate in a transient user unit with the secrets file of the service,
+# so it sees the environment that `autoreview serve` gets. Sets
+# validate_output and returns the exit status of validate.
+run_validate() {
+    validate_output=$(systemd-run --user --wait --pipe --quiet --collect \
+        -p "EnvironmentFile=$env_file" \
+        "$autoreview_bin" --config "$dir/config.yaml" validate </dev/null)
+}
+
+# Prints the state of agent profile $1: absent, ours (with its base after a
+# space) or foreign.
+profile_state() {
+    local file=$agents_dir/$1.toml first base
+    if [ ! -e "$file" ]; then
+        echo absent
+        return
+    fi
+    first=$(head -n 1 "$file")
+    base=$(grep -Eo '^base = "(claude|codex)"$' "$file" | head -n 1 | cut -d'"' -f2) || base=""
+    if [[ $first == "$PROFILE_MARKER"* ]] && [ -n "$base" ]; then
+        echo "ours $base"
+    else
+        echo foreign
+    fi
+}
+
+# Prints `present` or `absent` for the official package of runtime $1.
+package_state() {
+    "$pohunek_bin" plugin list --json | json_query package "$1"
+}
+
+# Prints the hook state of runtime $1: current, not_installed, outdated or
+# no-home.
+hook_state() {
+    "$pohunek_bin" integration status --agent "$1" --json | json_query hooks
+}
+
+# Creates the private download directory once per run; it is removed on exit.
+work_dir() {
+    if [ -z "${work:-}" ]; then
+        work=$(mktemp -d "${TMPDIR:-/tmp}/autoreview-setup.XXXXXX")
+        trap 'rm -rf -- "$work"' EXIT
+    fi
+}
+
+# Downloads asset $2 of the release v$3 of repository $1 and its .sha256 into
+# the download directory, then checks that the .sha256 names exactly the asset
+# and that the checksum matches.
+download_checked() {
+    local repository=$1 name=$2 version=$3 base line digest rest
+    base="https://github.com/$repository/releases/download/v$version"
+    curl -fsSL --proto '=https' -o "$work/$name" "$base/$name" \
+        || fail 5 "downloading $name of v$version failed; the release or the asset is missing"
+    curl -fsSL --proto '=https' -o "$work/$name.sha256" "$base/$name.sha256" \
+        || fail 5 "downloading $name.sha256 of v$version failed"
+    line=$(cat "$work/$name.sha256")
+    digest=${line%% *}
+    rest=${line#* }
+    if [[ ! $digest =~ ^[0-9a-f]{64}$ ]] || { [ "$rest" != " $name" ] && [ "$rest" != "*$name" ]; }
+    then
+        fail 5 "$name failed its checksum: $name.sha256 does not name it"
+    fi
+    (cd "$work" && sha256sum --check --quiet -- "$name.sha256") >/dev/null \
+        || fail 5 "$name failed its checksum"
+}
+
+# Prints the commands of a download of asset $2 of release v$3 of repository $1.
+download_commands() {
+    local base="https://github.com/$1/releases/download/v$3"
+    printf '%s\n' "curl -fsSL -o $2 $base/$2" "curl -fsSL -o $2.sha256 $base/$2.sha256" \
+        "sha256sum --check $2.sha256"
+}
+
+step_autoreview() {
+    detect_autoreview
+    case $autoreview_state in
+        current | newer)
+            in_place "autoreview"
+            return
+            ;;
+    esac
+    local name="autoreview-$AUTOREVIEW_VERSION-$autoreview_target"
+    local -a commands
+    mapfile -t commands < <(download_commands "$AUTOREVIEW_REPOSITORY" "$name.tar.gz" \
+        "$AUTOREVIEW_VERSION")
+    approve "autoreview $AUTOREVIEW_VERSION" "${commands[@]}" \
+        "gh attestation verify $name.tar.gz --repo $AUTOREVIEW_REPOSITORY" \
+        "  --signer-workflow $AUTOREVIEW_WORKFLOW" \
+        "  --source-ref refs/tags/v$AUTOREVIEW_VERSION --deny-self-hosted-runners" \
+        "tar -xzf $name.tar.gz" "install -m 0755 $name/autoreview $autoreview_bin"
+    work_dir
+    download_checked "$AUTOREVIEW_REPOSITORY" "$name.tar.gz" "$AUTOREVIEW_VERSION"
+    gh attestation verify "$work/$name.tar.gz" --repo "$AUTOREVIEW_REPOSITORY" \
+        --signer-workflow "$AUTOREVIEW_WORKFLOW" --source-ref "refs/tags/v$AUTOREVIEW_VERSION" \
+        --deny-self-hosted-runners >/dev/null || fail 5 "$name.tar.gz failed its attestation"
+    tar -xzf "$work/$name.tar.gz" -C "$work" || fail 5 "$name.tar.gz cannot be unpacked"
+    { install -d -m 0755 "$HOME/.local/bin" \
+        && install -m 0755 "$work/$name/autoreview" "$autoreview_bin"; } \
+        || fail 7 "installing autoreview failed"
+    detect_autoreview
+    [ "$autoreview_state" = current ] \
+        || fail 7 "installing autoreview failed: $autoreview_bin is not $AUTOREVIEW_VERSION"
+    autoreview_installed=1
+}
+
+# Downloads, checks and unpacks the pohunek daemon archive of version $1, once
+# per run and version, and sets pohunek_archive to its directory.
+pohunek_archive_of() {
+    local version=$1 name
+    [ "$pohunek_target" != - ] \
+        || fail 2 "pohunek publishes no Linux archive for $platform;" \
+            "install pohunek and its runtime packages by hand"
+    name="pohunek-daemon-$version-$pohunek_target"
+    if [ "${pohunek_archive:-}" = "${work:-}/$name" ] && [ -d "$pohunek_archive" ]; then
+        return
+    fi
+    work_dir
+    download_checked "$POHUNEK_REPOSITORY" "$name.tar.gz" "$version"
+    gh attestation verify "$work/$name.tar.gz" --repo "$POHUNEK_REPOSITORY" >/dev/null \
+        || fail 5 "$name.tar.gz failed its attestation"
+    tar -xzf "$work/$name.tar.gz" -C "$work" || fail 5 "$name.tar.gz cannot be unpacked"
+    [ -d "$work/$name" ] || fail 5 "$name.tar.gz holds no directory $name"
+    pohunek_archive=$work/$name
+}
+
+# Prints the commands of pohunek_archive_of for version $1.
+pohunek_archive_commands() {
+    local name="pohunek-daemon-$1-$pohunek_target"
+    download_commands "$POHUNEK_REPOSITORY" "$name.tar.gz" "$1"
+    printf '%s\n' "gh attestation verify $name.tar.gz --repo $POHUNEK_REPOSITORY" \
+        "tar -xzf $name.tar.gz"
+}
+
+step_pohunek() {
+    detect_pohunek
+    if [ "$pohunek_state" = ok ]; then
+        in_place "pohunek $pohunek_version"
+        return
+    fi
+    [ "$pohunek_target" != - ] \
+        || fail 2 "pohunek publishes no Linux archive for $platform; install pohunek by hand"
+    local name="pohunek-daemon-$POHUNEK_VERSION-$pohunek_target"
+    local -a commands
+    mapfile -t commands < <(pohunek_archive_commands "$POHUNEK_VERSION")
+    approve "pohunek $POHUNEK_VERSION" "${commands[@]}" "sh $name/packaging/install-daemon.sh"
+    pohunek_archive_of "$POHUNEK_VERSION"
+    sh "$pohunek_archive/packaging/install-daemon.sh" \
+        || fail 6 "pohunek packaging/install-daemon.sh failed; its message above names the cause"
+    detect_pohunek
+    [ "$pohunek_state" = ok ] \
+        || fail 6 "pohunek packaging/install-daemon.sh left no pohunek" \
+            "$POHUNEK_MIN_VERSION or newer"
+}
+
+# Stops unless pohunek host $1 is the daemon of this machine: its host_id must
+# equal the one of `local`, the check of `autoreview profiles install`.
+check_local_host() {
+    local local_id named_id
+    local_id=$("$pohunek_bin" host governance inspect local --json | json_query host_id) \
+        || fail 6 "pohunek host governance inspect local --json failed"
+    named_id=$("$pohunek_bin" host governance inspect "$1" --json 2>/dev/null \
+        | json_query host_id 2>/dev/null) || named_id=""
+    [ "$named_id" = "$local_id" ] \
+        || fail 1 "the pohunek host $1 is not this machine; name its pohunek host, or local"
+}
+
+step_config() {
+    if [ -e "$dir/config.yaml" ]; then
+        in_place "configuration $dir/config.yaml"
+        return
+    fi
+    ask login "GitHub login of the account that posts the reviews"
+    ask pohunek_host "pohunek host name of this machine (local names it too)"
+    check_local_host "$pohunek_host"
+    ask example "Example to start from (${EXAMPLES[*]})"
+    is_one_of "$example" "${EXAMPLES[@]}" || fail 1 "the example must be one of: ${EXAMPLES[*]}"
+    ask matrix_url "Matrix homeserver URL"
+    ask matrix_room "Matrix room of the notifications"
+    ask matrix_user "Matrix user that the notifications mention"
+    local output
+    local -a command=("$autoreview_bin" init --dir "$dir" --login "$login"
+        --pohunek-host "$pohunek_host" --example "$example" --store-path "$dir/autoreview.db"
+        --gh-bin "$gh_bin" --pohunek-bin "$pohunek_bin" --pohunek-state-home "$state_home"
+        --pohunek-runtime-dir "$runtime_dir" --matrix-homeserver-url "$matrix_url"
+        --matrix-room "$matrix_room" --matrix-mention-user "$matrix_user")
+    approve "configuration" "$(printf '%q ' "${command[@]}")"
+    if ! output=$("${command[@]}"); then
+        printf '%s\n' "$output" >&2
+        fail 8 "autoreview init failed: $(error_code_of "$output")"
+    fi
+    printf '%s\n' "$output"
+    created_config=1
+}
+
+step_secrets_file() {
+    if [ -f "$env_file" ]; then
+        [ "$(stat -c %a "$env_file")" = 600 ] \
+            || fail 9 "$env_file must have mode 0600; run chmod 0600 $env_file"
+        in_place "secrets file $env_file"
+        return
+    fi
+    approve "secrets file" "install -d -m 0700 ${env_file%/*}" \
+        "install -m 0600 /dev/null $env_file"
+    { install -d -m 0700 "${env_file%/*}" && install -m 0600 /dev/null "$env_file"; } \
+        || fail 9 "creating $env_file failed"
+}
+
+step_validate() {
+    echo "secrets in $env_file:"
+    check_secrets
+    [ -z "$secrets_missing" ] \
+        || fail 9 "${secrets_missing# } is not set in $env_file;" \
+            "write NAME=value lines into it with an editor, then run setup again"
+    if ! run_validate; then
+        printf '%s\n' "$validate_output" >&2
+        fail 9 "validate failed: $(error_code_of "$validate_output")"
+    fi
+    mapfile -t profiles < <(json_query profiles <<<"$validate_output")
+    local name
+    for name in "${profiles[@]}"; do
+        [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && $name != *..* ]] \
+            || fail 9 "validate names an agent profile that is not a file name"
+    done
+    echo "validate: passed; agent profiles: ${profiles[*]}"
+}
+
+# Asks the values of the absent profile $1 and keeps them for step_profiles.
+ask_profile() {
+    local profile=$1 agent="" model="" effort="" input="" result="" retention="" binary
+    ask agent "Agent of profile $profile (claude: claude-structured, codex: codex-envelope)"
+    is_one_of "$agent" claude codex || fail 1 "the agent of $profile must be claude or codex"
+    binary=$(command -v "$agent") || binary=""
+    [[ $binary == /* ]] \
+        || fail 3 "missing $agent on PATH; install it and run it once, then run setup again"
+    ask model "Model of profile $profile"
+    [[ $model =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+        || fail 1 "the model of $profile must match [A-Za-z0-9][A-Za-z0-9._-]*"
+    ask effort "Effort of profile $profile (${EFFORTS[*]}; max is Claude only)"
+    is_one_of "$effort" "${EFFORTS[@]}" \
+        || fail 1 "the effort of $profile must be one of: ${EFFORTS[*]}"
+    if [ "$agent" = codex ] && [ "$effort" = max ]; then
+        fail 1 "the effort of $profile must not be max: Codex accepts low to xhigh"
+    fi
+    ask input "Largest request of profile $profile, in bytes"
+    [[ $input =~ ^[1-9][0-9]*$ ]] \
+        || fail 1 "the largest request of $profile must be a whole number of bytes"
+    if [ "$agent" = codex ]; then
+        ask result "Largest report of profile $profile, in bytes (at most limits.result_max_bytes)"
+        [[ $result =~ ^[1-9][0-9]*$ ]] \
+            || fail 1 "the largest report of $profile must be a whole number of bytes"
+        ask retention "Seconds that $profile stays after its report (>= session.timeout_seconds)"
+        [[ $retention =~ ^[1-9][0-9]*$ ]] \
+            || fail 1 "the wait of $profile must be a whole number of seconds"
+    fi
+    profile_agent[$profile]=$agent
+    profile_model[$profile]=$model
+    profile_effort[$profile]=$effort
+    profile_binary[$profile]=$binary
+    profile_input[$profile]=$input
+    profile_result[$profile]=$result
+    profile_retention[$profile]=$retention
+}
+
+# Sets install_command to the profiles install command of the absent profile $1.
+profile_install_command() {
+    local profile=$1
+    install_command=("$autoreview_bin" profiles install --host local
+        --agent "${profile_agent[$profile]}" --name "$profile"
+        --model "${profile_model[$profile]}" --effort "${profile_effort[$profile]}"
+        --agent-binary "${profile_binary[$profile]}"
+        --maximum-input-bytes "${profile_input[$profile]}")
+    if [ "${profile_agent[$profile]}" = codex ]; then
+        install_command+=(--maximum-result-bytes "${profile_result[$profile]}"
+            --maximum-retention-seconds "${profile_retention[$profile]}")
+    fi
+}
+
+# Reads the state of every profile, asks for the absent ones and sets agents to
+# the runtimes the profiles need.
+collect_profiles() {
+    local name state
+    pending=()
+    agents=()
+    for name in "${profiles[@]}"; do
+        state=$(profile_state "$name")
+        case $state in
+            ours\ *) profile_agent[$name]=${state#ours } ;;
+            absent)
+                ask_profile "$name"
+                pending+=("$name")
+                ;;
+            *)
+                fail 8 "$agents_dir/$name.toml was not written by autoreview profiles install;" \
+                    "remove it, or overwrite it with autoreview profiles install --replace"
+                ;;
+        esac
+        is_one_of "${profile_agent[$name]}" "${agents[@]}" || agents+=("${profile_agent[$name]}")
+    done
+}
+
+step_packages() {
+    local agent state
+    local -a commands
+    for agent in "${agents[@]}"; do
+        state=$(package_state "$agent") || fail 6 "pohunek plugin list --json failed"
+        if [ "$state" = present ]; then
+            in_place "runtime package $agent"
+            continue
+        fi
+        mapfile -t commands < <(pohunek_archive_commands "$pohunek_version")
+        approve "runtime package $agent" "${commands[@]}" \
+            "cd pohunek-daemon-$pohunek_version-$pohunek_target" \
+            "$pohunek_bin plugin install runtime/packages/$agent.tar.zst" \
+            "  --catalog runtime/runtime-catalog.json --yes"
+        pohunek_archive_of "$pohunek_version"
+        (cd "$pohunek_archive" && "$pohunek_bin" plugin install "runtime/packages/$agent.tar.zst" \
+            --catalog runtime/runtime-catalog.json --yes) \
+            || fail 6 "pohunek plugin install failed for $agent"
+        state=$(package_state "$agent") || fail 6 "pohunek plugin list --json failed"
+        [ "$state" = present ] || fail 6 "pohunek plugin install left no serving $agent package"
+    done
+}
+
+step_hooks() {
+    local agent state
+    for agent in "${agents[@]}"; do
+        state=$(hook_state "$agent") \
+            || fail 6 "pohunek integration status --agent $agent --json failed"
+        case $state in
+            current)
+                in_place "hooks $agent"
+                continue
+                ;;
+            no-home)
+                fail 3 "missing the config home of $agent; run $agent once, then run setup again"
+                ;;
+        esac
+        approve "hooks $agent (pohunek offers no dry run of this command)" \
+            "$pohunek_bin integration install --agent $agent"
+        "$pohunek_bin" integration install --agent "$agent" \
+            || fail 6 "pohunek integration install --agent $agent failed"
+        state=$(hook_state "$agent") \
+            || fail 6 "pohunek integration status --agent $agent --json failed"
+        [ "$state" = current ] \
+            || fail 6 "pohunek integration install --agent $agent left the hooks $state"
+    done
+}
+
+step_profiles() {
+    local name output
+    for name in "${profiles[@]}"; do
+        if ! is_one_of "$name" "${pending[@]}"; then
+            in_place "agent profile $name"
+            continue
+        fi
+        profile_install_command "$name"
+        approve "agent profile $name" "$(printf '%q ' "${install_command[@]}")"
+        if ! output=$("${install_command[@]}"); then
+            printf '%s\n' "$output" >&2
+            fail 8 "autoreview profiles install failed: $(error_code_of "$output")"
+        fi
+        printf '%s\n' "$output"
+    done
+}
+
+# Sets the unit names and their texts. The paths were checked with
+# unit_path_safe, so each line holds them as they are.
+render_units() {
+    unit_names=(autoreview.service autoreview-queue.service autoreview-queue.timer)
+    unit_texts=()
+    unit_texts+=("[Unit]
+Description=autoreview pull request review service
+
+[Service]
+Type=simple
+ExecStart=$autoreview_bin --config $dir/config.yaml serve
+EnvironmentFile=$env_file
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
+")
+    unit_texts+=("[Unit]
+Description=autoreview review queue notice
+
+[Service]
+Type=oneshot
+ExecStart=$autoreview_bin --config $dir/config.yaml review-queue
+EnvironmentFile=$env_file
+NoNewPrivileges=yes
+")
+    unit_texts+=("[Unit]
+Description=Hourly autoreview review queue, 08:00-20:00 local time
+
+[Timer]
+OnCalendar=*-*-* 08..20:00:00
+Unit=autoreview-queue.service
+
+[Install]
+WantedBy=timers.target
+")
+}
+
+# Sets units_missing and units_changed to the unit files that are absent or
+# hold other text, and units_running to 1 when the service and the timer are
+# enabled and the service is active.
+detect_units() {
+    local i file
+    render_units
+    units_missing=() units_changed=()
+    for i in "${!unit_names[@]}"; do
+        file=$unit_dir/${unit_names[i]}
+        if [ ! -f "$file" ]; then
+            units_missing+=("${unit_names[i]}")
+        elif [ "$(cat "$file"; echo x)" != "${unit_texts[i]}x" ]; then
+            units_changed+=("${unit_names[i]}")
+        fi
+    done
+    units_running=0
+    if [ "$(systemctl --user is-enabled autoreview.service 2>/dev/null)" = enabled ] \
+        && [ "$(systemctl --user is-enabled autoreview-queue.timer 2>/dev/null)" = enabled ] \
+        && [ "$(systemctl --user is-active autoreview.service 2>/dev/null)" = active ]; then
+        units_running=1
+    fi
+}
+
+step_service() {
+    local i name
+    detect_units
+    if [ "${#units_missing[@]}" -eq 0 ] && [ "${#units_changed[@]}" -eq 0 ] \
+        && [ "$units_running" -eq 1 ]; then
+        if [ "$autoreview_installed" -eq 1 ]; then
+            approve "restarting autoreview.service on the new binary" \
+                "systemctl --user restart autoreview.service"
+            systemctl --user restart autoreview.service \
+                || fail 10 "systemctl --user restart failed"
+            return
+        fi
+        in_place "user service autoreview.service"
+        return
+    fi
+    echo
+    echo "The service reviews what these lines of $dir/policy.yaml select:"
+    grep -E '^[[:space:]]*(- )?(match|trigger):' "$dir/policy.yaml" | sed 's/^/  /' || true
+    if [ "${#units_changed[@]}" -gt 0 ]; then
+        for i in "${!unit_names[@]}"; do
+            name=${unit_names[i]}
+            if is_one_of "$name" "${units_changed[@]}"; then
+                diff -u "$unit_dir/$name" <(printf '%s' "${unit_texts[i]}") || true
+            fi
+        done
+        approve "replacing the changed units (the diff above)" \
+            "${units_changed[@]/#/write $unit_dir/}"
+    fi
+    approve "user service" "${unit_names[@]/#/write $unit_dir/}" "systemctl --user daemon-reload" \
+        "systemctl --user enable --now autoreview.service autoreview-queue.timer" \
+        "systemctl --user restart autoreview.service"
+    install -d -m 0755 "$unit_dir" || fail 10 "creating $unit_dir failed"
+    for i in "${!unit_names[@]}"; do
+        name=${unit_names[i]}
+        { printf '%s' "${unit_texts[i]}" >"$unit_dir/.$name.setup" \
+            && chmod 0644 "$unit_dir/.$name.setup" \
+            && mv -f "$unit_dir/.$name.setup" "$unit_dir/$name"; } \
+            || fail 10 "writing $unit_dir/$name failed"
+    done
+    systemctl --user daemon-reload || fail 10 "systemctl --user daemon-reload failed"
+    systemctl --user enable --now autoreview.service autoreview-queue.timer \
+        || fail 10 "systemctl --user enable --now failed"
+    systemctl --user restart autoreview.service || fail 10 "systemctl --user restart failed"
+}
+
+step_linger() {
+    local linger
+    linger=$(loginctl show-user "$user_name" --property=Linger --value 2>/dev/null) || linger=""
+    if [ "$linger" = yes ]; then
+        in_place "lingering of $user_name"
+        return
+    fi
+    echo
+    echo "Without lingering, systemd stops pohunek and autoreview when $user_name logs out,"
+    echo "and starts them again only at the next login."
+    approve "lingering of $user_name" "loginctl enable-linger $user_name"
+    loginctl enable-linger "$user_name" || fail 10 "loginctl enable-linger failed"
+}
+
+# Prints one plan line: the step $1 and its state $2.
+plan() {
+    printf '  %-58s %s\n' "$1" "$2"
+}
+
+# Prints every step with its state from the detection; changes nothing.
+print_plan() {
+    local state
+    detect_autoreview
+    detect_pohunek
+    echo "setup plan for $user_name on $platform:"
+    case $autoreview_state in
+        current | newer) state="in place, skipped" ;;
+        *) state="will run ($autoreview_state)" ;;
+    esac
+    plan "autoreview $AUTOREVIEW_VERSION into $autoreview_bin" "$state"
+    if [ "$pohunek_state" = ok ]; then
+        state="in place, skipped ($pohunek_version)"
+    else
+        state="will run ($pohunek_state)"
+    fi
+    plan "pohunek $POHUNEK_VERSION with its login service" "$state"
+    if [ -z "$dir" ]; then
+        plan "configuration and the later steps" "needs --dir"
+        return
+    fi
+    if [ -e "$dir/config.yaml" ]; then
+        plan "configuration $dir/config.yaml" "in place, skipped"
+    else
+        plan "configuration $dir/config.yaml (autoreview init)" "will run"
+    fi
+    if [ -f "$env_file" ]; then
+        plan "secrets file $env_file" "in place, skipped"
+    else
+        plan "secrets file $env_file (empty, mode 0600)" "will run"
+    fi
+    if [ ! -e "$dir/config.yaml" ] || [ ! -f "$env_file" ] || [ "$pohunek_state" != ok ] \
+        || [ "$autoreview_state" = missing ] || [ "$autoreview_state" = older ]; then
+        plan "secrets, validate, profiles, packages, hooks" "decided after the steps above"
+    else
+        plan_profiles
+    fi
+    detect_units
+    if [ "${#units_missing[@]}" -eq 0 ] && [ "${#units_changed[@]}" -eq 0 ] \
+        && [ "$units_running" -eq 1 ]; then
+        plan "user service autoreview.service and the queue timer" "in place, skipped"
+    else
+        plan "user service autoreview.service and the queue timer" "will run"
+    fi
+    if [ "$(loginctl show-user "$user_name" --property=Linger --value 2>/dev/null)" = yes ]; then
+        plan "lingering of $user_name" "in place, skipped"
+    else
+        plan "lingering of $user_name" "will run"
+    fi
+}
+
+# Prints the plan lines of the secrets, the profiles, the packages and the hooks.
+plan_profiles() {
+    local name state agent
+    local -a known=()
+    check_secrets >/dev/null
+    if [ -n "$secrets_missing" ]; then
+        plan "secrets" "missing:$secrets_missing"
+        return
+    fi
+    if ! run_validate; then
+        plan "validate" "fails: $(error_code_of "$validate_output")"
+        return
+    fi
+    plan "secrets and validate" "passed"
+    mapfile -t profiles < <(json_query profiles <<<"$validate_output")
+    for name in "${profiles[@]}"; do
+        state=$(profile_state "$name")
+        case $state in
+            ours\ *)
+                plan "agent profile $name" "in place, skipped"
+                is_one_of "${state#ours }" "${known[@]}" || known+=("${state#ours }")
+                ;;
+            absent) plan "agent profile $name" "will run (asks agent, model, effort, limits)" ;;
+            *) plan "agent profile $name" "stops: not written by autoreview" ;;
+        esac
+    done
+    for agent in "${known[@]}"; do
+        state=$(package_state "$agent") || state="unreadable"
+        if [ "$state" = present ]; then
+            plan "runtime package $agent" "in place, skipped"
+        else
+            plan "runtime package $agent" "will run"
+        fi
+        state=$(hook_state "$agent") || state="unreadable"
+        if [ "$state" = current ]; then
+            plan "hooks $agent" "in place, skipped"
+        else
+            plan "hooks $agent" "will run ($state)"
+        fi
+    done
+}
+
+run_steps() {
+    changed=0
+    created_config=0
+    autoreview_installed=0
+    declare -gA profile_agent=() profile_model=() profile_effort=() profile_binary=()
+    declare -gA profile_input=() profile_result=() profile_retention=()
+    step_autoreview
+    step_pohunek
+    step_config
+    step_secrets_file
+    if [ "$created_config" -eq 1 ]; then
+        echo
+        echo "setup: edit $dir/policy.yaml first: the example reviews other people's repositories;"
+        echo "set the repositories you want reviewed. Then write each secret as a NAME=value line"
+        echo "into $env_file with an editor, and run scripts/setup again."
+        return
+    fi
+    step_validate
+    collect_profiles
+    step_packages
+    step_hooks
+    step_profiles
+    step_service
+    step_linger
+    if [ "$changed" -eq 1 ]; then
+        echo "setup: done"
+    else
+        echo "setup: nothing to change"
+    fi
+}
+
+main() {
+    if [ "$#" -eq 1 ] && [ "$1" = --self-test ]; then
+        self_test
+        return
+    fi
+    parse_arguments "$@"
+    detect_machine
+    if [ "$dry_run" -eq 0 ]; then
+        [ -t 0 ] \
+            || fail 4 "stopped before the first step: stdin is not a terminal;" \
+                "run setup in a terminal, or with --dry-run"
+        ask dir "Absolute directory of the configuration"
+    fi
+    if [ -n "$dir" ]; then
+        unit_path_safe "$dir" \
+            || fail 1 "--dir must be an absolute path of letters, digits, '.', '_', '-' and '/'"
+    fi
+    print_plan
+    if [ "$dry_run" -eq 1 ]; then
+        echo "setup: dry run, nothing was changed"
+        return
+    fi
+    run_steps
+}
+
+main "$@"

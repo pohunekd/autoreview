@@ -9,8 +9,8 @@ intents: [debug, help, update]
 
 # State and recovery
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 autoreview keeps all of its state in one SQLite file, `store.path` in
 [config.yaml](../../configuration.md#store). A restart does not lose a review in

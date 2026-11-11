@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Reviewers and adapters
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 A **reviewer** is one coding agent run in its own pohunek session. The agent
 reads the pull request in a worktree, writes findings, and returns them in a
@@ -407,7 +407,7 @@ remain:
 
 ## Adding another agent later
 
-Not in v0.1. The first release ships exactly two protocols, and the policy
+Not in v0.1. autoreview 0.2.0 ships exactly two protocols, and the policy
 validator accepts only those two names. A new agent would need a new protocol,
 and the design below is the outline that such a protocol would have to meet.
 

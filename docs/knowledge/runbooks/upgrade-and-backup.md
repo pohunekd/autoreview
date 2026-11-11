@@ -2,16 +2,16 @@
 type: Runbook
 id: runbook/upgrade-and-backup
 title: Upgrade and backup
-description: Back up the SQLite store, upgrade the binary or the container image (after 0.1.0, planned in #40), validate before the restart, and roll back, with the pohunek version compatibility rules.
+description: Back up the SQLite store, upgrade the binary or the container image (planned in #40), validate before the restart, and roll back, with the pohunek version compatibility rules.
 source_kind: manual
 intents: [update, help]
 ---
 
 # Upgrade and backup
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0. The container image this page
-> mentions comes after 0.1.0 and is planned in #40.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0. The container image this page
+> mentions is not in 0.2.0 and is planned in #40.
 
 Back up first, validate before every restart, and keep the previous binary or
 image until the new version has published a review.
@@ -70,7 +70,7 @@ Reviews running at shutdown resume on the new process. See
 
 ## Upgrade the container
 
-The container image comes after 0.1.0 and is planned in #40; this section
+The container image is not in 0.2.0 and is planned in #40; this section
 describes its design.
 
 Change the image tag in the compose file, pull, and validate with the same

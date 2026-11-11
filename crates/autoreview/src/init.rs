@@ -34,6 +34,39 @@ const LOGIN_LINE: &str = "      login: review-bot\n";
 /// The `pohunek.hosts` line of the template.
 const HOSTS_LINE: &str = "  hosts: [review-host]\n";
 
+/// The `store.path` line of the template and the text before its value.
+const STORE_PATH_LINE: (&str, &str) = ("  path: /var/lib/autoreview/autoreview.db\n", "  path: ");
+
+/// The `github.gh_bin` line of the template and the text before its value.
+const GH_BIN_LINE: (&str, &str) = ("  gh_bin: /usr/bin/gh\n", "  gh_bin: ");
+
+/// The `pohunek.bin` line of the template and the text before its value.
+const POHUNEK_BIN_LINE: (&str, &str) = ("  bin: /usr/local/bin/pohunek\n", "  bin: ");
+
+/// The `pohunek.state_home` line of the template and the text before its value.
+const STATE_HOME_LINE: (&str, &str) = (
+    "  state_home: /var/lib/autoreview/.local/state\n",
+    "  state_home: ",
+);
+
+/// The `pohunek.runtime_dir` line of the template and the text before its value.
+const RUNTIME_DIR_LINE: (&str, &str) = ("  runtime_dir: /run/autoreview\n", "  runtime_dir: ");
+
+/// The `homeserver_url` line of the Matrix backend and the text before its value.
+const HOMESERVER_LINE: (&str, &str) = (
+    "      homeserver_url: https://matrix.example.org\n",
+    "      homeserver_url: ",
+);
+
+/// The `room` line of the Matrix backend and the text before its value.
+const ROOM_LINE: (&str, &str) = ("      room: \"!roomid:example.org\"\n", "      room: ");
+
+/// The `mention_user` line of the Matrix backend and the text before its value.
+const MENTION_LINE: (&str, &str) = (
+    "      mention_user: \"@you:example.org\"\n",
+    "      mention_user: ",
+);
+
 /// Name of the written configuration file.
 const CONFIG_NAME: &str = "config.yaml";
 
@@ -117,7 +150,7 @@ impl Example {
     }
 }
 
-/// The arguments of `init`; every one is required.
+/// The arguments of `init`; the four answers are required, the layout flags optional.
 #[derive(Debug, Args)]
 pub(crate) struct InitArguments {
     /// Absolute directory that receives config.yaml, policy.yaml and prompts/.
@@ -132,6 +165,38 @@ pub(crate) struct InitArguments {
     /// The example whose policy and prompts are written.
     #[arg(long, value_enum, value_name = "NAME")]
     pub(crate) example: Example,
+    /// The paths and Matrix values written instead of the reference values.
+    #[command(flatten)]
+    pub(crate) layout: Layout,
+}
+
+/// The optional flags of `init`; an absent flag keeps the value of the reference file.
+#[derive(Debug, Default, Args)]
+pub(crate) struct Layout {
+    /// Clean absolute path of the SQLite store, written as `store.path`.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) store_path: Option<String>,
+    /// Clean absolute path of the GitHub CLI, written as `github.gh_bin`.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) gh_bin: Option<String>,
+    /// Clean absolute path of the pohunek CLI, written as `pohunek.bin`.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) pohunek_bin: Option<String>,
+    /// Clean absolute `XDG_STATE_HOME` of the pohunek CLI, written as `pohunek.state_home`.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) pohunek_state_home: Option<String>,
+    /// Clean absolute `XDG_RUNTIME_DIR` of the pohunek CLI, written as `pohunek.runtime_dir`.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) pohunek_runtime_dir: Option<String>,
+    /// Homeserver URL of the `matrix` backend.
+    #[arg(long, value_name = "URL")]
+    pub(crate) matrix_homeserver_url: Option<String>,
+    /// Room of the `matrix` backend, for example `!abc:example.org`.
+    #[arg(long, value_name = "ROOM")]
+    pub(crate) matrix_room: Option<String>,
+    /// User that the `matrix` backend mentions, for example `@you:example.org`.
+    #[arg(long, value_name = "USER")]
+    pub(crate) matrix_mention_user: Option<String>,
 }
 
 /// What `init` prints after it wrote every file.
@@ -197,8 +262,8 @@ fn directory(dir: &Path) -> Result<&str, Error> {
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming `--login` or `--pohunek-host`, and the errors of
-/// [`render_config`].
+/// Returns `configuration_invalid` naming `--login`, `--pohunek-host` or a layout flag, and the
+/// errors of [`render_config`].
 pub(crate) fn render(arguments: &InitArguments, directory: &str) -> Result<Vec<SetupFile>, Error> {
     if !github_login_valid(&arguments.login) {
         return Err(invalid_flag("--login", "is not a lowercase GitHub login"));
@@ -210,6 +275,7 @@ pub(crate) fn render(arguments: &InitArguments, directory: &str) -> Result<Vec<S
         ));
     }
     let config = render_config(directory, &arguments.login, &arguments.pohunek_host)?;
+    let config = apply_layout(config, &arguments.layout)?;
     let mut files = vec![
         SetupFile {
             relative: CONFIG_NAME,
@@ -247,6 +313,64 @@ pub(crate) fn render_config(directory: &str, login: &str, host: &str) -> Result<
     text = replace_once(&text, LOGIN_LINE, &login_line)?;
     let hosts_line = format!("  hosts: [{}]\n", quoted(host)?);
     replace_once(&text, HOSTS_LINE, &hosts_line)
+}
+
+/// Replaces the template line of every layout flag that is given.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` naming a path flag that is not a clean absolute path, or a
+/// Matrix flag that is empty or holds a control character, and `workflow_failed` when the
+/// template lacks a line that a flag replaces.
+pub(crate) fn apply_layout(mut text: String, layout: &Layout) -> Result<String, Error> {
+    let paths = [
+        ("--store-path", &layout.store_path, STORE_PATH_LINE),
+        ("--gh-bin", &layout.gh_bin, GH_BIN_LINE),
+        ("--pohunek-bin", &layout.pohunek_bin, POHUNEK_BIN_LINE),
+        (
+            "--pohunek-state-home",
+            &layout.pohunek_state_home,
+            STATE_HOME_LINE,
+        ),
+        (
+            "--pohunek-runtime-dir",
+            &layout.pohunek_runtime_dir,
+            RUNTIME_DIR_LINE,
+        ),
+    ];
+    for (flag, value, (line, key)) in paths {
+        if let Some(value) = value {
+            if !clean_absolute(value) {
+                return Err(invalid_flag(flag, "must be a clean absolute path"));
+            }
+            text = replace_once(&text, line, &format!("{key}{}\n", quoted(value)?))?;
+        }
+    }
+    let matrix = [
+        (
+            "--matrix-homeserver-url",
+            &layout.matrix_homeserver_url,
+            HOMESERVER_LINE,
+        ),
+        ("--matrix-room", &layout.matrix_room, ROOM_LINE),
+        (
+            "--matrix-mention-user",
+            &layout.matrix_mention_user,
+            MENTION_LINE,
+        ),
+    ];
+    for (flag, value, (line, key)) in matrix {
+        if let Some(value) = value {
+            if value.is_empty() || value.chars().any(char::is_control) {
+                return Err(invalid_flag(
+                    flag,
+                    "must be non-empty text without control characters",
+                ));
+            }
+            text = replace_once(&text, line, &format!("{key}{}\n", quoted(value)?))?;
+        }
+    }
+    Ok(text)
 }
 
 /// Returns `value` as a JSON string.

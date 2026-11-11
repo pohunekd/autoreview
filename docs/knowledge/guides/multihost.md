@@ -2,15 +2,15 @@
 type: Guide
 id: guide/multihost
 title: Several review hosts
-description: Run reviewers on more than one pohunek host - list the hosts in priority order, register each repository on the hosts that may review it or pin it with a route override, skip a failing host, install the agent profiles on every host, reach remote hosts over an overlay network and size the concurrency.
+description: Run reviewers on more than one pohunek host - the deployment layout of the autoreview server and the review hosts, list the hosts in priority order, register each repository on the hosts that may review it or pin it with a route override, skip a failing host, install the agent profiles on every host, reach remote hosts over an overlay network and size the concurrency.
 source_kind: manual
 intents: [setup, project, debug]
 ---
 
 # Several review hosts
 
-> **Status: 0.1.0.** This page describes autoreview 0.1.0, the first release. Parts
-> marked planned or "not in v0.1" are not in 0.1.0.
+> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
+> marked planned or "not in v0.1" are not in 0.2.0.
 
 One autoreview service can run its reviewers on several pohunek hosts. Each
 review starts a pohunek session on one host, so the host that runs a review
@@ -20,6 +20,42 @@ repository to a host by hand.
 
 A single host needs none of this: list it in `pohunek.hosts`, register each
 repository there, and skip the rest of the guide.
+[Getting started](getting-started.md) sets up such a machine with
+`scripts/setup`.
+
+## Deployment layout
+
+A deployment over several machines has two roles. One machine can hold both.
+
+| Machine | Runs | Holds |
+|---|---|---|
+| The autoreview server | `autoreview serve` and the hourly `review-queue`, `gh`, the pohunek CLI | `config.yaml`, the policy, the prompts, the store, the secrets file |
+| Each review host | the pohunek daemon with its login service, Claude Code or Codex | the official runtime packages and hooks, the agent profiles, the registered repositories |
+
+They are joined by pohunek remote hosts: the server's pohunek CLI reaches each
+review host by its pohunek name over an overlay network (see
+[below](#reach-a-remote-host-over-an-overlay-network)), and `pohunek.hosts`
+lists those names. autoreview itself opens no connection to a review host.
+
+`scripts/setup` sets up one machine with both roles. On several machines its
+steps split like this:
+
+| Step of `scripts/setup` | Autoreview server | Review host |
+|---|---|---|
+| autoreview binary | yes | yes, for `profiles install` |
+| pohunek with its login service | the CLI and the remote host setup | yes |
+| Configuration (`autoreview init`), secrets file, `validate` | yes | no |
+| Runtime packages and hooks | no | yes |
+| Agent profiles (`autoreview profiles install`) | no | yes, as the user of its daemon |
+| User service and lingering | yes | lingering, for the pohunek daemon |
+
+On a review host the script cannot run alone, because it writes and validates
+a configuration first. Install the release archives there as
+[install](../../install.md#a-release-binary) and the pohunek install guide
+describe, then run the commands of the steps the table gives that host; the
+[getting started](getting-started.md#the-steps) page lists them. Which host
+reviews a repository is the subject of the sections below; choosing a host by
+its state is planned in #180.
 
 ## Hosts in the configuration
 
