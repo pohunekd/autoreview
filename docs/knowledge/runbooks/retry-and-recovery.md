@@ -54,6 +54,9 @@ The review does not restart by itself after it stopped.
    A retry is refused with `review_already_running` when the review still runs,
    and with `review_retry_not_dispatched` when a retry is not possible right now.
    `head_changed` means the head moved; see the step above.
+   `review_already_completed` means a review of this head against the current
+   base branch completed. A review against another base branch does not count, so
+   the stopped review of a retargeted pull request can be retried.
 
 If the same failure stops the review again, fix its cause first. The usual
 causes are in [troubleshooting](troubleshooting.md): route errors, session start

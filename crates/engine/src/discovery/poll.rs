@@ -159,7 +159,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         self.remind_handoffs(cancel, &mut state, &present, now, &mut notices)
             .await?;
         if let Some(force) = force {
-            self.apply_force(&mut state, &present, &history, force, now)?;
+            self.apply_force(cancel, &mut state, &present, &history, force, now)?;
         }
         let mut dispatches = Vec::new();
         // A host that fails once is not asked again in this pass, so it costs one timeout.
@@ -525,12 +525,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Turns the failed latest attempt of a pull request head into a due retry.
     ///
+    /// Only a run that reviewed the current base branch completes the head. A run whose stored
+    /// input names another base branch does not; one without a stored base branch does.
+    ///
     /// # Errors
     ///
     /// Returns `review_request_not_active`, `head_changed`, `review_already_running` or
-    /// `review_already_completed`, all permanent.
+    /// `review_already_completed`, all permanent, and the error of the store.
     fn apply_force(
         &self,
+        cancel: &CancellationToken,
         state: &mut DiscoveryState,
         present: &BTreeMap<String, Candidate>,
         own: &[Run],
@@ -545,6 +549,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         if !target.head_sha.starts_with(&force.head_sha) {
             return Err(Error::workflow(HEAD_CHANGED, true, None));
         }
+        let run_bases = self.run_bases(cancel, &target, own)?;
+        let base_branch = &candidate.pull_request.base_branch;
         // The run history decides, not the schedule record: the record may still say running
         // from a poll that saw the run before it ended.
         let mut forced = Record {
@@ -574,7 +580,15 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 continue;
             }
             if run.result == RESULT_SUCCESS || run.released {
-                return Err(Error::workflow(REVIEW_ALREADY_COMPLETED, true, None));
+                let other_base = run_bases
+                    .get(&run.workflow_id)
+                    .is_some_and(|base| !base.is_empty() && base != base_branch);
+                if !other_base {
+                    return Err(Error::workflow(REVIEW_ALREADY_COMPLETED, true, None));
+                }
+                // A review of another base branch is not retried; it only raises the attempt.
+                forced.attempt = forced.attempt.max(run.attempt.wrapping_add(1));
+                continue;
             }
             if run.attempt > latest_attempt {
                 latest_attempt = run.attempt;

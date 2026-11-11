@@ -326,7 +326,8 @@ pub struct Retarget<'a> {
 /// count as no review; [`plan`] does not see them, and none of them stays a blocker. A record
 /// that follows a running run of the head keeps that run's attempt, which [`plan`] matches
 /// against the run history. Any other record gets an attempt above every run of the head,
-/// skipping the attempt whose `workflow_id` is the published workflow.
+/// skipping the attempt whose `workflow_id` is the published workflow. A record of a notified
+/// failure that waits again keeps that run's `workflow_id` and its `retries`.
 ///
 /// # Errors
 ///
@@ -374,15 +375,31 @@ pub fn plan_retarget(
     record
         .blocking_workflows
         .retain(|id| !ended.contains(id.as_str()));
-    // A record that follows a run of the head starts afresh. The record of the retarget names
-    // no workflow until it dispatches; it is kept, so its debounce runs once.
-    if record.identity == identity && !record.workflow_id.is_empty() {
+    // A record that follows a run of the head starts afresh. The waiting record of the retarget
+    // is kept, so its debounce runs once, and so is a record that waits for a review host.
+    let mut handled = None;
+    if record.identity == identity
+        && !record.workflow_id.is_empty()
+        && record.phase != phase::WAITING
+        && !record.awaits_host
+    {
+        // A failure already notified keeps its run and retry budget, so a retarget back to its
+        // base branch neither notifies it again nor restarts the budget.
+        if record.phase == phase::RETRY_WAIT || record.phase == phase::FAILED {
+            handled = Some((record.workflow_id.clone(), record.retries));
+        }
         record = Record {
             blocking_workflows: record.blocking_workflows,
             ..Record::default()
         };
     }
     let mut decision = plan(record, target, &visible, now, policy)?;
+    if let Some((workflow_id, retries)) = handled
+        && decision.record.phase == phase::WAITING
+    {
+        decision.record.workflow_id = workflow_id;
+        decision.record.retries = retries;
+    }
     // A higher attempt on a running record would hide the end of its run from `plan`.
     let follows_run = !decision.dispatch
         && decision.record.phase == phase::RUNNING
@@ -1065,11 +1082,11 @@ mod tests {
         let label_removed = "review_label_removed: the review label was removed";
         let session_lost = "pohunek_session_lost: the reviewer session was lost";
         // Each pass runs one debounce after the one before and plans from its record; it gives
-        // (planned by `plan_retarget`, phase, attempt, blockers, dispatch, notify).
+        // (planned by `plan_retarget`, phase, attempt, retries, blockers, dispatch, notify).
         type Pass = (
             Vec<Run>,
             &'static str,
-            (bool, &'static str, i64, Vec<&'static str>, bool, bool),
+            (bool, &'static str, i64, i64, Vec<&'static str>, bool, bool),
         );
         let rows: Vec<(&str, Record, &str, Vec<Pass>)> = vec![
             (
@@ -1080,12 +1097,12 @@ mod tests {
                     (
                         vec![ended(0, "")],
                         "release",
-                        (true, phase::WAITING, 1, vec![], false, false),
+                        (true, phase::WAITING, 1, 0, vec![], false, false),
                     ),
                     (
                         vec![ended(0, "")],
                         "release",
-                        (true, phase::RUNNING, 1, vec![], true, false),
+                        (true, phase::RUNNING, 1, 0, vec![], true, false),
                     ),
                 ],
             ),
@@ -1096,7 +1113,7 @@ mod tests {
                 vec![(
                     vec![ended(0, ""), running(1)],
                     "release",
-                    (false, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                    (false, phase::RUNNING, 1, 0, vec!["wf-1"], false, false),
                 )],
             ),
             (
@@ -1107,12 +1124,12 @@ mod tests {
                     (
                         vec![ended(0, ""), ended(1, label_removed)],
                         "release",
-                        (true, phase::WAITING, 2, vec![], false, false),
+                        (true, phase::WAITING, 2, 0, vec![], false, false),
                     ),
                     (
                         vec![ended(0, ""), ended(1, label_removed)],
                         "release",
-                        (true, phase::RUNNING, 2, vec![], true, false),
+                        (true, phase::RUNNING, 2, 0, vec![], true, false),
                     ),
                 ],
             ),
@@ -1124,17 +1141,17 @@ mod tests {
                     (
                         vec![ended(0, ""), running(1)],
                         "next",
-                        (true, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                        (true, phase::RUNNING, 1, 0, vec!["wf-1"], false, false),
                     ),
                     (
                         vec![ended(0, ""), ended(1, superseded)],
                         "next",
-                        (true, phase::WAITING, 2, vec![], false, false),
+                        (true, phase::WAITING, 2, 0, vec![], false, false),
                     ),
                     (
                         vec![ended(0, ""), ended(1, superseded)],
                         "next",
-                        (true, phase::RUNNING, 2, vec![], true, false),
+                        (true, phase::RUNNING, 2, 0, vec![], true, false),
                     ),
                 ],
             ),
@@ -1146,19 +1163,78 @@ mod tests {
                     (
                         vec![ended(0, ""), running(1)],
                         "next",
-                        (true, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                        (true, phase::RUNNING, 1, 0, vec!["wf-1"], false, false),
                     ),
                     (
                         vec![ended(0, ""), running(1)],
                         "release",
-                        (false, phase::RUNNING, 1, vec!["wf-1"], false, false),
+                        (false, phase::RUNNING, 1, 0, vec!["wf-1"], false, false),
                     ),
                     (
                         vec![ended(0, ""), ended(1, session_lost)],
                         "release",
-                        (false, phase::RETRY_WAIT, 2, vec![], false, true),
+                        (false, phase::RETRY_WAIT, 2, 1, vec![], false, true),
                     ),
                 ],
+            ),
+            (
+                "failed retarget review, retargeted away and back within the debounce",
+                record(phase::RUNNING, 1, &["wf-1"]),
+                "wf-0",
+                vec![
+                    (
+                        vec![ended(0, ""), ended(1, session_lost)],
+                        "release",
+                        (false, phase::RETRY_WAIT, 2, 1, vec![], false, true),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, session_lost)],
+                        "next",
+                        (true, phase::WAITING, 2, 1, vec![], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, session_lost)],
+                        "release",
+                        (false, phase::RUNNING, 2, 1, vec![], true, false),
+                    ),
+                ],
+            ),
+            (
+                "failed retarget review, retargeted again",
+                record(phase::RUNNING, 1, &["wf-1"]),
+                "wf-0",
+                vec![
+                    (
+                        vec![ended(0, ""), ended(1, session_lost)],
+                        "release",
+                        (false, phase::RETRY_WAIT, 2, 1, vec![], false, true),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, session_lost)],
+                        "next",
+                        (true, phase::WAITING, 2, 1, vec![], false, false),
+                    ),
+                    (
+                        vec![ended(0, ""), ended(1, session_lost)],
+                        "next",
+                        (true, phase::RUNNING, 2, 1, vec![], true, false),
+                    ),
+                ],
+            ),
+            (
+                "host wait of the review after a failed retarget review",
+                Record {
+                    workflow_id: workflow(1),
+                    retries: 1,
+                    awaits_host: true,
+                    ..record(phase::RETRY_WAIT, 2, &[])
+                },
+                "wf-0",
+                vec![(
+                    vec![ended(0, ""), ended(1, session_lost)],
+                    "next",
+                    (true, phase::RUNNING, 2, 1, vec![], true, false),
+                )],
             ),
             (
                 "back to a reviewed base branch",
@@ -1167,7 +1243,7 @@ mod tests {
                 vec![(
                     vec![ended(0, ""), ended(1, "")],
                     "main",
-                    (false, phase::COMPLETED, 1, vec![], false, false),
+                    (false, phase::COMPLETED, 1, 0, vec![], false, false),
                 )],
             ),
             (
@@ -1177,7 +1253,7 @@ mod tests {
                 vec![(
                     vec![ended(0, superseded), ended(1, "")],
                     "main",
-                    (true, phase::WAITING, 2, vec![], false, false),
+                    (true, phase::WAITING, 2, 0, vec![], false, false),
                 )],
             ),
             (
@@ -1187,7 +1263,7 @@ mod tests {
                 vec![(
                     vec![],
                     "release",
-                    (true, phase::WAITING, 1, vec![], false, false),
+                    (true, phase::WAITING, 1, 0, vec![], false, false),
                 )],
             ),
         ];
@@ -1213,6 +1289,7 @@ mod tests {
                         retargeted,
                         record.phase.as_str(),
                         record.attempt,
+                        record.retries,
                         record.blocking_workflows.clone(),
                         decision.dispatch,
                         decision.notify,
@@ -1221,9 +1298,10 @@ mod tests {
                         want.0,
                         want.1,
                         want.2,
-                        want.3.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>(),
-                        want.4,
+                        want.3,
+                        want.4.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>(),
                         want.5,
+                        want.6,
                     ),
                     "{name}, pass {index}"
                 );
