@@ -358,7 +358,9 @@ again with `GIT_CONFIG_GLOBAL` set to the file.
 
 ## Reviewer output
 
-A reviewer run ends in one of these codes:
+A reviewer run ends in one of these codes. Where a code below ends the review,
+a run of the verifier ends only the verification (see the paragraph after the
+list):
 
 - `review_output_timeout`: the session ran longer than `session.timeout_seconds`
   (default in the recommended config: 7200). Check the diff size and the model
@@ -376,12 +378,12 @@ A reviewer run ends in one of these codes:
   refused the run before. It carries neither the reason nor any text of the
   refused output, and no other code in this list adds a sentence. For a broken
   limit, tighten the prompt so the reviewer stays within it, or raise the bound
-  in `limits` with care.
-  The same code also comes from the review host: its answer to a read of the
-  session output could not be used (it names another session, worker or
-  runtime generation, its history does not start at offset 0, or its offsets,
-  data and `has_more` flag disagree). The review then fails at once, without a
-  fresh session, and the log has only "review failed" with the code.
+  in `limits` with care. The same code also comes from the review host: its
+  answer to a read of the session output could not be used (for example its
+  `ok` value is `null`, it names another session, worker or runtime generation,
+  its history does not start at offset 0, or its offsets, data and `has_more`
+  flag disagree). The review then fails at once, without a fresh session, and
+  the log has only "review failed" with the code.
 - `review_output_too_large`: the session output grew past
   `session.output_max_bytes` (at most 16 MiB) before it was complete. The
   review fails at once, without a fresh session. Codex keeps its transcript in
@@ -419,9 +421,14 @@ A reviewer run ends in one of these codes:
 A run that ends in `review_output_invalid` after a complete output,
 `review_result_invalid` or `review_wrapper_invalid`, or with an empty Claude
 output (`review_output_incomplete`), gets a fresh session, up to
-`session.reviewer_run_max_attempts`. Every other code in this list ends the
-review at once. If the same reviewer keeps failing, compare its agent profile
-and its prompt with the protocol named in `policy.yaml`.
+`session.reviewer_run_max_attempts`. Every other code in this list, and a
+retried code once the run limit is used up, ends the review at once. For the
+verifier, the same codes end only the verification: the claims are published
+unverified, the log has "verification did not finish, publishing the claims
+unverified" with the code instead of "review failed", and the review goes on
+(see [verification](../concepts/verification.md#when-the-verifier-fails)). If
+the same reviewer keeps failing, compare its agent profile and its prompt with
+the protocol named in `policy.yaml`.
 
 ## github_search_limit_exceeded
 
