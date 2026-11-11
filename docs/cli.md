@@ -385,6 +385,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `review_not_found` | The MCP tool `review_detail` got a workflow ID that the store does not know |
 | `mcp_scope_denied`, `mcp_tool_unknown` | An MCP client without the `write` scope called a write tool, or called a tool the server does not have |
 | `mcp_client_missing`, `mcp_result_invalid` | An MCP tool call reached the tools without an authenticated client, or its result could not be encoded; both are server defects to report |
+| `workflow_failed` | A failure without a more specific code: a review whose stored state misses a part it needs, an error that carries no code, or a command whose standard output is closed; a review that fails with it is not retried |
 
 The [troubleshooting runbook](knowledge/runbooks/troubleshooting.md) maps codes
 to fixes.

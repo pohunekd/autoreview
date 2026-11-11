@@ -25,10 +25,11 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   document in the `result` field of its answer; see the
   [MCP server](knowledge/guides/mcp-server.md#tools).
 - The document is read from the store only. `stats` asks neither GitHub nor pohunek, and
-  changes nothing. Without `--since` it reads the reviews that are not completed, through
-  the status index, and the discovery state. With `--since` it reads the whole `reviews`
-  table, so its cost grows with `store.review_retention_seconds`, which decides how many
-  reviews the store keeps.
+  changes nothing. Both forms read the discovery state. Without `--since` they read the
+  reviews that are not completed, through the status index. With `--since` they read the
+  whole `reviews` table, so the cost grows with `store.review_retention_seconds`, which
+  decides how many reviews the store keeps. The reviews and the discovery state come from
+  one read transaction, so all counts describe the same moment.
 
 ## The range
 
@@ -84,7 +85,7 @@ writes all of them.
 - `schema_version`: `1`. A change to a field's name or meaning gets a new version.
 - `generated_at`: when the document was computed, RFC 3339 in UTC.
 - `current`: the queued and running reviews, the approval waits without a decision, and
-  the pull requests stopped after their retries.
+  the stopped pull requests (attempts used up, or a failure that is not retried).
 - `history`: the counts of the range, or `null` without `--since`.
 
 ```sh
@@ -101,9 +102,12 @@ autoreview stats --json | jq '{schema_version, generated_at}'
 - `stopped`: pull requests whose schedule record is `failed`: their attempts are used up,
   or the failure is not retryable (see the
   [scheduler states](knowledge/concepts/state-and-recovery.md#scheduler-states)). Such a
-  pull request has no review in the three counts above. It leaves `stopped` when
-  `autoreview retry` or a new head starts a review, and when discovery drops its record
-  after the pull request left every trigger. `autoreview review` shows the record.
+  pull request has no review in the three counts above. It counts here from the discovery
+  pass after its failed review, which decides that the failure is not retried. It leaves `stopped` when
+  discovery sees a new head or a new review request (the record becomes `waiting` before a
+  review starts), when `autoreview retry` or the MCP tool `retry` starts a review, and when
+  discovery drops its record after the pull request left every trigger. `autoreview review`
+  shows the record.
 - `by_repository` and `by_host`: the queued, running and awaiting counts per repository
   and per review host, sorted by `key`. The host is the one chosen when the review was
   dispatched.
@@ -136,7 +140,8 @@ autoreview stats --json | jq -r '.current.stopped_by_repository[] | "\(.key) \(.
   (`key`), sorted by code. The entries add up to `totals.failed`; a superseding code such as
   `head_changed` counts in `superseded` and is not listed. The codes are those of the
   [CLI error codes](cli.md#error-codes) and the
-  [troubleshooting](knowledge/runbooks/troubleshooting.md) table.
+  [troubleshooting](knowledge/runbooks/troubleshooting.md) table, including
+  `workflow_failed` for a failure without a more specific code.
 
 ```sh
 autoreview stats --since 2026-11-01 --json | jq '.history.totals'
@@ -204,7 +209,7 @@ The store does not keep these, so the document leaves them out:
 Current: 0 queued, 1 running, 1 awaiting approval
   acme/widget: 0 queued, 1 running, 1 awaiting approval
   host review-host: 0 queued, 1 running, 1 awaiting approval
-Pull requests stopped after their retries: 1
+Pull requests stopped: 1
 History 2026-11-09 to 2026-11-10 (UTC days):
   started 6, completed 4, published 3, superseded 0, approval expired 0, failed 1
   published: approved without a human 1, approved after a wait 1, changes requested 1, commented 0

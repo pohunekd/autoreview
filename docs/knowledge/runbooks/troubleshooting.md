@@ -50,6 +50,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_already_running`, `review_retry_not_dispatched` | A retry is not needed or not possible now | [Retry and recovery](retry-and-recovery.md) |
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it | Fix the key, then run `validate` |
 | `pohunek_session_cleanup_failed` | A reviewer session could not be removed | [Stale sessions](stale-sessions-and-branches.md) |
+| `workflow_failed` | A failure without a more specific code, for example a stored review that misses a part it needs; the scheduler does not retry it | Read the `review failed` log line of the review and the lines before it, run `autoreview retry`, and report it as a defect when it repeats |
 
 Policy validation errors (for example `unreachable, owner/* matches first`) are
 not error codes; they are listed in the [policy reference](../../policy.md#validation-errors).

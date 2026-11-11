@@ -5,11 +5,12 @@
 use autoreview_go_compat::go_time::format_rfc3339_nano;
 use autoreview_schedule::scheduler::Run;
 use rusqlite::types::ToSql;
-use rusqlite::{Connection, Row, Transaction, params};
+use rusqlite::{Connection, Row, Transaction, TransactionBehavior, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use time::OffsetDateTime;
 
+use super::discovery::DiscoveryState;
 use super::{Store, encode_go_json, store_error};
 use crate::Error;
 use crate::model::{ReviewInput, ReviewOutcome};
@@ -249,11 +250,10 @@ impl Store {
     ///
     /// Returns `store_state_invalid` when a stored row does not decode, and `store_unavailable`
     /// when SQLite fails.
-    pub fn stats_reviews(
-        &self,
+    fn stats_reviews(
+        connection: &Connection,
         range: Option<(OffsetDateTime, OffsetDateTime)>,
     ) -> Result<Vec<StoredReview>, Error> {
-        let connection = self.lock_connection()?;
         let created = time_key("created_at");
         let Some((start, end)) = range else {
             let sql = format!(
@@ -261,7 +261,7 @@ impl Store {
                  ORDER BY {created}, workflow_id"
             );
             let active: [&dyn ToSql; 3] = [&REVIEW_QUEUED, &REVIEW_RUNNING, &REVIEW_AWAITING];
-            return collect_reviews(&connection, &sql, &active);
+            return collect_reviews(connection, &sql, &active);
         };
         let completed = time_key("completed_at");
         let (low, high) = (time_key("?2"), time_key("?3"));
@@ -272,7 +272,29 @@ impl Store {
              ORDER BY {created}, workflow_id"
         );
         let (start, end) = (format_rfc3339_nano(start), format_rfc3339_nano(end));
-        collect_reviews(&connection, &sql, &[&REVIEW_COMPLETED, &start, &end])
+        collect_reviews(connection, &sql, &[&REVIEW_COMPLETED, &start, &end])
+    }
+
+    /// Reads the reviews of `stats_reviews` and the discovery state as one snapshot.
+    ///
+    /// A deferred transaction takes no write lock; in WAL mode its first read fixes the
+    /// snapshot, so a write of another process between the two reads is not seen.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `stats_reviews` and `load_discovery`.
+    pub fn stats_snapshot(
+        &self,
+        range: Option<(OffsetDateTime, OffsetDateTime)>,
+    ) -> Result<(Vec<StoredReview>, DiscoveryState), Error> {
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(unavailable)?;
+        let reviews = Self::stats_reviews(&transaction, range)?;
+        let discovery = Self::read_discovery(&transaction)?;
+        transaction.commit().map_err(unavailable)?;
+        Ok((reviews, discovery))
     }
 
     /// Lists the reviews that can make progress, oldest first: queued and running reviews, and

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use autoreview_schedule::scheduler::Record;
-use rusqlite::{Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -56,6 +56,15 @@ impl Store {
     /// read, and `store_unavailable` when SQLite fails.
     pub fn load_discovery(&self) -> Result<DiscoveryState, Error> {
         let connection = self.lock_connection()?;
+        Self::read_discovery(&connection)
+    }
+
+    /// Reads the four discovery entries through `connection`, as `load_discovery` does.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `load_discovery`.
+    pub(super) fn read_discovery(connection: &Connection) -> Result<DiscoveryState, Error> {
         let mut statement = connection
             .prepare("SELECT name, value FROM discovery")
             .map_err(|err| store_error("store_unavailable", false, err))?;

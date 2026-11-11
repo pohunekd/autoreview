@@ -171,7 +171,8 @@ pub struct CurrentState {
     /// Counts over every queued, running and undecided awaiting review.
     #[serde(flatten)]
     pub total: StateCounts,
-    /// Pull requests whose schedule record stopped after its retries.
+    /// Pull requests whose schedule record is `failed`: attempts used up, or a failure that is
+    /// not retried.
     pub stopped: i64,
     /// Counts per repository, sorted by name.
     pub by_repository: Vec<Keyed<StateCounts>>,
@@ -184,7 +185,8 @@ pub struct CurrentState {
 /// The stopped pull requests of one repository.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct StoppedCount {
-    /// Pull requests whose schedule record stopped after its retries.
+    /// Pull requests whose schedule record is `failed`: attempts used up, or a failure that is
+    /// not retried.
     pub stopped: i64,
 }
 
@@ -433,9 +435,9 @@ impl HistoryTally {
 
 /// Builds the document from review rows and schedule records.
 ///
-/// The rows are those that `Store::stats_reviews` returns, the records those of the discovery
-/// state. The current state counts every queued and running row, every awaiting row without an
-/// approval decision, and every schedule record in phase `failed`. With `range`, an attempt
+/// The rows and the schedule records are those of one `Store::stats_snapshot`. The current
+/// state counts every queued and running row, every awaiting row without an approval
+/// decision, and every schedule record in phase `failed`. With `range`, an attempt
 /// counts as started on the UTC day of `created_at` and as completed on the UTC day of
 /// `completed_at`, each only inside the range.
 ///
@@ -605,11 +607,7 @@ impl fmt::Display for StatsDocument {
         for entry in &current.by_host {
             writeln!(f, "  host {}: {}", entry.key, state_line(&entry.counts))?;
         }
-        writeln!(
-            f,
-            "Pull requests stopped after their retries: {}",
-            current.stopped
-        )?;
+        writeln!(f, "Pull requests stopped: {}", current.stopped)?;
         let Some(history) = &self.history else {
             return writeln!(
                 f,
@@ -684,8 +682,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns the errors of `StatsRange::parse`, `Store::stats_reviews`,
-    /// `Store::load_discovery` and `compute`.
+    /// Returns the errors of `StatsRange::parse`, `Store::stats_snapshot` and `compute`.
     pub fn review_stats(
         &self,
         cancel: &CancellationToken,
@@ -696,12 +693,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let range = StatsRange::parse(since, until, now.date())?;
         live(cancel)?;
         let bounds = range.map(|range| (range.start, range.end));
-        let reviews = self.store.stats_reviews(bounds)?;
-        live(cancel)?;
-        let schedule = self.store.load_discovery()?.schedule;
+        let (reviews, discovery) = self.store.stats_snapshot(bounds)?;
         compute(
             &reviews,
-            &schedule,
+            &discovery.schedule,
             range.as_ref(),
             now,
             self.prune_cutoff(),
