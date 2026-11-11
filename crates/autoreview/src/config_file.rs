@@ -164,18 +164,22 @@ pub(crate) struct FileConfig {
     notify: Option<NotifyFile>,
     /// The `mcp` section; only `autoreview mcp` needs it.
     mcp: Option<McpFile>,
-    /// The `metrics` section; without it `serve` runs no metrics endpoint.
+    /// The `metrics` section; without it `serve` runs no metrics endpoint. A null section reads
+    /// as a section without keys, so its first key is reported missing.
+    #[serde(default, deserialize_with = "present_section")]
     metrics: Option<MetricsFile>,
 }
 
 /// The `metrics` section.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MetricsFile {
     /// Address the metrics endpoint listens on, as `IP:PORT`.
     listen: Option<Value>,
     /// `Host` header values the endpoint accepts.
     allowed_hosts: Option<Value>,
+    /// Longest time one connection may stay open, in seconds.
+    request_timeout_seconds: Option<Value>,
     /// Longest time a client may take to send the request headers, in seconds.
     header_timeout_seconds: Option<Value>,
     /// Most connections served at once.
@@ -549,24 +553,44 @@ pub(crate) fn mcp_section(file: &FileConfig) -> Result<Option<McpConfig>, Error>
     McpConfig::new(&listen, allowed_hosts, &entries, limits).map(Some)
 }
 
-/// Reads the `metrics` section; `None` when the configuration has none.
+/// Reads the `metrics` section; `None` when the configuration has no `metrics` key.
 ///
 /// # Errors
 ///
-/// Returns `configuration_missing` for an absent key of the section, and the errors of
-/// [`MetricsConfig::new`].
+/// Returns `configuration_missing` for an absent key of the section (`metrics.listen` for a
+/// null section), and the errors of [`MetricsConfig::new`].
 pub(crate) fn metrics_section(file: &FileConfig) -> Result<Option<MetricsConfig>, Error> {
     let Some(metrics) = &file.metrics else {
         return Ok(None);
     };
     let listen = text(&metrics.listen, "metrics.listen")?;
     let allowed_hosts = text_list(&metrics.allowed_hosts, "metrics.allowed_hosts")?;
+    let request_timeout = seconds(
+        &metrics.request_timeout_seconds,
+        "metrics.request_timeout_seconds",
+    )?;
     let header_timeout = seconds(
         &metrics.header_timeout_seconds,
         "metrics.header_timeout_seconds",
     )?;
     let max_connections = count(&metrics.max_connections, "metrics.max_connections")?;
-    MetricsConfig::new(&listen, allowed_hosts, header_timeout, max_connections).map(Some)
+    MetricsConfig::new(
+        &listen,
+        allowed_hosts,
+        request_timeout,
+        header_timeout,
+        max_connections,
+    )
+    .map(Some)
+}
+
+/// Reads a section that is present when its key is, also when its value is null.
+fn present_section<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Option::<T>::deserialize(deserializer).map(|section| Some(section.unwrap_or_default()))
 }
 
 /// Reads a positive integer that counts items or bytes.
@@ -2737,7 +2761,7 @@ pub(crate) mod tests {
     fn metrics_section_is_optional_and_every_key_is_required() {
         let section = concat!(
             "metrics:\n  listen: \"127.0.0.1:9464\"\n  allowed_hosts: [metrics.example.com]\n",
-            "  header_timeout_seconds: 10\n  max_connections: 4\n",
+            "  request_timeout_seconds: 10\n  header_timeout_seconds: 10\n  max_connections: 4\n",
         );
         let full = format!("{EXAMPLE}{section}");
         let loaded = metrics_section(&parse_file(&full).expect("valid YAML"))
@@ -2748,6 +2772,11 @@ pub(crate) mod tests {
                     without scheme, path or user";
         let cases = [
             (
+                section,
+                "metrics:\n",
+                "configuration_missing: metrics.listen",
+            ),
+            (
                 "  listen: \"127.0.0.1:9464\"\n",
                 "",
                 "configuration_missing: metrics.listen",
@@ -2756,6 +2785,11 @@ pub(crate) mod tests {
                 "  allowed_hosts: [metrics.example.com]\n",
                 "",
                 "configuration_missing: metrics.allowed_hosts",
+            ),
+            (
+                "  request_timeout_seconds: 10\n",
+                "",
+                "configuration_missing: metrics.request_timeout_seconds",
             ),
             (
                 "  header_timeout_seconds: 10\n",
@@ -2777,6 +2811,14 @@ pub(crate) mod tests {
                 "\"127.0.0.1:9464\"",
                 "\"localhost:9464\"",
                 "configuration_invalid: metrics.listen: must be an IP address and port",
+            ),
+            (
+                "request_timeout_seconds: 10",
+                "request_timeout_seconds: 86401",
+                concat!(
+                    "configuration_invalid: metrics.request_timeout_seconds: ",
+                    "must be from 1 to 86400 seconds"
+                ),
             ),
             (
                 "header_timeout_seconds: 10",

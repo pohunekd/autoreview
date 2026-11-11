@@ -133,5 +133,6 @@ notify:
 # metrics:
 #   listen: "127.0.0.1:9464"
 #   allowed_hosts: ["127.0.0.1"]
+#   request_timeout_seconds: 10
 #   header_timeout_seconds: 10
 #   max_connections: 4

@@ -262,6 +262,7 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
         "127.0.0.1:0",
         vec![HOST.to_owned()],
         Duration::from_secs(10),
+        Duration::from_secs(10),
         4,
     )
     .expect("the metrics settings are valid");

@@ -39,9 +39,11 @@ pub(crate) async fn bind(config: &MetricsConfig) -> Result<TcpListener, Error> {
 
 /// Serves `GET /metrics` on `listener` until `cancel` is cancelled.
 ///
-/// At most `metrics.max_connections` connections run at once, each in its own task. On cancel
-/// the listener stops and each connection finishes the request it serves; a scrape answers
-/// from memory and one indexed store read, so the wait is short.
+/// At most `metrics.max_connections` connections run at once, each in its own task. A
+/// connection serves one request and is closed after `metrics.request_timeout_seconds`, so a
+/// client that never reads its answer cannot hold a slot. On cancel the listener is closed,
+/// each connection finishes the request it serves, and the wait for them is bounded by the
+/// same timeout.
 pub(crate) async fn run(
     listener: TcpListener,
     engine: Arc<Engine<External, SystemClock>>,
@@ -76,30 +78,48 @@ pub(crate) async fn run(
         let server = Arc::clone(&server);
         let cancel = cancel.clone();
         let header_timeout = config.header_timeout;
+        let request_timeout = config.request_timeout;
         connections.spawn(async move {
             let _permit = permit;
             let service = service_fn(move |request| {
                 let server = Arc::clone(&server);
                 async move { Ok::<_, Infallible>(server.handle(&request)) }
             });
+            // Keep-alive off: hyper closes the connection after its first answer, so pipelined
+            // requests get no answer and cannot fill the socket while the client does not read.
             let mut builder = http1::Builder::new();
             builder
                 .timer(TokioTimer::new())
-                .header_read_timeout(header_timeout);
+                .header_read_timeout(header_timeout)
+                .keep_alive(false);
             let connection = builder.serve_connection(TokioIo::new(stream), service);
             tokio::pin!(connection);
-            let result = tokio::select! {
-                result = connection.as_mut() => result,
-                () = cancel.cancelled() => {
-                    connection.as_mut().graceful_shutdown();
-                    connection.await
+            let served = tokio::time::timeout(request_timeout, async {
+                tokio::select! {
+                    result = connection.as_mut() => result,
+                    () = cancel.cancelled() => {
+                        connection.as_mut().graceful_shutdown();
+                        connection.await
+                    }
                 }
-            };
-            if let Err(error) = result {
-                tracing::debug!(error = %error, "metrics connection ended with an error");
+            })
+            .await;
+            match served {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::debug!(error = %error, "metrics connection ended with an error");
+                }
+                Err(_) => tracing::debug!("metrics connection closed at the request timeout"),
             }
         });
     }
+    drop(listener);
     connections.close();
-    connections.wait().await;
+    let drain = tokio::time::timeout(config.request_timeout, connections.wait()).await;
+    if drain.is_err() {
+        tracing::warn!(
+            open = connections.len(),
+            "metrics connections still open after the drain"
+        );
+    }
 }

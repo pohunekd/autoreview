@@ -408,14 +408,16 @@ client field is reported with its index, for example
 Optional; see [Prometheus metrics](stats.md#prometheus-metrics). Without it
 `serve` opens no metrics port and counts nothing for it. When the section is
 present, every command validates it at load, so a broken section stops `serve`
-and `validate` too, and every key is required. Only `autoreview serve` runs the
-endpoint.
+and `validate` too, and every key is required; a `metrics:` key without a value
+is refused with `configuration_missing: metrics.listen`. Only `autoreview serve`
+runs the endpoint.
 
 | Key | Meaning |
 |---|---|
 | `listen` | `IP:PORT` the endpoint listens on; keep it on loopback, such as `127.0.0.1` |
 | `allowed_hosts` | `Host` header values the endpoint accepts, at least one |
 | `allowed_hosts` entries | Each a bare `host` or `host:port`; a `host` alone accepts any port |
+| `request_timeout_seconds` | Longest time one connection may stay open; it serves one request and is then closed. On shutdown `serve` waits this long for the connections. From 1 to 86400 |
 | `header_timeout_seconds` | Longest time a client may take to send the headers. From 1 to 86400 |
 | `max_connections` | Most connections served at once; more wait to be accepted. From 1 to 4096 |
 
@@ -423,6 +425,7 @@ endpoint.
 metrics:
   listen: "127.0.0.1:9464"
   allowed_hosts: ["127.0.0.1"]
+  request_timeout_seconds: 10
   header_timeout_seconds: 10
   max_connections: 4
 ```

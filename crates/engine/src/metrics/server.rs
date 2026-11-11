@@ -32,6 +32,8 @@ pub struct MetricsConfig {
     pub listen: SocketAddr,
     /// `Host` header values the endpoint accepts.
     pub allowed_hosts: Vec<String>,
+    /// Longest time one connection may stay open; it serves one request.
+    pub request_timeout: Duration,
     /// Longest time a client may take to send the request headers.
     pub header_timeout: Duration,
     /// Most connections served at once; further connections wait to be accepted.
@@ -49,6 +51,7 @@ impl MetricsConfig {
     pub fn new(
         listen: &str,
         allowed_hosts: Vec<String>,
+        request_timeout: Duration,
         header_timeout: Duration,
         max_connections: usize,
     ) -> Result<Self, Error> {
@@ -61,11 +64,14 @@ impl MetricsConfig {
                 "must list hosts or host:port, without scheme, path or user",
             ));
         }
-        if header_timeout.is_zero() || header_timeout > TIMEOUT_MAX {
-            return Err(invalid(
-                "metrics.header_timeout_seconds",
-                "must be from 1 to 86400 seconds",
-            ));
+        let timeouts = [
+            ("metrics.request_timeout_seconds", request_timeout),
+            ("metrics.header_timeout_seconds", header_timeout),
+        ];
+        for (key, timeout) in timeouts {
+            if timeout.is_zero() || timeout > TIMEOUT_MAX {
+                return Err(invalid(key, "must be from 1 to 86400 seconds"));
+            }
         }
         if !(1..=MAX_CONNECTIONS_LIMIT).contains(&max_connections) {
             return Err(invalid("metrics.max_connections", "must be from 1 to 4096"));
@@ -73,6 +79,7 @@ impl MetricsConfig {
         Ok(Self {
             listen,
             allowed_hosts,
+            request_timeout,
             header_timeout,
             max_connections,
         })
