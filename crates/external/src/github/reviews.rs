@@ -16,6 +16,9 @@ use super::{GitHub, response_invalid};
 /// Reviews per page of the reviews API; a short page ends the lookup.
 const REVIEWS_PER_PAGE: usize = 100;
 
+/// GitHub state of a review that a person or a branch protection rule dismissed.
+const DISMISSED_STATE: &str = "DISMISSED";
+
 /// The author of a review; a deleted account has an empty login.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
@@ -130,8 +133,9 @@ fn fold_char(character: char) -> char {
 
 /// Decides what one page of the reviews lookup means (`github.go:766-793`).
 ///
-/// The first record, in listing order, that carries the marker on `head_sha` from `login` is the
-/// review. Its state must be the expected state or `DISMISSED`; a later record is never tried.
+/// The first record, in listing order, that carries the marker on `head_sha` from `login` and is
+/// not dismissed is the review, and its state must be the expected state. A dismissed record is
+/// skipped: GitHub no longer counts it, so the review is posted again. Go reuses it.
 fn review_page_step(
     output: &str,
     review: &GitHubReview,
@@ -148,7 +152,10 @@ fn review_page_step(
         let commit_matches = record.commit_id == head_sha;
         let author_matches = login_matches(login, &record.user.login);
         if marker_found && has_id && has_url && commit_matches && author_matches {
-            if record.state != expected_state(&review.decision) && record.state != "DISMISSED" {
+            if record.state == DISMISSED_STATE {
+                continue;
+            }
+            if record.state != expected_state(&review.decision) {
                 return Err(Error::workflow("github_review_state_conflict", true, None));
             }
             return Ok(PageStep::Found(PublishResult {
@@ -265,6 +272,7 @@ impl GitHub {
 
 #[cfg(test)]
 mod tests {
+    use autoreview_engine::error_code;
     use autoreview_engine::integrations::GitHubReview;
     use autoreview_engine::model::{Decision, PublishResult};
 
@@ -308,6 +316,57 @@ mod tests {
         let mut empty = review(Decision::Comment);
         empty.marker = String::new();
         assert!(check_review_marker(&empty).is_err());
+    }
+
+    /// Each row is a page of records on the head and what the lookup of an approval makes of it.
+    #[test]
+    fn dismissed_review_is_skipped_and_a_later_match_is_reused() {
+        let approval = review(Decision::Approve);
+        let marked = |id: i64, state: &str| record(id, HEAD, LOGIN, state);
+        let found = |id: i64| {
+            Ok(PageStep::Found(PublishResult {
+                decision: Decision::Approve,
+                github_review_id: id,
+                review_url: format!("https://example.org/acme/widget/pull/3#review-{id}"),
+                reused: true,
+            }))
+        };
+        let full_page: Vec<String> = (1..=100).map(|id| marked(id, "DISMISSED")).collect();
+        let cases: [(&str, Vec<String>, Result<PageStep, String>); 5] = [
+            ("approved", vec![marked(1, "APPROVED")], found(1)),
+            (
+                "dismissed",
+                vec![marked(1, "DISMISSED")],
+                Ok(PageStep::Done),
+            ),
+            (
+                "dismissed, then approved",
+                vec![marked(1, "DISMISSED"), marked(2, "APPROVED")],
+                found(2),
+            ),
+            ("full page of dismissed", full_page, Ok(PageStep::Next)),
+            (
+                "dismissed, then changes requested",
+                vec![marked(1, "DISMISSED"), marked(2, "CHANGES_REQUESTED")],
+                Err("github_review_state_conflict".to_owned()),
+            ),
+        ];
+        for (name, records, expected) in cases {
+            let output = format!("[{}]", records.join(","));
+            let step = review_page_step(&output, &approval, HEAD, LOGIN)
+                .map_err(|error| error_code(&error).to_owned());
+            assert_eq!(step, expected, "case {name}");
+        }
+        let mut on_base = review(Decision::Approve);
+        on_base.marker = format!("{MARKER}<!-- base:v1 -->");
+        on_base.body = format!("Findings. {}", on_base.marker);
+        let output = format!("[{}]", marked(1, "APPROVED"));
+        assert_eq!(
+            review_page_step(&output, &on_base, HEAD, LOGIN)
+                .map_err(|error| error_code(&error).to_owned()),
+            Ok(PageStep::Done),
+            "a review with the legacy marker alone is not the review of a known base branch"
+        );
     }
 
     #[test]
