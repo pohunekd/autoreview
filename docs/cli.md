@@ -395,6 +395,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `review_superseded`, `approval_expired` | The wait ended without a publication |
 | `head_changed` | The pull request has a newer head than the one given |
 | `review_already_running`, `review_retry_not_dispatched` | A retry is not needed or not possible right now |
+| `review_already_completed` | `retry` found a completed review of this head (it succeeded or went on to wait for an approval) against the current base branch, or one whose base branch is no longer known; nothing to do when that review is current, approve it if it still waits, or push a new commit for a fresh review |
 | `engine_already_running` | Another `serve` uses the same database |
 | `discovery_busy` | Another discovery pass held the lock past `schedule.discovery_lock_timeout_seconds` |
 | `pull_request_not_open`, `pull_request_draft`, `review_label_removed`, `review_request_not_active` | The pull request no longer asks for a review: closed, back in draft, label removed or review request withdrawn |
