@@ -3,6 +3,29 @@
 Release notes of autoreview, newest first. Unreleased changes are fragments
 under `changelog.d/`; `scripts/changelog fold` moves them here.
 
+## 0.2.0 - 2026-11-11
+
+### Added
+
+- The Claude Code adapter ships in `adapters/claude/`: a wrapper that runs one bounded, read-only, schema-validated Claude Code run for a pohunek session, and a renderer that writes its pohunek profile. The Claude Code path comes from configuration and telemetry is optional. ([#21](https://github.com/pohunekd/autoreview/issues/21))
+- The Codex adapter ships in `adapters/codex/`: a wrapper that runs one bounded, read-only Codex review for a pohunek session and prints a result frame, and a renderer that writes its pohunek profile. The Codex path comes from configuration, telemetry is optional, and the report now carries the blocking flag of each finding and verdicts on prior findings, which the engine reads from a later release. ([#22](https://github.com/pohunekd/autoreview/issues/22))
+- `autoreview profiles install` writes, on the review host it runs on, the pohunek agent profile of a reviewer and the Claude or Codex adapter that it starts, both embedded in the binary. It pins the official runtime package, takes the model, the effort, the agent executable and the adapter limits as required flags, keeps identical files, rewrites the files it wrote earlier and refuses any other profile of that name unless `--replace` is given. The Codex adapter sets a terminal title before it reads its request, which pohunek's input readiness for Codex waits for, and accepts the trailing `--no-daemon` that pohunek appends to every Codex launch. ([#25](https://github.com/pohunekd/autoreview/issues/25))
+
+### Changed
+
+- **Breaking:** A `codex-envelope` reviewer reports notes that do not block and settles the earlier blocking findings, as a `claude-structured` reviewer does, so a Codex re-review after a push covers only the new commits. A Codex profile must run the adapter in `adapters/codex/`: the report of an older adapter, without `blocking` and `prior_findings`, stops the review with `review_adapter_outdated`. Switch every Codex profile to that adapter in the same maintenance window as this upgrade; a rollback to the Go engine needs the older wrapper back, and a Codex review in flight with prior findings stops. ([#23](https://github.com/pohunekd/autoreview/issues/23))
+
+### Fixed
+
+- **Breaking:** A review on a `checkout: base` pipeline whose pull request head commit is not in the review host's repository stops with the new code `review_head_unavailable` and publishes nothing, for Claude and Codex reviewers, instead of a Claude review that could not read the change; a verifier refused that way publishes the claims unverified, as after a verifier timeout. Neither the reviewer run nor the scheduler retries the stop; fetch the head on the review host and retry the pull request. The Claude adapter now checks the review checkout as the Codex adapter does and names that checkout in its result, and the engine refuses a Claude result without it as `review_adapter_outdated`, so run `autoreview profiles install` for every Claude and Codex profile on each review host in the same window as the upgrade. ([#253](https://github.com/pohunekd/autoreview/issues/253))
+- A `codex-envelope` pipeline reviews the whole pull request again after a rebase, a force push or a merge of the base branch, as a `claude-structured` pipeline does, so a rule with `on_clean: approve` no longer approves a rewritten history on an incremental review. ([#237](https://github.com/pohunekd/autoreview/issues/237))
+- A review that is due while a review host fails and no other host has the repository waits for a host instead of using its retries: it starts on the first discovery pass after a host answers, without `autoreview retry`, and one `review_stopped` message per host outage says that reviews wait for a review host. ([#241](https://github.com/pohunekd/autoreview/issues/241))
+- Codex reviewers work on pipelines with `checkout: base`, which the examples use and untrusted authors require: the Codex adapter checks the base checkout locally and Codex reads the change through git. The pull request head must already be in the review host's repository; otherwise the review stops with `review_head_unavailable` (#253). ([#252](https://github.com/pohunekd/autoreview/issues/252))
+
+### Security
+
+- **Breaking:** The `--version` probe of the Claude and Codex adapters runs the agent executable with the environment of a review run, without the pohunek session identity, the GitHub and Matrix tokens and the `AUTOREVIEW_` variables. The adapters' `render_profile.py` copies only the telemetry keys (`OTEL_*`, and `CLAUDE_CODE_ENABLE_TELEMETRY` for Claude) and the config home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) of the base profile's `[env]`, drops every other key and prints the dropped names on stderr, so a profile rendered again loses any other variable it carried. Run `autoreview profiles install` for every Claude and Codex profile after the upgrade, and render again every profile written with `render_profile.py`. ([#246](https://github.com/pohunekd/autoreview/issues/246))
+
 ## 0.1.0 - 2026-11-09
 
 ### Added
