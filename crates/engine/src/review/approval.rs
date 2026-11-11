@@ -21,7 +21,7 @@ use crate::model::review::{
 };
 use crate::model::{
     ApprovalResult, ApproveRequest, Artifact, AwaitRecord, Outcome, PublishResult, ResolveRequest,
-    ReviewOutcome,
+    ReviewOutcome, repository_valid, sha_valid,
 };
 use crate::publish::plan::PublicationPlan;
 use crate::store::{RESULT_SUCCESS, REVIEW_AWAITING};
@@ -32,8 +32,11 @@ const NANOS_PER_SECOND: i64 = 1_000_000_000;
 /// Error code of an approval whose review, artifact or plan is not stored.
 const REVIEW_INCOMPLETE: &str = "review_incomplete";
 
-/// Error code of an approval whose identity differs from the stored artifact.
+/// Error code of an approval whose identity is malformed or differs from the review.
 const REVIEW_IDENTITY_INVALID: &str = "review_identity_invalid";
+
+/// Error code of an approval whose head is not a full lowercase hex SHA.
+const HEAD_SHA_INVALID: &str = "head_sha_invalid";
 
 /// Error code of an approval whose plan does not wait for one.
 const APPROVAL_NOT_REQUIRED: &str = "approval_not_required";
@@ -213,13 +216,21 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns the errors of [`Engine::resolve`] and [`Engine::approve`], and
-    /// `review_identity_invalid` when the resolved head or workflow ID does not match.
+    /// Returns `review_identity_invalid` for an invalid repository or number, `head_sha_invalid`
+    /// for a head that is not a full SHA, the errors of [`Engine::resolve`] and
+    /// [`Engine::approve`], and `review_identity_invalid` when the resolved head or workflow ID
+    /// does not match.
     pub fn approve_head(
         &self,
         cancel: &CancellationToken,
         request: &ApproveRequest,
     ) -> Result<ApprovalResult, Error> {
+        if !repository_valid(&request.repository) || request.number <= 0 {
+            return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
+        }
+        if !sha_valid(&request.head_sha) {
+            return Err(Error::workflow(HEAD_SHA_INVALID, true, None));
+        }
         let resolve = ResolveRequest {
             repository: request.repository.clone(),
             number: request.number,

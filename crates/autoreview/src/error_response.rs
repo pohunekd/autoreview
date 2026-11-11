@@ -6,6 +6,7 @@
 
 use std::error::Error as StdError;
 
+use autoreview_engine::model::{HEAD_PREFIX_MIN_LEN, SHA_LEN};
 use autoreview_engine::{Error, error_code};
 use serde::Serialize;
 
@@ -17,6 +18,12 @@ use crate::profiles::{
 
 /// Error code of a command with unknown or malformed arguments.
 pub(crate) const COMMAND_INVALID: &str = "command_invalid";
+
+/// Error code of a malformed `HEAD_PREFIX` argument.
+pub(crate) const HEAD_PREFIX_INVALID: &str = "head_prefix_invalid";
+
+/// Error code of a malformed `HEAD_SHA` argument.
+pub(crate) const HEAD_SHA_INVALID: &str = "head_sha_invalid";
 
 /// Error code of a poll that found the discovery lock held.
 const DISCOVERY_BUSY: &str = "discovery_busy";
@@ -65,6 +72,16 @@ pub(crate) fn error_response(error: &(dyn StdError + 'static)) -> ErrorResponse 
         response.message =
             "Another discovery pass holds the lock. Repeat the command shortly.".to_owned();
         response.retryable = true;
+    } else if code == HEAD_PREFIX_INVALID {
+        response.message = format!(
+            "HEAD_PREFIX must be {HEAD_PREFIX_MIN_LEN} to {SHA_LEN} lowercase hexadecimal \
+characters of the pull request head, as the Review ID of a notification shows."
+        );
+    } else if code == HEAD_SHA_INVALID {
+        response.message = format!(
+            "HEAD_SHA must be the full pull request head, {SHA_LEN} lowercase hexadecimal \
+characters; autoreview resolve prints it for a head prefix."
+        );
     }
     if let Some((config_code, name)) = first_config_error(error) {
         response.error = config_code.to_owned();

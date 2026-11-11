@@ -22,8 +22,11 @@ use crate::store::{ReviewFilter, StoredReview};
 /// Schedule phase of a review identity whose attempt is queued or running.
 const PHASE_RUNNING: &str = "running";
 
-/// Error code of a command whose repository, number or head is invalid.
+/// Error code of a command whose repository or number is invalid.
 const REVIEW_IDENTITY_INVALID: &str = "review_identity_invalid";
+
+/// Error code of a head prefix that `head_prefix_valid` refuses.
+const HEAD_PREFIX_INVALID: &str = "head_prefix_invalid";
 
 /// Error code of a retry whose poll queued no attempt for the pull request.
 const REVIEW_RETRY_NOT_DISPATCHED: &str = "review_retry_not_dispatched";
@@ -57,18 +60,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns `review_identity_invalid` for an invalid request, the error of the lock, of the
-    /// poll or of the store, and `review_retry_not_dispatched` when no attempt is running.
+    /// Returns `review_identity_invalid` for an invalid repository or number,
+    /// `head_prefix_invalid` for an invalid head, the error of the lock, of the poll or of the
+    /// store, and `review_retry_not_dispatched` when no attempt is running.
     pub async fn retry(
         &self,
         cancel: &CancellationToken,
         request: &RetryRequest,
     ) -> Result<RetryResult, Error> {
-        if !repository_valid(&request.repository)
-            || request.number <= 0
-            || !head_prefix_valid(&request.head_sha)
-        {
+        if !repository_valid(&request.repository) || request.number <= 0 {
             return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
+        }
+        if !head_prefix_valid(&request.head_sha) {
+            return Err(Error::workflow(HEAD_PREFIX_INVALID, true, None));
         }
         let key = format!("{}#{}", request.repository, request.number);
         // The read after the pass may fail; the saved pass still sends its notices.
@@ -108,18 +112,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns `review_identity_invalid` for an invalid request, the error of the store, and
+    /// Returns `review_identity_invalid` for an invalid repository or number,
+    /// `head_prefix_invalid` for an invalid head prefix, the error of the store, and
     /// `review_not_awaiting_approval` when no review matches.
     pub fn resolve(
         &self,
         cancel: &CancellationToken,
         request: &ResolveRequest,
     ) -> Result<ResolveResult, Error> {
-        if !repository_valid(&request.repository)
-            || request.number <= 0
-            || !head_prefix_valid(&request.head_prefix)
-        {
+        if !repository_valid(&request.repository) || request.number <= 0 {
             return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
+        }
+        if !head_prefix_valid(&request.head_prefix) {
+            return Err(Error::workflow(HEAD_PREFIX_INVALID, true, None));
         }
         live(cancel)?;
         let state = self.store.load_discovery()?;

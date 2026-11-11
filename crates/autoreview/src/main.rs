@@ -35,7 +35,9 @@ use time::OffsetDateTime;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
-use crate::error_response::{COMMAND_INVALID, error_response};
+use crate::error_response::{
+    COMMAND_INVALID, HEAD_PREFIX_INVALID, HEAD_SHA_INVALID, error_response,
+};
 
 /// Environment variable that names the config file when `--config` is absent.
 const CONFIG_ENV: &str = "AUTOREVIEW_CONFIG";
@@ -58,7 +60,7 @@ const LOGIN_KEY: &str = "github.credentials.login";
 /// Error code of malformed repository names.
 const REPOSITORY_NOT_ALLOWED: &str = "repository_not_allowed";
 
-/// Error code of a malformed pull request number or head.
+/// Error code of a malformed pull request number.
 const REVIEW_IDENTITY_INVALID: &str = "review_identity_invalid";
 
 /// Error code of a configuration value that the command refuses.
@@ -385,7 +387,8 @@ fn cancel_on_signal(cancel: CancellationToken) -> Result<(), Error> {
 /// # Errors
 ///
 /// Returns `repository_not_allowed`, `command_invalid` when not exactly two positional
-/// arguments remain, and `review_identity_invalid` for a bad number or head.
+/// arguments remain, `review_identity_invalid` for a bad number, and then
+/// `head_prefix_invalid` (with `prefix`) or `head_sha_invalid` for a bad head.
 fn review_arguments(arguments: &[String], prefix: bool) -> Result<(String, i64, String), Error> {
     let (repository, positional) = split_repository(arguments);
     if !repository_valid(&repository) {
@@ -394,16 +397,18 @@ fn review_arguments(arguments: &[String], prefix: bool) -> Result<(String, i64, 
     let [number, head] = positional.as_slice() else {
         return Err(command_invalid(None));
     };
-    let number = parse_number(number);
-    let head_valid = if prefix {
-        head_prefix_valid(head)
-    } else {
-        sha_valid(head)
+    let Some(number) = parse_number(number) else {
+        return Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None));
     };
-    match number {
-        Some(number) if head_valid => Ok((repository, number, (*head).to_owned())),
-        _ => Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None)),
+    let (head_valid, head_code) = if prefix {
+        (head_prefix_valid(head), HEAD_PREFIX_INVALID)
+    } else {
+        (sha_valid(head), HEAD_SHA_INVALID)
+    };
+    if !head_valid {
+        return Err(Error::workflow(head_code, true, None));
     }
+    Ok((repository, number, (*head).to_owned()))
 }
 
 /// Reads `--repository OWNER/REPO NUMBER`, as `main.go:200-213` does.
@@ -503,4 +508,46 @@ fn command_invalid(cause: Option<BoxError>) -> Error {
 /// Wraps a failure that carries no engine code, which Go reports as `workflow_failed`.
 fn failed(cause: impl Into<BoxError>) -> Error {
     Error::workflow(WORKFLOW_FAILED, false, Some(cause.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use autoreview_engine::error_code;
+
+    use super::review_arguments;
+
+    /// A full head SHA of 40 lowercase hexadecimal digits.
+    const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    /// A refused head names the argument; a bad number stays `review_identity_invalid`.
+    #[test]
+    fn review_arguments_name_the_refused_head() {
+        let too_long = format!("{HEAD}8");
+        // Number, head, whether a prefix is accepted, and the code ("" when accepted).
+        let cases = [
+            ("7", &HEAD[..12], true, ""),
+            ("7", HEAD, true, ""),
+            ("7", HEAD, false, ""),
+            ("7", &HEAD[..8], true, "head_prefix_invalid"),
+            ("7", "0123456789AB", true, "head_prefix_invalid"),
+            ("7", "0123456789ag", true, "head_prefix_invalid"),
+            ("7", too_long.as_str(), true, "head_prefix_invalid"),
+            ("7", &HEAD[..8], false, "head_sha_invalid"),
+            ("7", &HEAD[..12], false, "head_sha_invalid"),
+            ("7", too_long.as_str(), false, "head_sha_invalid"),
+            ("0", HEAD, true, "review_identity_invalid"),
+            ("x", HEAD, false, "review_identity_invalid"),
+            ("0", &HEAD[..8], true, "review_identity_invalid"),
+            ("0", &HEAD[..8], false, "review_identity_invalid"),
+        ];
+        for (number, head, prefix, expected) in cases {
+            let arguments = ["--repository", "acme/widget", number, head].map(str::to_owned);
+            let result = review_arguments(&arguments, prefix);
+            let code = match &result {
+                Ok(_) => "",
+                Err(error) => error_code(error),
+            };
+            assert_eq!(code, expected, "{number} {head} {prefix}");
+        }
+    }
 }
