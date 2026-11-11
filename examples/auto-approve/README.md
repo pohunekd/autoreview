@@ -3,7 +3,11 @@
 A low-risk website repository where a clean review approves without a person.
 
 - **Repository:** `pohunekd/pohunek.dev` (`ai:review` label)
-- **Reviewer:** one Sonnet reviewer; incremental reviewers equal the full reviewers
+- **Reviewer:** one Sonnet reviewer, base checkout; incremental reviewers equal
+  the full reviewers. The pull request head must already be in the project
+  repository on the review host (`git fetch origin refs/pull/<n>/head` there);
+  see
+  [Head commit unavailable](../../docs/knowledge/runbooks/troubleshooting.md#head-commit-unavailable)
 - **Verifier:** Sonnet re-checks blocking findings; a demoted critical or high
   finding, or two demoted findings, turns the approval into a wait for a person
 - **Outcome:** blocking findings request changes; a clean review is approved
