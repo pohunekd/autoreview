@@ -394,7 +394,8 @@ fn validate(config: &Config) -> Result<(), Error> {
 ///
 /// With `metrics`, the endpoint is bound after the login check and before the engine takes
 /// its lock, and it stops when the engine stops. A review panic ends the process, as a
-/// goroutine panic ends Go's.
+/// goroutine panic ends Go's. A signal during the login check is a normal stop, as a signal
+/// while the engine runs: it logs the engine's stop line and returns `Ok`.
 async fn serve(
     engine: &Arc<Engine<External, SystemClock>>,
     external: &External,
@@ -402,7 +403,15 @@ async fn serve(
     metrics: Option<MetricsConfig>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
-    let login = external.viewer_login(cancel).await?;
+    let login = match external.viewer_login(cancel).await {
+        Ok(login) => login,
+        // Read from the token: the unit's SIGTERM may kill `gh` first, which fails as an exit.
+        Err(_) if cancel.is_cancelled() => {
+            tracing::info!("pull request review engine stopping");
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
     if login != github_login {
         return Err(Error::config(
             CONFIGURATION_INVALID,

@@ -429,6 +429,8 @@ Commands:
 - A signal during `backup-db`, `reviews`, `awaiting`, `resolve`, `approve` or
   `review` waits for the running store call; the Go engine cancelled it. Do not
   interrupt a running `backup-db`.
+- A signal during the login check of `serve` is a normal stop with exit status
+  0; the Go engine logged `command failed` and exited 1.
 - A closed standard output, as in `autoreview reviews | head -c 0`, ends with
   `workflow_failed` and exit status 1; the Go engine died by SIGPIPE (141).
 - `--help`, `-h` and `-V` print the command help or version and exit 0; the Go

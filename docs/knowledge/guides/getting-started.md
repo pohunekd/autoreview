@@ -147,8 +147,9 @@ prints it; it goes on with:
 11. **User service.** Prints the `match` and `trigger` lines of the policy,
     writes `autoreview.service` (`serve`), `autoreview-queue.service` and
     `autoreview-queue.timer` (hourly, 08:00 to 20:00) with the secrets file as
-    their `EnvironmentFile`, and runs `systemctl --user daemon-reload` and
-    `enable --now`. A unit file with other text is shown as a diff and replaced
+    their `EnvironmentFile`, and runs `systemctl --user daemon-reload`, `enable`
+    and one `restart` of the service and the timer, so the service starts once.
+    A unit file with other text is shown as a diff and replaced
     only after its own question. When the running service does not run the
     installed autoreview binary (this run or an earlier one replaced it), it is
     restarted, after a question.
