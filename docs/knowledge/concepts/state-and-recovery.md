@@ -66,7 +66,8 @@ engine finds every review in `queued` or `running`, and it resumes it:
   published, without posting again, from its stored publication or, when the stop
   came before the publication was stored, from the review it finds on the head by
   the hidden marker; that lookup records the publication step. When neither
-  exists, the review ends as superseded.
+  exists, the review ends as superseded. When the lookup itself fails, the review
+  fails with the lookup's error code and a failed publication step.
 - A review that waits for an approval keeps its first deadline. A restart does not
   extend the wait.
 - A reviewer whose session was started before the restart is found by its name.
