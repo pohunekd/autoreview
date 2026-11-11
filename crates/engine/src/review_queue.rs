@@ -1176,6 +1176,7 @@ notifications:
             published_at,
             awaits_author: true,
             reminded,
+            base_branch: pr.base_branch.clone(),
         };
         engine
             .mark_published(&CancellationToken::new(), &record)

@@ -62,9 +62,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Decides the scope and the prior findings of the review of `candidate`.
     ///
     /// The prior findings are the blocking findings of the last published review and those it
-    /// left open, for a pipeline of either protocol. An incremental scope also needs that
-    /// review's stored result and a head that extends the reviewed one linearly; otherwise the
-    /// review is full and keeps the prior findings.
+    /// left open, for a pipeline of either protocol. An incremental scope also needs an unchanged
+    /// base branch, that review's stored result and a head that extends the reviewed one
+    /// linearly; otherwise the review is full and keeps the prior findings.
     ///
     /// # Errors
     ///
@@ -87,6 +87,17 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let stored = self.prior_findings(published)?;
         if !scope.incremental() {
             return Ok((scope, stored.unwrap_or_default()));
+        }
+        if published.retargeted(pr) {
+            // Commits that joined the diff through the new base were never reviewed.
+            tracing::info!(
+                review_id = %pr.review_id(),
+                reason = "base_branch_changed",
+                previous_base_branch = %published.base_branch,
+                base_branch = %pr.base_branch,
+                "review widened to full"
+            );
+            return Ok((full_scope(), stored.unwrap_or_default()));
         }
         let Some(prior) = stored else {
             tracing::info!(

@@ -357,6 +357,9 @@ pub struct PublishedRecord {
     /// Marks that the author was reminded once.
     #[serde(skip_serializing_if = "is_false")]
     pub reminded: bool,
+    /// Base branch of the published review; empty when unknown, as in a Go record.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub base_branch: String,
 }
 
 autoreview_go_compat::object_only_serde!(PublishedRecord);
@@ -373,6 +376,7 @@ impl Default for PublishedRecord {
             published_at: go_zero_time(),
             awaits_author: bool::default(),
             reminded: bool::default(),
+            base_branch: String::default(),
         }
     }
 }
@@ -388,6 +392,13 @@ impl PublishedRecord {
     pub(crate) fn covers(&self, pr: &PullRequest) -> bool {
         self.head_sha == pr.head_sha
             && !(self.awaits_author && self.review_request_id != pr.review_request_id)
+    }
+
+    /// Reports whether the pull request targets another base branch than this review did.
+    ///
+    /// An unknown base branch, as in a record written before it was stored, is not a change.
+    pub(crate) fn retargeted(&self, pr: &PullRequest) -> bool {
+        !self.base_branch.is_empty() && self.base_branch != pr.base_branch
     }
 }
 

@@ -272,6 +272,17 @@ What is not compatible, by decision:
   with `on_clean: approve` can approve a rebased head on an incremental review.
   No stored row changes, and a rollback to Go brings the Go behaviour back. The
   regression test is `rewritten_history_gets_a_full_review_on_a_codex_pipeline`.
+- **Retargeted pull requests (#240):** the published record stores the base
+  branch of the reviewed diff (`base_branch`, omitted when empty), and a review
+  whose pull request now targets another base branch is full
+  (`base_branch_changed`). A record without the field, written by Go or before
+  #240, has an unknown base branch and does not widen. Go never compares the
+  base (`reviewScope`, `discovery.go:72-80`), so an `on_clean: approve` rule
+  can approve commits that joined the diff only through a retarget. Go ignores
+  the field when it reads the record and drops it when it rewrites the
+  `published` entry, so after a return to Rust such a record does not widen
+  until the next publication. The regression test is
+  `retargeted_pull_request_gets_a_full_review_before_it_is_approved`.
 - **Codex results like Claude results (#23):** a `codex-envelope` report must
   carry `prior_findings` and the `blocking` flag of every finding, as the
   adapter in `adapters/codex/` writes them. A report without them is refused
