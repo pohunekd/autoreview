@@ -200,9 +200,14 @@ each pull request would match, before any review runs.
   `pohunekd/*`, with its own pipeline or with the generic one. Validate afterwards.
 - **Generic rule that waits.** Change the generic rule to `on_clean: await`, so the
   organisation's clean reviews wait for a person.
-- **Generic rule with two reviewers.** Add a Sonnet reviewer to the generic
-  pipeline's `reviewers` and `incremental_reviewers`, in the same order, so the
-  approve rule stays valid.
+- **Generic rule with two reviewers.** All reviewers of one pipeline must use the
+  same protocol (see [pipelines](../../policy.md#pipelines)), and the generic
+  pipeline runs Codex. Add a second `codex-envelope` reviewer under `reviewers`, or
+  replace `codex` with two `claude-structured` reviewers, for example `sonnet` and
+  a second Claude model. A new reviewer names the agent profile of its model and
+  a `finding_prefix` that no other reviewer uses. List the same reviewers in the
+  generic pipeline's `reviewers` and `incremental_reviewers`, in the same order,
+  so the approve rule stays valid.
 
 ## Combine with
 
