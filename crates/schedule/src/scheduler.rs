@@ -431,8 +431,10 @@ pub fn plan_retarget(
 ///
 /// It plans when [`plan_retarget`] returned `None`. An ended run of the head that completed
 /// another base branch, by the base branch of its stored input, does not complete this one:
-/// [`plan`] does not see it, and none of these runs stays a blocker. A record that followed such
-/// a run is completed like it, so [`plan`] handles the latest run of this base branch. A record
+/// [`plan`] does not see it. Once a run completed this base branch, or a run without a stored
+/// base branch completed, as `apply_force` counts it, no ended run of another base branch is
+/// seen. None of the hidden runs stays a blocker. A record that followed a hidden run is
+/// completed like it, so [`plan`] handles the latest run of this base branch. A record
 /// that waits or dispatches gets an attempt above every run of the head, skipping the attempt
 /// whose `workflow_id` is the published workflow: a workflow ID names the head and the attempt,
 /// not the base branch.
@@ -451,18 +453,23 @@ pub fn plan_on_base(
 ) -> Result<Decision, Error> {
     let identity = target.identity();
     let attempt = free_attempt(runs, &identity, retarget.published_workflow, &workflow_id);
-    // A run without a stored base branch, or with an empty one, counts for this base branch.
-    let other: BTreeSet<&str> = runs
+    let ended: Vec<&Run> = runs
         .iter()
-        .filter(|run| {
-            run.target.identity() == identity
-                && !run.active()
-                && (run.result == "success" || run.released)
-                && retarget
-                    .run_bases
-                    .get(&run.workflow_id)
-                    .is_some_and(|base| !base.is_empty() && base != retarget.base_branch)
-        })
+        .filter(|run| run.target.identity() == identity && !run.active())
+        .collect();
+    // A run without a stored base branch, or with an empty one, counts for this base branch.
+    let elsewhere = |run: &Run| {
+        retarget
+            .run_bases
+            .get(&run.workflow_id)
+            .is_some_and(|base| !base.is_empty() && base != retarget.base_branch)
+    };
+    let completed = |run: &Run| run.result == "success" || run.released;
+    // A head reviewed here is completed here; a later failure elsewhere does not reopen it.
+    let reviewed_here = ended.iter().any(|run| completed(run) && !elsewhere(run));
+    let other: BTreeSet<&str> = ended
+        .iter()
+        .filter(|run| elsewhere(run) && (reviewed_here || completed(run)))
         .map(|run| run.workflow_id.as_str())
         .collect();
     let visible: Vec<Run> = runs
@@ -1551,6 +1558,51 @@ mod tests {
                 // The record names wf-0, the run that reviewed `main`, and its attempt.
                 vec![(
                     vec![ended(0, ""), ended(1, "")],
+                    "main",
+                    (false, phase::COMPLETED, 0, 0, vec![], false, false),
+                )],
+            ),
+            (
+                "back to a reviewed base branch after a retried review elsewhere",
+                // The record that discovery writes on `release`, where wf-2 published.
+                Record {
+                    workflow_id: workflow(2),
+                    handled_workflow: workflow(1),
+                    ..record(phase::COMPLETED, 0, &[])
+                },
+                "wf-2",
+                None,
+                vec![(
+                    vec![ended(0, ""), ended(1, session_lost), ended(2, "")],
+                    "main",
+                    (false, phase::COMPLETED, 0, 0, vec![], false, false),
+                )],
+            ),
+            (
+                "back to a reviewed base branch after a superseded review elsewhere",
+                Record {
+                    workflow_id: workflow(2),
+                    ..record(phase::COMPLETED, 0, &[])
+                },
+                "wf-2",
+                None,
+                vec![(
+                    vec![ended(0, ""), ended(1, superseded), ended(2, "")],
+                    "main",
+                    (false, phase::COMPLETED, 0, 0, vec![], false, false),
+                )],
+            ),
+            (
+                "back to a reviewed base branch after a review elsewhere retried by hand",
+                Record {
+                    workflow_id: workflow(2),
+                    handled_workflow: workflow(1),
+                    ..record(phase::COMPLETED, 0, &[])
+                },
+                "wf-2",
+                None,
+                vec![(
+                    vec![ended(0, ""), ended(1, wrapper_invalid), ended(2, "")],
                     "main",
                     (false, phase::COMPLETED, 0, 0, vec![], false, false),
                 )],
