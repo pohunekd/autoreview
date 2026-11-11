@@ -19,12 +19,15 @@ const MEASURED: &str = "measured";
 /// Start of the notification that asks to remove reviewer sessions by hand.
 const CLEANUP_NOTE: &str = "Pohunek could not remove reviewer sessions";
 
+/// Start of the `published` notification of a clean review of `claude/base`.
+const APPROVED_NOTE: &str = "Approved claude/base PR";
+
 /// The sample of the one succeeded publication step.
 const PUBLICATION_COUNTED: &str =
     "autoreview_review_steps_total{step=\"publication\",outcome=\"succeeded\"} 1\n";
 
-/// Reads `history.steps` of the statistics document from yesterday on.
-fn recorded_steps(h: &Harness) -> Value {
+/// Reads the field `field` of `history` of the statistics document from yesterday on.
+fn recorded(h: &Harness, field: &str) -> Value {
     // A day before today, so a review that ends just after midnight UTC is still inside.
     let since = (OffsetDateTime::now_utc() - Duration::days(1))
         .date()
@@ -34,7 +37,7 @@ fn recorded_steps(h: &Harness) -> Value {
         .review_stats(&CancellationToken::new(), Some(&since), None)
         .expect("the statistics read");
     let history = serde_json::to_value(document.history).expect("the history serializes");
-    history["steps"].clone()
+    history[field].clone()
 }
 
 /// Waits for the publication record, the last step, and returns every step entry.
@@ -42,12 +45,12 @@ fn recorded_steps(h: &Harness) -> Value {
 /// Each duration is set to [`MEASURED`].
 async fn measured_steps(h: &Harness) -> Value {
     h.wait_for("the publication record", || {
-        recorded_steps(h)
+        recorded(h, "steps")
             .as_array()
             .is_some_and(|runs| runs.iter().any(|run| run["key"] == "publication"))
     })
     .await;
-    let mut steps = recorded_steps(h);
+    let mut steps = recorded(h, "steps");
     for entry in steps.as_array_mut().into_iter().flatten() {
         for field in ["duration_median_ms", "duration_p90_ms"] {
             assert!(entry[field].is_i64(), "{field} of {entry}");
@@ -151,6 +154,97 @@ async fn shutdown_after_the_last_reviewer_result_still_records_the_reviewers_ste
         ])
     );
     h.stop_engine().await;
+}
+
+/// A review-request review stopped after its review is posted completes as published.
+///
+/// The posted review answered the review request, and the engine stops before the publication
+/// is stored. The resumed review finds the review by its marker and records the publication.
+#[tokio::test]
+async fn review_posted_before_a_restart_completes_as_published() {
+    let mut h = start_harness(|_| {}).await;
+    let gate = h.fake.hold_publications();
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the held publication", || h.publications() == 1)
+        .await;
+    // The engine is cancelled before the post returns, so the publication is not stored.
+    tokio::join!(biased; h.stop_engine(), async { gate.add_permits(1) });
+    h.fake.lock().held_publications = None;
+    h.start();
+    completed_as_published(&h).await;
+    assert!(h.fake.has_note(Level::Digest, APPROVED_NOTE));
+    assert!(!h.fake.has_note(Level::Log, "was superseded"));
+    h.stop_engine().await;
+}
+
+/// A review-request review stopped after its publication is stored completes as published.
+///
+/// The `published` notification is held, so the engine stops after the publication is stored
+/// and before the review completes. The resumed review reads the stored publication.
+#[tokio::test]
+async fn review_stopped_after_its_publication_is_stored_completes_as_published() {
+    let mut h = start_harness(|_| {}).await;
+    let gate = h.fake.hold_notes(APPROVED_NOTE);
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the held published notification", || {
+        h.fake.has_note(Level::Digest, APPROVED_NOTE)
+    })
+    .await;
+    // The engine is cancelled before the notification returns, so the review stays running.
+    tokio::join!(biased; h.stop_engine(), async { gate.add_permits(1) });
+    h.fake.lock().held_notes = None;
+    h.start();
+    completed_as_published(&h).await;
+    h.stop_engine().await;
+}
+
+/// An approved review stopped after its review is posted completes as published.
+///
+/// The approval path reads the pull request before it publishes, as a resumed review does.
+#[tokio::test]
+async fn approved_review_posted_before_a_restart_completes_as_published() {
+    let mut h = start_harness(|_| {}).await;
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the review to resolve", || h.resolve(&pr).is_ok())
+        .await;
+    let gate = h.fake.hold_publications();
+    h.approve_when_awaiting(&pr)
+        .await
+        .expect("the approval is recorded");
+    h.wait_for("the held publication", || h.publications() == 1)
+        .await;
+    tokio::join!(biased; h.stop_engine(), async { gate.add_permits(1) });
+    h.fake.lock().held_publications = None;
+    h.start();
+    completed_as_published(&h).await;
+    h.stop_engine().await;
+}
+
+/// Waits until the resumed review completed, then checks that it completed as published.
+///
+/// The review is posted once, and its publication and reviewers steps each ran once.
+async fn completed_as_published(h: &Harness) {
+    h.poll_until("the resumed review completed", || {
+        recorded(h, "totals")["completed"] == 1
+    })
+    .await;
+    let totals = recorded(h, "totals");
+    assert_eq!(
+        [&totals["published"], &totals["superseded"]],
+        [&json!(1), &json!(0)],
+        "the resumed review completes as published: {totals}"
+    );
+    assert_eq!(h.publications(), 1, "the review is posted once");
+    assert_eq!(
+        measured_steps(h).await,
+        json!([
+            succeeded_once("publication", 0),
+            succeeded_once("reviewers", 0)
+        ])
+    );
 }
 
 /// Output where the opus reviewer reports one blocking finding and every other reviewer none.

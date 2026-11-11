@@ -6,7 +6,7 @@
 
 use std::sync::atomic::AtomicI64;
 
-use autoreview_policy::{Event, OnClean, Reviewer};
+use autoreview_policy::{Event, OnClean, Reviewer, TriggerKind};
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
@@ -15,7 +15,7 @@ use super::input::{
     ArtifactOutcome, RenderOutcome, SLOT_STATE_PREFIX, STEP_COMMENTABLE, STEP_DISCUSSION,
     STEP_HUMAN_REVIEW, STEP_PLAN, STEP_PUBLISHED_AT, STEP_RENDERED, SlotState, validate_input,
 };
-use super::sessions::{Review, ReviewerSlot};
+use super::sessions::{Review, ReviewerSlot, StepFailure};
 use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
 use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code};
@@ -31,8 +31,14 @@ use crate::publish::anchor::anchor_findings;
 use crate::publish::decision_text;
 use crate::publish::plan::{PublicationPlan, blocking_count, plan_publication, publication_event};
 use crate::publish::render::{RenderSettings, human_review_signals, render_review};
-use crate::store::{RESULT_SUCCESS, ReviewStep, StoredReview};
+use crate::store::{RESULT_SUCCESS, ReviewStep, StepOutcome, StoredReview};
 use crate::verify::{apply_verification, claims_of, verifier_reviewer};
+
+/// Error code of a pull request that no longer requests a review of the login.
+const REVIEW_REQUEST_NOT_ACTIVE: &str = "review_request_not_active";
+
+/// Step name of the lookup of a review posted before a restart, in the retry log.
+const STEP_PUBLISHED_REVIEW: &str = "published_review";
 
 /// The stored time of a publication, written as Go writes a `time.Time`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,9 +160,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
         };
         if !plan.await_approval {
-            let current = match review.current_pull_request().await {
+            let current = match review.publication_target().await {
                 Ok(current) => current,
-                Err(err) => return review.fail(err).await,
+                Err(failure) => return review.fail_step(failure).await,
             };
             return review.publish(&current, &artifact, &plan).await;
         }
@@ -370,6 +376,83 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
         })
         .await
+    }
+
+    /// Reads the pull request that a resumed review publishes its stored plan on.
+    ///
+    /// A posted review answers the review request, so a resumed review of a request finds it
+    /// inactive. When its publication is stored, or its rendered review is found on the head,
+    /// the reviewed pull request is returned and the review completes as published. A found
+    /// review is stored with a succeeded publication run of the lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns the read error without a run when no publication is stored or found, and a
+    /// failed publication run when the lookup or its store write fails.
+    pub(crate) async fn publication_target(&self) -> Result<PullRequest, StepFailure> {
+        let cause = match self.current_pull_request().await {
+            Ok(current) => return Ok(current),
+            Err(cause) => cause,
+        };
+        if self.input.rule.trigger.kind != TriggerKind::ReviewRequested
+            || error_code(&cause) != REVIEW_REQUEST_NOT_ACTIVE
+        {
+            return Err(StepFailure::without_run(cause));
+        }
+        let reviewed = self.input.pull_request.clone();
+        let stored = live(&self.cancel).and_then(|()| {
+            self.engine
+                .store
+                .load_step::<PublishResult>(&self.workflow_id, STEP_PUBLICATION)
+        });
+        match stored {
+            Ok(Some(_)) => return Ok(reviewed),
+            Ok(None) => {}
+            Err(err) => return Err(StepFailure::without_run(err)),
+        }
+        let rendered = live(&self.cancel).and_then(|()| {
+            self.engine
+                .store
+                .load_step::<RenderOutcome>(&self.workflow_id, STEP_RENDERED)
+        });
+        let review = match rendered {
+            // A review that was not rendered was never posted.
+            Ok(Some(rendered)) if rendered.error_code.is_empty() => rendered.review,
+            Ok(_) => return Err(StepFailure::without_run(cause)),
+            Err(err) => return Err(StepFailure::without_run(err)),
+        };
+        let started = self.step_started();
+        let found = self
+            .fresh(STEP_PUBLISHED_REVIEW, || {
+                let integration = &*self.engine.integration;
+                let (cancel, reviewed, review) = (&self.cancel, &reviewed, &review);
+                async move {
+                    integration
+                        .find_published_review(cancel, reviewed, review)
+                        .await
+                }
+            })
+            .await;
+        let result = match found {
+            Ok(Some(result)) => result,
+            Ok(None) => return Err(StepFailure::without_run(cause)),
+            Err(err) => return Err(self.step_failure(ReviewStep::Publication, started, err)),
+        };
+        let run = self.step_run(ReviewStep::Publication, started, StepOutcome::Succeeded);
+        let saved = live(&self.cancel).and_then(|()| {
+            self.engine
+                .store
+                .save_step_recorded(&self.workflow_id, STEP_PUBLICATION, &result, &run)
+        });
+        match saved {
+            Ok(inserted) => {
+                if inserted {
+                    self.engine.count_step(&run);
+                }
+                Ok(reviewed)
+            }
+            Err(err) => Err(self.step_failure(ReviewStep::Publication, started, err)),
+        }
     }
 
     /// Renders and publishes the review once, records it and completes the review.

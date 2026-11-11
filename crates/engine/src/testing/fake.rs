@@ -10,6 +10,7 @@ use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
+use autoreview_policy::TriggerKind;
 use autoreview_policy::{
     Checkout, Level, Permission, Policy, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID,
 };
@@ -118,6 +119,10 @@ pub(crate) struct FakeState {
     pub(crate) rejected: Vec<RejectedCandidate>,
     /// Every review submission that was published.
     pub(crate) published: Vec<GitHubReview>,
+    /// Pull requests whose review request a posted review answered, by `repository#number`.
+    pub(crate) answered: BTreeSet<String>,
+    /// Gate that every posted review waits on before it returns; `None` holds none.
+    pub(crate) held_publications: Option<Arc<Semaphore>>,
     /// Every notification that was sent.
     pub(crate) notes: Vec<Note>,
     /// Counter of session IDs.
@@ -176,7 +181,8 @@ impl FakeIntegration {
 
     /// Registers a pull request as a candidate.
     ///
-    /// Its authors section is the one of the policy rule that covers the repository.
+    /// Its authors section is the one of the policy rule that covers the repository. It also
+    /// requests a review of the login again, which a posted review answered.
     pub(crate) fn open(&self, pr: PullRequest, rule: Rule) {
         let mut state = self.lock();
         let key = pr.key();
@@ -196,6 +202,7 @@ impl FakeIntegration {
         );
         state.current.insert(key.clone(), pr);
         state.lapsed.remove(&key);
+        state.answered.remove(&key);
     }
 
     /// Marks a pull request as lapsed with an error code.
@@ -293,6 +300,15 @@ impl FakeIntegration {
         self.lock().held_notes = Some((fragment.to_owned(), Arc::clone(&gate)));
         gate
     }
+
+    /// Holds every posted review after it is recorded.
+    ///
+    /// A held publication returns once the returned gate has a permit.
+    pub(crate) fn hold_publications(&self) -> Arc<Semaphore> {
+        let gate = Arc::new(Semaphore::new(0));
+        self.lock().held_publications = Some(Arc::clone(&gate));
+        gate
+    }
 }
 
 /// Error codes that the Matrix notifier drops for a level other than action.
@@ -353,7 +369,7 @@ impl Integrations for FakeIntegration {
         _cancel: &CancellationToken,
         repository: &str,
         number: i64,
-        _trigger: &Trigger,
+        trigger: &Trigger,
     ) -> impl Future<Output = Result<PullRequest, Error>> + Send {
         let key = format!("{repository}#{number}");
         let result = {
@@ -363,7 +379,12 @@ impl Integrations for FakeIntegration {
             } else if let Some(code) = state.lapsed.get(&key) {
                 Err(Error::workflow(code.clone(), true, None))
             } else if let Some(pr) = state.current.get(&key) {
-                Ok(pr.clone())
+                // The open state is checked before the trigger, as `decode_pull_request` does.
+                if trigger.kind == TriggerKind::ReviewRequested && state.answered.contains(&key) {
+                    Err(Error::workflow("review_request_not_active", true, None))
+                } else {
+                    Ok(pr.clone())
+                }
             } else {
                 Err(Error::workflow("pull_request_not_open", true, None))
             }
@@ -627,33 +648,65 @@ impl Integrations for FakeIntegration {
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send {
         // An earlier review is reused when its body carries the marker, as the GitHub client
-        // finds it.
-        let result = {
+        // finds it. A posted review answers the review request of the login, as on GitHub.
+        let (result, gate) = {
             let mut state = self.lock();
             if let Some(code) = state.publish_fail.clone() {
-                Err(Error::workflow(code, true, None))
+                (Err(Error::workflow(code, true, None)), None)
             } else if let Some(index) = state
                 .published
                 .iter()
                 .position(|existing| existing.body.contains(&review.marker))
             {
-                Ok(PublishResult {
+                let reused = PublishResult {
+                    decision: review.decision.clone(),
+                    github_review_id: (index + 1) as i64,
+                    review_url: format!("{}#review", pull_request.url),
+                    reused: true,
+                };
+                (Ok(reused), None)
+            } else {
+                state.published.push(review.clone());
+                state.answered.insert(pull_request.key());
+                let posted = PublishResult {
+                    decision: review.decision.clone(),
+                    github_review_id: state.published.len() as i64,
+                    review_url: format!("{}#review", pull_request.url),
+                    reused: false,
+                };
+                (Ok(posted), state.held_publications.clone())
+            }
+        };
+        async move {
+            if let Some(gate) = gate {
+                // The permit goes back when it drops, so one permit releases every held review.
+                let _permit = gate.acquire().await;
+            }
+            result
+        }
+    }
+
+    fn find_published_review(
+        &self,
+        _cancel: &CancellationToken,
+        pull_request: &PullRequest,
+        review: &GitHubReview,
+    ) -> impl Future<Output = Result<Option<PublishResult>, Error>> + Send {
+        // The lookup of `publish_review`, which finds a review by the marker in its body.
+        let result = {
+            let state = self.lock();
+            state
+                .published
+                .iter()
+                .position(|existing| existing.body.contains(&review.marker))
+                .map(|index| PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,
                     review_url: format!("{}#review", pull_request.url),
                     reused: true,
                 })
-            } else {
-                state.published.push(review.clone());
-                Ok(PublishResult {
-                    decision: review.decision.clone(),
-                    github_review_id: state.published.len() as i64,
-                    review_url: format!("{}#review", pull_request.url),
-                    reused: false,
-                })
-            }
         };
-        ready(result)
+        ready(Ok(result))
     }
 
     fn list_review_requests(

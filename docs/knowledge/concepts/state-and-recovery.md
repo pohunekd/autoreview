@@ -61,6 +61,13 @@ engine finds every review in `queued` or `running`, and it resumes it:
 
 - A step that already has stored output is not repeated. The stored output is read
   instead, so a publication that happened before the restart is not posted twice.
+- A review that a review request started and that stopped after its review was
+  posted to GitHub finds the request answered by that review. It completes as
+  published, without posting again, from its stored publication or, when the stop
+  came before the publication was stored, from the review it finds on the head by
+  the hidden marker; that lookup records the publication step. When neither
+  exists, the review ends as superseded. When the lookup itself fails, the review
+  fails with the lookup's error code and a failed publication step.
 - A review that waits for an approval keeps its first deadline. A restart does not
   extend the wait.
 - A reviewer whose session was started before the restart is found by its name.

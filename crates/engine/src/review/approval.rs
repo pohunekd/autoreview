@@ -132,18 +132,18 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 self.approved = true;
                 live(&self.cancel)?;
                 self.set_released(false)?;
-                let current = match self.current_pull_request().await {
+                let current = match self.publication_target().await {
                     Ok(current) => current,
-                    Err(err) => {
-                        if is_shutdown(&err) {
-                            return Err(err);
+                    Err(failure) => {
+                        if is_shutdown(&failure.error) {
+                            return Err(failure.error);
                         }
                         let record = self.await_record();
                         if let Err(clear) = self.engine.clear_awaiting(&self.cancel, &record).await
                         {
                             return Err(self.interrupted(clear));
                         }
-                        return self.fail(err).await;
+                        return self.fail_step(failure).await;
                     }
                 };
                 self.publish(&current, &artifact, &plan).await

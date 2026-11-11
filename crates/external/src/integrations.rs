@@ -250,6 +250,17 @@ impl Integrations for External {
             .await
     }
 
+    async fn find_published_review(
+        &self,
+        cancel: &CancellationToken,
+        pull_request: &PullRequest,
+        review: &GitHubReview,
+    ) -> Result<Option<PublishResult>, Error> {
+        self.github
+            .published_review(cancel, pull_request, review)
+            .await
+    }
+
     async fn notify(
         &self,
         cancel: &CancellationToken,
