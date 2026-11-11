@@ -14,7 +14,7 @@ use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_OPEN, prior_key};
 use crate::protocol::fixtures::sha;
-use crate::testing::fake::{reviewer_output, settling_output};
+use crate::testing::fake::{count_notes, reviewer_output, settling_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
 
 #[tokio::test]
@@ -645,11 +645,22 @@ async fn stopped_review_of_a_retarget_is_retried_by_head_prefix() {
     retargeted.base_branch = "release".to_owned();
     retargeted.base_sha = sha("e");
     h.fake.open(retargeted.clone(), h.rule(&pr.repository));
+    let stop = "No further automatic attempt is scheduled";
     h.poll_until("the stop notification", || {
-        h.fake
-            .has_note(Level::Action, "No further automatic attempt is scheduled")
+        h.fake.has_note(Level::Action, stop)
     })
     .await;
+    // Back on the published base branch and away again: the stop is not notified twice.
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll().await;
+    h.fake.open(retargeted.clone(), h.rule(&pr.repository));
+    h.poll().await;
+    let (_, notes, _, _) = h.fake.snapshot();
+    assert_eq!(
+        count_notes(&notes, Level::Action, stop),
+        1,
+        "a return by way of the published base branch must not notify the stop again"
+    );
     h.set_output(reviewer_output(Vec::new()));
     let retried = match h.retry(&retargeted).await {
         Ok(result) if result.head_sha == pr.head_sha && result.attempt == 2 => result.workflow_id,

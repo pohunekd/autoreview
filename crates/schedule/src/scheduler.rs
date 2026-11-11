@@ -1252,7 +1252,28 @@ mod tests {
                         "release",
                         (false, phase::RUNNING, 2, 2, vec![], true, false),
                     ),
+                    // The retry is a new run, so its failure is notified.
+                    (
+                        vec![ended(0, ""), ended(1, session_lost), ended(2, session_lost)],
+                        "release",
+                        (false, phase::RETRY_WAIT, 3, 3, vec![], false, true),
+                    ),
                 ],
+            ),
+            (
+                "failed retarget review, back by way of the published base branch",
+                // The record that discovery writes on the published base branch.
+                Record {
+                    handled_workflow: workflow(1),
+                    ..record(phase::COMPLETED, 0, &[])
+                },
+                "wf-0",
+                None,
+                vec![(
+                    lost(),
+                    "release",
+                    (false, phase::RETRY_WAIT, 2, 1, vec![], false, false),
+                )],
             ),
             (
                 "stopped review, retargeted away and back within the debounce",
