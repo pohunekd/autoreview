@@ -138,6 +138,42 @@ class WrapperTests(unittest.TestCase):
             {"PATH": "/usr/bin", "HOME": "/tmp/home", "POHUNEK_SESSION_ID_HINT": "kept"},
         )
 
+    def test_exit_reason_is_the_last_error_line_bounded_and_neutralized(self) -> None:
+        bound = wrapper.REASON_MAX_BYTES
+        transcript = (
+            b"OpenAI Codex v0.0.0\n--------\nmodel: model-x\nuser\nERROR: from the prompt\n"
+            b"ERROR: unexpected status 400 Bad Request: model not supported\r\n"
+            b"tokens used\n12\n"
+        )
+        cases = (
+            ("codex transcript", transcript,
+             "ERROR: unexpected status 400 Bad Request: model not supported"),
+            ("argument error", b"error: unexpected argument '--x' found\n\nUsage: codex\n",
+             "error: unexpected argument '--x' found"),
+            ("no error line", b"first\n  last line  \n\n", "last line"),
+            ("blank", b" \n\t\r\n", ""),
+            ("empty", b"", ""),
+            ("control and format characters",
+             "ERROR: a\x1b[31mb\u202ec\u0085d\te\u200bf".encode("utf-8"),
+             "ERROR: a?[31mb?c?d?e?f"),
+            ("soft hyphen, tag and separator characters",
+             "ERROR: a\u00adb\U000e0041c\u2028d\u2029e\u180ef\ufff9g\u0600h".encode("utf-8"),
+             "ERROR: a?b?c?d?e?f?g?h"),
+            ("invalid bytes", b"ERROR: \xff\xfe x", "ERROR: \ufffd\ufffd x"),
+            ("cut inside a character", b"x" * (bound - 1) + "\u00e9tail".encode("utf-8"),
+             "x" * (bound - 1)),
+            ("replacement characters over the bound", b"\xff" * 200, "\ufffd" * 170),
+            ("exactly the bound", b"y" * bound + b"z", "y" * bound),
+        )
+        for name, stderr, reason in cases:
+            with self.subTest(name=name):
+                self.assertEqual(wrapper.exit_reason(stderr), reason)
+        self.assertEqual(
+            wrapper.reason_marker(b"ERROR: x\n"),
+            "[pohunek-codex-review-reason-v1:RVJST1I6IHg=]",
+        )
+        self.assertEqual(wrapper.reason_marker(b""), "[pohunek-codex-review-reason-v1:]")
+
     def write_result(self, directory: str, value: object) -> Path:
         result = Path(directory) / "result.json"
         result.write_text(json.dumps(value), encoding="utf-8")
@@ -470,6 +506,32 @@ class BaseCheckoutTests(unittest.TestCase):
                 )
                 # The engine reads the output as finished only at the exit line.
                 self.assertIn(wrapper.EXIT_LINE_FORMAT.format(wrapper.EXIT_USAGE), stdout)
+
+    def test_failed_codex_run_reports_its_error_line_before_the_exit_line(self) -> None:
+        self.fetch_head()
+        # More stderr than the adapter keeps, then the lines of a failed turn.
+        failing = (
+            "head -c 70000 /dev/zero | tr '\\0' x >&2\n"
+            "printf '\\nOpenAI Codex v0.0.0\\nERROR: model-x is not supported\\n"
+            "tokens used\\n12\\n' >&2\n"
+            "exit 3"
+        )
+
+        status, stdout, stderr = self.run_adapter(failing)
+
+        self.assertEqual(status, 3, stderr)
+        reason = base64.b64encode(b"ERROR: model-x is not supported").decode("ascii")
+        self.assertTrue(
+            stdout.endswith(
+                f"\n[pohunek-codex-review-reason-v1:{reason}]\n"
+                "[pohunek-codex-review exited with status 3]\n"
+            ),
+            stdout,
+        )
+        self.assertNotIn(wrapper.RESULT_MARKER_PREFIX, stdout)
+        # Codex's stderr still reaches the session output, in full.
+        self.assertIn("x" * 70000 + "\nOpenAI Codex v0.0.0\n", stderr)
+        self.assertTrue(stderr.endswith("tokens used\n12\n"), stderr[-200:])
 
 
 class VersionProbeTests(unittest.TestCase):

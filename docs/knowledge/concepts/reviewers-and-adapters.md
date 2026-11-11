@@ -251,7 +251,13 @@ Python standard library (Python 3.11 or newer). It has two parts:
   The adapter then stays alive for the retention time, so that the coordinator
   can read the output before it removes the session. It exits with the status of
   Codex, or with status 64 when the request's trusted lines, the checkout check
-  before or after the run, or the report fail. After the run the checkout gets
+  before or after the run, or the report fail. Codex's stderr goes on to the
+  session output as it arrives; the adapter keeps its last 64 KiB. When Codex
+  exits with a status other than 0, the line
+  `[pohunek-codex-review-reason-v1:<base64>]` comes right before the exit line,
+  with the reason that the engine logs next to `review_result_invalid` (see
+  [troubleshooting](../runbooks/troubleshooting.md#codex-program-failed)).
+  After the run the checkout gets
   the same check again, and a base checkout must still be at the `HEAD`
   recorded before the run.
   A refused checkout prints `codex-adapter: <reason>`, no result frame and the
