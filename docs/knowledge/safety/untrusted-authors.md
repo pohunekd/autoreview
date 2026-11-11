@@ -40,6 +40,10 @@ authors:
   `"devin-ai-integration[bot]"`, and matches only the app. A user account that
   takes an app's name is not trusted by the app's entry. An author whose type
   GitHub does not report as a user or a bot is untrusted.
+- A login is listed in lowercase. An Enterprise Managed User login is the
+  handle, an underscore and the enterprise short code, such as `mona-cat_octo`;
+  list it in lowercase even when GitHub shows capitals from the identity
+  provider. An app's name never has an underscore.
 - `trusted: any` means every author is trusted. Such a rule has no `untrusted`
   section; adding one is an error.
 - `untrusted` is required unless `trusted: any`. It is `skip`, or a mapping with
