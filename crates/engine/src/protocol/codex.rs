@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::error::Error;
+use crate::error::{BoxError, Error};
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
 use crate::protocol::validate::{
     count_over, review_adapter_outdated, review_head_unavailable, sort_findings,
@@ -23,6 +23,27 @@ const REFUSED_EXIT_LINE: &str = "[pohunek-codex-review exited with status 64]";
 
 /// Line of the adapter, right before its exit line, when the pull request head is missing.
 const HEAD_UNAVAILABLE_MARKER: &str = "[pohunek-codex-review-refused-v1:head_unavailable]";
+
+/// Opens the exit line of a Codex session; the status and `]` follow.
+const EXIT_LINE_PREFIX: &str = "[pohunek-codex-review exited with status ";
+
+/// Opens the adapter's base64 reason line before the exit line of a failed run.
+const REASON_MARKER: &str = "[pohunek-codex-review-reason-v1:";
+
+/// Most bytes of a reason that the engine logs, as the adapter's `REASON_MAX_BYTES`.
+const REASON_MAX_BYTES: usize = 512;
+
+/// Format characters that a logged reason shows as `?`, as control characters.
+///
+/// Bidi controls and invisible separators could make a log line read differently than it is.
+const FORMAT_CHARACTERS: [(char, char); 6] = [
+    ('\u{061C}', '\u{061C}'),
+    ('\u{200B}', '\u{200F}'),
+    ('\u{2028}', '\u{202E}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{2069}'),
+    ('\u{FEFF}', '\u{FEFF}'),
+];
 
 /// Line breaks that may separate the report from the exit line.
 const SEPARATORS: [&str; 6] = ["\n", "\r\n", "\n\n", "\n\r\n", "\r\n\n", "\r\n\r\n"];
@@ -111,7 +132,8 @@ autoreview_go_compat::object_only_serde!(CodexVerdict);
 ///
 /// Returns `review_result_invalid` for an output, report or head that the engine refuses,
 /// `review_adapter_outdated` for a report without `prior_findings` or a finding without
-/// `blocking`, and `review_head_unavailable` when the adapter refused a missing head.
+/// `blocking`, and `review_head_unavailable` when the adapter refused a missing head. A
+/// `review_result_invalid` of a failed Codex run carries the adapter's reason line as its cause.
 pub(crate) fn parse_codex_output(
     cfg: &Config,
     pr: &PullRequest,
@@ -120,7 +142,7 @@ pub(crate) fn parse_codex_output(
     if refused_for_missing_head(raw) {
         return Err(review_head_unavailable());
     }
-    let encoded = envelope_payload(raw).ok_or_else(result_invalid)?;
+    let encoded = envelope_payload(raw).ok_or_else(|| exit_without_result(raw))?;
     let decoded = decode_go_base64(encoded)
         .filter(|v| !v.is_empty())
         .ok_or_else(result_invalid)?;
@@ -246,6 +268,86 @@ fn envelope_payload(raw: &str) -> Option<&str> {
     Some(payload)
 }
 
+/// Error of an output without an envelope, with a failed run's reason.
+///
+/// The reason quotes the output, which is untrusted, so it is bounded and neutralized. It only
+/// goes into the log line of the refused output: the recorded failure keeps only the code.
+fn exit_without_result(raw: &str) -> Error {
+    match exit_reason(raw) {
+        Some(reason) => Error::workflow(
+            "review_result_invalid",
+            true,
+            Some(BoxError::from(format!(
+                "Codex exited without a result: {reason}"
+            ))),
+        ),
+        None => result_invalid(),
+    }
+}
+
+/// Returns the reason right before a failed exit line at the end of `raw`.
+///
+/// The line must come right before the exit line, separated by one of `SEPARATORS`, as the
+/// adapter writes both at once. An empty or invalid base64 text, or an empty reason, is `None`.
+fn exit_reason(raw: &str) -> Option<String> {
+    let encoded = ENDINGS
+        .iter()
+        .filter_map(|ending| raw.strip_suffix(ending))
+        .find_map(|rest| {
+            let (head, status) = rest.rsplit_once(EXIT_LINE_PREFIX)?;
+            if !failed_status(status.strip_suffix(']')?) {
+                return None;
+            }
+            SEPARATORS
+                .iter()
+                .filter_map(|separator| head.strip_suffix(separator))
+                .find_map(|before| {
+                    let start = before.rfind(['\n', '\r']).map_or(0, |index| index + 1);
+                    before
+                        .get(start..)?
+                        .strip_prefix(REASON_MARKER)?
+                        .strip_suffix(']')
+                })
+        })?;
+    let reason = bounded_reason(&decode_go_base64(encoded)?);
+    (!reason.is_empty()).then_some(reason)
+}
+
+/// Reports whether `status` is the decimal text of an exit status other than 0.
+///
+/// A Codex run that a signal ended has a negative status, as Python reports it.
+fn failed_status(status: &str) -> bool {
+    let digits = status.strip_prefix('-').unwrap_or(status);
+    !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && digits.bytes().any(|byte| byte != b'0')
+}
+
+/// Returns `bytes` cut to `REASON_MAX_BYTES`, decoded lossily and neutralized.
+///
+/// Each control or format character becomes `?`.
+fn bounded_reason(bytes: &[u8]) -> String {
+    let cut = bytes.get(..REASON_MAX_BYTES).unwrap_or(bytes);
+    go_utf8_lossy(cut)
+        .chars()
+        .map(|character| {
+            if is_neutralized(character) {
+                '?'
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+/// Reports whether a logged reason shows `character` as `?`.
+fn is_neutralized(character: char) -> bool {
+    character.is_control()
+        || FORMAT_CHARACTERS
+            .iter()
+            .any(|(low, high)| (*low..=*high).contains(&character))
+}
+
 /// Reports whether `character` belongs to the base64 alphabet that the envelope accepts.
 fn is_base64_char(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '+' || character == '/' || character == '='
@@ -258,6 +360,8 @@ fn result_invalid() -> Error {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
     use serde_json::json;
 
     use crate::error::error_code;
@@ -327,6 +431,76 @@ mod tests {
                 .expect_err(name);
             assert_eq!(error_code(&err), "review_adapter_outdated", "{name}");
             assert!(!reviewer_output_retryable(&err), "{name}");
+        }
+    }
+
+    // A failed Codex run gets the adapter's reason line, bounded and neutralized, as the cause
+    // of `review_result_invalid`; any other output keeps the bare code (#283).
+    #[test]
+    fn failed_codex_run_carries_the_bounded_reason_of_the_adapter() {
+        let pr = test_pull_request(3);
+        let line =
+            |text: &[u8]| format!("[pohunek-codex-review-reason-v1:{}]", STANDARD.encode(text));
+        let failed = "[pohunek-codex-review exited with status 1]";
+        let reason = line(b"ERROR: model-x is not supported");
+        let long = [b"x".repeat(511), "\u{e9}tail".as_bytes().to_vec()].concat();
+        let cases = [
+            (
+                "reason on the terminal",
+                format!("OpenAI Codex v0.0.0\r\ntokens used\r\n\r\n{reason}\r\n{failed}\r\n"),
+                Some("ERROR: model-x is not supported".to_owned()),
+            ),
+            (
+                "status of a signal",
+                format!("{reason}\n[pohunek-codex-review exited with status -9]"),
+                Some("ERROR: model-x is not supported".to_owned()),
+            ),
+            (
+                "control and format characters",
+                format!(
+                    "{}\n{failed}\n",
+                    line("a\u{1b}[31mb\u{202e}c\u{85}d\te\u{200b}f".as_bytes())
+                ),
+                Some("a?[31mb?c?d?e?f".to_owned()),
+            ),
+            (
+                "cut inside a character",
+                format!("{}\n{failed}\n", line(&long)),
+                Some(format!("{}\u{FFFD}", "x".repeat(511))),
+            ),
+            (
+                "adapter without the reason line",
+                format!("ERROR: x\n{failed}\n"),
+                None,
+            ),
+            ("empty reason", format!("{}\n{failed}\n", line(b"")), None),
+            (
+                "invalid base64",
+                format!("[pohunek-codex-review-reason-v1:%%]\n{failed}\n"),
+                None,
+            ),
+            (
+                "text after the reason",
+                format!("{reason}\nmore\n{failed}\n"),
+                None,
+            ),
+            (
+                "status 0",
+                format!("{reason}\n[pohunek-codex-review exited with status 0]\n"),
+                None,
+            ),
+        ];
+        for (name, output, reason) in cases {
+            let err = parse_codex_output(&test_config(), &pr, &output).expect_err(name);
+            assert_eq!(error_code(&err), "review_result_invalid", "{name}");
+            assert!(reviewer_output_retryable(&err), "{name}");
+            let message = match reason {
+                Some(reason) => {
+                    format!("review_result_invalid: Codex exited without a result: {reason}")
+                }
+                None => "review_result_invalid".to_owned(),
+            };
+            assert_eq!(err.to_string(), message, "{name}");
         }
     }
 
