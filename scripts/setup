@@ -943,8 +943,8 @@ step_service() {
             "${units_changed[@]/#/write $unit_dir/}"
     fi
     approve "user service" "${unit_names[@]/#/write $unit_dir/}" "systemctl --user daemon-reload" \
-        "systemctl --user enable --now autoreview.service autoreview-queue.timer" \
-        "systemctl --user restart autoreview.service"
+        "systemctl --user enable autoreview.service autoreview-queue.timer" \
+        "systemctl --user restart autoreview.service autoreview-queue.timer"
     install -d -m 0755 "$unit_dir" || fail 10 "creating $unit_dir failed"
     for i in "${!unit_names[@]}"; do
         name=${unit_names[i]}
@@ -954,9 +954,12 @@ step_service() {
             || fail 10 "writing $unit_dir/$name failed"
     done
     systemctl --user daemon-reload || fail 10 "systemctl --user daemon-reload failed"
-    systemctl --user enable --now autoreview.service autoreview-queue.timer \
-        || fail 10 "systemctl --user enable --now failed"
-    systemctl --user restart autoreview.service || fail 10 "systemctl --user restart failed"
+    systemctl --user enable autoreview.service autoreview-queue.timer \
+        || fail 10 "systemctl --user enable failed"
+    # One restart starts a stopped unit and moves a running one to the new unit text,
+    # so the service starts exactly once.
+    systemctl --user restart autoreview.service autoreview-queue.timer \
+        || fail 10 "systemctl --user restart failed"
 }
 
 step_linger() {

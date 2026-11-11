@@ -267,7 +267,9 @@ Runs discovery and reviews until stopped. Before it starts, it asks GitHub for
 the login of the token and refuses with `configuration_invalid` naming
 `github.credentials.login` when the token belongs to another account, see
 [credentials](configuration.md#credentials). A second `serve` on the same database is refused. Reviews
-running at shutdown resume from their stored steps on the next start.
+running at shutdown resume from their stored steps on the next start. A SIGINT
+or SIGTERM during the login check or while the engine runs is a normal stop:
+`serve` logs `pull request review engine stopping` and exits with status 0.
 
 With a [`metrics` section](configuration.md#metrics), `serve` also answers
 `GET /metrics` on `metrics.listen`, see
