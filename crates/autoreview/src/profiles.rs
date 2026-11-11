@@ -359,12 +359,14 @@ pub(crate) fn profile_name_valid(name: &str) -> bool {
 ///
 /// pohunek reads profiles from `$XDG_CONFIG_HOME/pohunek/agents`, or from
 /// `$HOME/.config/pohunek/agents` when `XDG_CONFIG_HOME` is unset. pohunek refuses a set but
-/// empty `XDG_CONFIG_HOME`, so this does too.
+/// empty `XDG_CONFIG_HOME`, and a path with an empty, `.` or `..` part or a trailing `/`, so
+/// this does too.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming the variable that is empty, relative, not UTF-8 or
-/// holds a control character, or `HOME` when the variable is unset and `HOME` is unset or empty.
+/// Returns `configuration_invalid` naming the variable that is empty, relative, not UTF-8,
+/// holds a control character, or has an empty, `.` or `..` part or a trailing `/`. When the
+/// variable is unset, it names `HOME` if `HOME` is unset, empty or refused the same way.
 pub(crate) fn agents_directory(
     xdg_config_home: Option<&OsStr>,
     home: Option<&OsStr>,
@@ -377,7 +379,8 @@ pub(crate) fn agents_directory(
 ///
 /// The adapters live in `$XDG_DATA_HOME/autoreview/adapters`, or in
 /// `$HOME/.local/share/autoreview/adapters` when `XDG_DATA_HOME` is unset. A set but empty
-/// `XDG_DATA_HOME` is refused, as pohunek refuses it.
+/// `XDG_DATA_HOME`, or a path with an empty, `.` or `..` part or a trailing `/`, is refused,
+/// as pohunek refuses it.
 ///
 /// # Errors
 ///
@@ -392,21 +395,24 @@ pub(crate) fn adapters_directory(
 
 /// Returns the XDG base directory: the variable when it is set, else `fallback` under `HOME`.
 ///
-/// A set but empty variable is refused: pohunek refuses it rather than use the default.
+/// A set but empty variable is refused: pohunek refuses it rather than use the default. The
+/// value used, the variable or `HOME`, must have clean parts, as [`path_parts_clean`] checks.
 fn base_directory(
     (name, value): (&'static str, Option<&OsStr>),
     home: Option<&OsStr>,
     fallback: &str,
 ) -> Result<PathBuf, Error> {
-    let (variable, base) = match (value, home) {
+    let (variable, root, base) = match (value, home) {
         (Some(value), _) if value.is_empty() => {
             return Err(invalid_flag(
                 name,
                 "must not be empty when set; unset it for the default under HOME",
             ));
         }
-        (Some(value), _) => (name, PathBuf::from(value)),
-        (None, Some(value)) if !value.is_empty() => ("HOME", Path::new(value).join(fallback)),
+        (Some(value), _) => (name, value, PathBuf::from(value)),
+        (None, Some(value)) if !value.is_empty() => {
+            ("HOME", value, Path::new(value).join(fallback))
+        }
         (None, _) => {
             return Err(invalid_flag(
                 "HOME",
@@ -423,7 +429,22 @@ fn base_directory(
             "must be an absolute UTF-8 path without control characters",
         ));
     }
+    // The raw value is checked: `Path::join` drops a trailing `/` of `HOME`.
+    if !root.to_str().is_some_and(path_parts_clean) {
+        return Err(invalid_flag(
+            variable,
+            "must not have an empty, '.' or '..' part or a trailing '/'",
+        ));
+    }
     Ok(base)
+}
+
+/// Reports whether `text` is `/` followed by parts that are neither empty, `.` nor `..`.
+///
+/// This is pohunek's rule for an XDG home: no `//`, no `.` or `..` part, no trailing `/`.
+fn path_parts_clean(text: &str) -> bool {
+    text.strip_prefix('/')
+        .is_some_and(|rest| rest.split('/').all(|part| !matches!(part, "" | "." | "..")))
 }
 
 /// Returns the configuration error of a flag or variable value that the command refuses.
