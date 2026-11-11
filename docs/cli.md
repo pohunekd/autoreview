@@ -44,7 +44,7 @@ required:
 | Flag | Meaning |
 |---|---|
 | `--dir` | Clean absolute directory whose parent exists; it and `prompts/` are created when absent |
-| `--login` | Lowercase GitHub login of the one credential |
+| `--login` | Lowercase GitHub user login of the one credential, such as `review-bot`, or `mona-cat_octo` for an Enterprise Managed User |
 | `--pohunek-host` | The pohunek host that runs the reviewers |
 | `--example` | The example directory under `examples/`, for example `single-repo-comment` |
 

@@ -385,8 +385,17 @@ pub(crate) fn parse_authors(
 pub fn login_valid(login: &str) -> bool {
     match login.strip_suffix(BOT_SUFFIX) {
         Some(app) => is_owner(app),
-        None => is_owner(login) || is_managed_user(login),
+        None => user_login_valid(login),
     }
+}
+
+/// Reports whether `login` is a lowercase GitHub user login, a managed user's included.
+///
+/// It is the user branch of [`login_valid`]: an app's `name[bot]` is refused. A token belongs to
+/// a user, and no accepted login has a path character.
+#[must_use]
+pub fn user_login_valid(login: &str) -> bool {
+    is_owner(login) || is_managed_user(login)
 }
 
 /// Validates the trusted mapping: at least one key, valid logins listed once, a known permission.

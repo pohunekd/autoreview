@@ -5,14 +5,11 @@
 use autoreview_engine::error::Error;
 use autoreview_engine::model::repository_valid;
 use autoreview_go_compat::null_default;
-use autoreview_policy::Permission;
+use autoreview_policy::{Permission, user_login_valid};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::{GitHub, response_invalid};
-
-/// Longest login in bytes that GitHub allows.
-const MAX_LOGIN_BYTES: usize = 39;
 
 /// The response of `gh api repos/<repository>/collaborators/<login>/permission`.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -26,18 +23,6 @@ struct PermissionResponse {
 }
 
 autoreview_go_compat::object_only_serde!(PermissionResponse);
-
-/// Reports whether `login` is a plain GitHub user login, safe to place in an API path.
-///
-/// An Enterprise Managed User login carries an underscore (`handle_shortcode`). Letters,
-/// digits, `-` and `_` are unreserved in a URL path, so the login needs no encoding.
-fn login_valid(login: &str) -> bool {
-    !login.is_empty()
-        && login.len() <= MAX_LOGIN_BYTES
-        && login
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-}
 
 /// Returns the argv of the permission read of `login` in `repository`.
 fn permission_args(repository: &str, login: &str) -> Vec<String> {
@@ -70,7 +55,7 @@ impl GitHub {
         repository: &str,
         login: &str,
     ) -> Result<Option<Permission>, Error> {
-        if !repository_valid(repository) || !login_valid(login) {
+        if !repository_valid(repository) || !user_login_valid(login) {
             return Err(Error::workflow("github_request_invalid", true, None));
         }
         let output = self
@@ -85,7 +70,7 @@ mod tests {
     use autoreview_engine::error_code;
     use autoreview_policy::Permission;
 
-    use super::{decode_permission, login_valid};
+    use super::{decode_permission, user_login_valid};
 
     #[test]
     fn permission_is_read_from_the_role_name() {
@@ -123,11 +108,14 @@ mod tests {
             );
         }
         assert!(
-            login_valid("handle_shortcode")
-                && !login_valid("bot[bot]")
-                && !login_valid("a/b")
-                && !login_valid("a%2fb"),
-            "an Enterprise Managed User login is read, and no path character passes"
+            user_login_valid("handle_shortcode")
+                && !user_login_valid("bot[bot]")
+                && !user_login_valid("a/b")
+                && !user_login_valid("a%2fb")
+                && !user_login_valid("_octo")
+                && !user_login_valid("mona__octo")
+                && !user_login_valid("Mona_octo"),
+            "an Enterprise Managed User login is read, and only a lowercase user login passes"
         );
     }
 }

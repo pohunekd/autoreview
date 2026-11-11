@@ -16,7 +16,7 @@ mod types;
 
 pub use authors::{
     AuthorClass, AuthorType, Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview,
-    login_valid,
+    login_valid, user_login_valid,
 };
 pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};

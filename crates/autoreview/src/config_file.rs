@@ -15,7 +15,7 @@ use autoreview_engine::Error;
 use autoreview_engine::config::{Config, MatrixRooms, RouteOverride, SECRET_ENV_PREFIX};
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
-use autoreview_policy::{EVENTS, Event, Policy};
+use autoreview_policy::{EVENTS, Event, Policy, user_login_valid};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -40,8 +40,6 @@ const RETRY_DELAYS_MAX: usize = 5;
 const RETRY_DELAY_SECONDS_MAX: i64 = 3600;
 /// Longest credential name, in characters.
 const CREDENTIAL_NAME_MAX: usize = 32;
-/// Longest GitHub login, in characters.
-const GITHUB_LOGIN_MAX: usize = 39;
 /// Seconds in one day, the shortest review retention.
 const SECONDS_PER_DAY: u64 = 86_400;
 /// Longest discovery lock timeout, in seconds.
@@ -977,7 +975,7 @@ fn github_credentials(
             ));
         }
         let login = text(&entry.login, "github.credentials.login")?;
-        if !github_login_valid(login.as_str()) {
+        if !user_login_valid(login.as_str()) {
             return Err(invalid("github.credentials.login", "is not a GitHub login"));
         }
         let token_env = text(&entry.token_env, "github.credentials.token_env")?;
@@ -1044,21 +1042,6 @@ fn credential_name_valid(name: &str) -> bool {
     bytes.iter().all(|byte| {
         byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_' || *byte == b'-'
     })
-}
-
-/// Reports whether a GitHub login matches `[a-z0-9](?:[a-z0-9-]{0,37}[a-z0-9])?`.
-pub(crate) fn github_login_valid(login: &str) -> bool {
-    let bytes = login.as_bytes();
-    if bytes.is_empty() || bytes.len() > GITHUB_LOGIN_MAX {
-        return false;
-    }
-    if !bytes
-        .iter()
-        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
-    {
-        return false;
-    }
-    !bytes.starts_with(b"-") && !bytes.ends_with(b"-")
 }
 
 /// Reports whether a match entry is `*`, `owner/*` or `owner/repository` in lowercase.
@@ -2012,6 +1995,16 @@ pub(crate) mod tests {
             metrics_section(&file).is_ok_and(|metrics| metrics.is_none()),
             "the example keeps the metrics endpoint off"
         );
+        // An Enterprise Managed User login is `handle_shortcode`.
+        for login in ["mona-cat_octo", "octo_admin"] {
+            let text = mutated(
+                "      login: review-bot\n",
+                &format!("      login: {login}\n"),
+            );
+            let config = parse(&text, secret, example_policy)
+                .unwrap_or_else(|error| panic!("{login}: {error}"));
+            assert_eq!(config.github_login, login);
+        }
     }
 
     /// Reads a prompt of the example in `directory` as its README installs it.
@@ -2422,6 +2415,16 @@ pub(crate) mod tests {
                 "version: 1",
                 "version: 2",
                 "configuration_invalid: version: must be 1",
+            ),
+            (
+                "      login: review-bot\n",
+                "      login: \"review-bot[bot]\"\n",
+                "configuration_invalid: github.credentials.login: is not a GitHub login",
+            ),
+            (
+                "      login: review-bot\n",
+                "      login: mona_cat_octo\n",
+                "configuration_invalid: github.credentials.login: is not a GitHub login",
             ),
             (
                 "policy_file: /etc/autoreview/policy.yaml",
