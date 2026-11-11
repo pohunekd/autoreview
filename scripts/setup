@@ -469,6 +469,12 @@ untrusted_lines() {
     user=$(id -u)
     root=$(stat -c %u /) || fail 3 "missing the owner of /; stat failed"
     IFS=/ read -r -a parts <<<"${target#/}"
+    # The walk compares entries with the target without empty parts, as pohunek
+    # reads `a//b/` as `a/b`.
+    target=""
+    for part in "${parts[@]}"; do
+        [ -z "$part" ] || target=$target/$part
+    done
     for part in "${parts[@]}"; do
         [ -n "$part" ] || continue
         current=$current/$part
