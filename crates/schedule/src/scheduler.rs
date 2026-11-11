@@ -391,6 +391,7 @@ pub fn superseded(code: &str) -> bool {
     matches!(
         code,
         "head_changed"
+            | "base_branch_changed"
             | "review_label_removed"
             | "review_request_changed"
             | "review_request_not_active"

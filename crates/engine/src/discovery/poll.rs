@@ -4,6 +4,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_policy::Event;
@@ -19,7 +20,9 @@ use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::messages::{go_elapsed_nanos, handoff_reminder_message};
 use crate::model::review::APPROVAL_KIND_SUPERSEDED;
-use crate::model::{Candidate, PollResult, RetryRequest, ReviewInput};
+use crate::model::{
+    Candidate, PollResult, PublishedRecord, PullRequest, RetryRequest, ReviewInput,
+};
 use crate::store::discovery::save_discovery;
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
 
@@ -173,6 +176,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             if let Some(published) = state.published.get(key)
                 && published.covers(pr)
+                && !published.retargeted(pr)
             {
                 state.schedule.insert(
                     key.clone(),
@@ -195,10 +199,47 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             let target = pr.target();
             // A key without a record plans from Go's zero record, which `Record::default` is.
-            let previous = state.schedule.get(key).cloned().unwrap_or_default();
+            let mut previous = state.schedule.get(key).cloned().unwrap_or_default();
+            let retarget = match state.published.get(key) {
+                Some(published) if published.covers(pr) => {
+                    self.retarget_attempt(cancel, published, pr, &history)?
+                }
+                _ => None,
+            };
+            let mut runs = Cow::Borrowed(history.as_slice());
+            if retarget.is_some() {
+                // The ended runs of this head reviewed another base branch, so none of them
+                // completes the review. The record of the retarget names no workflow until it
+                // dispatches; it is kept, so its debounce runs once.
+                let identity = target.identity();
+                runs = Cow::Owned(
+                    history
+                        .iter()
+                        .filter(|run| run.active() || run.target.identity() != identity)
+                        .cloned()
+                        .collect(),
+                );
+                if previous.identity != identity || !previous.workflow_id.is_empty() {
+                    previous = Record {
+                        blocking_workflows: previous.blocking_workflows,
+                        ..Record::default()
+                    };
+                }
+            }
             let mut decision =
-                scheduler::plan(previous, &target, &history, now, &self.config.schedule)
+                scheduler::plan(previous, &target, &runs, now, &self.config.schedule)
                     .map_err(schedule_error)?;
+            if let Some(attempt) = retarget {
+                decision.record.attempt = decision.record.attempt.max(attempt);
+                if decision.dispatch {
+                    tracing::info!(
+                        review_id = %pr.review_id(),
+                        reason = "base_branch_changed",
+                        base_branch = %pr.base_branch,
+                        "reviewed head scheduled again for a full review"
+                    );
+                }
+            }
             if decision.notify {
                 let message = scheduler::notification(&target, &decision.record);
                 notices.push(self.notice(record_event(&decision.record), key, message)?);
@@ -312,6 +353,47 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             save_discovery(transaction, &state)
         })?;
         Ok(Pass { result, notices })
+    }
+
+    /// Returns the first attempt of the review that a retarget of a reviewed head asks for.
+    ///
+    /// Returns `None` when a run of this head that was not superseded already reviewed the
+    /// current base branch. The attempt follows every run of the head and never repeats the
+    /// workflow of `published`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store.
+    fn retarget_attempt(
+        &self,
+        cancel: &CancellationToken,
+        published: &PublishedRecord,
+        pr: &PullRequest,
+        history: &[Run],
+    ) -> Result<Option<i64>, Error> {
+        let identity = pr.target().identity();
+        let mut attempt = 0_i64;
+        for run in history
+            .iter()
+            .filter(|run| run.target.identity() == identity)
+        {
+            attempt = attempt.max(run.attempt.wrapping_add(1));
+            // A superseded run reviewed nothing, so its base branch still needs a review.
+            if !run.active() && scheduler::superseded(&scheduler::failure_code(&run.failure)) {
+                continue;
+            }
+            live(cancel)?;
+            let stored = self.store.get_review(&run.workflow_id)?;
+            if stored.is_some_and(|review| review.input.pull_request.base_branch == pr.base_branch)
+            {
+                return Ok(None);
+            }
+        }
+        // The run of the published review may be pruned while its record is kept.
+        if pr.workflow_id(attempt) == published.workflow_id {
+            attempt = attempt.wrapping_add(1);
+        }
+        Ok(Some(attempt))
     }
 
     /// Returns the waits that no longer match their pull request and drops ended waits.

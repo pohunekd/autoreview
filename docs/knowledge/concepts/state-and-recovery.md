@@ -89,9 +89,10 @@ Two more rules apply to these layers:
 - **Each start attempt gets its own branch.** A session start that fails leaves a
   branch behind. The next start uses another branch name, so it begins from the
   base again. The names are described in [how it works](how-it-works.md#4-sessions-per-reviewer).
-- **A superseded attempt is not a failure.** When the head changes, or the trigger
-  stops asking, the attempt ends quietly. The pull request is reviewed again at the
-  new head after the debounce time, with a new attempt number.
+- **A superseded attempt is not a failure.** When the head changes, the pull
+  request is retargeted to another base branch, or the trigger stops asking, the
+  attempt ends quietly. The pull request is reviewed again after the debounce
+  time, with a new attempt number.
 
 A failure that is not in the retryable list is not retried by the scheduler. The
 policy's notifications tell the user that the review stopped, and

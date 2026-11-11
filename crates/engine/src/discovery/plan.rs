@@ -81,7 +81,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let Some(published) = published else {
             return Ok((scope, Vec::new()));
         };
-        if published.head_sha == pr.head_sha {
+        // A retarget of the published head keeps its findings: the full review settles them.
+        if published.head_sha == pr.head_sha && !published.retargeted(pr) {
             return Ok((scope, Vec::new()));
         }
         let stored = self.prior_findings(published)?;
@@ -207,8 +208,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Returns the published review that handed non-blocking findings to the author.
     ///
-    /// At an unchanged head the review adopts that result while it is stored; otherwise the
-    /// reviewers run and the clean outcome waits for the user.
+    /// At an unchanged head and base branch the review adopts that result while it is stored;
+    /// otherwise the reviewers run and the clean outcome waits for the user.
     ///
     /// # Errors
     ///
@@ -229,7 +230,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             head_sha: published.head_sha.clone(),
             adopt: false,
         };
-        if published.head_sha != pr.head_sha {
+        if published.head_sha != pr.head_sha || published.retargeted(pr) {
             return Ok(Some(handoff));
         }
         let stored = self

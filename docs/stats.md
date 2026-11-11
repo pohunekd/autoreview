@@ -171,8 +171,8 @@ other counter counts on the UTC day it completed, and only inside the range.
 - `changes_requested`: published reviews that requested changes.
 - `commented`: published reviews that commented, including a notes hand-off.
 - `superseded`: attempts that a newer state of the pull request replaced: a new head, a
-  closed or draft pull request, a removed label, a changed or withdrawn review request, or a
-  wait that a newer review replaced.
+  retarget to another base branch, a closed or draft pull request, a removed label, a
+  changed or withdrawn review request, or a wait that a newer review replaced.
 - `approval_expired`: approval waits that reached `approval.timeout_hours` without a
   publication.
 - `failed`: attempts that failed for any other reason. A failure that is retried counts

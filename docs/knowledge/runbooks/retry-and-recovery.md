@@ -77,10 +77,12 @@ Before a planned restart, run `validate` (see [upgrade and backup](upgrade-and-b
 ## Superseded reviews
 
 A review is `superseded` (event `superseded`, log level by default) when a newer
-commit arrives or the review request changes before the review was published.
-Nothing is published for the old head. The newer head is reviewed under its own
-review. `approve` for the old head returns `review_superseded`, and that is the
-expected answer. Do not retry a superseded review.
+commit arrives, the review request changes, or the pull request is retargeted to
+another base branch (`base_branch_changed`) before the review was published.
+Nothing is published for the old state. The newer head, or the same head against
+the new base branch, is reviewed under its own review. `approve` for the old head
+returns `review_superseded`, and that is the expected answer. Do not retry a
+superseded review.
 
 ## Expired waits
 

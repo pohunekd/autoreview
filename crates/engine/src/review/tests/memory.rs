@@ -397,6 +397,107 @@ async fn retargeted_pull_request_gets_a_full_review_before_it_is_approved() {
     h.stop_engine().await;
 }
 
+// A retarget while a review runs supersedes that review: it reads the diff against the old
+// base, so its approval would cover commits it never saw. The next review is full (#279).
+#[tokio::test]
+async fn retarget_during_a_review_publishes_nothing_and_the_next_review_is_full() {
+    let mut h = start_harness(|_| {}).await;
+    h.set_output(reviewer_output(Vec::new()));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the first approval", || h.publications() == 1)
+        .await;
+    h.set_output(|_: &SessionRequest| String::new());
+    let mut pushed = pr.clone();
+    pushed.head_sha = sha("c");
+    h.fake.open(pushed.clone(), h.rule(&pr.repository));
+    h.poll_until("the incremental review", || h.started_count() == 2)
+        .await;
+    let mut retargeted = pushed.clone();
+    retargeted.base_branch = "release".to_owned();
+    retargeted.base_sha = sha("e");
+    h.fake.open(retargeted, h.rule(&pr.repository));
+    h.set_output(reviewer_output(Vec::new()));
+    h.poll_until("the next approval", || h.publications() == 2)
+        .await;
+    let (published, _, started, _) = h.fake.snapshot();
+    let scopes: Vec<bool> = started
+        .iter()
+        .map(|request| request.prompt.contains("Review scope: incremental"))
+        .collect();
+    assert_eq!(
+        (scopes, published[1].body.contains("full review of")),
+        (vec![false, true, false], true),
+        "the review that ran during the retarget must publish nothing, and the review after it \
+         must be full (incremental per started review, full publication)"
+    );
+    assert!(
+        h.fake
+            .has_note(Level::Log, "superseded (base_branch_changed)"),
+        "the retarget must supersede the running review"
+    );
+    // The superseded review read `main` but published nothing, so `main` is reviewed again.
+    h.fake.open(pushed, h.rule(&pr.repository));
+    h.poll_until("the review after the retarget back", || {
+        h.started_count() == 4
+    })
+    .await;
+    h.settle().await;
+    let (_, _, started, _) = h.fake.snapshot();
+    assert!(
+        started.len() == 4 && !started[3].prompt.contains("Review scope: incremental"),
+        "the retarget back to main must get one full review, started {} sessions",
+        started.len()
+    );
+    h.stop_engine().await;
+}
+
+// A retarget without a push gets a full review of the same head: the diff gained commits that
+// no review read. It settles the findings of the published review and runs once (#280).
+#[tokio::test]
+async fn retarget_without_a_push_gets_a_full_review_of_the_same_head() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 3, "title": "Broken", "body": "It breaks.",
+    })]));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    h.set_output(reviewer_output(Vec::new()));
+    let mut retargeted = pr.clone();
+    retargeted.base_branch = "release".to_owned();
+    retargeted.base_sha = sha("e");
+    h.fake.open(retargeted, h.rule(&pr.repository));
+    h.poll_until("the review after the retarget", || h.publications() == 2)
+        .await;
+    h.settle().await;
+    let (published, _, started, _) = h.fake.snapshot();
+    let reviews: Vec<(Decision, bool)> = published
+        .iter()
+        .map(|review| {
+            (
+                review.decision.clone(),
+                review.body.contains("full review of"),
+            )
+        })
+        .collect();
+    let reads = h.fake.lock().discussion_reads.len();
+    assert_eq!(
+        (reviews, started.len(), reads),
+        (
+            vec![(Decision::RequestChanges, true), (Decision::Approve, true)],
+            2,
+            1
+        ),
+        "a retarget of the reviewed head must get one full review that settles the earlier \
+         findings (decision, full; sessions; discussion reads)"
+    );
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn missing_previous_review_falls_back_to_a_full_review() {
     let mut h = start_harness(|_| {}).await;

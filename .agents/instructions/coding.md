@@ -283,6 +283,14 @@ What is not compatible, by decision:
   `published` entry, so after a return to Rust such a record does not widen
   until the next publication. The regression test is
   `retargeted_pull_request_gets_a_full_review_before_it_is_approved`.
+  A running review whose pull request is retargeted publishes nothing and ends
+  superseded with `base_branch_changed` (#279); Go's `superseded` list
+  (`schedule/scheduler.go:184`) lacks the code, so after a rollback such a row
+  counts as a failure that is not retried. A retarget without a push schedules
+  a full review of the same head (#280); Go leaves that head completed. The
+  regression tests are
+  `retarget_during_a_review_publishes_nothing_and_the_next_review_is_full` and
+  `retarget_without_a_push_gets_a_full_review_of_the_same_head`.
 - **Codex results like Claude results (#23):** a `codex-envelope` report must
   carry `prior_findings` and the `blocking` flag of every finding, as the
   adapter in `adapters/codex/` writes them. A report without them is refused

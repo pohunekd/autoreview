@@ -136,7 +136,10 @@ The wait ends in one of three ways, and the first one that happens decides:
 | Expired | `approval.timeout_hours` passed | `approval_expired` | None |
 
 A renewed review request for the same head does not supersede the wait. Only a
-new head or a trigger that stopped asking ends it.
+new head or a trigger that stopped asking ends it. A retarget to another base
+branch does not end the wait, but an approval after it publishes nothing: the
+review ends as `superseded` (`base_branch_changed`) and the pull request is
+reviewed again.
 
 When a head is no longer the pull request head, `approve` fails with
 `head_changed`. A wait that already ended answers `review_superseded` or

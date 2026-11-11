@@ -79,7 +79,7 @@ fails validation with `notifications: event X needs a level`.
 | `approval_expired` | A wait for approval passed `approval.timeout_hours` | `digest` |
 | `started` | A review started | `log` |
 | `retry_scheduled` | A failed review is retried later | `log` |
-| `superseded` | A newer head or a changed trigger replaced a review | `log` |
+| `superseded` | A newer head, a retarget or a changed trigger replaced a review | `log` |
 
 Events for a rejected or an expiring GitHub token are planned in #19.
 
