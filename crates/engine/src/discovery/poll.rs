@@ -29,7 +29,7 @@ const PHASE_WAITING: &str = "waiting";
 const PHASE_COMPLETED: &str = "completed";
 
 /// Schedule phase of a review identity that gets no automatic attempt.
-const PHASE_FAILED: &str = "failed";
+pub(crate) const PHASE_FAILED: &str = "failed";
 
 /// Schedule phase of a review identity that left every trigger.
 const PHASE_WITHDRAWN: &str = "withdrawn";

@@ -170,6 +170,18 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
             && stats["history"]["totals"]["started"] == json!(1),
         "review_stats = {body}"
     );
+    // Without a range: the current state only, read through the status index.
+    let (_, body) = call(&server, Some(READ_TOKEN), "review_stats", json!({})).await;
+    let (content, failed) = structured(&body);
+    let current = &content["result"]["current"];
+    assert!(
+        !failed
+            && current["awaiting"] == json!(1)
+            && current["stopped"] == json!(0)
+            && current["stopped_by_repository"] == json!([])
+            && content["result"]["history"].is_null(),
+        "review_stats without a range = {body}"
+    );
 
     let approve = json!({
         "repository": pr.repository,

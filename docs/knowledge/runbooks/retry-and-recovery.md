@@ -36,7 +36,9 @@ The review does not restart by itself after it stopped.
 
    `reviews` lists the newest reviews, up to `cli.review_list_limit`. `review`
    shows the current head, the reviews, the published decisions, the waits and
-   the hand-offs. Read the last failure before you retry.
+   the hand-offs. Read the last failure before you retry. `autoreview stats
+   --json` counts the stopped pull requests per repository
+   (`current.stopped_by_repository`, see [review statistics](../../stats.md#current-state)).
 
 2. Decide whether a retry can work. A retry needs the head to be the pull
    request head. If the author pushed, the old review is superseded and there is

@@ -242,7 +242,8 @@ impl Store {
     /// Lists the reviews that the statistics count, oldest first.
     ///
     /// These are the reviews that are not completed and, with `range` (its first instant and
-    /// the first instant after it), those created or completed inside it.
+    /// the first instant after it), those created or completed inside it. Without `range` the
+    /// read goes through the status index, so it does not grow with the completed reviews.
     ///
     /// # Errors
     ///
@@ -256,10 +257,11 @@ impl Store {
         let created = time_key("created_at");
         let Some((start, end)) = range else {
             let sql = format!(
-                "SELECT {REVIEW_COLUMNS} FROM reviews WHERE status != ?1 \
+                "SELECT {REVIEW_COLUMNS} FROM reviews WHERE status IN (?1, ?2, ?3) \
                  ORDER BY {created}, workflow_id"
             );
-            return collect_reviews(&connection, &sql, &[&REVIEW_COMPLETED]);
+            let active: [&dyn ToSql; 3] = [&REVIEW_QUEUED, &REVIEW_RUNNING, &REVIEW_AWAITING];
+            return collect_reviews(&connection, &sql, &active);
         };
         let completed = time_key("completed_at");
         let (low, high) = (time_key("?2"), time_key("?3"));
