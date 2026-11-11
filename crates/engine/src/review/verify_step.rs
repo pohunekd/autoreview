@@ -82,6 +82,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
             Err(err) => Err(err),
         };
+        // Recorded before the verification is stored, so a stored verification has its record.
         self.record_step(ReviewStep::Verifier, started, &run);
         let mut verification = Verification {
             reviewer_label,

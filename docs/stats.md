@@ -217,7 +217,6 @@ are a fixed set, in the order a review runs them:
 
 Each entry has these counts:
 
-
 - `runs`: runs of the step, counted on the UTC day they ended, whatever their outcome.
 - `succeeded`: runs that finished the work of the step.
 - `superseded`: runs stopped because a newer state of the pull request replaced the review,
@@ -231,11 +230,12 @@ Each entry has these counts:
   rank, of the milliseconds of the succeeded runs; `null` without a succeeded run. A
   `reviewers` run includes the whole wait for the reviewer sessions.
 
-A review attempt records each step at most once, when the step ends. A run that a shutdown
+A review attempt records each step it runs once, when the step ends. A run that a shutdown
 interrupts records nothing; after the restart the step records the time and the retries
-of its resumed part only, and a step whose result was stored before the restart is not
-recorded again. A record that cannot be written is logged as `review step not recorded`,
-and the review goes on.
+of its resumed part only. A step whose result was stored before the restart but not yet
+recorded is recorded after the restart, with the time since the restart, and a step that
+has its record keeps it. A record that cannot be written is logged as
+`review step not recorded`, and the review goes on.
 
 The step runs are deleted with their review (see `pruned_before`). Reviews that an engine
 before this version ran have no step runs, so they count in no step.

@@ -215,7 +215,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Runs `step` as `once` does and records the run as the step `recorded`.
     ///
-    /// A stored output is read without a record: the step ran before a restart.
+    /// A stored output is recorded as a run too: the store keeps the first record of a step, so
+    /// a restart between the stored output and its record loses no run.
     pub(crate) async fn once_recorded<T, Fut>(
         &self,
         recorded: ReviewStep,
@@ -226,11 +227,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         T: Serialize + DeserializeOwned,
         Fut: Future<Output = Result<T, Error>>,
     {
-        if let Some(value) = self.stored::<T>(name)? {
-            return Ok(value);
-        }
         let started = self.step_started();
-        let result = self.run_and_save(name, step).await;
+        let result = match self.stored::<T>(name)? {
+            Some(value) => Ok(value),
+            None => self.run_and_save(name, step).await,
+        };
         self.record_step(recorded, started, &result);
         result
     }
@@ -301,8 +302,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Records the run of `step` that started at `started` and ended with `result`.
     ///
-    /// A shutdown records nothing, so the resumed review records the step. A record that
-    /// cannot be written is logged and the review goes on.
+    /// A run that a shutdown ends records nothing, so the resumed review records the step. A
+    /// succeeded run is recorded during a shutdown too, because its output may be stored
+    /// already. A record that cannot be written is logged and the review goes on.
     pub(crate) fn record_step<T>(
         &self,
         step: ReviewStep,
@@ -311,13 +313,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ) {
         let outcome = match result {
             Ok(_) => StepOutcome::Succeeded,
-            Err(err) if is_shutdown(err) => return,
+            // An error during a shutdown may come from it, such as a cancelled host call.
+            Err(err) if is_shutdown(err) || self.cancel.is_cancelled() => return,
             Err(err) if superseded(error_code(err)) => StepOutcome::Superseded,
             Err(_) => StepOutcome::Failed,
         };
-        if self.cancel.is_cancelled() {
-            return;
-        }
         let elapsed = self.engine.clock.now().saturating_duration_since(started);
         let run = StepRun {
             step,

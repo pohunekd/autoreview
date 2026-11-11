@@ -32,15 +32,12 @@ fn reviewer_done(slot: &ReviewerSlot) -> bool {
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Runs every reviewer slot to a result and records the run of the reviewers step.
     ///
-    /// A review whose reviewers all have a stored result records nothing: the step ran before
-    /// a restart.
+    /// A review whose reviewers all have a stored result records a run too: the store keeps
+    /// the first record of a step, so a restart before the record loses no run.
     pub(crate) async fn collect(&mut self) -> Result<(), Error> {
-        let stored = self.slots.iter().all(reviewer_done);
         let started = self.step_started();
         let collected = self.collect_results().await;
-        if !stored {
-            self.record_step(ReviewStep::Reviewers, started, &collected);
-        }
+        self.record_step(ReviewStep::Reviewers, started, &collected);
         collected
     }
 
