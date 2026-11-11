@@ -1,7 +1,8 @@
 //! The `profiles install` command: writes the pohunek agent profile of a reviewer on this host.
 //!
-//! It needs no configuration. It asks the local pohunek CLI two read-only questions, writes the
-//! reviewer adapter embedded in this binary and the profile that starts it.
+//! It needs no configuration. It asks the local pohunek CLI two read-only questions through the
+//! engine's pohunek runner, writes the reviewer adapter embedded in this binary and the profile
+//! that starts it.
 
 // Rust guideline compliant 2026-11-10
 
@@ -12,6 +13,7 @@ mod render;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::identifier_valid;
@@ -120,6 +122,9 @@ pub(crate) struct InstallArguments {
     /// How long the Codex adapter stays alive after its report; Codex only.
     #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..))]
     pub(crate) maximum_retention_seconds: Option<u64>,
+    /// Seconds after which each pohunek call is killed, as `pohunek.timeout_seconds`.
+    #[arg(long, value_name = "SECONDS", value_parser = clap::value_parser!(u64).range(1..))]
+    pub(crate) pohunek_timeout_seconds: u64,
     /// Overwrite a file of that name that this command did not write.
     #[arg(long)]
     pub(crate) replace: bool,
@@ -212,7 +217,7 @@ impl Runtime {
 /// `configuration_invalid` naming a flag or a variable, `pohunek_command_failed`,
 /// `profile_host_not_local`, `runtime_package_missing`, `profile_foreign` and
 /// `profile_write_failed`.
-pub(crate) fn run(
+pub(crate) async fn run(
     config_path: Option<&Path>,
     command: &ProfilesCommand,
 ) -> Result<InstallResult, Error> {
@@ -233,8 +238,9 @@ pub(crate) fn run(
         home.as_deref(),
     )?
     .join(&arguments.name);
-    pohunek::check_local(&arguments.host)?;
-    let pin = pohunek::package_pin(settings.runtime.agent())?;
+    let timeout = Duration::from_secs(arguments.pohunek_timeout_seconds);
+    pohunek::check_local(&arguments.host, timeout).await?;
+    let pin = pohunek::package_pin(settings.runtime.agent(), timeout).await?;
     let plan = render::plan(&arguments.name, &pin, &settings, &agents, &adapters)?;
     let result = files::install(&plan, arguments.replace)?;
     Ok(InstallResult {

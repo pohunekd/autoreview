@@ -106,7 +106,8 @@ On success it prints:
 ```
 autoreview profiles install --host <HOST> --agent claude|codex --name <NAME> \
   --model <MODEL> --effort <EFFORT> --agent-binary <PATH> --maximum-input-bytes <BYTES> \
-  [--maximum-result-bytes <BYTES> --maximum-retention-seconds <SECONDS>] [--replace]
+  [--maximum-result-bytes <BYTES> --maximum-retention-seconds <SECONDS>] \
+  --pohunek-timeout-seconds <SECONDS> [--replace]
 ```
 
 Writes the pohunek agent profile `<NAME>` of a reviewer, and the reviewer
@@ -140,13 +141,21 @@ default:
 - `--maximum-retention-seconds` (Codex only, required there): how long the
   adapter stays alive after its report, so that the engine can read it. Use at
   least `session.timeout_seconds`.
+- `--pohunek-timeout-seconds`: how long each pohunek call may take before it is
+  killed, a positive number of seconds. Use the `pohunek.timeout_seconds` of
+  the configuration.
 - `--replace`: overwrite a file of that name that this command did not write.
 
 A Codex flag with `--agent claude`, or a missing one with `--agent codex`, is
 `command_invalid`.
 
 It calls the `pohunek` found on `PATH` for the host check, once when `--host`
-is `local` and twice otherwise, and once for `pohunek plugin list --json`. The
+is `local` and twice otherwise, and once for `pohunek plugin list --json`. Each
+call runs as the engine's pohunek calls run: with `PAGER=cat`, without the
+pohunek session identity, `GH_TOKEN`, `MATRIX_ACCESS_TOKEN` and every
+`AUTOREVIEW_` variable, and killed after `--pohunek-timeout-seconds`. It keeps
+the caller's `XDG_STATE_HOME` and `XDG_RUNTIME_DIR`, so it reaches the daemon of
+the user who runs it. The
 base runtime must be served by exactly one official package that is enabled,
 selected and healthy; the profile pins its package id and digest. `<config>` is `$XDG_CONFIG_HOME`, or `$HOME/.config`
 when that is unset, and `<data>` is `$XDG_DATA_HOME`, or `$HOME/.local/share`.
@@ -376,7 +385,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `init_write_failed` | `init` could not check, create or write a path; the `configuration` field names it |
 | `profile_host_not_local`, `runtime_package_missing` | `profiles install` was run on the wrong host, or the official runtime package is missing |
 | `profile_foreign`, `profile_write_failed` | `profiles install` found a file it did not write, or could not write the path it names |
-| `pohunek_command_failed` | `profiles install` could not read the answer of a pohunek command |
+| `pohunek_command_failed` | `profiles install` could not read the answer of a pohunek command about the local daemon, or that command ran past `--pohunek-timeout-seconds`; a failed or timed-out check of a named `--host` is `profile_host_not_local` |
 | `repository_not_allowed`, `review_identity_invalid` | Malformed repository or pull request number, or an approval whose identity differs from the stored review |
 | `head_prefix_invalid` | `HEAD_PREFIX` of `retry` or `resolve` (`head_prefix` of the MCP tools) is not 12 to 40 lowercase hexadecimal characters |
 | `head_sha_invalid` | `HEAD_SHA` of `approve` (`head_sha` of the MCP tool) is not the full head commit, 40 lowercase hexadecimal characters |

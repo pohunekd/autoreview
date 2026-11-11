@@ -197,7 +197,9 @@ async fn main() -> ExitCode {
             Ok(Cli {
                 config,
                 command: Invocation::Profiles(command),
-            }) => profiles::run(config.as_deref(), &command).and_then(|done| print_json(&done)),
+            }) => profiles::run(config.as_deref(), &command)
+                .await
+                .and_then(|done| print_json(&done)),
             Ok(Cli {
                 config,
                 command: Invocation::Configured(command),

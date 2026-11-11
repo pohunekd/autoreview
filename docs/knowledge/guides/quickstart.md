@@ -99,13 +99,14 @@ example reviewer uses Codex:
 autoreview profiles install --host <host> --agent codex --name autoreview-codex \
   --model <model> --effort high --agent-binary "$(command -v codex)" \
   --maximum-input-bytes 1048576 --maximum-result-bytes 1048576 \
-  --maximum-retention-seconds 7200
+  --maximum-retention-seconds 7200 --pohunek-timeout-seconds 45
 ```
 
 Its `result` is `created`, and `unchanged` when you run it again. Keep
 `--maximum-result-bytes` at most `limits.result_max_bytes` and
 `--maximum-retention-seconds` at least `session.timeout_seconds` of the
-configuration.
+configuration, and give `--pohunek-timeout-seconds` its
+`pohunek.timeout_seconds`.
 
 The base runtime must already be installed on that host, see step 1.
 

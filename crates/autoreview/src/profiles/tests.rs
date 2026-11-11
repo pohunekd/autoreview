@@ -72,6 +72,7 @@ fn claude_arguments(binary: &Path) -> InstallArguments {
         maximum_input_bytes: 1_048_576,
         maximum_result_bytes: None,
         maximum_retention_seconds: None,
+        pohunek_timeout_seconds: 30,
         replace: false,
     }
 }
