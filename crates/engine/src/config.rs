@@ -7,7 +7,7 @@ use std::fmt;
 use std::net::Ipv6Addr;
 use std::time::Duration;
 
-use autoreview_policy::{Event, Level, Policy};
+use autoreview_policy::{Event, Level, Policy, user_login_valid};
 use autoreview_schedule::metadata::is_valid_session_group;
 use autoreview_schedule::scheduler;
 use time::Duration as SignedDuration;
@@ -28,9 +28,6 @@ pub const SECRET_ENV_PREFIX: &str = "AUTOREVIEW_";
 
 /// Host that the GitHub login and token belong to.
 const GITHUB_HOST: &str = "github.com";
-
-/// Longest GitHub login in bytes.
-const GITHUB_LOGIN_MAX_LEN: usize = 39;
 
 /// Longest AI signature in bytes.
 const AI_SIGNATURE_MAX_BYTES: usize = 200;
@@ -322,7 +319,7 @@ impl Config {
     /// Returns a configuration error when a field is invalid.
     pub fn validate(&self) -> Result<(), Error> {
         if self.github_host != GITHUB_HOST
-            || !github_login_valid(&self.github_login)
+            || !user_login_valid(&self.github_login)
             || self.github_token.contains('\r')
             || self.github_token.contains('\n')
             || self.github_token.contains(' ')
@@ -582,24 +579,6 @@ fn invalid(message: impl Into<String>) -> Error {
         CONFIG_NAME,
         Some(BoxError::from(message.into())),
     )
-}
-
-/// Reports whether `login` is a valid GitHub login.
-pub(crate) fn github_login_valid(login: &str) -> bool {
-    let bytes = login.as_bytes();
-    if bytes.is_empty() || bytes.len() > GITHUB_LOGIN_MAX_LEN {
-        return false;
-    }
-    if bytes[0] == b'-' || bytes[bytes.len() - 1] == b'-' {
-        return false;
-    }
-    for &byte in bytes {
-        let valid = byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-';
-        if !valid {
-            return false;
-        }
-    }
-    true
 }
 
 /// Reports whether `value` is a valid identifier.
@@ -1151,6 +1130,41 @@ mod tests {
                 "configuration_invalid: config: invalid AI signature"
             );
             assert_eq!(error_code(&error), "configuration_invalid");
+        }
+        // A managed user is `handle_shortcode`; an app's `name[bot]` never owns the token.
+        let longest = format!("{}_octo", "a".repeat(34));
+        for login in [
+            "mona-cat_octo",
+            "octo_admin",
+            "review-bot-",
+            longest.as_str(),
+        ] {
+            let mut config = valid_config();
+            config.github_login = login.to_owned();
+            if let Err(error) = config.validate() {
+                panic!("{login}: {error}");
+            }
+        }
+        let over_long = format!("{}_octo", "a".repeat(35));
+        let refused = [
+            "",
+            "review-bot[bot]",
+            "Mona-Cat_octo",
+            "mona_cat_octo",
+            "_octo",
+            "mona_",
+            "a/b",
+            over_long.as_str(),
+        ];
+        for login in refused {
+            let mut config = valid_config();
+            config.github_login = login.to_owned();
+            let error = config.validate().expect_err("the login is refused");
+            assert_eq!(
+                error.to_string(),
+                "configuration_invalid: config: invalid GitHub configuration",
+                "{login}"
+            );
         }
         let mut config = valid_config();
         config.matrix_rooms.action = String::new();

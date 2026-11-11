@@ -190,6 +190,11 @@ How the credential applies:
 - **Its login is the reviewer.** The `review-requested` trigger means a
   request for the credential's `login`; a pull request authored by that
   login is its own pull request and gets a comment.
+- **Its login is a user login, in lowercase.** A plain login such as
+  `review-bot`, or an Enterprise Managed User login: the handle, an underscore
+  and the enterprise short code, such as `mona-cat_octo`. Write it in lowercase
+  even when GitHub shows capitals from the identity provider. An app's
+  `name[bot]` is refused.
 - **The token stays with `gh`.** Every `gh` call gets the token through
   `GH_TOKEN` in that child's environment. No other process that autoreview
   starts sees it.

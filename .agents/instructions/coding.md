@@ -378,6 +378,20 @@ What is not compatible, by decision:
   No stored row changes, and a rollback to Go brings the Go behaviour back. The
   regression tests are `author_logins_follow_the_github_login_grammar` and
   `trusted_logins_follow_the_github_login_grammar`.
+- **Served Enterprise Managed User login (#276):** `github.credentials.login`,
+  `init --login`, the review input's `publisher_login` and the permission read
+  check `autoreview_policy::user_login_valid`, the user branch of the #227
+  grammar: a plain login or `handle_shortcode`; an app's `name[bot]` is refused.
+  Go's `githubLoginPattern` (`cmd/autoreview/config.go:146`) refuses the
+  underscore and a trailing hyphen, which the plain login of the policy accepts
+  (`review-bot-`). Go checks it at startup (`invalid GitHub configuration`,
+  `config.go:287`) and in `validateInput` (`review.go:75`), so a rollback to Go
+  with such a login does not start. No stored row changes. The regression tests
+  are `missing_or_unsafe_configuration_fails_fast`,
+  `validate_input_rejects_inconsistent_input`,
+  `example_passes_the_loader_and_the_engine_validation`,
+  `init_login_follows_the_user_login_grammar` and
+  `permission_is_read_from_the_role_name`.
 
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):

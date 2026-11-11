@@ -6,10 +6,10 @@
 
 use std::collections::BTreeSet;
 
-use autoreview_policy::{Checkout, OnClean, OnNotes, Rule, WORKFLOW_EVENTS};
+use autoreview_policy::{Checkout, OnClean, OnNotes, Rule, WORKFLOW_EVENTS, user_login_valid};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{github_login_valid, identifier_valid};
+use crate::config::identifier_valid;
 use crate::error::{BoxError, Error};
 use crate::integrations::GitHubReview;
 use crate::model::ids::{
@@ -116,7 +116,7 @@ pub(crate) fn validate_input(input: &ReviewInput) -> Result<(), BoxError> {
     }
     if !identifier_valid(&input.route.host)
         || !identifier_valid(&input.route.project_id)
-        || !github_login_valid(&input.publisher_login)
+        || !user_login_valid(&input.publisher_login)
         || input.approval_timeout_seconds <= 0
         || !input.limits.valid()
     {
@@ -390,7 +390,12 @@ mod tests {
         if let Err(err) = validate_input(&valid) {
             panic!("{err}");
         }
-        let mutations: [(&str, Mutation); 6] = [
+        let mut managed = valid.clone();
+        managed.publisher_login = "mona-cat_octo".to_owned();
+        if let Err(err) = validate_input(&managed) {
+            panic!("a managed user publishes: {err}");
+        }
+        let mutations: [(&str, Mutation); 8] = [
             ("version", |input| input.version = 1),
             ("foreign reviewer", |input| input.reviewers = vec![codex()]),
             ("incremental head", |input| {
@@ -406,6 +411,12 @@ mod tests {
                 input.approval_timeout_seconds = 0
             }),
             ("no limits", |input| input.limits = RunLimits::default()),
+            ("app publisher", |input| {
+                input.publisher_login = "review-bot[bot]".to_owned();
+            }),
+            ("second underscore", |input| {
+                input.publisher_login = "mona_cat_octo".to_owned();
+            }),
         ];
         for (name, mutate) in mutations {
             let mut input = valid.clone();

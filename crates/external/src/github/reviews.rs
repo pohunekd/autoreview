@@ -102,7 +102,7 @@ fn expected_state(decision: &Decision) -> &'static str {
 
 /// Reports whether the author `author` is the configured `login`, as Go's `strings.EqualFold`.
 ///
-/// The configured login is lower-case ASCII (`github_login_valid` in the engine configuration),
+/// The configured login is lower-case ASCII (`user_login_valid` of the engine configuration),
 /// so the author matches exactly when each of its characters folds to the login character. Of
 /// the non-ASCII characters, only U+212A KELVIN SIGN (folds to `k`) and U+017F LATIN SMALL LETTER
 /// LONG S (folds to `s`) fold to an ASCII letter. A missed match would post a second review.

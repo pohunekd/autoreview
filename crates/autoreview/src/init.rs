@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 
 use autoreview_engine::config::identifier_valid;
 use autoreview_engine::{Error, go_json};
+use autoreview_policy::user_login_valid;
 use clap::{Args, ValueEnum};
 use serde::Serialize;
 
-use crate::config_file::{clean_absolute, github_login_valid};
+use crate::config_file::clean_absolute;
 use crate::{CONFIGURATION_INVALID, command_invalid, failed};
 
 /// Error code of a file or directory that is in the way of `init`.
@@ -265,7 +266,7 @@ fn directory(dir: &Path) -> Result<&str, Error> {
 /// Returns `configuration_invalid` naming `--login`, `--pohunek-host` or a layout flag, and the
 /// errors of [`render_config`].
 pub(crate) fn render(arguments: &InitArguments, directory: &str) -> Result<Vec<SetupFile>, Error> {
-    if !github_login_valid(&arguments.login) {
+    if !user_login_valid(&arguments.login) {
         return Err(invalid_flag("--login", "is not a lowercase GitHub login"));
     }
     if !identifier_valid(&arguments.pohunek_host) {
