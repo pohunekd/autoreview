@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use autoreview_policy::{
-    Checkout, Level, Permission, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID,
+    Checkout, Level, Permission, Policy, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -74,6 +74,8 @@ pub(crate) struct QueuedDigest {
 pub(crate) struct FakeState {
     /// Candidates by `repository#number`.
     pub(crate) candidates: BTreeMap<String, Candidate>,
+    /// The policy whose authors section `open` gives each candidate; `None` gives none.
+    pub(crate) policy: Option<Policy>,
     /// Current state of each pull request by `repository#number`.
     pub(crate) current: BTreeMap<String, PullRequest>,
     /// Read errors of pull requests that left the search, by `repository#number`.
@@ -173,15 +175,23 @@ impl FakeIntegration {
     }
 
     /// Registers a pull request as a candidate.
+    ///
+    /// Its authors section is the one of the policy rule that covers the repository.
     pub(crate) fn open(&self, pr: PullRequest, rule: Rule) {
         let mut state = self.lock();
         let key = pr.key();
+        let authors = state
+            .policy
+            .as_ref()
+            .and_then(|policy| policy.resolve_with_authors(&pr.repository))
+            .map(|(_, authors)| authors.clone());
         state.candidates.insert(
             key.clone(),
             Candidate {
                 pull_request: pr.clone(),
                 rule,
                 author_class: None,
+                authors,
             },
         );
         state.current.insert(key.clone(), pr);

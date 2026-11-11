@@ -16,7 +16,7 @@ use autoreview_engine::model::{
     Candidate, CandidateList, PullRequest, RejectedCandidate, repository_valid,
 };
 use autoreview_go_compat::{null_default, null_entries};
-use autoreview_policy::{Policy, Rule, TriggerKind};
+use autoreview_policy::{Authors, Policy, Rule, Trigger, TriggerKind};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -218,13 +218,29 @@ fn skippable_candidate_error(error: &Error) -> bool {
     )
 }
 
+/// Returns the rule that covers `repository` for `trigger`, with its authors section.
+///
+/// Both come from the policy's first match. A first match with another trigger covers nothing,
+/// so a later rule never lends its section.
+fn covering<'a>(
+    policy: &'a Policy,
+    repository: &str,
+    trigger: &Trigger,
+) -> Option<(&'a Rule, &'a Authors)> {
+    policy
+        .resolve_with_authors(repository)
+        .filter(|(rule, _)| rule.trigger == *trigger)
+}
+
 /// Sorts the outcome of reading one candidate: kept, skipped because its trigger lapsed,
 /// rejected because its data is invalid, or a failure that stops the search (`classify`).
+///
+/// A kept candidate carries `rule` and `authors`, which come from one policy match.
 fn classify(
     list: &mut CandidateList,
     repository: &str,
     number: i64,
-    rule: &Rule,
+    (rule, authors): (&Rule, &Authors),
     outcome: Result<PullRequest, Error>,
 ) -> Result<(), Error> {
     match outcome {
@@ -233,6 +249,7 @@ fn classify(
                 pull_request,
                 rule: rule.clone(),
                 author_class: None,
+                authors: Some(authors.clone()),
             });
             Ok(())
         }
@@ -581,13 +598,14 @@ impl GitHub {
             .search_requested(cancel, scopes, &["--draft=false".to_owned()])
             .await?;
         let mut list = CandidateList::default();
+        let trigger = Trigger {
+            kind: TriggerKind::ReviewRequested,
+            label: String::new(),
+        };
         for identity in &identities {
             let repository = repository_name(&identity.repository).to_ascii_lowercase();
             let number = identity.number;
-            let rule = policy
-                .resolve(&repository)
-                .filter(|rule| rule.trigger.kind == TriggerKind::ReviewRequested);
-            let Some(rule) = rule else {
+            let Some(covered) = covering(policy, &repository, &trigger) else {
                 tracing::info!(
                     repository = %repository,
                     pull_request = number,
@@ -604,9 +622,9 @@ impl GitHub {
                 continue;
             }
             let outcome = self
-                .get_pull_request(cancel, &repository, number, &rule.trigger)
+                .get_pull_request(cancel, &repository, number, &trigger)
                 .await;
-            classify(&mut list, &repository, number, rule, outcome)?;
+            classify(&mut list, &repository, number, covered, outcome)?;
         }
         Ok(list)
     }
@@ -622,20 +640,21 @@ impl GitHub {
         let query = label_search_query(policy, name);
         let mut after = String::new();
         let mut list = CandidateList::default();
+        let trigger = Trigger {
+            kind: TriggerKind::Label,
+            label: name.to_owned(),
+        };
         for _ in 0..self.search_page_limit {
             let args = label_search_args(&query, &after);
             let output = self.github::<()>(cancel, &args, None).await?;
             let page = decode_label_search_page(&output)?;
             for node in &page.nodes {
                 let (repository, number) = node.repository_and_number();
-                let rule = policy.resolve(&repository).filter(|rule| {
-                    rule.trigger.kind == TriggerKind::Label && rule.trigger.label == name
-                });
-                let Some(rule) = rule else {
+                let Some(covered) = covering(policy, &repository, &trigger) else {
                     continue;
                 };
-                let outcome = decode_pull_request(node, &self.host, &self.login, &rule.trigger);
-                classify(&mut list, &repository, number, rule, outcome)?;
+                let outcome = decode_pull_request(node, &self.host, &self.login, &trigger);
+                classify(&mut list, &repository, number, covered, outcome)?;
             }
             if !page.has_next_page {
                 return Ok(list);
@@ -652,14 +671,14 @@ impl GitHub {
 #[cfg(test)]
 mod tests {
     use autoreview_engine::error_code;
-    use autoreview_engine::model::CandidateList;
-    use autoreview_policy::{Rule, Trigger, TriggerKind};
+    use autoreview_engine::model::{CandidateList, PullRequest};
+    use autoreview_policy::{Authors, Rule, Trigger, TriggerKind};
 
     use super::super::pull_request::{
         decode_pull_request, decode_pull_request_response, ready_draft_id,
     };
     use super::{
-        classify, decode_label_search_page, decode_mark_ready_response,
+        classify, covering, decode_label_search_page, decode_mark_ready_response,
         decode_review_request_search, list_review_requests_args, search_requested_args,
     };
 
@@ -766,11 +785,106 @@ mod tests {
         r#"equests":{"nodes":[null]},"repository":{"nameWithOwner":"acme/widget"}}]}}}"#,
     );
 
+    /// A policy whose first and second rule both match `acme/special` and `solo/special`.
+    const OVERLAPPING_POLICY: &str = "version: 1
+reviewers:
+  opus: {protocol: claude-structured, agent_profile: claude-profile, label: Opus,
+    finding_prefix: O}
+pipelines:
+  main: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompt.md, checkout: base,
+    project_sources: [manual]}
+repositories:
+  - {match: acme/special, trigger: review-requested, pipeline: main, on_findings: comment,
+    on_clean: comment, authors: {trusted: {logins: [maintainer]}, untrusted: skip}}
+  - {match: acme/*, trigger: review-requested, pipeline: main, on_findings: comment,
+    on_clean: comment, authors: {trusted: any}}
+  - {match: solo/special, trigger: review-requested, pipeline: main, on_findings: comment,
+    on_clean: comment, authors: {trusted: {logins: [maintainer]}, untrusted: skip}}
+  - {match: solo/*, trigger: \"label:ai:review\", pipeline: main, on_findings: comment,
+    on_clean: comment, authors: {trusted: any}}
+unmatched: skip
+approval: {timeout_hours: 1}
+notifications:
+  approval_requested: action
+  findings_on_own_pr: action
+  review_stopped: action
+  cleanup_manual: action
+  command_failed: action
+  approved: digest
+  changes_requested: digest
+  commented: digest
+  approval_expired: digest
+  started: log
+  retry_scheduled: log
+  superseded: log
+  handoff_reminder: action
+";
+
     /// Review-requested trigger, the kind of the rule that covers `acme/*`.
     fn review_requested() -> Trigger {
         Trigger {
             kind: TriggerKind::ReviewRequested,
             label: String::new(),
+        }
+    }
+
+    // A candidate's authors section comes from the match that gave its rule: the first rule
+    // that matches, never a later rule that matches as well or has the searched trigger (#228).
+    #[test]
+    fn candidate_carries_the_authors_section_of_its_own_rule() {
+        let policy = autoreview_policy::parse(OVERLAPPING_POLICY.as_bytes(), |_| {
+            Ok(b"Review the pull request.".to_vec())
+        })
+        .expect("the overlapping policy parses");
+        let label = Trigger {
+            kind: TriggerKind::Label,
+            label: "ai:review".to_owned(),
+        };
+        let other_label = Trigger {
+            kind: TriggerKind::Label,
+            label: "other".to_owned(),
+        };
+        let cases = [
+            (
+                "acme/special",
+                review_requested(),
+                Some(("acme/special", "maintainer")),
+            ),
+            ("acme/widget", review_requested(), Some(("acme/*", "any"))),
+            ("solo/special", label.clone(), None),
+            ("solo/tool", label, Some(("solo/*", "any"))),
+            ("solo/tool", other_label, None),
+            ("solo/tool", review_requested(), None),
+            ("other/repository", review_requested(), None),
+        ];
+        for (repository, trigger, want) in cases {
+            let covered = covering(&policy, repository, &trigger);
+            let mut list = CandidateList::default();
+            if let Some(covered) = covered {
+                let pull_request = PullRequest {
+                    repository: repository.to_owned(),
+                    number: 1,
+                    ..PullRequest::default()
+                };
+                classify(&mut list, repository, 1, covered, Ok(pull_request))
+                    .expect("a read pull request is kept");
+            }
+            let got = list.candidates.first().map(|candidate| {
+                let trusted = match &candidate.authors {
+                    Some(Authors::Any) => "any".to_owned(),
+                    Some(Authors::Restricted { trusted, .. }) => trusted.logins.join(","),
+                    None => "none".to_owned(),
+                };
+                (candidate.rule.match_glob.clone(), trusted)
+            });
+            let got = got
+                .as_ref()
+                .map(|(glob, trusted)| (glob.as_str(), trusted.as_str()));
+            assert_eq!(got, want, "{repository} {trigger}");
+            assert!(
+                covered.is_none_or(|(rule, _)| policy.resolve(repository) == Some(rule)),
+                "{repository}: the pair is not the rule that resolve returns"
+            );
         }
     }
 
@@ -787,11 +901,12 @@ mod tests {
         let outcome = decode_pull_request(&draft, HOST, LOGIN, &trigger);
         let error = outcome.as_ref().expect_err("a draft is refused");
         assert_eq!(error_code(error), "pull_request_draft");
-        classify(&mut list, "acme/widget", 1, &rule, outcome).expect("a lapsed draft is skipped");
+        classify(&mut list, "acme/widget", 1, (&rule, &Authors::Any), outcome)
+            .expect("a lapsed draft is skipped");
 
         let ready = decode_pull_request_response(READY_RESPONSE).expect("ready decodes");
         let outcome = decode_pull_request(&ready, HOST, LOGIN, &trigger);
-        classify(&mut list, "acme/widget", 2, &rule, outcome)
+        classify(&mut list, "acme/widget", 2, (&rule, &Authors::Any), outcome)
             .expect("a ready pull request is kept");
 
         assert_eq!(list.candidates.len(), 1);

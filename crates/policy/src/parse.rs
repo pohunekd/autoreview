@@ -1063,7 +1063,7 @@ mod tests {
     use super::{load, parse};
     use crate::Error;
     use crate::authors::{Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview};
-    use crate::types::{MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes};
+    use crate::types::{MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy};
 
     /// The authors section of the acme/special rule in the valid policy.
     const SPECIAL_AUTHORS: &str = "{match: acme/special, authors: {trusted: any},";
@@ -1135,6 +1135,13 @@ notifications:
             &format!("{{match: acme/special, authors: {value},"),
             1,
         )
+    }
+
+    /// Returns the authors section of the rule that covers repository.
+    fn authors_of<'a>(policy: &'a Policy, repository: &str) -> Option<&'a Authors> {
+        policy
+            .resolve_with_authors(repository)
+            .map(|(_, authors)| authors)
     }
 
     /// Reports whether a cause in the chain of error is an I/O not-found error.
@@ -1494,19 +1501,19 @@ notifications:
                 on_clean: OnClean::Await,
             })),
         };
-        assert_eq!(parsed.authors("acme/special"), Some(&want));
-        assert_eq!(parsed.authors("acme/other"), Some(&Authors::Any));
-        assert_eq!(parsed.authors("other/repository"), None);
+        assert_eq!(authors_of(&parsed, "acme/special"), Some(&want));
+        assert_eq!(authors_of(&parsed, "acme/other"), Some(&Authors::Any));
+        assert_eq!(authors_of(&parsed, "other/repository"), None);
         let skip = with_authors(VALID_POLICY, "{trusted: {logins: [ab]}, untrusted: skip}");
         let skipping = parse(skip.as_bytes(), prompts).expect("the skipping policy parses");
         assert!(
             matches!(
-                skipping.authors("acme/special"),
+                authors_of(&skipping, "acme/special"),
                 Some(Authors::Restricted { untrusted: Untrusted::Skip, trusted })
                     if trusted.permission.is_none()
             ),
             "authors = {:?}",
-            skipping.authors("acme/special")
+            authors_of(&skipping, "acme/special")
         );
     }
 
@@ -1553,11 +1560,11 @@ notifications:
             match parse(document(login).as_bytes(), prompts) {
                 Ok(parsed) => assert!(
                     matches!(
-                        parsed.authors("acme/special"),
+                        authors_of(&parsed, "acme/special"),
                         Some(Authors::Restricted { trusted, .. }) if trusted.logins == [login]
                     ),
                     "{login}: authors = {:?}",
-                    parsed.authors("acme/special")
+                    authors_of(&parsed, "acme/special")
                 ),
                 Err(error) => panic!("{login}: {error}"),
             }

@@ -15,21 +15,19 @@ impl Policy {
     /// Rules are tried in file order. `None` means no rule covers the repository.
     #[must_use]
     pub fn resolve(&self, repository: &str) -> Option<&Rule> {
-        self.rules
-            .iter()
-            .find(|rule| matches(&rule.match_glob, repository))
+        self.resolve_with_authors(repository).map(|(rule, _)| rule)
     }
 
-    /// Returns the authors section of the rule that [`Policy::resolve`] returns.
+    /// Returns the first rule that matches the lowercase repository and its authors section.
     ///
+    /// Both come from one match, so a candidate's trust section is always its rule's own.
     /// `None` means no rule covers the repository.
     #[must_use]
-    pub fn authors(&self, repository: &str) -> Option<&Authors> {
-        let index = self
-            .rules
+    pub fn resolve_with_authors(&self, repository: &str) -> Option<(&Rule, &Authors)> {
+        self.rules
             .iter()
-            .position(|rule| matches(&rule.match_glob, repository))?;
-        self.authors.get(index)
+            .zip(&self.authors)
+            .find(|(rule, _)| matches(&rule.match_glob, repository))
     }
 
     /// Returns the distinct labels used by label triggers, sorted.

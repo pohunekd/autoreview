@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use autoreview_policy::{AuthorClass, Event, Level, Reviewer, Rule};
+use autoreview_policy::{AuthorClass, Authors, Event, Level, Reviewer, Rule};
 use serde::{Deserialize, Serialize, Serializer};
 
 /// Scope mode of a review that reads the whole pull request.
@@ -71,6 +71,11 @@ pub struct Candidate {
     /// The author class; `None` until discovery resolves it, and a review needs it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author_class: Option<AuthorClass>,
+    /// The authors section of the policy match that gave `rule`; `None` drops the candidate.
+    ///
+    /// Not serialized: `rule` and `author_class` show its effect in the `candidates` output.
+    #[serde(skip)]
+    pub authors: Option<Authors>,
 }
 
 /// A pull request a trigger found but whose data the engine refuses.
