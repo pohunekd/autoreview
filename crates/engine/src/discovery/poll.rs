@@ -4,12 +4,11 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_policy::Event;
 use autoreview_schedule::phase;
-use autoreview_schedule::scheduler::{self, Record, Run};
+use autoreview_schedule::scheduler::{self, Record, Retarget, Run, Target};
 use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
@@ -20,9 +19,7 @@ use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::messages::{go_elapsed_nanos, handoff_reminder_message};
 use crate::model::review::APPROVAL_KIND_SUPERSEDED;
-use crate::model::{
-    Candidate, PollResult, PublishedRecord, PullRequest, RetryRequest, ReviewInput,
-};
+use crate::model::{Candidate, PollResult, RetryRequest, ReviewInput};
 use crate::store::discovery::save_discovery;
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
 
@@ -199,46 +196,43 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             let target = pr.target();
             // A key without a record plans from Go's zero record, which `Record::default` is.
-            let mut previous = state.schedule.get(key).cloned().unwrap_or_default();
-            let retarget = match state.published.get(key) {
+            let previous = state.schedule.get(key).cloned().unwrap_or_default();
+            // A published review that covers the head gets here only when it names another base
+            // branch.
+            let planned = match state.published.get(key) {
                 Some(published) if published.covers(pr) => {
-                    self.retarget_attempt(cancel, published, pr, &history)?
+                    let run_bases = self.run_bases(cancel, &target, &history)?;
+                    let retarget = Retarget {
+                        base_branch: &pr.base_branch,
+                        run_bases: &run_bases,
+                        published_workflow: &published.workflow_id,
+                    };
+                    scheduler::plan_retarget(
+                        &previous,
+                        &target,
+                        &history,
+                        &retarget,
+                        |attempt| pr.workflow_id(attempt),
+                        now,
+                        &self.config.schedule,
+                    )
+                    .map_err(schedule_error)?
                 }
                 _ => None,
             };
-            let mut runs = Cow::Borrowed(history.as_slice());
-            if retarget.is_some() {
-                // The ended runs of this head reviewed another base branch, so none of them
-                // completes the review. The record of the retarget names no workflow until it
-                // dispatches; it is kept, so its debounce runs once.
-                let identity = target.identity();
-                runs = Cow::Owned(
-                    history
-                        .iter()
-                        .filter(|run| run.active() || run.target.identity() != identity)
-                        .cloned()
-                        .collect(),
+            let retargeted = planned.is_some();
+            let mut decision = match planned {
+                Some(decision) => decision,
+                None => scheduler::plan(previous, &target, &history, now, &self.config.schedule)
+                    .map_err(schedule_error)?,
+            };
+            if retargeted && decision.dispatch {
+                tracing::info!(
+                    review_id = %pr.review_id(),
+                    reason = "base_branch_changed",
+                    base_branch = %pr.base_branch,
+                    "reviewed head scheduled again for a full review"
                 );
-                if previous.identity != identity || !previous.workflow_id.is_empty() {
-                    previous = Record {
-                        blocking_workflows: previous.blocking_workflows,
-                        ..Record::default()
-                    };
-                }
-            }
-            let mut decision =
-                scheduler::plan(previous, &target, &runs, now, &self.config.schedule)
-                    .map_err(schedule_error)?;
-            if let Some(attempt) = retarget {
-                decision.record.attempt = decision.record.attempt.max(attempt);
-                if decision.dispatch {
-                    tracing::info!(
-                        review_id = %pr.review_id(),
-                        reason = "base_branch_changed",
-                        base_branch = %pr.base_branch,
-                        "reviewed head scheduled again for a full review"
-                    );
-                }
             }
             if decision.notify {
                 let message = scheduler::notification(&target, &decision.record);
@@ -355,45 +349,34 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         Ok(Pass { result, notices })
     }
 
-    /// Returns the first attempt of the review that a retarget of a reviewed head asks for.
+    /// Returns the base branch of the stored input of each run of `target`, by workflow ID.
     ///
-    /// Returns `None` when a run of this head that was not superseded already reviewed the
-    /// current base branch. The attempt follows every run of the head and never repeats the
-    /// workflow of `published`.
+    /// A run whose stored review is gone has no entry.
     ///
     /// # Errors
     ///
     /// Returns the error of the store.
-    fn retarget_attempt(
+    fn run_bases(
         &self,
         cancel: &CancellationToken,
-        published: &PublishedRecord,
-        pr: &PullRequest,
+        target: &Target,
         history: &[Run],
-    ) -> Result<Option<i64>, Error> {
-        let identity = pr.target().identity();
-        let mut attempt = 0_i64;
+    ) -> Result<BTreeMap<String, String>, Error> {
+        let identity = target.identity();
+        let mut bases = BTreeMap::new();
         for run in history
             .iter()
             .filter(|run| run.target.identity() == identity)
         {
-            attempt = attempt.max(run.attempt.wrapping_add(1));
-            // A superseded run reviewed nothing, so its base branch still needs a review.
-            if !run.active() && scheduler::superseded(&scheduler::failure_code(&run.failure)) {
-                continue;
-            }
             live(cancel)?;
-            let stored = self.store.get_review(&run.workflow_id)?;
-            if stored.is_some_and(|review| review.input.pull_request.base_branch == pr.base_branch)
-            {
-                return Ok(None);
+            if let Some(review) = self.store.get_review(&run.workflow_id)? {
+                bases.insert(
+                    run.workflow_id.clone(),
+                    review.input.pull_request.base_branch,
+                );
             }
         }
-        // The run of the published review may be pruned while its record is kept.
-        if pr.workflow_id(attempt) == published.workflow_id {
-            attempt = attempt.wrapping_add(1);
-        }
-        Ok(Some(attempt))
+        Ok(bases)
     }
 
     /// Returns the waits that no longer match their pull request and drops ended waits.
