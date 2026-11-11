@@ -12,7 +12,7 @@ use crate::error::{Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::Integrations;
 use crate::model::Verification;
 use crate::protocol::go_utf8_lossy;
-use crate::store::{ReviewStep, StepOutcome};
+use crate::store::{ReviewStep, StepOutcome, StepRun};
 use crate::verify::{
     VERDICT_CONFIRMED, VERDICT_NOT_BLOCKING, VERDICT_REFUTED, VERDICT_REOPENED, VERDICT_UPHELD,
     VerificationClaims, build_verifier_request, parse_verifier_output,
@@ -35,6 +35,12 @@ fn verdict_count(verification: &Verification, verdict: &str) -> usize {
             .iter()
             .filter(|check| check.verdict == verdict)
             .count()
+}
+
+/// Returns `failure` with the run, if it records one, lasting `duration_ms`.
+fn measured_at(failure: StepFailure, duration_ms: i64) -> StepFailure {
+    let run = failure.run.map(|run| StepRun { duration_ms, ..run });
+    StepFailure { run, ..failure }
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
@@ -120,7 +126,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 // Measured before the session cleanup, which is not part of the run.
                 let failed = self.step_run(step, started, StepOutcome::Failed);
                 if let Err(cleanup) = self.remove_sessions(&ids).await {
-                    return Err(self.step_failure(step, started, cleanup));
+                    // A failed cleanup ends the step, and the run keeps its time before it.
+                    let failure = self.step_failure(step, started, cleanup);
+                    return Err(measured_at(failure, failed.duration_ms));
                 }
                 verification.error_code = error_code(&err).to_owned();
                 tracing::warn!(
@@ -132,7 +140,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
             Err(err) => return Err(self.step_failure(step, started, err)),
         };
-        live(&self.cancel)
+        let inserted = live(&self.cancel)
             .and_then(|()| {
                 self.engine.store.save_step_recorded(
                     &self.workflow_id,
@@ -141,7 +149,13 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                     &recorded,
                 )
             })
-            .map_err(|err| self.step_failure(step, started, err))?;
+            // A failed write ends the step, and the run keeps the time measured with its result.
+            .map_err(|err| {
+                measured_at(self.step_failure(step, started, err), recorded.duration_ms)
+            })?;
+        if inserted {
+            self.engine.count_step(&recorded);
+        }
         Ok(verification)
     }
 

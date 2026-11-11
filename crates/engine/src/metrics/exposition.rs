@@ -1,8 +1,8 @@
-//! The Prometheus text exposition, format 0.0.4, of the gauges and the review counters.
+//! The Prometheus text exposition, format 0.0.4, of the gauges, the review and step counters.
 
 // Rust guideline compliant 2026-06-26
 
-use super::counts::{Counts, Gauges, PUBLICATION_BUCKETS, ReviewCounts};
+use super::counts::{Counts, Gauges, PUBLICATION_BUCKETS, ReviewCounts, STEP_BUCKETS};
 use crate::stats::StateCounts;
 
 /// One gauge family of the review states: its name, its help text and the count it shows.
@@ -110,6 +110,7 @@ pub(crate) fn render(gauges: &Gauges, counts: &Counts) -> String {
         }
     }
     histogram(&mut out, counts);
+    steps(&mut out, counts);
     out
 }
 
@@ -135,6 +136,45 @@ fn histogram(out: &mut String, counts: &Counts) {
         let labels = [("repository", repository), ("rule", rule)];
         sample(out, &format!("{name}_sum"), &labels, review.seconds_sum);
         sample(out, &format!("{name}_count"), &labels, review.seconds_count);
+    }
+}
+
+/// Writes the counters and the duration histogram of the recorded step runs.
+fn steps(out: &mut String, counts: &Counts) {
+    let name = "autoreview_review_steps_total";
+    let help = "Recorded runs of the review steps by outcome.";
+    header(out, name, "counter", help);
+    for (step, totals) in &counts.steps {
+        for (outcome, runs) in &totals.runs {
+            sample(out, name, &[("step", step), ("outcome", outcome)], runs);
+        }
+    }
+    let name = "autoreview_review_step_retries_total";
+    let help = "Repeated attempts inside the recorded step runs.";
+    header(out, name, "counter", help);
+    for (step, totals) in &counts.steps {
+        sample(out, name, &[("step", step)], totals.retries);
+    }
+    let name = "autoreview_review_step_seconds";
+    let help = "Seconds of the succeeded runs of the review steps.";
+    header(out, name, "histogram", help);
+    let (bucket, sum, count) = (
+        format!("{name}_bucket"),
+        format!("{name}_sum"),
+        format!("{name}_count"),
+    );
+    for (step, totals) in &counts.steps {
+        for (bound, hits) in STEP_BUCKETS.iter().zip(totals.buckets) {
+            let le = bound.to_string();
+            sample(out, &bucket, &[("step", step), ("le", &le)], hits);
+        }
+        let measured = totals.measured;
+        sample(out, &bucket, &[("step", step), ("le", "+Inf")], measured);
+        // Milliseconds as seconds with three decimals, exact for any sum.
+        let total = totals.milliseconds_sum;
+        let seconds = format!("{}.{:03}", total / 1000, total % 1000);
+        sample(out, &sum, &[("step", step)], seconds);
+        sample(out, &count, &[("step", step)], measured);
     }
 }
 
@@ -181,7 +221,7 @@ mod tests {
 
     use super::render;
     use crate::metrics::counts::{Counts, Gauges};
-    use crate::store::StoredReview;
+    use crate::store::{ReviewStep, StepOutcome, StepRun, StoredReview};
 
     /// A rule `match` with the three characters that a label value escapes.
     const ODD_RULE: &str = "d/\"x\"\\y\nz";
@@ -254,6 +294,65 @@ autoreview_review_publication_seconds_bucket{repository="a/w",rule="*",le="25920
 autoreview_review_publication_seconds_bucket{repository="a/w",rule="*",le="+Inf"} 2
 autoreview_review_publication_seconds_sum{repository="a/w",rule="*"} 7500
 autoreview_review_publication_seconds_count{repository="a/w",rule="*"} 2
+# HELP autoreview_review_steps_total Recorded runs of the review steps by outcome.
+# TYPE autoreview_review_steps_total counter
+autoreview_review_steps_total{step="publication",outcome="succeeded"} 2
+autoreview_review_steps_total{step="reviewers",outcome="failed"} 1
+autoreview_review_steps_total{step="reviewers",outcome="succeeded"} 1
+autoreview_review_steps_total{step="verifier",outcome="succeeded"} 1
+autoreview_review_steps_total{step="verifier",outcome="superseded"} 1
+# HELP autoreview_review_step_retries_total Repeated attempts inside the recorded step runs.
+# TYPE autoreview_review_step_retries_total counter
+autoreview_review_step_retries_total{step="publication"} 0
+autoreview_review_step_retries_total{step="reviewers"} 3
+autoreview_review_step_retries_total{step="verifier"} 1
+# HELP autoreview_review_step_seconds Seconds of the succeeded runs of the review steps.
+# TYPE autoreview_review_step_seconds histogram
+autoreview_review_step_seconds_bucket{step="publication",le="1"} 1
+autoreview_review_step_seconds_bucket{step="publication",le="5"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="15"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="60"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="300"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="900"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="1800"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="3600"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="14400"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="43200"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="86400"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="259200"} 2
+autoreview_review_step_seconds_bucket{step="publication",le="+Inf"} 2
+autoreview_review_step_seconds_sum{step="publication"} 1.251
+autoreview_review_step_seconds_count{step="publication"} 2
+autoreview_review_step_seconds_bucket{step="reviewers",le="1"} 0
+autoreview_review_step_seconds_bucket{step="reviewers",le="5"} 0
+autoreview_review_step_seconds_bucket{step="reviewers",le="15"} 0
+autoreview_review_step_seconds_bucket{step="reviewers",le="60"} 0
+autoreview_review_step_seconds_bucket{step="reviewers",le="300"} 1
+autoreview_review_step_seconds_bucket{step="reviewers",le="900"} 1
+autoreview_review_step_seconds_bucket{step="reviewers",le="1800"} 1
+autoreview_review_step_seconds_bucket{step="reviewers",le="3600"} 1
+autoreview_review_step_seconds_bucket{step="reviewers",le="14400"} 1
+autoreview_review_step_seconds_bucket{step="reviewers",le="43200"} 1
+autoreview_review_step_seconds_bucket{step="reviewers",le="86400"} 1
+autoreview_review_step_seconds_bucket{step="reviewers",le="259200"} 1
+autoreview_review_step_seconds_bucket{step="reviewers",le="+Inf"} 1
+autoreview_review_step_seconds_sum{step="reviewers"} 300.000
+autoreview_review_step_seconds_count{step="reviewers"} 1
+autoreview_review_step_seconds_bucket{step="verifier",le="1"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="5"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="15"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="60"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="300"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="900"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="1800"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="3600"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="14400"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="43200"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="86400"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="259200"} 0
+autoreview_review_step_seconds_bucket{step="verifier",le="+Inf"} 1
+autoreview_review_step_seconds_sum{step="verifier"} 259200.001
+autoreview_review_step_seconds_count{step="verifier"} 1
 "#;
 
     /// Returns a queued review of `repository` under `rule` on `host-a`.
@@ -296,6 +395,8 @@ autoreview_review_publication_seconds_count{repository="a/w",rule="*"} 2
     }
 
     /// The counters of fixed rows: every family, two keys, label escaping, cumulative buckets.
+    ///
+    /// The step runs cover a bucket bound, a failed run with retries and a sub-second run.
     #[test]
     fn metrics_exposition_writes_every_family_of_fixed_counts() {
         let start = "2026-11-01T00:00:00Z";
@@ -352,6 +453,28 @@ autoreview_review_publication_seconds_count{repository="a/w",rule="*"} 2
             counts.complete(&broken).is_err(),
             "an outcome that does not decode"
         );
+        let run = |step, outcome, retries, duration_ms| StepRun {
+            step,
+            outcome,
+            retries,
+            duration_ms,
+        };
+        let (reviewers, verifier) = (ReviewStep::Reviewers, ReviewStep::Verifier);
+        for step_run in [
+            // 300 seconds, a bucket bound: in every bucket from 300 seconds on.
+            run(reviewers, StepOutcome::Succeeded, 1, 300_000),
+            // Failed: its run and its retries count, its duration is in no bucket.
+            run(reviewers, StepOutcome::Failed, 2, 7),
+            // Under one second: in every bucket.
+            run(ReviewStep::Publication, StepOutcome::Succeeded, 0, 250),
+            // Just above one second: in every bucket from 5 seconds on.
+            run(ReviewStep::Publication, StepOutcome::Succeeded, 0, 1001),
+            // Above the last bound: only in `+Inf`.
+            run(verifier, StepOutcome::Succeeded, 0, 259_200_001),
+            run(verifier, StepOutcome::Superseded, 1, 40),
+        ] {
+            counts.step(&step_run);
+        }
 
         let mut running = widget("r1");
         running.status = "running".to_owned();

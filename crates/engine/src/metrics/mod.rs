@@ -1,5 +1,5 @@
-//! The Prometheus endpoint of `autoreview serve`: the review counters of the process and the
-//! current state, read from the store at each scrape.
+//! The Prometheus endpoint of `autoreview serve`: the review and step counters of the process
+//! and the current state, read from the store at each scrape.
 //!
 //! The binary binds the listener; this module counts the reviews and answers each request.
 
@@ -19,7 +19,7 @@ use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
-use crate::store::{REVIEW_COMPLETED, StoredReview};
+use crate::store::{REVIEW_COMPLETED, StepRun, StoredReview};
 
 #[doc(inline)]
 pub use server::{METRICS_PATH, MetricsConfig, MetricsServer};
@@ -50,6 +50,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     pub(crate) fn count_started(&self, review: &StoredReview) {
         if let Some(metrics) = &self.metrics {
             metrics.lock().start(review);
+        }
+    }
+
+    /// Counts a step run that the store inserted; without counters it does nothing.
+    ///
+    /// Call it after the transaction that inserted the run committed, never for a run that
+    /// the store kept out because the step already had its record.
+    pub(crate) fn count_step(&self, run: &StepRun) {
+        if let Some(metrics) = &self.metrics {
+            metrics.lock().step(run);
         }
     }
 

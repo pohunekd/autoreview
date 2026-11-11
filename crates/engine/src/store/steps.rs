@@ -119,7 +119,8 @@ impl Store {
     /// Inserts the run of a step of the review `workflow_id`; the first record of a step wins.
     ///
     /// The end of the run is the store's current time. Call it in the transaction that stores
-    /// the outcome of the step, so a record exists only with a stored outcome.
+    /// the outcome of the step, so a record exists only with a stored outcome. Returns whether
+    /// the row was inserted: `false` when the step already has its record.
     ///
     /// # Errors
     ///
@@ -129,8 +130,8 @@ impl Store {
         connection: &Connection,
         workflow_id: &str,
         run: &StepRun,
-    ) -> Result<(), Error> {
-        connection
+    ) -> Result<bool, Error> {
+        let inserted = connection
             .execute(
                 "INSERT INTO review_step_runs (workflow_id, step, outcome, retries, duration_ms, \
                  finished_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
@@ -145,7 +146,7 @@ impl Store {
                 ],
             )
             .map_err(unavailable)?;
-        Ok(())
+        Ok(inserted == 1)
     }
 
     /// Lists the step runs that ended inside `range`, its first instant and the first after it.

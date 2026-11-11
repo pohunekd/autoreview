@@ -19,6 +19,10 @@ const MEASURED: &str = "measured";
 /// Start of the notification that asks to remove reviewer sessions by hand.
 const CLEANUP_NOTE: &str = "Pohunek could not remove reviewer sessions";
 
+/// The sample of the one succeeded publication step.
+const PUBLICATION_COUNTED: &str =
+    "autoreview_review_steps_total{step=\"publication\",outcome=\"succeeded\"} 1\n";
+
 /// Reads `history.steps` of the statistics document from yesterday on.
 fn recorded_steps(h: &Harness) -> Value {
     // A day before today, so a review that ends just after midnight UTC is still inside.
@@ -62,6 +66,8 @@ fn succeeded_once(key: &str, retries: i64) -> Value {
 }
 
 /// A review records its reviewers and publication steps; a fresh reviewer run is a retry.
+///
+/// The metrics count each recorded run once, with its retries and its duration.
 #[tokio::test]
 async fn review_records_its_steps_with_their_retries() {
     let mut h = start_harness(|_| {}).await;
@@ -86,6 +92,30 @@ async fn review_records_its_steps_with_their_retries() {
             succeeded_once("reviewers", 1)
         ])
     );
+    let metrics = || {
+        h.engine
+            .metrics_text(&CancellationToken::new())
+            .expect("the metrics read")
+    };
+    // The worker counts a step just after the write that records it.
+    h.wait_for("the publication step counted", || {
+        metrics().contains(PUBLICATION_COUNTED)
+    })
+    .await;
+    let text = metrics();
+    for line in [
+        "autoreview_review_steps_total{step=\"reviewers\",outcome=\"succeeded\"} 1",
+        "autoreview_review_step_retries_total{step=\"publication\"} 0",
+        "autoreview_review_step_retries_total{step=\"reviewers\"} 1",
+        "autoreview_review_step_seconds_count{step=\"reviewers\"} 1",
+    ] {
+        assert!(
+            text.lines().any(|sample| sample == line),
+            "{line} in {text}"
+        );
+    }
+    assert!(!text.contains("outcome=\"failed\""), "{text}");
+    assert!(!text.contains("step=\"verifier\""), "{text}");
     h.stop_engine().await;
 }
 
