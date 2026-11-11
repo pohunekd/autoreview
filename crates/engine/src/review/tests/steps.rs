@@ -2,15 +2,16 @@
 
 // Rust guideline compliant 2026-06-26
 
-use autoreview_policy::Level;
+use autoreview_policy::{Level, VERIFIER_REVIEWER_ID};
 use serde_json::{Value, json};
 use time::{Duration, OffsetDateTime};
 use tokio_util::sync::CancellationToken;
 
 use crate::integrations::SessionRequest;
 use crate::protocol::fixtures::sha;
-use crate::testing::fake::reviewer_output;
+use crate::testing::fake::{reviewer_output, verifying};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
+use crate::verify::{VERDICT_CONFIRMED, VERDICT_UPHELD};
 
 /// Stands in for a measured duration, which differs from run to run.
 const MEASURED: &str = "measured";
@@ -117,6 +118,78 @@ async fn shutdown_after_the_last_reviewer_result_still_records_the_reviewers_ste
         json!([
             succeeded_once("publication", 0),
             succeeded_once("reviewers", 0)
+        ])
+    );
+    h.stop_engine().await;
+}
+
+/// Output where the opus reviewer reports one blocking finding and every other reviewer none.
+fn opus_blocks(request: &SessionRequest) -> String {
+    let output = if request.reviewer.id == "opus" {
+        reviewer_output(vec![json!({
+            "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+            "line": 3, "title": "Broken", "body": "It breaks.",
+        })])
+    } else {
+        reviewer_output(Vec::new())
+    };
+    output(request)
+}
+
+/// A verifier run that a shutdown interrupts after its failure records the run after it.
+///
+/// The verifier session cannot be read and its cleanup notification is held, so the engine
+/// stops before the failed verification is stored. After the restart the verifier succeeds.
+#[tokio::test]
+async fn verifier_failure_before_its_verification_is_stored_records_the_resumed_run() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    let gate = h.fake.hold_notes(CLEANUP_NOTE);
+    h.set_output(|request: &SessionRequest| {
+        if request.reviewer.id == VERIFIER_REVIEWER_ID {
+            return String::new();
+        }
+        opus_blocks(request)
+    });
+    let pr = integration_pull_request("checked/widget", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the verifier session", || h.started_count() == 3)
+        .await;
+    {
+        // The host loses the verifier session and refuses its removal.
+        let mut state = h.fake.lock();
+        let verifier = state
+            .sessions
+            .iter()
+            .find(|(_, request)| request.reviewer.id == VERIFIER_REVIEWER_ID)
+            .map(|(id, _)| id.clone())
+            .expect("the verifier session runs");
+        state.sessions.remove(&verifier);
+        state.remove_failing.insert(verifier);
+    }
+    h.poll_until("the held cleanup notification", || {
+        h.fake.has_note(Level::Action, CLEANUP_NOTE)
+    })
+    .await;
+    // The engine is cancelled before the notification returns, so the run ends by shutdown.
+    tokio::join!(biased; h.stop_engine(), async { gate.add_permits(1) });
+    h.fake.lock().held_notes = None;
+    h.set_output(verifying(
+        opus_blocks,
+        |_| VERDICT_CONFIRMED,
+        |_| VERDICT_UPHELD,
+    ));
+    h.start();
+    h.poll_until("the publication after the restart", || {
+        h.publications() == 1
+    })
+    .await;
+    assert_eq!(
+        measured_steps(&h).await,
+        json!([
+            succeeded_once("publication", 0),
+            succeeded_once("reviewers", 0),
+            succeeded_once("verifier", 0)
         ])
     );
     h.stop_engine().await;

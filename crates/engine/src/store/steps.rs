@@ -116,15 +116,20 @@ pub struct StepRun {
 }
 
 impl Store {
-    /// Records the run of a step of the review `workflow_id`; the first record of a step wins.
+    /// Inserts the run of a step of the review `workflow_id`; the first record of a step wins.
     ///
-    /// The end of the run is the store's current time.
+    /// The end of the run is the store's current time. Call it in the transaction that stores
+    /// the outcome of the step, so a record exists only with a stored outcome.
     ///
     /// # Errors
     ///
     /// Returns `store_unavailable` when SQLite fails.
-    pub(crate) fn record_step(&self, workflow_id: &str, run: &StepRun) -> Result<(), Error> {
-        let connection = self.lock_connection()?;
+    pub(super) fn insert_step_run(
+        &self,
+        connection: &Connection,
+        workflow_id: &str,
+        run: &StepRun,
+    ) -> Result<(), Error> {
         connection
             .execute(
                 "INSERT INTO review_step_runs (workflow_id, step, outcome, retries, duration_ms, \

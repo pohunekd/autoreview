@@ -643,12 +643,49 @@ impl Store {
             .map(encode_go_json)
             .transpose()
             .map_err(|err| store_error("store_state_invalid", true, err))?;
+        let connection = self.lock_connection()?;
+        self.write_completion(&connection, workflow_id, result, failure, encoded)
+    }
+
+    /// Records the final result of a review as `complete_review` does, and the run `run` of
+    /// the step that ended it, in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_state_invalid` when the outcome cannot be encoded and `store_unavailable`
+    /// when SQLite fails; then neither is written.
+    pub(crate) fn complete_review_recorded(
+        &self,
+        workflow_id: &str,
+        result: &str,
+        failure: &str,
+        outcome: Option<&ReviewOutcome>,
+        run: &StepRun,
+    ) -> Result<(), Error> {
+        let encoded = outcome
+            .map(encode_go_json)
+            .transpose()
+            .map_err(|err| store_error("store_state_invalid", true, err))?;
+        self.in_tx(|transaction| {
+            self.write_completion(transaction, workflow_id, result, failure, encoded)?;
+            self.insert_step_run(transaction, workflow_id, run)
+        })
+    }
+
+    /// Writes the final result of a review on `connection`. An empty `failure` is no failure.
+    fn write_completion(
+        &self,
+        connection: &Connection,
+        workflow_id: &str,
+        result: &str,
+        failure: &str,
+        encoded: Option<String>,
+    ) -> Result<(), Error> {
         let failure_value = if failure.is_empty() {
             None
         } else {
             Some(failure.to_owned())
         };
-        let connection = self.lock_connection()?;
         let now = self.timestamp();
         connection
             .execute(
@@ -726,14 +763,29 @@ impl Store {
         let encoded =
             encode_go_json(value).map_err(|err| store_error("store_state_invalid", true, err))?;
         let connection = self.lock_connection()?;
-        connection
-            .execute(
-                "INSERT INTO review_steps (workflow_id, name, output) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT (workflow_id, name) DO UPDATE SET output = excluded.output",
-                params![workflow_id, name, encoded],
-            )
-            .map_err(unavailable)?;
-        Ok(())
+        write_step(&connection, workflow_id, name, &encoded)
+    }
+
+    /// Writes the output of a review step as `save_step` does, and the run `run` of the step,
+    /// in one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_state_invalid` when the value cannot be encoded and `store_unavailable`
+    /// when SQLite fails; then neither is written.
+    pub(crate) fn save_step_recorded<T: Serialize + ?Sized>(
+        &self,
+        workflow_id: &str,
+        name: &str,
+        value: &T,
+        run: &StepRun,
+    ) -> Result<(), Error> {
+        let encoded =
+            encode_go_json(value).map_err(|err| store_error("store_state_invalid", true, err))?;
+        self.in_tx(|transaction| {
+            write_step(transaction, workflow_id, name, &encoded)?;
+            self.insert_step_run(transaction, workflow_id, run)
+        })
     }
 
     /// Reads a review state value, or `None` when it has not been set.
@@ -772,15 +824,64 @@ impl Store {
         let encoded =
             encode_go_json(value).map_err(|err| store_error("store_state_invalid", true, err))?;
         let connection = self.lock_connection()?;
-        connection
-            .execute(
-                "INSERT INTO review_state (workflow_id, name, value) VALUES (?1, ?2, ?3) \
-                 ON CONFLICT (workflow_id, name) DO UPDATE SET value = excluded.value",
-                params![workflow_id, name, encoded],
-            )
-            .map_err(unavailable)?;
-        Ok(())
+        write_state(&connection, workflow_id, name, &encoded)
     }
+
+    /// Writes a review state value as `set_state` does, and the run `run` of a step, in one
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_state_invalid` when the value cannot be encoded and `store_unavailable`
+    /// when SQLite fails; then neither is written.
+    pub(crate) fn set_state_recorded<T: Serialize + ?Sized>(
+        &self,
+        workflow_id: &str,
+        name: &str,
+        value: &T,
+        run: &StepRun,
+    ) -> Result<(), Error> {
+        let encoded =
+            encode_go_json(value).map_err(|err| store_error("store_state_invalid", true, err))?;
+        self.in_tx(|transaction| {
+            write_state(transaction, workflow_id, name, &encoded)?;
+            self.insert_step_run(transaction, workflow_id, run)
+        })
+    }
+}
+
+/// Writes the encoded output of a review step on `connection`, replacing a previous one.
+fn write_step(
+    connection: &Connection,
+    workflow_id: &str,
+    name: &str,
+    encoded: &str,
+) -> Result<(), Error> {
+    connection
+        .execute(
+            "INSERT INTO review_steps (workflow_id, name, output) VALUES (?1, ?2, ?3) \
+             ON CONFLICT (workflow_id, name) DO UPDATE SET output = excluded.output",
+            params![workflow_id, name, encoded],
+        )
+        .map_err(unavailable)?;
+    Ok(())
+}
+
+/// Writes an encoded review state value on `connection`, replacing a previous one.
+fn write_state(
+    connection: &Connection,
+    workflow_id: &str,
+    name: &str,
+    encoded: &str,
+) -> Result<(), Error> {
+    connection
+        .execute(
+            "INSERT INTO review_state (workflow_id, name, value) VALUES (?1, ?2, ?3) \
+             ON CONFLICT (workflow_id, name) DO UPDATE SET value = excluded.value",
+            params![workflow_id, name, encoded],
+        )
+        .map_err(unavailable)?;
+    Ok(())
 }
 #[cfg(test)]
 mod tests {

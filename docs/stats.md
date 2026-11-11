@@ -230,15 +230,17 @@ Each entry has these counts:
   rank, of the milliseconds of the succeeded runs; `null` without a succeeded run. A
   `reviewers` run includes the whole wait for the reviewer sessions.
 
-A review attempt records each step it runs once, when the step ends. A run that a shutdown
-interrupts records nothing; after the restart the step records the time and the retries
-of its resumed part only. A step whose result was stored before the restart but not yet
-recorded is recorded after the restart, with the time since the restart, and a step that
-has its record keeps it. A record that cannot be written is logged as
-`review step not recorded`, and the review goes on.
+A review attempt records each step it runs once, in the store write that keeps the
+outcome of the step: a succeeded step with its stored result, a failed `verifier` run with
+its unverified claims, and any other failed or superseded run with the failed review. A
+run that a shutdown interrupts before that write records nothing; when the resumed review
+reaches the step, the step records the time and the retries of its resumed part only. A
+step whose outcome is stored keeps its record, and the resumed review does not run it
+again. A record that cannot be written fails that write like any other store error.
 
 The step runs are deleted with their review (see `pruned_before`). Reviews that an engine
-before this version ran have no step runs, so they count in no step.
+before this version ran have no step runs, so they count in no step; a review that such an
+engine started records only the steps that end after the update.
 
 ```sh
 autoreview stats --since 2026-11-01 --json \

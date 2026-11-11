@@ -93,7 +93,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 .await;
             match settled {
                 Ok(discussion) => review.discussion = discussion,
-                Err(err) => return review.fail(err).await,
+                Err(failure) => return review.fail_step(failure).await,
             }
         }
         for reviewer in review.input.reviewers.clone() {
@@ -201,8 +201,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Err(err) = self.current_pull_request().await {
             return self.fail(err).await;
         }
-        if let Err(err) = self.collect().await {
-            return self.fail(err).await;
+        if let Err(failure) = self.collect().await {
+            return self.fail_step(failure).await;
         }
         let mut results = Vec::with_capacity(self.slots.len());
         for slot in &self.slots {
@@ -266,7 +266,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if self.input.verifies() && !claims.is_empty() {
             let verification = match self.verify(&claims).await {
                 Ok(verification) => verification,
-                Err(err) => return self.fail(err).await,
+                Err(failure) => return self.fail_step(failure).await,
             };
             artifact = apply_verification(artifact, verification);
         }
@@ -424,7 +424,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             .await;
         let result = match result {
             Ok(result) => result,
-            Err(err) => return self.fail(err).await,
+            Err(failure) => return self.fail_step(failure).await,
         };
         let published_at = self
             .once::<PublishedAt, _>(STEP_PUBLISHED_AT, || async {

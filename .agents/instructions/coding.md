@@ -411,8 +411,9 @@ What is not compatible, by decision:
   count in no step. `go_store_golden_opens` leaves the table out of the Go golden
   comparison and checks its SQL on its own; the golden is not regenerated. The
   regression tests are `go_store_golden_opens`,
-  `review_records_its_steps_with_their_retries` and
-  `shutdown_after_the_last_reviewer_result_still_records_the_reviewers_step`.
+  `review_records_its_steps_with_their_retries`,
+  `shutdown_after_the_last_reviewer_result_still_records_the_reviewers_step` and
+  `verifier_failure_before_its_verification_is_stored_records_the_resumed_run`.
 
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):

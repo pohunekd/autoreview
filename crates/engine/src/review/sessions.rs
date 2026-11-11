@@ -53,6 +53,22 @@ pub(crate) struct SessionFault {
     source: Option<Error>,
 }
 
+/// The error that ended a recorded step, with the run that the failed review records.
+#[derive(Debug)]
+pub(crate) struct StepFailure {
+    /// The error the step ended with.
+    pub(crate) error: Error,
+    /// The run of the step; `None` when a shutdown ended it or it had ended before.
+    pub(crate) run: Option<StepRun>,
+}
+
+impl StepFailure {
+    /// Returns the failure with `error` of a step that has no run to record.
+    pub(crate) fn without_run(error: Error) -> Self {
+        Self { error, run: None }
+    }
+}
+
 /// Returns the error of a review interrupted by an engine shutdown.
 ///
 /// Its code is `workflow_failed` and it is not permanent, as Go's plain `errShutdown`.
@@ -215,25 +231,37 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Runs `step` as `once` does and records the run as the step `recorded`.
     ///
-    /// A stored output is recorded as a run too: the store keeps the first record of a step, so
-    /// a restart between the stored output and its record loses no run.
+    /// The run is recorded in the transaction that stores the output, so a stored output has
+    /// its record and a resumed review that reads it records nothing. A failed run is
+    /// recorded when the review completes as failed.
     pub(crate) async fn once_recorded<T, Fut>(
         &self,
         recorded: ReviewStep,
         name: &str,
         step: impl FnMut() -> Fut,
-    ) -> Result<T, Error>
+    ) -> Result<T, StepFailure>
     where
         T: Serialize + DeserializeOwned,
         Fut: Future<Output = Result<T, Error>>,
     {
         let started = self.step_started();
-        let result = match self.stored::<T>(name)? {
-            Some(value) => Ok(value),
-            None => self.run_and_save(name, step).await,
+        if let Some(value) = self.stored::<T>(name).map_err(StepFailure::without_run)? {
+            return Ok(value);
+        }
+        let saved = match self.fresh(name, step).await {
+            Ok(value) => {
+                let run = self.step_run(recorded, started, StepOutcome::Succeeded);
+                live(&self.cancel)
+                    .and_then(|()| {
+                        self.engine
+                            .store
+                            .save_step_recorded(&self.workflow_id, name, &value, &run)
+                    })
+                    .map(|()| value)
+            }
+            Err(err) => Err(err),
         };
-        self.record_step(recorded, started, &result);
-        result
+        saved.map_err(|err| self.step_failure(recorded, started, err))
     }
 
     /// Reads the stored output of the step `name`, or `None` when it has not been saved.
@@ -300,39 +328,44 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         self.engine.clock.now()
     }
 
-    /// Records the run of `step` that started at `started` and ended with `result`.
+    /// Returns the run of `step` that started at `started` and ends now with `outcome`.
     ///
-    /// A run that a shutdown ends records nothing, so the resumed review records the step. A
-    /// succeeded run is recorded during a shutdown too, because its output may be stored
-    /// already. A record that cannot be written is logged and the review goes on.
-    pub(crate) fn record_step<T>(
+    /// The caller writes it with the stored outcome of the step, never on its own.
+    pub(crate) fn step_run(
         &self,
         step: ReviewStep,
         started: Instant,
-        result: &Result<T, Error>,
-    ) {
-        let outcome = match result {
-            Ok(_) => StepOutcome::Succeeded,
-            // An error during a shutdown may come from it, such as a cancelled host call.
-            Err(err) if is_shutdown(err) || self.cancel.is_cancelled() => return,
-            Err(err) if superseded(error_code(err)) => StepOutcome::Superseded,
-            Err(_) => StepOutcome::Failed,
-        };
+        outcome: StepOutcome,
+    ) -> StepRun {
         let elapsed = self.engine.clock.now().saturating_duration_since(started);
-        let run = StepRun {
+        StepRun {
             step,
             outcome,
-            retries: self.retries.swap(0, Ordering::Relaxed),
+            retries: self.retries.load(Ordering::Relaxed),
             duration_ms: i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX),
-        };
-        if let Err(err) = self.engine.store.record_step(&self.workflow_id, &run) {
-            tracing::warn!(
-                review_id = %self.input.pull_request.review_id(),
-                step = step.as_str(),
-                error_code = error_code(&err),
-                "review step not recorded"
-            );
         }
+    }
+
+    /// Returns the failure of `step`, started at `started`, that ends now with `error`.
+    ///
+    /// A run that a shutdown ends has no run to record: the resumed review runs the step
+    /// again. A superseding code makes the run superseded, any other code failed.
+    pub(crate) fn step_failure(
+        &self,
+        step: ReviewStep,
+        started: Instant,
+        error: Error,
+    ) -> StepFailure {
+        // An error during a shutdown may come from it, such as a cancelled host call.
+        let outcome = if is_shutdown(&error) || self.cancel.is_cancelled() {
+            None
+        } else if superseded(error_code(&error)) {
+            Some(StepOutcome::Superseded)
+        } else {
+            Some(StepOutcome::Failed)
+        };
+        let run = outcome.map(|outcome| self.step_run(step, started, outcome));
+        StepFailure { error, run }
     }
 
     /// Waits for `delay`, or fails with [`shutdown_error`] when the engine shuts down.
@@ -427,6 +460,19 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         self.engine
             .store
             .set_state(&self.workflow_id, &name, &slot.state)
+    }
+
+    /// Stores the progress of `slot` as `save_slot` does and records `run` with it.
+    pub(crate) fn save_slot_recorded(
+        &self,
+        slot: &ReviewerSlot,
+        run: &StepRun,
+    ) -> Result<(), Error> {
+        let name = format!("{SLOT_STATE_PREFIX}{}", slot.reviewer.id);
+        live(&self.cancel)?;
+        self.engine
+            .store
+            .set_state_recorded(&self.workflow_id, &name, &slot.state, run)
     }
 
     /// Stores whether the review may still own open sessions.
@@ -741,6 +787,15 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// A shutdown returns `cause` unchanged. A superseded review is reported quietly; any other
     /// cause is logged, and the scheduler retries or reports it.
     pub(crate) async fn fail(&mut self, cause: Error) -> Result<(), Error> {
+        self.fail_step(StepFailure::without_run(cause)).await
+    }
+
+    /// Ends the review as `fail` does with the error of `failure`, and records its run.
+    ///
+    /// The run is written in the transaction that completes the review, so a shutdown before
+    /// that leaves no record and the resumed review runs the step again.
+    pub(crate) async fn fail_step(&mut self, failure: StepFailure) -> Result<(), Error> {
+        let StepFailure { error: cause, run } = failure;
         if is_shutdown(&cause) {
             return Err(cause);
         }
@@ -770,9 +825,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             .await?;
         }
         live(&self.cancel)?;
-        self.engine
-            .store
-            .complete_review(&self.workflow_id, RESULT_FAILURE, &code, None)
+        let (store, id) = (&self.engine.store, self.workflow_id.as_str());
+        match run {
+            Some(run) => store.complete_review_recorded(id, RESULT_FAILURE, &code, None, &run),
+            None => store.complete_review(id, RESULT_FAILURE, &code, None),
+        }
     }
 
     /// Returns the deadline stored under `key`, storing one on the first call.
