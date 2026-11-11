@@ -145,6 +145,16 @@ A route override pins one repository to one host. See
 | `pohunek_base_fetch_timeout` | Git on the review host did not finish the base fetch within pohunek's Git timeout. The engine retries. Check the network, then the SSH agent and the credential helper, see [review host checks](#review-host-checks). |
 | `pohunek_base_fetch_authentication_failed` | Git on the review host could not authenticate to GitHub. It is not retried. Check the SSH agent and the credentials, see [review host checks](#review-host-checks). |
 
+The log line `reviewer session start failed` carries the code above as
+`error_code` and the cause as `diagnostic`: the error code of pohunek's JSON
+error when it matches `^[a-z][a-z0-9_]{0,63}$`, the loss cause for
+`pohunek_session_lost`, otherwise an allowlisted class such as
+`unclassified_cli_failure`. Nothing else from pohunek's output is logged.
+
+| Diagnostic | Cause and fix |
+|---|---|
+| `session_input_not_ready` | The reviewer program gave pohunek no evidence that it is ready for input within pohunek's input grace (`input.initial_startup_grace_ms`), so pohunek did not write the request and refused the start. Every attempt fails the same way. The profile's program must show the input readiness that its pohunek runtime declares; for a Codex reviewer, see [Codex input not ready](#codex-input-not-ready). |
+
 When all start attempts fail, the review reaches `review_stopped`. See
 [retry and recovery](retry-and-recovery.md).
 
@@ -152,12 +162,12 @@ When all start attempts fail, the review reaches `review_stopped`. See
 
 Every start of a Codex reviewer fails with `pohunek_session_start_failed`, and
 the log line `reviewer session start failed` carries
-`diagnostic=unclassified_cli_failure`; the engine does not log pohunek's own
-error code. Each attempt waits for pohunek's whole input grace
-(`input.initial_startup_grace_ms`), then the review reaches `review_stopped`
-after `session.start_max_attempts`. A hand-run `pohunek session new
---agent <profile> --input-stdin` on the review host, or the pohunek daemon log,
-shows the cause: `session_input_not_ready`.
+`diagnostic=session_input_not_ready`, pohunek's error code. Each attempt waits
+for pohunek's whole input grace (`input.initial_startup_grace_ms`), then the
+review reaches `review_stopped` after `session.start_max_attempts`. A hand-run
+`pohunek session new --agent <profile> --input-stdin` on the review host, or the
+pohunek daemon log, shows the same code with pohunek's message, for example
+`agent did not show an editable prompt within 5000 ms`.
 
 The Codex runtime declares `manifest_idle` input readiness, so pohunek writes
 the request only after the session shows an idle terminal title or screen. The

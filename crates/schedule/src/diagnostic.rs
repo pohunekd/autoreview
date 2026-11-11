@@ -29,7 +29,7 @@ const DIAGNOSTIC_CODES: [(&str, &str); 16] = [
 /// Capital I with dot above (U+0130), which Go's `strings.ToLower` maps to a plain `i`.
 const CAPITAL_I_WITH_DOT: char = '\u{130}';
 
-/// Longest pohunek code that [`SessionLoss`] keeps, in bytes.
+/// Longest pohunek code that [`SessionLoss`] and [`start_diagnostic`] keep, in bytes.
 const LOSS_CODE_MAX_BYTES: usize = 64;
 
 /// Why pohunek reports a reviewer session's runtime as lost, as a checked pohunek code.
@@ -86,14 +86,34 @@ pub fn diagnostic<'a>(err: Option<&'a (dyn StdError + Send + Sync + 'static)>) -
     let Some(err) = err else {
         return "unavailable";
     };
-    let mut current: Option<&'a (dyn StdError + 'static)> = Some(err);
-    while let Some(error) = current {
-        if let Some(loss) = error.downcast_ref::<SessionLoss>() {
-            return loss.code();
-        }
-        current = error.source();
+    if let Some(code) = session_loss(err) {
+        return code;
     }
     classify(&err.to_string())
+}
+
+/// Classifies a failed session start into a diagnostic code that is safe to log.
+///
+/// A [`SessionLoss`] in the source chain wins, then `code`, the error code pohunek reported,
+/// when it matches `^[a-z][a-z0-9_]{0,63}$`; otherwise the result of [`diagnostic`] for `err`.
+pub fn start_diagnostic<'a>(
+    code: Option<&'a str>,
+    err: Option<&'a (dyn StdError + Send + Sync + 'static)>,
+) -> &'a str {
+    if let Some(loss) = err.and_then(|err| session_loss(err)) {
+        return loss;
+    }
+    match code {
+        Some(code) if is_loss_code(code) => code,
+        _ => diagnostic(err),
+    }
+}
+
+/// Returns the code of the first [`SessionLoss`] in the source chain of `err`.
+fn session_loss<'a>(err: &'a (dyn StdError + 'static)) -> Option<&'a str> {
+    std::iter::successors(Some(err), |&error| error.source())
+        .find_map(|error| error.downcast_ref::<SessionLoss>())
+        .map(SessionLoss::code)
 }
 
 /// Maps an error message to the code of its first matching entry in `DIAGNOSTIC_CODES`.
@@ -189,7 +209,7 @@ pub fn failure_explanation(code: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionLoss, diagnostic, failure_explanation, fetch_failure};
+    use super::{SessionLoss, diagnostic, failure_explanation, fetch_failure, start_diagnostic};
     use crate::scheduler::retryable;
 
     /// A wrapper whose source is the error it wraps, as an engine error keeps its cause.
@@ -228,6 +248,64 @@ mod tests {
         };
         let wrapped = Wrapped { source };
         assert_eq!(diagnostic(Some(&wrapped)), "host_restarted");
+    }
+
+    #[test]
+    fn start_diagnostic_logs_only_a_well_formed_pohunek_code() {
+        let longest = "a".repeat(64);
+        let too_long = "a".repeat(65);
+        let cases = [
+            (
+                Some("session_input_not_ready"),
+                "exit status 1: pohunek error code session_input_not_ready",
+                "session_input_not_ready",
+            ),
+            (
+                Some("request_timeout"),
+                "exit status 1: pohunek error code request_timeout",
+                "request_timeout",
+            ),
+            (Some(longest.as_str()), "token=secret", longest.as_str()),
+            (
+                Some(too_long.as_str()),
+                "token=secret",
+                "unclassified_cli_failure",
+            ),
+            (
+                Some("Session_Input"),
+                "token=secret",
+                "unclassified_cli_failure",
+            ),
+            (
+                Some("token=secret <a>&\u{2028}"),
+                "dial: connection refused",
+                "connection_refused",
+            ),
+            (Some("lost\n"), "No space left on device", "disk_full"),
+            (Some(""), "token=secret", "unclassified_cli_failure"),
+            (
+                None,
+                "token=secret prompt=private",
+                "unclassified_cli_failure",
+            ),
+        ];
+        for (code, message, want) in cases {
+            let err = std::io::Error::other(message);
+            assert_eq!(
+                start_diagnostic(code, Some(&err)),
+                want,
+                "{code:?}, {message:?}"
+            );
+        }
+        assert_eq!(start_diagnostic(None, None), "unavailable");
+        let Some(source) = SessionLoss::new("host_restarted", "") else {
+            panic!("host_restarted is a pohunek code");
+        };
+        let wrapped = Wrapped { source };
+        assert_eq!(
+            start_diagnostic(Some("session_input_not_ready"), Some(&wrapped)),
+            "host_restarted"
+        );
     }
 
     #[test]

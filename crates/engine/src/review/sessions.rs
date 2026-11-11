@@ -9,7 +9,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use autoreview_policy::{Event, Reviewer};
-use autoreview_schedule::diagnostic::diagnostic;
+use autoreview_schedule::diagnostic::{diagnostic, start_diagnostic};
 use autoreview_schedule::scheduler::superseded;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -523,7 +523,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                                 host = %request.route.host,
                                 start_attempt = attempt,
                                 error_code = %code,
-                                diagnostic = %diagnostic(cause.map(|cause| &**cause)),
+                                diagnostic = %start_diagnostic(
+                                    cause.and_then(|cause| pohunek_error_code(&**cause)),
+                                    cause.map(|cause| &**cause),
+                                ),
                                 "reviewer session start failed"
                             );
                             (code.to_owned(), permanent)
