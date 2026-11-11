@@ -352,6 +352,51 @@ async fn rewritten_history_gets_a_full_review_on_a_codex_pipeline() {
     h.stop_engine().await;
 }
 
+// A pull request retargeted to another base branch is reviewed in full: commits that joined the
+// diff through the retarget were never reviewed, so an incremental approval would cover them
+// (#240). A new base SHA on the same branch keeps the review incremental.
+#[tokio::test]
+async fn retargeted_pull_request_gets_a_full_review_before_it_is_approved() {
+    let mut h = start_harness(|_| {}).await;
+    h.set_output(reviewer_output(Vec::new()));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the first approval", || h.publications() == 1)
+        .await;
+    for (head, base_sha, count) in [("c", "e", 2), ("d", "f", 3)] {
+        let mut next = pr.clone();
+        next.head_sha = sha(head);
+        next.base_branch = "release".to_owned();
+        next.base_sha = sha(base_sha);
+        h.fake.open(next, h.rule(&pr.repository));
+        h.poll_until("the next approval", || h.publications() == count)
+            .await;
+    }
+    let (published, _, started, _) = h.fake.snapshot();
+    let scopes: Vec<(Decision, bool, bool)> = published
+        .iter()
+        .zip(&started)
+        .map(|(review, request)| {
+            (
+                review.decision.clone(),
+                review.body.contains("full review of"),
+                request.prompt.contains("Review scope: incremental"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        scopes,
+        [
+            (Decision::Approve, true, false),
+            (Decision::Approve, true, false),
+            (Decision::Approve, false, true),
+        ],
+        "the push after the retarget must be reviewed in full before it is approved; the next \
+         push on the new base is incremental (decision, full, previous head)"
+    );
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn missing_previous_review_falls_back_to_a_full_review() {
     let mut h = start_harness(|_| {}).await;

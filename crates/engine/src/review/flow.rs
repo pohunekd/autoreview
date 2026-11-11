@@ -440,6 +440,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             published_at: published_at.0,
             awaits_author: plan.notes_to_author,
             reminded: false,
+            // The base of the reviewed diff: a retarget during the review widens the next one.
+            base_branch: self.input.pull_request.base_branch.clone(),
         };
         if let Err(err) = self.engine.mark_published(&self.cancel, &record).await {
             return Err(self.interrupted(err));

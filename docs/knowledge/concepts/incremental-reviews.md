@@ -37,10 +37,18 @@ A rule that approves without a human and whose last published decision was not a
 approval gets a full review. That keeps the approval resting on a complete
 baseline (see [the stricter rule](#the-stricter-rule-for-auto-approve-rules)).
 
-**Step two: the commit history.** For the scope to stay incremental the stored
-result of that review must still exist, because it holds the prior findings, and
-the new head must extend the reviewed head in a straight line:
+**Step two: the base branch and the commit history.** For the scope to stay
+incremental the pull request must still target the base branch of that review,
+the stored result of that review must still exist, because it holds the prior
+findings, and the new head must extend the reviewed head in a straight line:
 
+- If the pull request now targets another base branch than at the published
+  review, the review widens to full. A retarget changes the pull request diff by
+  commits that no review has read, even when the new head extends the reviewed
+  one. The log reason is `base_branch_changed`. A new base commit on the same
+  branch is normal and keeps the review incremental. A review published by an
+  earlier release or by the Go engine records no base branch, so it does not
+  widen for this reason; the next published review records it.
 - If the stored result is gone (for example after
   `store.review_retention_seconds` or after an upgrade of the engine), the review
   widens to full. The log records the reason as `previous_review_not_stored`.
