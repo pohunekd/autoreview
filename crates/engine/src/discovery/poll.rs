@@ -272,10 +272,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                                 && run_bases
                                     .get(run)
                                     .is_some_and(|base| *base == pr.base_branch);
-                            let approval = if returned {
-                                self.approval_stands(cancel, pr, run).await?
-                            } else {
+                            // A record that stopped before any run stays stopped without a
+                            // lookup: its route failed, and `retry` dispatches it again.
+                            let approval = if !returned {
                                 Approval::Stands
+                            } else if failed_before_run(&previous, &target) {
+                                Approval::Dismissed
+                            } else {
+                                self.approval_stands(cancel, pr, run).await?
                             };
                             match approval {
                                 Approval::Stands => (None, on_base),
@@ -749,6 +753,17 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 forced.attempt = forced.attempt.max(run.attempt.wrapping_add(1));
             }
         }
+        // A dispatch that failed at its route left no run; its attempt is a failure here. After
+        // a completion here the planner does not see the other failed runs, so the forced record
+        // names no run, as the stopped one did.
+        if let Some(previous) = state.schedule.get(&key)
+            && failed_before_run(previous, &target)
+        {
+            failed_here = failed_here.max(previous.attempt);
+            if completed_here > NO_ATTEMPT {
+                forced.workflow_id = String::new();
+            }
+        }
         if completed_here > failed_here {
             return Err(Error::workflow(REVIEW_ALREADY_COMPLETED, true, None));
         }
@@ -795,6 +810,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 /// that names another run, or none, came back from another base branch.
 fn follows_another_run(previous: &Record, target: &Target, workflow_id: &str) -> bool {
     previous.identity == target.identity() && previous.workflow_id != workflow_id
+}
+
+/// Reports whether `previous`, the record of the head of `target`, stopped before any run.
+///
+/// A dispatch whose route fails with a code that is not retried leaves a `failed` record that
+/// names no run.
+fn failed_before_run(previous: &Record, target: &Target) -> bool {
+    previous.identity == target.identity()
+        && previous.phase == phase::FAILED
+        && previous.workflow_id.is_empty()
 }
 
 /// Reports a pull request that changed between the search and its detail read.

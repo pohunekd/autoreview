@@ -826,8 +826,8 @@ async fn dismissed_approval_is_replaced_after_a_retarget_away_and_back() {
 }
 
 // A return from a base branch whose review stopped replaces a dismissed approval too, and a
-// replacement that stops can be retried by hand: the dismissed approval does not complete the
-// head (#316).
+// replacement that stops, at its route or in its run, can be retried by hand: the dismissed
+// approval does not complete the head, and a stop at the route is not looked up again (#316).
 #[tokio::test]
 async fn dismissed_approval_is_replaced_after_a_stopped_review_elsewhere() {
     let mut h = start_harness(|_| {}).await;
@@ -853,20 +853,40 @@ async fn dismissed_approval_is_replaced_after_a_stopped_review_elsewhere() {
         workflows.dedup();
         workflows
     };
+    h.fake.lock().host_fail.insert(
+        "example-host".to_owned(),
+        "project_route_not_found".to_owned(),
+    );
     h.fake.dismiss(0);
     h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the stop of the replacing review at its route", || {
+        stops() == 2
+    })
+    .await;
+    let lookups = h.fake.lock().lookups;
     h.settle().await;
+    assert_eq!(
+        (reviews().len(), h.fake.lock().lookups - lookups),
+        (2, 0),
+        "the replacing review stopped at its route must start nothing and look nothing up \
+         (reviews, lookups of five more passes)"
+    );
+    h.fake.lock().host_fail.clear();
+    match h.retry(&pr).await {
+        Ok(result) if result.attempt == 3 => {}
+        other => panic!("the review stopped at its route must get attempt 3, retry = {other:?}"),
+    }
+    h.poll_until("the stop of the replacing review", || stops() == 3)
+        .await;
     assert_eq!(
         reviews().len(),
         3,
-        "the return to main, whose approval was dismissed, must start a review"
+        "the retry must start the replacing review"
     );
-    h.poll_until("the stop of the replacing review", || stops() == 2)
-        .await;
     h.set_output(reviewer_output(Vec::new()));
     let retried = match h.retry(&pr).await {
-        Ok(result) if result.attempt == 3 => result.workflow_id,
-        other => panic!("the stopped replacing review must get attempt 3, retry = {other:?}"),
+        Ok(result) if result.attempt == 4 => result.workflow_id,
+        other => panic!("the stopped replacing review must get attempt 4, retry = {other:?}"),
     };
     h.poll_until("the retried review", || h.publications() == 2)
         .await;
@@ -882,7 +902,7 @@ async fn dismissed_approval_is_replaced_after_a_stopped_review_elsewhere() {
             workflows.len(),
             workflows.last() == Some(&retried),
         ),
-        (2, Decision::Approve, true, true, 4, true),
+        (3, Decision::Approve, true, true, 4, true),
         "the retried review must post a new full approval for main (stop notices, decision, \
          full, marker of main, reviews, last review retried)"
     );

@@ -59,8 +59,9 @@ The review does not restart by itself after it stopped.
    head is no longer known. A review against another base branch does not count,
    also when it completed after the stop, so the stopped review of a retargeted
    pull request can be retried. A completed review does not count either when a
-   later review of the same base branch failed, as a review that replaces an
-   approval GitHub dismissed can, so that stopped review can be retried too.
+   later review of the same base branch failed, also before it ran (for example
+   at its project route), as a review that replaces an approval GitHub dismissed
+   can, so that stopped review can be retried too.
 
 If the same failure stops the review again, fix its cause first. The usual
 causes are in [troubleshooting](troubleshooting.md): route errors, session start
