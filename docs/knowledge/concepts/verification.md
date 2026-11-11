@@ -110,7 +110,10 @@ error code.
 Only an error of the review itself stops it, for example a head that changed while
 the verifier ran. The same rule applies to the verifier's reviewer session as to
 any other reviewer. A session that gives unusable output gets a fresh run, up to
-`session.reviewer_run_max_attempts`.
+`session.reviewer_run_max_attempts`, unless its code is one that is not retried,
+such as `claude_result_invalid` or `claude_result_mismatch` (see
+[troubleshooting](../runbooks/troubleshooting.md#reviewer-output)); the
+verification then ends at once and the claims are published unverified.
 
 ## Escalation on auto-approve rules
 

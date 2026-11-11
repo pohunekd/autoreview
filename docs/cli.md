@@ -415,7 +415,8 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `pohunek_session_lost` | The review host lost the session's worker while the session started; retried on a fresh branch. A leftover session that cannot be removed raises `cleanup_manual`, see [stale sessions](knowledge/runbooks/stale-sessions-and-branches.md#when-a-session-cannot-be-removed) |
 | `pohunek_base_fetch_ref_locked`, `pohunek_session_warning` | The session start hit a locked base fetch or reported a warning; retried on a fresh branch |
 | `pohunek_session_cleanup_failed` | A session could not be removed, see `cleanup_manual` |
-| `review_output_timeout`, `review_output_invalid`, `review_result_invalid` | A reviewer did not return a usable result in time |
+| `review_output_timeout`, `review_output_incomplete`, `review_output_invalid`, `review_output_too_large`, `review_result_invalid`, `review_wrapper_invalid` | A reviewer did not return a usable result in time, or its output was too large |
+| `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried |
 | `review_head_unavailable` | A reviewer on a base checkout stopped because the pull request head commit is not in the review host's repository; fetch it there, then `retry` |
 | `review_adapter_outdated` | A Codex report has no `prior_findings` or a finding without `blocking`, or a Claude result names no checked checkout or another one; the profile runs an older adapter than `adapters/codex/` or `adapters/claude/`; run `profiles install` for it |
 | `github_search_limit_exceeded` | A search returned more than `schedule.poll_limit`; narrow the rules or raise the limit |

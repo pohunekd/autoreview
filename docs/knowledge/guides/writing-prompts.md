@@ -72,7 +72,10 @@ request context.
 - It must not define a result format. A pipeline's reviewers share one
   request and result contract, which the protocol enforces (a JSON schema for
   `claude-structured`, an envelope for `codex-envelope`). Output that does not
-  match the contract is unusable, and the reviewer gets a fresh session.
+  match the contract is unusable: the reviewer gets a fresh session, or for
+  some codes, such as a Claude Code result message that does not decode
+  (`claude_result_invalid`), the review fails at once (see
+  [troubleshooting](../runbooks/troubleshooting.md#reviewer-output)).
 - It must not ask for GitHub actions, such as posting a comment, requesting a
   change or approving. The reviewer has no such authority, and approvals are
   decided by the policy.

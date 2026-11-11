@@ -31,12 +31,13 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `pohunek_base_fetch_ref_locked`, `pohunek_session_warning` | Base fetch on a locked ref, or a session warning | [Session start failures](#session-start-failures) |
 | `pohunek_request_failed`, `pohunek_request_timeout` | Review host did not answer | [Session start failures](#session-start-failures) |
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
-| `review_output_invalid`, `review_result_invalid` | Reviewer output was unusable or broke a limit | [Reviewer output](#reviewer-output) |
+| `review_output_invalid`, `review_output_too_large`, `review_result_invalid` | Reviewer output was unusable, too large or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts, or a Claude profile one that does not name the checkout it checked | [Reviewer output](#reviewer-output) |
 | `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
 | `review_result_invalid: Codex exited without a result: ...` in the log | The Codex program itself failed, for example on a model the account does not support, or the adapter refused what a Codex run left | [Codex program failed](#codex-program-failed) |
 | `review_result_invalid: Claude adapter refused the run: claude-adapter: ...` in the log | The Claude adapter refused the worktree, before or after Claude Code ran | [Codex checkout refused](#codex-checkout-refused) |
 | `review_wrapper_invalid`, `review_wrapper_invalid: Claude Code exited with status N: ...` in the log | A Claude result line was unusable, or Claude Code itself failed | [Claude Code failed](#claude-code-failed) |
+| `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried | [Reviewer output](#reviewer-output) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
@@ -197,9 +198,9 @@ before the exit line (see [Codex program failed](#codex-program-failed)), so
 the engine logs it. The engine reads that output at once, starts a fresh
 session up to `session.reviewer_run_max_attempts`, then records the failure.
 The adapter checks the worktree against the trusted lines of the request before
-and after the Codex run. The Claude adapter runs the same `base` checks with the same
-messages, and on a `head` checkout only the `HEAD` check; its refusal is one
-result line whose `stderr_base64` holds the message. Every refusal but a
+and after the Codex run. The Claude adapter runs the same `base` checks with
+the same messages, and on a `head` checkout only the `HEAD` check; its refusal
+is one result line whose `stderr_base64` holds the message. Every refusal but a
 missing head is `review_result_invalid`:
 
 | Message | Cause | Fix |
@@ -267,9 +268,10 @@ verdict. Fix what it names (the Claude Code login on the review host, the
 `model` of the profile, the Claude Code version), then `autoreview retry` the
 pull request. A bare `review_wrapper_invalid` has no such reason: for example a
 run with status 0 that wrote to stderr, a failed run with an empty stderr, an
-unreadable result line, or one of another protocol or mode. The result line in
-the session output holds the whole stderr in `stderr_base64`. The engine reads the stderr that every Claude adapter already
-sends, so no `autoreview profiles install` is needed for this reason.
+unreadable result line, or one of another protocol or mode with status 0. The
+result line in the session output holds the whole stderr in `stderr_base64`.
+The engine reads the stderr that every Claude adapter already sends, so no
+`autoreview profiles install` is needed for this reason.
 
 ### Head commit unavailable
 
@@ -356,27 +358,36 @@ again with `GIT_CONFIG_GLOBAL` set to the file.
 
 ## Reviewer output
 
-A reviewer run ends in one of these codes:
+A reviewer run ends in one of these codes. Where a code below ends the review,
+a run of the verifier ends only the verification (see the paragraph after the
+list):
 
 - `review_output_timeout`: the session ran longer than `session.timeout_seconds`
   (default in the recommended config: 7200). Check the diff size and the model
   on the review host before you raise the timeout.
-- `review_output_invalid`: the output could not be read as a reviewer result,
-  or it broke an engine check: no findings list, another pull request or head,
-  the summary length, the count of findings or tests (`max_findings`,
-  `max_tests`), a finding's id, side, line, path, title, body, confidence or
-  severity, a test's text, or a verdict on a prior finding. The recorded review
-  failure carries only the code. The failed check is named in the `error` field
-  of two log warnings: "retrying reviewer after unusable output" before a fresh
-  run, and "rejecting reviewer output" when the run limit is used up. An
-  unreadable output and a broken prior-finding verdict have no reason there.
-  The request of the reviewer's fresh run adds one fixed sentence: the output
-  check `review_output_invalid` refused the run before. It carries neither the
-  reason nor any text of the refused output, and no other code in this list
-  adds a sentence. Common cause of an unreadable output: an output larger than
-  `session.output_max_bytes`. Codex keeps its transcript in the output, so
-  raise that bound for Codex. For a broken limit, tighten the prompt so the
-  reviewer stays within it, or raise the bound in `limits` with care.
+- `review_output_invalid`: the complete output broke an engine check: no
+  findings list, another pull request or head, the summary length, the count of
+  findings or tests (`max_findings`, `max_tests`), a finding's id, side, line,
+  path, title, body, confidence or severity, a test's text, or a verdict on a
+  prior finding. The recorded review failure carries only the code. The failed
+  check is named in the `error` field of two log warnings: "retrying reviewer
+  after unusable output" before a fresh run, and "rejecting reviewer output"
+  when the run limit is used up. A broken prior-finding verdict and a verifier
+  output that breaks a check have no reason there. The request of the reviewer's
+  fresh run adds one fixed sentence: the output check `review_output_invalid`
+  refused the run before. It carries neither the reason nor any text of the
+  refused output, and no other code in this list adds a sentence. For a broken
+  limit, tighten the prompt so the reviewer stays within it, or raise the bound
+  in `limits` with care. The same code also comes from the review host: its
+  answer to a read of the session output could not be used (for example its
+  `ok` value is `null`, it names another session, worker or runtime generation,
+  its history does not start at offset 0, or its offsets, data and `has_more`
+  flag disagree). The review then fails at once, without a fresh session, and
+  the log has only "review failed" with the code.
+- `review_output_too_large`: the session output grew past
+  `session.output_max_bytes` (at most 16 MiB) before it was complete. The
+  review fails at once, without a fresh session. Codex keeps its transcript in
+  the output, so raise that bound for Codex.
 - `review_result_invalid`: a Codex result could not be read, is larger than
   `result_max_bytes`, or reports another head or a status other than
   `completed`, or the adapter printed no result frame, as when it refuses the
@@ -386,21 +397,38 @@ A reviewer run ends in one of these codes:
 - `review_wrapper_invalid`: a Claude result line could not be read, or reports
   an exit code other than 0, output on stderr, or another protocol or mode (see
   [Claude Code failed](#claude-code-failed)).
+- `claude_result_invalid`: the Claude Code output in a usable result line is
+  not one successful result message, for example not a JSON object, another
+  `type` or `subtype`, `is_error` set, or a structured output that does not
+  decode as a review. `claude_result_mismatch`: its prose result is a JSON
+  object or `null` that does not read as the same review as its structured
+  output. Neither gets a fresh session: "rejecting reviewer output" logs the
+  code and the review fails at once. Check the Claude Code version on the
+  review host, then `autoreview retry` the pull request.
 - `review_head_unavailable`: the adapter refused a base checkout run because
   the pull request head commit is not in the review host's repository (see
   [Head commit unavailable](#head-commit-unavailable)). The review stops
   without a fresh session.
 - `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
-  finding without `blocking`, or a Claude result line has no `checked_checkout`
+  finding without `blocking`, or a Claude result line of protocol
+  `claude-otel-noninteractive/v2` without a `refusal` has no `checked_checkout`
   or names another checkout than the pipeline's. It comes from an adapter older
   than the one in `adapters/codex/` or `adapters/claude/`, so the review stops
   without a fresh session. Write the profile with `autoreview profiles install`
   on the review host (with `--replace` when the command did not write it), then
   run `autoreview retry` for the pull request.
 
-Each other unusable run gets a fresh session, up to `session.reviewer_run_max_attempts`.
-If the same reviewer keeps failing, compare its agent profile and its prompt
-with the protocol named in `policy.yaml`.
+A run that ends in `review_output_invalid` after a complete output,
+`review_result_invalid` or `review_wrapper_invalid`, or with an empty Claude
+output (`review_output_incomplete`), gets a fresh session, up to
+`session.reviewer_run_max_attempts`. Every other code in this list, and a
+retried code once the run limit is used up, ends the review at once. For the
+verifier, the same codes end only the verification: the claims are published
+unverified, the log has "verification did not finish, publishing the claims
+unverified" with the code instead of "review failed", and the review goes on
+(see [verification](../concepts/verification.md#when-the-verifier-fails)). If
+the same reviewer keeps failing, compare its agent profile and its prompt with
+the protocol named in `policy.yaml`.
 
 ## github_search_limit_exceeded
 
