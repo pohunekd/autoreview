@@ -2,7 +2,7 @@
 type: Guide
 id: guide/mcp-server
 title: MCP server
-description: Run autoreview mcp so that agents list, read, approve and retry reviews through MCP tools over Streamable HTTP - clients and scopes, token digests, the reverse proxy, the tools and their untrusted output.
+description: Run autoreview mcp so that agents list, read, count, approve and retry reviews through MCP tools over Streamable HTTP - clients and scopes, token digests, the reverse proxy, the tools and their untrusted output.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -26,7 +26,7 @@ Each client has its own static bearer token and a scope:
 
 | Scope | Tools |
 |---|---|
-| `read` | `list_reviews`, `review_detail`, `list_awaiting`, `pull_request_status`, `review_queue` |
+| `read` | `list_reviews`, `review_detail`, `list_awaiting`, `pull_request_status`, `review_queue`, `review_stats` |
 | `write` | The read tools, and `resolve`, `approve`, `retry` |
 
 A request without a token, or with a token that no client has, gets HTTP 401 and reaches
@@ -100,6 +100,7 @@ Every tool takes a JSON object; unknown arguments are refused with `command_inva
 | `list_awaiting` | none | The reviews that wait for a human approval, as `autoreview awaiting` |
 | `pull_request_status` | `repository`, `number` | Everything the engine knows about one pull request, as `autoreview review` |
 | `review_queue` | none | The requested reviews with their engine status. Unlike `autoreview review-queue` it sends nothing |
+| `review_stats` | `since`, `until`, both optional UTC days `YYYY-MM-DD` | The [review statistics](../../stats.md) document of `autoreview stats --json`, read from the store only |
 | `resolve` | `repository`, `number`, `head_prefix` | The waiting review at a head prefix of at least 12 characters, as `autoreview resolve` |
 | `approve` | `repository`, `number`, `head_sha` | The approval of the clean review that waits at the full head, as `autoreview approve` |
 | `retry` | `repository`, `number`, `head_prefix` | A new attempt of a stopped review, as `autoreview retry` |
@@ -116,6 +117,9 @@ The write tools call the same engine functions as the CLI commands.
 - `review_queue` runs the GitHub search of requested reviews with the engine's credential
   on every call, so a read token can spend the GitHub API budget of that credential. Give
   read tokens only to clients you would let run `autoreview review-queue`.
+- `review_stats` returns, in `result`, the same document as `autoreview stats --json` with
+  the same `since` and `until`; it reads the store only. A bad range is
+  `stats_range_invalid` or `stats_range_too_long`.
 
 A failed call returns a tool error with `{"error_code": "<code>"}`, using the codes of the
 [CLI reference](../../cli.md#error-codes). The codes of the server itself:

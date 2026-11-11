@@ -73,7 +73,7 @@ struct ToolSpec {
 }
 
 /// Every tool of the server, read tools first.
-const TOOLS: [ToolSpec; 8] = [
+const TOOLS: [ToolSpec; 9] = [
     ToolSpec {
         name: "list_reviews",
         scope: Scope::Read,
@@ -98,6 +98,11 @@ const TOOLS: [ToolSpec; 8] = [
         name: "review_queue",
         scope: Scope::Read,
         description: "Lists the requested reviews with their engine status; sends nothing.",
+    },
+    ToolSpec {
+        name: "review_stats",
+        scope: Scope::Read,
+        description: "Returns review statistics: the current state and, with since, daily counts.",
     },
     ToolSpec {
         name: "resolve",
@@ -169,6 +174,16 @@ struct ApproveArguments {
     number: i64,
     /// Full head SHA of the waiting review.
     head_sha: String,
+}
+
+/// Arguments of `review_stats`.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StatsArguments {
+    /// First UTC day of the history, `YYYY-MM-DD`.
+    since: Option<String>,
+    /// Last UTC day of the history, `YYYY-MM-DD`.
+    until: Option<String>,
 }
 
 /// Arguments of the tools that take none.
@@ -336,6 +351,11 @@ where
                 let (entries, truncated) = engine.queue_snapshot(cancel).await?;
                 encode(&queue_view(entries, truncated))
             }
+            "review_stats" => {
+                let parsed: StatsArguments = parse(arguments)?;
+                let (since, until) = (parsed.since.as_deref(), parsed.until.as_deref());
+                encode(&engine.review_stats(cancel, since, until)?)
+            }
             "resolve" => {
                 let parsed: PrefixArguments = parse(arguments)?;
                 let request = ResolveRequest {
@@ -422,6 +442,7 @@ fn input_schema(name: &str) -> JsonObject {
         "type": "string",
         "description": "Head SHA, or a prefix of at least 12 lowercase hexadecimal characters."
     });
+    let day = json!({ "type": "string", "description": "UTC day as YYYY-MM-DD." });
     match name {
         "list_reviews" => object(
             &[
@@ -439,6 +460,7 @@ fn input_schema(name: &str) -> JsonObject {
             &[("repository", repository), ("number", number)],
             &["repository", "number"],
         ),
+        "review_stats" => object(&[("since", day.clone()), ("until", day)], &[]),
         "resolve" | "retry" => object(
             &[
                 ("repository", repository),

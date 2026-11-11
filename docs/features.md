@@ -84,6 +84,11 @@ repository is planned in #13. [Configuration: credentials](configuration.md#cred
 restart, transient failures are retried with backoff, and sessions it cannot
 clean up are reported. [State and recovery](knowledge/concepts/state-and-recovery.md)
 
+**Counts its work.** `autoreview stats` and the MCP tool `review_stats` (after
+0.3.0) report what runs now and how reviews went per UTC day, repository, rule
+and reviewer, as one versioned JSON document for a dashboard of your own.
+[Review statistics](stats.md)
+
 ## Requirements
 
 - A pohunek daemon on one or more review hosts, with the repositories
@@ -108,6 +113,7 @@ clean up are reported. [State and recovery](knowledge/concepts/state-and-recover
 | [Policy](policy.md) | `policy.yaml` |
 | [Configuration](configuration.md) | `config.yaml` and environment |
 | [CLI](cli.md) | Commands and error codes |
+| [Review statistics](stats.md) | The `stats` document for dashboards (after 0.3.0) |
 
 | Concepts | |
 |---|---|

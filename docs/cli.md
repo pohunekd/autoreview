@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, approve, resolve, retry, review-queue and backup-db - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, approve, resolve, retry, review-queue and backup-db - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -21,7 +21,8 @@ Secrets come only from the variables named by the `*_env` keys of the configurat
 Every command except `init` and `profiles install` reads the configuration from `--config` or
 `AUTOREVIEW_CONFIG` and validates it together with the policy before doing
 anything. Output is
-one JSON object (or array) on stdout; logs are JSON lines on stderr. A failed
+one JSON object (or array) on stdout, except the text summary of `stats` without
+`--json`; logs are JSON lines on stderr. A failed
 command prints `{"error": "<code>", ...}` with a stable error code and exits
 with status 1, so scripts and agents can branch on the code.
 
@@ -283,6 +284,7 @@ per rule and trigger.
 | `autoreview reviews [LIMIT]` | The newest reviews, at most `cli.review_list_limit` |
 | `autoreview review --repository OWNER/REPO NUMBER` | Everything the engine knows about one pull request: current head, reviews, published decisions, waits, hand-offs |
 | `autoreview awaiting` | Reviews that wait for a human approval |
+| `autoreview stats [--since DATE [--until DATE]] [--json]` | Review statistics from the store: the current state and, with `--since`, daily counts over UTC days; see [review statistics](stats.md) |
 | `autoreview review-queue` | Sends the review queue to `notify.review_queue.backends` and prints it. Run it from a timer |
 
 ## Act
@@ -366,6 +368,8 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `state_entry_limit_exceeded` | The discovery state hit `schedule.state_entry_limit` |
 | `store_unavailable` | The SQLite store could not be opened or written |
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
+| `stats_range_invalid` | `--since` or `--until` of `stats` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
+| `stats_range_too_long` | The `stats` range covers more than 366 days |
 | `project_route_not_found`, `project_route_ambiguous` | The repository is registered on no review host that answered, or as two projects on the host that serves it |
 | `pohunek_request_failed`, `pohunek_request_timeout`, `pohunek_session_start_failed` | The review host did not answer or could not start a session |
 | `pohunek_session_lost` | The review host lost the session's worker while the session started; retried on a fresh branch. A leftover session that cannot be removed raises `cleanup_manual`, see [stale sessions](knowledge/runbooks/stale-sessions-and-branches.md#when-a-session-cannot-be-removed) |

@@ -45,7 +45,7 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 | Reviewer model | Untrusted output | The text it returns; it can be steered by the content it reads |
 | GitHub | Trusted platform | Stores the reviews; its search results bound discovery |
 | MCP client with the `write` scope | Semi-trusted | `resolve`, `approve` and `retry`, and the read tools. An agent client reads review text that pull request authors and models wrote, so injected text can steer it |
-| MCP client with the `read` scope | Semi-trusted | The read tools: review text, statuses and the review queue |
+| MCP client with the `read` scope | Semi-trusted | The read tools: review text, statuses, the review queue and the review statistics |
 
 ## What runs where
 
