@@ -1,10 +1,13 @@
 //! The two read-only questions that `profiles install` asks the local pohunek CLI.
+//!
+//! Both run through the engine's pohunek runner (`autoreview_external::local_pohunek_json`).
 
-use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use autoreview_engine::{BoxError, Error};
+use autoreview_external::local_pohunek_json;
 use serde::Deserialize;
-use serde_json::error::Category;
+use serde::de::DeserializeOwned;
 
 use super::{
     Agent, POHUNEK_COMMAND_FAILED, PROFILE_HOST_NOT_LOCAL, Pin, RUNTIME_PACKAGE_MISSING,
@@ -25,30 +28,6 @@ const DIGEST_PREFIX: &str = "sha256:";
 
 /// Length of the hex text of a SHA-256 digest.
 const DIGEST_HEX_LENGTH: usize = 64;
-
-/// The longest pohunek error code that a failed call may report.
-const ERROR_CODE_MAX_LENGTH: usize = 64;
-
-/// The process envelope of a pohunek `--json` answer; a missing or `null` `ok` is refused.
-#[derive(Debug, Deserialize)]
-struct Envelope<T> {
-    /// The result of the call.
-    ok: Option<T>,
-}
-
-/// The envelope of a failed pohunek `--json` call.
-#[derive(Debug, Deserialize)]
-struct FailureEnvelope {
-    /// The error of the call.
-    err: FailureDetail,
-}
-
-/// The error object of a failed pohunek call.
-#[derive(Debug, Deserialize)]
-struct FailureDetail {
-    /// The error code that pohunek reports.
-    code: String,
-}
 
 /// The part of `host governance inspect --json` that identifies a daemon.
 #[derive(Debug, Deserialize)]
@@ -93,20 +72,25 @@ struct PackageIdentity {
 /// Refuses a `host` that does not name the daemon of this machine.
 ///
 /// Both names are looked up with `pohunek host governance inspect`, which changes nothing; the
-/// host is local when its `host_id` equals the one of `local`.
+/// host is local when its `host_id` equals the one of `local`. Each call is killed after
+/// `timeout`.
 ///
 /// # Errors
 ///
 /// Returns `pohunek_command_failed` when `local` cannot be inspected, and
 /// `profile_host_not_local` naming `--host` when `host` cannot be inspected or is another host.
-pub(super) fn check_local(host: &str) -> Result<(), Error> {
+pub(super) async fn check_local(host: &str, timeout: Duration) -> Result<(), Error> {
     let arguments = ["host", "governance", "inspect", LOCAL_HOST, "--json"];
-    let local: Governance = pohunek_json(&arguments)?;
+    let local: Governance = pohunek_json(&arguments, timeout).await?;
     if host == LOCAL_HOST {
         return Ok(());
     }
-    let named: Governance = pohunek_json(&["host", "governance", "inspect", host, "--json"])
-        .map_err(|error| Error::config(PROFILE_HOST_NOT_LOCAL, "--host", Some(Box::new(error))))?;
+    let named: Governance =
+        pohunek_json(&["host", "governance", "inspect", host, "--json"], timeout)
+            .await
+            .map_err(|error| {
+                Error::config(PROFILE_HOST_NOT_LOCAL, "--host", Some(Box::new(error)))
+            })?;
     if named.host_id != local.host_id {
         return Err(Error::config(PROFILE_HOST_NOT_LOCAL, "--host", None));
     }
@@ -116,13 +100,14 @@ pub(super) fn check_local(host: &str) -> Result<(), Error> {
 /// Returns the package that serves `agent` on this host, from `pohunek plugin list --json`.
 ///
 /// The package must be official, enabled, selected and healthy, and serve the runtime `agent`.
+/// The call is killed after `timeout`.
 ///
 /// # Errors
 ///
 /// Returns `pohunek_command_failed`, and `runtime_package_missing` naming the runtime when not
 /// exactly one package qualifies.
-pub(super) fn package_pin(agent: Agent) -> Result<Pin, Error> {
-    let list: PackageList = pohunek_json(&["plugin", "list", "--json"])?;
+pub(super) async fn package_pin(agent: Agent, timeout: Duration) -> Result<Pin, Error> {
+    let list: PackageList = pohunek_json(&["plugin", "list", "--json"], timeout).await?;
     let mut serving = list.packages.into_iter().filter(|package| {
         package.origin == OFFICIAL_ORIGIN
             && package.enabled
@@ -152,71 +137,25 @@ fn digest_valid(digest: &str) -> bool {
     })
 }
 
-/// Runs the pohunek CLI with `arguments` and returns the `ok` value of its JSON envelope.
+/// Runs the pohunek CLI with `arguments` and returns the `ok` value of its JSON answer.
 ///
-/// The child inherits the caller's environment, so it reaches the caller's own daemon.
+/// The child keeps the caller's state and runtime directories, so it reaches the caller's own
+/// daemon, and is killed after `timeout`.
 ///
 /// # Errors
 ///
-/// Returns `pohunek_command_failed` naming the command when it cannot start, exits non-zero or
-/// prints something else than the expected JSON. After a non-zero exit, the cause carries the
-/// error code of the `err` envelope on stdout when the code is well-formed; any other cause
-/// holds no stdout text.
-fn pohunek_json<T: for<'de> Deserialize<'de>>(arguments: &[&str]) -> Result<T, Error> {
+/// Returns `pohunek_command_failed` naming the command when it cannot start, times out, exits
+/// unsuccessfully or prints something else than the expected JSON. The cause carries the error
+/// code of the `err` envelope when the output reports a well-formed one.
+async fn pohunek_json<T: DeserializeOwned>(
+    arguments: &[&str],
+    timeout: Duration,
+) -> Result<T, Error> {
     let command = format!("{POHUNEK_PROGRAM} {}", arguments.join(" "));
-    let output = Command::new(POHUNEK_PROGRAM)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
-        .output()
-        .map_err(|error| pohunek_failed(&command, Some(Box::new(error))))?;
-    if !output.status.success() {
-        let cause: BoxError = format!("exited with {}", output.status).into();
-        let cause = match failure_code(&output.stdout) {
-            Some(code) => Box::new(Error::pohunek_code(code, cause)),
-            None => cause,
-        };
-        return Err(pohunek_failed(&command, Some(cause)));
-    }
-    let envelope: Envelope<T> = serde_json::from_slice(&output.stdout)
-        .map_err(|error| pohunek_failed(&command, Some(parse_cause(&error))))?;
-    envelope
-        .ok
-        .ok_or_else(|| pohunek_failed(&command, Some("the answer holds no ok value".into())))
-}
-
-/// Returns the cause of an answer that is not the expected JSON, from the kind and position of
-/// `error` only.
-///
-/// A `serde_json` message can quote strings of the parsed text, and the cause is logged.
-fn parse_cause(error: &serde_json::Error) -> BoxError {
-    let kind = match error.classify() {
-        Category::Io => "a read error",
-        Category::Syntax => "invalid JSON",
-        Category::Data => "JSON of an unexpected shape",
-        Category::Eof => "truncated JSON",
-    };
-    format!(
-        "the answer is {kind} at line {}, column {}",
-        error.line(),
-        error.column()
-    )
-    .into()
-}
-
-/// Returns the error code of the `err` envelope in `stdout`, when it matches
-/// `^[a-z][a-z0-9_]{0,63}$`.
-///
-/// The rule is the one of the engine's pohunek calls (`failure_code` in the `external` crate),
-/// which that crate keeps private to its runner; this command runs pohunek itself.
-fn failure_code(stdout: &[u8]) -> Option<String> {
-    let envelope: FailureEnvelope = serde_json::from_slice(stdout).ok()?;
-    let code = envelope.err.code;
-    let mut bytes = code.bytes();
-    let well_formed = code.len() <= ERROR_CODE_MAX_LENGTH
-        && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
-        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_');
-    well_formed.then_some(code)
+    let arguments: Vec<String> = arguments.iter().map(|item| (*item).to_owned()).collect();
+    local_pohunek_json(POHUNEK_PROGRAM, &arguments, timeout)
+        .await
+        .map_err(|cause| pohunek_failed(&command, Some(cause)))
 }
 
 /// Returns the error of a pohunek CLI call that failed.

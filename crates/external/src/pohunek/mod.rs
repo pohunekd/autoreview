@@ -2,7 +2,7 @@
 //!
 //! Mirrors `cmd/autoreview/pohunek.go:1-252`. Every call is an argv list, never a shell. The child
 //! gets the cleaned environment of [`crate::process::child_environment`] and its own state and
-//! runtime paths.
+//! runtime paths; a [`local_pohunek_json`] child keeps the caller's paths instead.
 
 // Rust guideline compliant 2026-06-26
 
@@ -10,7 +10,9 @@ pub(crate) mod output;
 
 pub(crate) mod sessions;
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::Config;
@@ -139,6 +141,53 @@ pub(crate) fn pohunek_environment(
             (OsString::from(PAGER_VARIABLE), OsString::from(PAGER_VALUE)),
         ],
     )
+}
+
+/// Returns the environment of a pohunek child that reaches the caller's own daemon.
+///
+/// It is `parent` without the pohunek session identity, the token variables and every
+/// `AUTOREVIEW_` variable, then the pager setting. Every `*_env` key of the configuration names
+/// an `AUTOREVIEW_` variable, so no configuration is needed to drop the secrets. The state and
+/// runtime directories stay the caller's.
+pub(crate) fn local_environment(
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Vec<(OsString, OsString)> {
+    child_environment(
+        parent,
+        &BTreeSet::new(),
+        [(OsString::from(PAGER_VARIABLE), OsString::from(PAGER_VALUE))],
+    )
+}
+
+/// Runs the pohunek CLI `program` with `arguments` for the caller's own daemon.
+///
+/// It returns the `ok` value of the answer, decoded as the engine's calls decode it. The child
+/// gets the [`local_environment`] of this process and is killed when `timeout` elapses.
+///
+/// # Errors
+///
+/// Returns the cause of a run that cannot start, times out or exits unsuccessfully, inside the
+/// pohunek error code of the `err` envelope when its output reports an allowlisted code, and a
+/// fixed text when the answer holds no `ok` value of type `T`. No cause holds stdout text.
+pub async fn local_pohunek_json<T: DeserializeOwned>(
+    program: &str,
+    arguments: &[String],
+    timeout: Duration,
+) -> Result<T, BoxError> {
+    let environment = local_environment(std::env::vars_os());
+    // No caller cancels a local call; the timeout bounds it.
+    let cancel = CancellationToken::new();
+    let output = run(&cancel, program, arguments, &[], &environment, timeout)
+        .await
+        .map_err(|error| -> BoxError {
+            let code = failure_code(error.stdout());
+            if code.is_empty() {
+                Box::new(error)
+            } else {
+                Box::new(Error::pohunek_code(code, Box::new(error)))
+            }
+        })?;
+    decode_ok(&output).ok_or_else(|| "the answer holds no ok value of the expected shape".into())
 }
 
 /// Returns the arguments that address `host` and then run `command`.
@@ -646,4 +695,45 @@ fn is_error_code(text: &str) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::local_environment;
+
+    fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        items
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect()
+    }
+
+    #[test]
+    fn local_environment_keeps_the_daemon_paths_and_drops_identity_and_secrets() {
+        let parent = pairs(&[
+            ("PATH", "/usr/bin"),
+            ("POHUNEK_SESSION_ID", "session-1"),
+            ("POHUNEK_DAEMON_ID", "daemon-1"),
+            ("XDG_STATE_HOME", "/home/operator/.local/state"),
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+            ("GH_TOKEN", "synthetic-gh"),
+            ("MATRIX_ACCESS_TOKEN", "synthetic-matrix"),
+            ("AUTOREVIEW_GH_TOKEN", "synthetic-autoreview"),
+            ("PAGER", "less"),
+        ]);
+
+        // The child sees the last of two equal names, so `PAGER=cat` wins.
+        assert_eq!(
+            local_environment(parent),
+            pairs(&[
+                ("PATH", "/usr/bin"),
+                ("XDG_STATE_HOME", "/home/operator/.local/state"),
+                ("XDG_RUNTIME_DIR", "/run/user/1000"),
+                ("PAGER", "less"),
+                ("PAGER", "cat"),
+            ])
+        );
+    }
 }

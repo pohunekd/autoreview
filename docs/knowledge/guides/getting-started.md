@@ -182,7 +182,8 @@ A third run with the same `--dir` on the finished setup prints every step as
 - Register each repository of the policy with `pohunek project add` and run a
   first review as the [quickstart](quickstart.md) describes from step 9 on.
 - After an upgrade of autoreview, run `autoreview profiles install` with the
-  same flags for each profile; the script keeps a profile it wrote and does not
-  know the flags of an earlier run.
+  same flags for each profile, and `--pohunek-timeout-seconds`, which 0.3.0 and
+  earlier did not take; the script keeps a profile it wrote and does not know
+  the flags of an earlier run.
 - Before you leave it running, read the
   [threat model](../safety/threat-model.md).

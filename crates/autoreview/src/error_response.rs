@@ -38,7 +38,7 @@ autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME [--st
 [--matrix-homeserver-url URL] [--matrix-room ROOM] [--matrix-mention-user USER]; \
 autoreview profiles install --host HOST --agent claude|codex --name NAME --model MODEL \
 --effort EFFORT --agent-binary PATH --maximum-input-bytes BYTES [--maximum-result-bytes BYTES \
---maximum-retention-seconds SECONDS] [--replace]";
+--maximum-retention-seconds SECONDS] --pohunek-timeout-seconds SECONDS [--replace]";
 
 /// The JSON a caller reads from a failed command. It carries stable codes, never raw causes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

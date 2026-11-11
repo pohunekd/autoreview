@@ -50,7 +50,8 @@ retention settings (`store.review_retention_seconds`,
 4. Compare `agent_profiles` in the output with the profiles on each review host.
    On each review host, install the new binary as well and run
    [`autoreview profiles install`](../../cli.md#autoreview-profiles-install)
-   again for every profile, with the flags it was written with: `updated` means
+   again for every profile, with the flags it was written with (an upgrade from
+   0.3.0 or earlier adds `--pohunek-timeout-seconds`): `updated` means
    the new binary carries a newer adapter. Write a profile the policy now needs
    the same way. Do it for every Claude profile in the same window as the
    restart: the engine refuses the result of an older Claude adapter with
