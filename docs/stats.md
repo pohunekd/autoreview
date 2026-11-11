@@ -308,7 +308,7 @@ scrape_configs:
   runs the review.
 - A series appears with its first count, so a missing series means zero. The labels are
   `repository`, `host` (the review host chosen at dispatch), `rule` (the `match` value of
-  the rule), `decision` and `error_code`; no label holds review text.
+  the rule), `decision`, `error_code`, `step` and `outcome`; no label holds review text.
 
 ### Gauges
 
@@ -364,4 +364,27 @@ histogram_quantile(0.9,
   sum by (le) (rate(autoreview_review_publication_seconds_bucket[1d])))
 ```
 
-The durations and retries of the workflow steps are not exported.
+### Step metrics
+
+The step metrics count the runs that [`history.steps`](#steps) counts, over the life of the
+process. They have the label `step` (`discussion`, `reviewers`, `verifier` or
+`publication`) and no `repository` or `rule`. A run is counted when the store records it,
+so each review attempt counts a step at most once, and a step resumed after a restart counts
+the time and the retries of its resumed part only. A step's retries and histogram series
+appear with its first run.
+
+- `autoreview_review_steps_total` (label `outcome`): the runs per outcome, `succeeded`,
+  `superseded` or `failed`, as `succeeded`, `superseded` and `failed` of each step; the
+  outcomes add up to `runs`.
+- `autoreview_review_step_retries_total`: `retries`, the repeated attempts inside the runs.
+- `autoreview_review_step_seconds`: the seconds of the succeeded runs, the durations of
+  `duration_median_ms` and `duration_p90_ms`. The buckets `le` are 1, 5, 15, 60, 300, 900,
+  1800, 3600, 14400, 43200, 86400 and 259200 seconds and `+Inf`; `_sum` has three decimals.
+
+```promql
+sum by (step, outcome) (increase(autoreview_review_steps_total[1d]))
+sum by (step) (increase(autoreview_review_step_retries_total[1d]))
+  / sum by (step) (increase(autoreview_review_steps_total[1d]))
+histogram_quantile(0.9,
+  sum by (le, step) (rate(autoreview_review_step_seconds_bucket[1d])))
+```

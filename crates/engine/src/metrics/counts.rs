@@ -1,7 +1,8 @@
 //! The review counters of one process and the gauges of one scrape.
 //!
 //! A completed review is classified with the function that the statistics document uses, so
-//! a counter and its document field count the same attempts.
+//! a counter and its document field count the same attempts. A step run is counted as the
+//! document counts it: every run with its retries, and the duration of a succeeded run.
 
 // Rust guideline compliant 2026-06-26
 
@@ -11,11 +12,16 @@ use autoreview_schedule::scheduler::Record;
 
 use crate::error::Error;
 use crate::stats::{Ending, Published, StateCounts, completed_ending, counts_now, stopped};
-use crate::store::StoredReview;
+use crate::store::{StepOutcome, StepRun, StoredReview};
 
 /// Upper bounds of the publication time buckets in seconds, from one minute to three days.
 pub(crate) const PUBLICATION_BUCKETS: [u64; 9] =
     [60, 300, 900, 1800, 3600, 14_400, 43_200, 86_400, 259_200];
+
+/// Step duration bucket bounds in seconds: 1, 5 and 15, then the publication's.
+pub(crate) const STEP_BUCKETS: [u64; 12] = [
+    1, 5, 15, 60, 300, 900, 1800, 3600, 14_400, 43_200, 86_400, 259_200,
+];
 
 /// The counts of one repository and rule since the process started.
 #[derive(Debug, Default)]
@@ -40,11 +46,28 @@ pub(crate) struct ReviewCounts {
     pub(crate) seconds_count: u64,
 }
 
+/// The counts of one review step since the process started.
+#[derive(Debug, Default)]
+pub(crate) struct StepCounts {
+    /// Recorded runs per `outcome` label.
+    pub(crate) runs: BTreeMap<&'static str, u64>,
+    /// Repeated attempts inside the recorded runs.
+    pub(crate) retries: u64,
+    /// Succeeded runs with a duration at most each bound of `STEP_BUCKETS`.
+    pub(crate) buckets: [u64; STEP_BUCKETS.len()],
+    /// Sum of the milliseconds of the measured runs.
+    pub(crate) milliseconds_sum: u64,
+    /// Succeeded runs with a duration.
+    pub(crate) measured: u64,
+}
+
 /// The review counters of this process, per repository and rule `match`.
 #[derive(Debug, Default)]
 pub(crate) struct Counts {
     /// The counts keyed by repository, then rule.
     pub(crate) reviews: BTreeMap<(String, String), ReviewCounts>,
+    /// The counts of the recorded step runs, keyed by the stored step name.
+    pub(crate) steps: BTreeMap<&'static str, StepCounts>,
 }
 
 impl Counts {
@@ -95,6 +118,30 @@ impl Counts {
         }
         Ok(())
     }
+
+    /// Counts one step run that the store recorded.
+    ///
+    /// Its retries count for every outcome; its duration only for a succeeded run.
+    pub(crate) fn step(&mut self, run: &StepRun) {
+        let counts = self.steps.entry(run.step.as_str()).or_default();
+        *counts.runs.entry(run.outcome.as_str()).or_default() += 1;
+        if let Ok(retries) = u64::try_from(run.retries) {
+            counts.retries = counts.retries.saturating_add(retries);
+        }
+        if run.outcome != StepOutcome::Succeeded {
+            return;
+        }
+        let Ok(milliseconds) = u64::try_from(run.duration_ms) else {
+            return;
+        };
+        for (bucket, bound) in counts.buckets.iter_mut().zip(STEP_BUCKETS) {
+            if milliseconds <= bound.saturating_mul(1000) {
+                *bucket += 1;
+            }
+        }
+        counts.milliseconds_sum = counts.milliseconds_sum.saturating_add(milliseconds);
+        counts.measured += 1;
+    }
 }
 
 /// Returns the `decision` label of a published attempt: the name of its document counter.
@@ -140,5 +187,54 @@ impl Gauges {
             reviews: counts,
             stopped: stopped(schedule)?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Counts, STEP_BUCKETS};
+    use crate::store::{ReviewStep, StepOutcome, StepRun};
+
+    /// A succeeded run counts in every bucket at or above its duration.
+    #[test]
+    fn step_runs_fill_the_buckets_from_their_first_bound_on() {
+        let (succeeded, failed) = (StepOutcome::Succeeded, StepOutcome::Failed);
+        // Milliseconds, outcome, index of the first bucket that counts the run, measured runs.
+        let rows: [(i64, StepOutcome, Option<usize>, u64); 10] = [
+            (0, succeeded, Some(0), 1),
+            (1000, succeeded, Some(0), 1),
+            (1001, succeeded, Some(1), 1),
+            (15_000, succeeded, Some(2), 1),
+            (15_001, succeeded, Some(3), 1),
+            (259_200_000, succeeded, Some(11), 1),
+            (259_200_001, succeeded, None, 1),
+            (i64::MAX, succeeded, None, 1),
+            (-1, succeeded, None, 0),
+            (500, failed, None, 0),
+        ];
+        for (duration_ms, outcome, first, measured) in rows {
+            let mut counts = Counts::default();
+            counts.step(&StepRun {
+                step: ReviewStep::Verifier,
+                outcome,
+                retries: 2,
+                duration_ms,
+            });
+            let step = &counts.steps["verifier"];
+            let expected: Vec<u64> = (0..STEP_BUCKETS.len())
+                .map(|index| u64::from(first.is_some_and(|first| index >= first)))
+                .collect();
+            let row = format!("{duration_ms} ms {outcome:?}");
+            assert_eq!(step.buckets.to_vec(), expected, "{row}");
+            assert_eq!(step.measured, measured, "{row}");
+            let sum = if measured == 1 {
+                duration_ms.unsigned_abs()
+            } else {
+                0
+            };
+            assert_eq!(step.milliseconds_sum, sum, "{row}");
+            assert_eq!(step.retries, 2, "{row}");
+            assert_eq!(step.runs.get(outcome.as_str()), Some(&1), "{row}");
+        }
     }
 }

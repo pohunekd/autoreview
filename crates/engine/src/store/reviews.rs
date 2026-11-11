@@ -650,6 +650,8 @@ impl Store {
     /// Records the final result of a review as `complete_review` does, and the run `run` of
     /// the step that ended it, in one transaction.
     ///
+    /// Returns whether the run was inserted: `false` when the step already has its record.
+    ///
     /// # Errors
     ///
     /// Returns `store_state_invalid` when the outcome cannot be encoded and `store_unavailable`
@@ -661,7 +663,7 @@ impl Store {
         failure: &str,
         outcome: Option<&ReviewOutcome>,
         run: &StepRun,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let encoded = outcome
             .map(encode_go_json)
             .transpose()
@@ -769,6 +771,8 @@ impl Store {
     /// Writes the output of a review step as `save_step` does, and the run `run` of the step,
     /// in one transaction.
     ///
+    /// Returns whether the run was inserted: `false` when the step already has its record.
+    ///
     /// # Errors
     ///
     /// Returns `store_state_invalid` when the value cannot be encoded and `store_unavailable`
@@ -779,7 +783,7 @@ impl Store {
         name: &str,
         value: &T,
         run: &StepRun,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let encoded =
             encode_go_json(value).map_err(|err| store_error("store_state_invalid", true, err))?;
         self.in_tx(|transaction| {
@@ -830,6 +834,8 @@ impl Store {
     /// Writes a review state value as `set_state` does, and the run `run` of a step, in one
     /// transaction.
     ///
+    /// Returns whether the run was inserted: `false` when the step already has its record.
+    ///
     /// # Errors
     ///
     /// Returns `store_state_invalid` when the value cannot be encoded and `store_unavailable`
@@ -840,7 +846,7 @@ impl Store {
         name: &str,
         value: &T,
         run: &StepRun,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let encoded =
             encode_go_json(value).map_err(|err| store_error("store_state_invalid", true, err))?;
         self.in_tx(|transaction| {
@@ -896,9 +902,9 @@ mod tests {
     use crate::model::PullRequest;
     use crate::model::ReviewInput;
     use crate::model::ids::INPUT_VERSION;
-    use crate::store::Store;
+    use crate::store::{ReviewStep, StepOutcome, StepRun, Store};
 
-    use super::{RESULT_SUCCESS, ReviewFilter, StoredReview};
+    use super::{RESULT_FAILURE, RESULT_SUCCESS, ReviewFilter, StoredReview};
 
     /// Approval decision that approves a review, the Go `approvalKindApprove`.
     const APPROVAL_APPROVE: &str = "approve";
@@ -992,6 +998,58 @@ mod tests {
         store
             .in_tx(|transaction| store.enqueue_review(transaction, workflow_id, input))
             .expect("enqueue commits");
+    }
+
+    /// Each recorded write reports whether it inserted the run; a step keeps its first run.
+    #[test]
+    fn recorded_writes_report_whether_the_step_run_was_inserted() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = open_store(dir.path());
+        let input = test_input(
+            test_rule(OnFindings::RequestChanges, OnClean::Await),
+            test_pull_request(4),
+        );
+        let id = "prr-v2-steps";
+        enqueue_test_review(&store, id, &input);
+        let reviewers = StepRun {
+            step: ReviewStep::Reviewers,
+            outcome: StepOutcome::Succeeded,
+            retries: 1,
+            duration_ms: 1500,
+        };
+        let publication = StepRun {
+            step: ReviewStep::Publication,
+            ..reviewers
+        };
+        let inserted = [
+            store.set_state_recorded(id, "slot/opus", &1, &reviewers),
+            store.save_step_recorded(id, "publish", &1, &publication),
+            store.save_step_recorded(id, "publish", &2, &publication),
+            // A failure after the step's stored result, as an error after the last reviewer.
+            store.complete_review_recorded(
+                id,
+                RESULT_FAILURE,
+                "store_unavailable",
+                None,
+                &StepRun {
+                    outcome: StepOutcome::Failed,
+                    ..reviewers
+                },
+            ),
+        ];
+        let inserted: Vec<bool> = inserted
+            .into_iter()
+            .map(|written| written.expect("the write commits"))
+            .collect();
+        assert_eq!(inserted, [true, true, false, false]);
+        let stored = store
+            .get_review(id)
+            .expect("review reads")
+            .expect("review exists");
+        assert_eq!(
+            stored.failure, "store_unavailable",
+            "the failure is written"
+        );
     }
 
     /// Approve, supersede and expiry all race for one wait. Whichever writer commits first sets

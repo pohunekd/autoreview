@@ -233,7 +233,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ///
     /// The run is recorded in the transaction that stores the output, so a stored output has
     /// its record and a resumed review that reads it records nothing. A failed run is
-    /// recorded when the review completes as failed.
+    /// recorded when the review completes as failed. A run that the store inserts is counted
+    /// in the metrics after the write.
     pub(crate) async fn once_recorded<T, Fut>(
         &self,
         recorded: ReviewStep,
@@ -257,7 +258,12 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                             .store
                             .save_step_recorded(&self.workflow_id, name, &value, &run)
                     })
-                    .map(|()| value)
+                    .map(|inserted| {
+                        if inserted {
+                            self.engine.count_step(&run);
+                        }
+                        value
+                    })
             }
             Err(err) => Err(err),
         };
@@ -463,6 +469,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     }
 
     /// Stores the progress of `slot` as `save_slot` does and records `run` with it.
+    ///
+    /// A run that the store inserts is counted in the metrics after the write.
     pub(crate) fn save_slot_recorded(
         &self,
         slot: &ReviewerSlot,
@@ -470,9 +478,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ) -> Result<(), Error> {
         let name = format!("{SLOT_STATE_PREFIX}{}", slot.reviewer.id);
         live(&self.cancel)?;
-        self.engine
-            .store
-            .set_state_recorded(&self.workflow_id, &name, &slot.state, run)
+        let store = &self.engine.store;
+        if store.set_state_recorded(&self.workflow_id, &name, &slot.state, run)? {
+            self.engine.count_step(run);
+        }
+        Ok(())
     }
 
     /// Stores whether the review may still own open sessions.
@@ -793,7 +803,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Ends the review as `fail` does with the error of `failure`, and records its run.
     ///
     /// The run is written in the transaction that completes the review, so a shutdown before
-    /// that leaves no record and the resumed review runs the step again.
+    /// that leaves no record and the resumed review runs the step again. A run that the store
+    /// inserts is counted in the metrics after the write.
     pub(crate) async fn fail_step(&mut self, failure: StepFailure) -> Result<(), Error> {
         let StepFailure { error: cause, run } = failure;
         if is_shutdown(&cause) {
@@ -826,10 +837,13 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         }
         live(&self.cancel)?;
         let (store, id) = (&self.engine.store, self.workflow_id.as_str());
-        match run {
-            Some(run) => store.complete_review_recorded(id, RESULT_FAILURE, &code, None, &run),
-            None => store.complete_review(id, RESULT_FAILURE, &code, None),
+        let Some(run) = run else {
+            return store.complete_review(id, RESULT_FAILURE, &code, None);
+        };
+        if store.complete_review_recorded(id, RESULT_FAILURE, &code, None, &run)? {
+            self.engine.count_step(&run);
         }
+        Ok(())
     }
 
     /// Returns the deadline stored under `key`, storing one on the first call.
