@@ -12,6 +12,7 @@ use crate::error::{Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::Integrations;
 use crate::model::Verification;
 use crate::protocol::go_utf8_lossy;
+use crate::store::ReviewStep;
 use crate::verify::{
     VERDICT_CONFIRMED, VERDICT_NOT_BLOCKING, VERDICT_REFUTED, VERDICT_REOPENED, VERDICT_UPHELD,
     VerificationClaims, build_verifier_request, parse_verifier_output,
@@ -37,7 +38,8 @@ fn verdict_count(verification: &Verification, verdict: &str) -> usize {
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
-    /// Runs the verifier on `claims` once per review and stores the verification.
+    /// Runs the verifier on `claims` once per review, stores the verification and records the
+    /// run of the verifier step.
     ///
     /// A verifier session that fails leaves every claim as the reviewers made it, so the review
     /// still publishes. An error of the review itself, such as a newer head, stops it.
@@ -65,6 +67,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         slot.request.prompt = prompt;
         let reviewer_label = slot.reviewer.label.clone();
         let ids = [SlotId::Verifier];
+        let started = self.step_started();
         let run = match self.start_slots(&ids, verifier_done).await {
             Ok(()) => {
                 self.await_slots(
@@ -79,6 +82,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
             Err(err) => Err(err),
         };
+        self.record_step(ReviewStep::Verifier, started, &run);
         let mut verification = Verification {
             reviewer_label,
             findings: Vec::new(),

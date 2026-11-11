@@ -23,6 +23,7 @@ use serde::Serialize;
 
 pub mod discovery;
 pub mod reviews;
+pub mod steps;
 
 pub use discovery::{
     DiscoveryState, STATE_AWAITING, STATE_PUBLISHED, STATE_REJECTED, STATE_SCHEDULE,
@@ -31,6 +32,7 @@ pub use reviews::{
     RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
     REVIEW_RUNNING, ReviewFilter, StoredReview,
 };
+pub use steps::{ReviewStep, StepOutcome, StepRun};
 
 /// Schema version stored in `PRAGMA user_version`; a newer database is refused.
 const STORE_SCHEMA_VERSION: i64 = 1;
@@ -201,6 +203,8 @@ impl Store {
     }
 
     /// Creates the schema and stamps the version, after refusing a newer database.
+    ///
+    /// The step runs table is added without a new version, so the Go store still opens the file.
     fn migrate(&self) -> Result<(), Error> {
         let connection = self.lock_connection()?;
         let version: i64 = connection
@@ -215,6 +219,9 @@ impl Store {
         }
         connection
             .execute_batch(STORE_SCHEMA)
+            .map_err(|err| store_error("store_unavailable", true, err))?;
+        connection
+            .execute_batch(steps::STEP_RUNS_SCHEMA)
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .pragma_update(None, "user_version", STORE_SCHEMA_VERSION)
@@ -531,10 +538,12 @@ mod tests {
                 .pragma_query_value(None, "user_version", |row| row.get(0))
                 .expect("version reads");
             assert_eq!(Some(version), golden["user_version"].as_i64());
+            // The Go schema has no `review_step_runs` (#270); its exact text is checked below.
             let mut statement = connection
                 .prepare(
                     "SELECT type, name, tbl_name, sql FROM sqlite_master \
-                     WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+                     WHERE name NOT LIKE 'sqlite_%' AND tbl_name != 'review_step_runs' \
+                     ORDER BY type, name",
                 )
                 .expect("schema query prepares");
             let schema: Vec<Value> = statement
@@ -550,6 +559,18 @@ mod tests {
                 .map(|row| row.expect("schema row reads"))
                 .collect();
             assert_eq!(Value::Array(schema), golden["schema"]);
+            let step_runs: String = connection
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE name = 'review_step_runs'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("the step runs table exists");
+            let expected = super::steps::STEP_RUNS_SCHEMA
+                .trim()
+                .replace("IF NOT EXISTS ", "")
+                .replace(");", ")");
+            assert_eq!(step_runs, expected);
         }
 
         let state = store.load_discovery().expect("discovery reads");

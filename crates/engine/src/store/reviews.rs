@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use time::OffsetDateTime;
 
 use super::discovery::DiscoveryState;
+use super::steps::StepRun;
 use super::{Store, encode_go_json, store_error};
 use crate::Error;
 use crate::model::pull_request::is_unset_class;
@@ -282,26 +283,32 @@ impl Store {
         collect_reviews(connection, &sql, &[&REVIEW_COMPLETED, &start, &end])
     }
 
-    /// Reads the reviews of `stats_reviews` and the discovery state as one snapshot.
+    /// Reads the reviews of `stats_reviews`, the discovery state and, with `range`, the step
+    /// runs that ended inside it, as one snapshot.
     ///
     /// A deferred transaction takes no write lock; in WAL mode its first read fixes the
-    /// snapshot, so a write of another process between the two reads is not seen.
+    /// snapshot, so a write of another process between the reads is not seen. Without `range`
+    /// the step runs are empty and not read.
     ///
     /// # Errors
     ///
-    /// The errors of `stats_reviews` and `load_discovery`.
+    /// The errors of `stats_reviews`, `load_discovery` and `stats_step_runs`.
     pub fn stats_snapshot(
         &self,
         range: Option<(OffsetDateTime, OffsetDateTime)>,
-    ) -> Result<(Vec<StoredReview>, DiscoveryState), Error> {
+    ) -> Result<(Vec<StoredReview>, DiscoveryState, Vec<StepRun>), Error> {
         let mut connection = self.lock_connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(unavailable)?;
         let reviews = Self::stats_reviews(&transaction, range)?;
         let discovery = Self::read_discovery(&transaction)?;
+        let steps = match range {
+            Some(range) => Self::stats_step_runs(&transaction, range)?,
+            None => Vec::new(),
+        };
         transaction.commit().map_err(unavailable)?;
-        Ok((reviews, discovery))
+        Ok((reviews, discovery, steps))
     }
 
     /// Lists the reviews that can make progress, oldest first: queued and running reviews, and
@@ -332,7 +339,7 @@ impl Store {
 /// Both engines write UTC text with the fraction's trailing zeros trimmed, so as text
 /// `...:05.5Z` sorts before `...:05Z`. The key is the text up to the seconds followed by the
 /// fraction padded to nine digits.
-fn time_key(operand: &str) -> String {
+pub(super) fn time_key(operand: &str) -> String {
     format!(
         "(CASE WHEN instr({operand}, '.') > 0 \
          THEN substr({operand}, 1, instr({operand}, '.') - 1) \
@@ -343,7 +350,7 @@ fn time_key(operand: &str) -> String {
 }
 
 /// Maps a SQLite failure to `store_unavailable`.
-fn unavailable(err: rusqlite::Error) -> Error {
+pub(super) fn unavailable(err: rusqlite::Error) -> Error {
     store_error("store_unavailable", false, err)
 }
 

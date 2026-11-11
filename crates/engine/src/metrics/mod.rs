@@ -79,7 +79,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// `store_state_invalid` for a schedule key without `#`.
     pub fn metrics_text(&self, cancel: &CancellationToken) -> Result<String, Error> {
         live(cancel)?;
-        let (reviews, discovery) = self.store.stats_snapshot(None)?;
+        let (reviews, discovery, _) = self.store.stats_snapshot(None)?;
         let gauges = Gauges::read(&reviews, &discovery.schedule)?;
         let none = Counts::default();
         let guard = self.metrics.as_ref().map(Metrics::lock);

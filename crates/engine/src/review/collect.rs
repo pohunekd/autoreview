@@ -19,6 +19,7 @@ use crate::messages::started_message;
 use crate::model::review::milliseconds;
 use crate::protocol::validate::reviewer_output_retryable;
 use crate::protocol::{go_utf8_lossy, parse_reviewer_output};
+use crate::store::ReviewStep;
 
 /// Step name of the read of a reviewer session's output in the retry log.
 const STEP_SESSION_OUTPUT: &str = "session_output";
@@ -29,10 +30,24 @@ fn reviewer_done(slot: &ReviewerSlot) -> bool {
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
+    /// Runs every reviewer slot to a result and records the run of the reviewers step.
+    ///
+    /// A review whose reviewers all have a stored result records nothing: the step ran before
+    /// a restart.
+    pub(crate) async fn collect(&mut self) -> Result<(), Error> {
+        let stored = self.slots.iter().all(reviewer_done);
+        let started = self.step_started();
+        let collected = self.collect_results().await;
+        if !stored {
+            self.record_step(ReviewStep::Reviewers, started, &collected);
+        }
+        collected
+    }
+
     /// Runs every reviewer slot to a result.
     ///
     /// It announces the start once the sessions are up.
-    pub(crate) async fn collect(&mut self) -> Result<(), Error> {
+    async fn collect_results(&mut self) -> Result<(), Error> {
         let ids: Vec<SlotId> = (0..self.slots.len()).map(SlotId::Reviewer).collect();
         self.start_slots(&ids, reviewer_done).await?;
         let message = started_message(&self.input);
@@ -163,6 +178,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                                 error = %err,
                                 "retrying reviewer after unusable output"
                             );
+                            self.count_retry();
                             self.remove_sessions(&[*id]).await?;
                             self.sleep(wait_of(milliseconds(limits.reviewer_run_retry_ms)))
                                 .await?;
