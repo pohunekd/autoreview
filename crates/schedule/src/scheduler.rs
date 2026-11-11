@@ -350,7 +350,7 @@ pub struct Retarget<'a> {
 /// Plans the review that a retarget of the published head of `target` asks for.
 ///
 /// Returns `None` when a run of the head that was not superseded reviewed the current base
-/// branch: [`plan`] then plans the head from its runs. Otherwise the ended runs of the head
+/// branch: [`plan_on_base`] then plans the head. Otherwise the ended runs of the head
 /// count as no review; [`plan`] does not see them, and none of them stays a blocker. A record
 /// that follows a running run of the head keeps that run's attempt, which [`plan`] matches
 /// against the run history. Any other record gets an attempt above every run of the head,
@@ -371,10 +371,8 @@ pub fn plan_retarget(
     policy: &Policy,
 ) -> Result<Option<Decision>, Error> {
     let identity = target.identity();
-    let mut attempt = 0_i64;
     let mut ended = BTreeSet::new();
     for run in runs.iter().filter(|run| run.target.identity() == identity) {
-        attempt = attempt.max(run.attempt.wrapping_add(1));
         if !run.active() {
             ended.insert(run.workflow_id.as_str());
             // A superseded run reviewed nothing, so its base branch still needs a review.
@@ -390,10 +388,7 @@ pub fn plan_retarget(
             return Ok(None);
         }
     }
-    // The run of the published review may be pruned while its record is kept.
-    if workflow_id(attempt) == retarget.published_workflow {
-        attempt = attempt.wrapping_add(1);
-    }
+    let attempt = free_attempt(runs, &identity, retarget.published_workflow, &workflow_id);
     let visible: Vec<Run> = runs
         .iter()
         .filter(|run| !ended.contains(run.workflow_id.as_str()))
@@ -430,6 +425,93 @@ pub fn plan_retarget(
         decision.record.attempt = decision.record.attempt.max(attempt);
     }
     Ok(Some(decision))
+}
+
+/// Plans a head on a base branch that one of its runs reviewed.
+///
+/// It plans when [`plan_retarget`] returned `None`. An ended run of the head that completed
+/// another base branch, by the base branch of its stored input, does not complete this one:
+/// [`plan`] does not see it. Once a run completed this base branch, or a run without a stored
+/// base branch completed, as `apply_force` counts it, no ended run of another base branch is
+/// seen. None of the hidden runs stays a blocker. A record that followed a hidden run is
+/// completed like it, so [`plan`] handles the latest run of this base branch. A record
+/// that waits or dispatches gets an attempt above every run of the head, skipping the attempt
+/// whose `workflow_id` is the published workflow: a workflow ID names the head and the attempt,
+/// not the base branch.
+///
+/// # Errors
+///
+/// Returns the error of [`plan`].
+pub fn plan_on_base(
+    previous: Record,
+    target: &Target,
+    runs: &[Run],
+    retarget: &Retarget<'_>,
+    workflow_id: impl Fn(i64) -> String,
+    now: OffsetDateTime,
+    policy: &Policy,
+) -> Result<Decision, Error> {
+    let identity = target.identity();
+    let attempt = free_attempt(runs, &identity, retarget.published_workflow, &workflow_id);
+    let ended: Vec<&Run> = runs
+        .iter()
+        .filter(|run| run.target.identity() == identity && !run.active())
+        .collect();
+    // A run without a stored base branch, or with an empty one, counts for this base branch.
+    let elsewhere = |run: &Run| {
+        retarget
+            .run_bases
+            .get(&run.workflow_id)
+            .is_some_and(|base| !base.is_empty() && base != retarget.base_branch)
+    };
+    let completed = |run: &Run| run.result == "success" || run.released;
+    // A head reviewed here is completed here; a later failure elsewhere does not reopen it.
+    let reviewed_here = ended.iter().any(|run| completed(run) && !elsewhere(run));
+    let other: BTreeSet<&str> = ended
+        .iter()
+        .filter(|run| elsewhere(run) && (reviewed_here || completed(run)))
+        .map(|run| run.workflow_id.as_str())
+        .collect();
+    let visible: Vec<Run> = runs
+        .iter()
+        .filter(|run| !other.contains(run.workflow_id.as_str()))
+        .cloned()
+        .collect();
+    let mut record = previous;
+    record
+        .blocking_workflows
+        .retain(|id| !other.contains(id.as_str()));
+    // A running record would wait for a run that `plan` does not see.
+    if record.phase == phase::RUNNING && other.contains(record.workflow_id.as_str()) {
+        record.phase = phase::COMPLETED.to_owned();
+    }
+    let mut decision = plan(record, target, &visible, now, policy)?;
+    let waits = decision.dispatch
+        || decision.record.phase == phase::WAITING
+        || decision.record.phase == phase::RETRY_WAIT;
+    if waits {
+        decision.record.attempt = decision.record.attempt.max(attempt);
+    }
+    Ok(decision)
+}
+
+/// Returns the next attempt of `identity` whose workflow is not the `published` one.
+///
+/// The run of the published review may be pruned while its record is kept.
+fn free_attempt(
+    runs: &[Run],
+    identity: &str,
+    published: &str,
+    workflow_id: &impl Fn(i64) -> String,
+) -> i64 {
+    let mut attempt = 0_i64;
+    for run in runs.iter().filter(|run| run.target.identity() == identity) {
+        attempt = attempt.max(run.attempt.wrapping_add(1));
+    }
+    if workflow_id(attempt) == published {
+        attempt = attempt.wrapping_add(1);
+    }
+    attempt
 }
 
 /// Records a failed run and schedules its retry when the failure is retryable and budget remains.
@@ -596,8 +678,8 @@ mod tests {
     use time::{Duration, OffsetDateTime};
 
     use super::{
-        Policy, Record, Retarget, Run, Target, after_failure, notification, plan, plan_retarget,
-        reconcile_completed, retryable,
+        Policy, Record, Retarget, Run, Target, after_failure, notification, plan, plan_on_base,
+        plan_retarget, reconcile_completed, retryable,
     };
     use crate::diagnostic::{diagnostic, failure_explanation};
     use crate::phase;
@@ -1094,16 +1176,37 @@ mod tests {
             blocking_workflows: blocking.iter().map(|id| (*id).to_owned()).collect(),
             ..Record::default()
         };
-        let bases: BTreeMap<String, String> = [("wf-0", "main"), ("wf-1", "release")]
-            .into_iter()
-            .map(|(id, base)| (id.to_owned(), base.to_owned()))
-            .collect();
+        let bases: BTreeMap<String, String> = [
+            ("wf-0", "main"),
+            ("wf-1", "release"),
+            ("wf-2", "release"),
+            ("wf-3", "next"),
+        ]
+        .into_iter()
+        .map(|(id, base)| (id.to_owned(), base.to_owned()))
+        .collect();
         let superseded = "base_branch_changed: the base branch changed";
         let label_removed = "review_label_removed: the review label was removed";
         let session_lost = "pohunek_session_lost: the reviewer session was lost";
         let wrapper_invalid = "review_wrapper_invalid: the reviewer wrapper is invalid";
         let lost = || vec![ended(0, ""), ended(1, session_lost)];
         let stopped = || vec![ended(0, ""), ended(1, wrapper_invalid)];
+        // The retry wf-2 of `release` ends with `failure`, then wf-3 approves `next`.
+        let approved_on_next = |failure: &str| {
+            vec![
+                ended(0, ""),
+                ended(1, session_lost),
+                ended(2, failure),
+                ended(3, ""),
+            ]
+        };
+        // The record that discovery writes on `next`, the base branch of the published wf-3.
+        let on_next = Record {
+            workflow_id: workflow(3),
+            handled_workflow: workflow(2),
+            handled_retries: 1,
+            ..record(phase::COMPLETED, 0, &[])
+        };
         // Each pass runs one debounce after the one before and plans from its record; it gives
         // (planned by `plan_retarget`, phase, attempt, retries, blockers, dispatch, notify).
         type Pass = (
@@ -1276,6 +1379,84 @@ mod tests {
                 )],
             ),
             (
+                "stopped review, approved on a third base branch, back",
+                on_next.clone(),
+                "wf-3",
+                None,
+                vec![
+                    (
+                        approved_on_next(wrapper_invalid),
+                        "release",
+                        (false, phase::FAILED, 2, 1, vec![], false, false),
+                    ),
+                    (
+                        approved_on_next(wrapper_invalid),
+                        "release",
+                        (false, phase::FAILED, 2, 1, vec![], false, false),
+                    ),
+                ],
+            ),
+            (
+                "retrying review, approved on a third base branch, back",
+                on_next.clone(),
+                "wf-3",
+                None,
+                vec![
+                    (
+                        approved_on_next(session_lost),
+                        "release",
+                        (false, phase::RETRY_WAIT, 4, 2, vec![], false, false),
+                    ),
+                    (
+                        approved_on_next(session_lost),
+                        "release",
+                        (false, phase::RETRY_WAIT, 4, 2, vec![], false, false),
+                    ),
+                    (
+                        approved_on_next(session_lost),
+                        "release",
+                        (false, phase::RETRY_WAIT, 4, 2, vec![], false, false),
+                    ),
+                    (
+                        approved_on_next(session_lost),
+                        "release",
+                        (false, phase::RUNNING, 4, 2, vec![], true, false),
+                    ),
+                ],
+            ),
+            (
+                "retry by hand after the approval on a third base branch",
+                // The record that `retry` writes on `release` after the stopped review.
+                Record {
+                    due_at: now,
+                    workflow_id: workflow(2),
+                    handled_workflow: workflow(2),
+                    ..record(phase::RETRY_WAIT, 4, &[])
+                },
+                "wf-3",
+                None,
+                vec![(
+                    approved_on_next(wrapper_invalid),
+                    "release",
+                    (false, phase::RUNNING, 4, 0, vec![], true, false),
+                )],
+            ),
+            (
+                "review of a third base branch approved after the return",
+                Record {
+                    handled_workflow: workflow(2),
+                    handled_retries: 1,
+                    ..record(phase::RUNNING, 3, &["wf-3"])
+                },
+                "wf-3",
+                None,
+                vec![(
+                    approved_on_next(wrapper_invalid),
+                    "release",
+                    (false, phase::FAILED, 2, 1, vec![], false, false),
+                )],
+            ),
+            (
                 "stopped review, retargeted away and back within the debounce",
                 record(phase::RUNNING, 1, &["wf-1"]),
                 "wf-0",
@@ -1374,10 +1555,56 @@ mod tests {
                 record(phase::COMPLETED, 1, &[]),
                 "wf-1",
                 None,
+                // The record names wf-0, the run that reviewed `main`, and its attempt.
                 vec![(
                     vec![ended(0, ""), ended(1, "")],
                     "main",
-                    (false, phase::COMPLETED, 1, 0, vec![], false, false),
+                    (false, phase::COMPLETED, 0, 0, vec![], false, false),
+                )],
+            ),
+            (
+                "back to a reviewed base branch after a retried review elsewhere",
+                // The record that discovery writes on `release`, where wf-2 published.
+                Record {
+                    workflow_id: workflow(2),
+                    handled_workflow: workflow(1),
+                    ..record(phase::COMPLETED, 0, &[])
+                },
+                "wf-2",
+                None,
+                vec![(
+                    vec![ended(0, ""), ended(1, session_lost), ended(2, "")],
+                    "main",
+                    (false, phase::COMPLETED, 0, 0, vec![], false, false),
+                )],
+            ),
+            (
+                "back to a reviewed base branch after a superseded review elsewhere",
+                Record {
+                    workflow_id: workflow(2),
+                    ..record(phase::COMPLETED, 0, &[])
+                },
+                "wf-2",
+                None,
+                vec![(
+                    vec![ended(0, ""), ended(1, superseded), ended(2, "")],
+                    "main",
+                    (false, phase::COMPLETED, 0, 0, vec![], false, false),
+                )],
+            ),
+            (
+                "back to a reviewed base branch after a review elsewhere retried by hand",
+                Record {
+                    workflow_id: workflow(2),
+                    handled_workflow: workflow(1),
+                    ..record(phase::COMPLETED, 0, &[])
+                },
+                "wf-2",
+                None,
+                vec![(
+                    vec![ended(0, ""), ended(1, wrapper_invalid), ended(2, "")],
+                    "main",
+                    (false, phase::COMPLETED, 0, 0, vec![], false, false),
                 )],
             ),
             (
@@ -1417,7 +1644,10 @@ mod tests {
                 let retargeted = planned.is_some();
                 let mut decision = match planned {
                     Some(decision) => decision,
-                    None => plan(previous, &target, &runs, at, &policy).expect("plan"),
+                    None => {
+                        plan_on_base(previous, &target, &runs, &retarget, workflow, at, &policy)
+                            .expect("plan_on_base")
+                    }
                 };
                 // As discovery does: a resolved route names the dispatched run, and a failed
                 // route goes through the retry policy and is notified.

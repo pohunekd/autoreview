@@ -105,7 +105,9 @@ Two more rules apply to these layers:
   branch of a failed review and back before a new review runs gets no second
   notice for that failure. The review keeps its retry count: a review stopped
   by that failure stays stopped, and its retry is due one retry delay after the
-  return. A review of the other base branch starts with its own retries.
+  return. A review of the other base branch starts with its own retries. When
+  it completes there, the head is still not reviewed on the base branch of the
+  failed review: back there, the review stays stopped or waits for its retry.
   `autoreview review` shows the failed run as `handled_workflow` in the schedule
   record.
 

@@ -697,6 +697,77 @@ async fn stopped_review_of_a_retarget_is_retried_by_head_prefix() {
     h.stop_engine().await;
 }
 
+// An approval on a third base branch does not complete the head on the base branch of a stopped
+// review: back there, the stop is not notified again and a retry starts a new attempt (#309).
+#[tokio::test]
+async fn stopped_review_is_retried_after_an_approval_on_a_third_base_branch() {
+    let mut h = start_harness(|_| {}).await;
+    h.set_output(reviewer_output(Vec::new()));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the first approval", || h.publications() == 1)
+        .await;
+    h.set_output(|_: &SessionRequest| "{\"protocol\":\"broken\"}\n".to_owned());
+    let mut release = pr.clone();
+    release.base_branch = "release".to_owned();
+    release.base_sha = sha("e");
+    h.fake.open(release.clone(), h.rule(&pr.repository));
+    let stop = "No further automatic attempt is scheduled";
+    h.poll_until("the stop notification", || {
+        h.fake.has_note(Level::Action, stop)
+    })
+    .await;
+    h.set_output(reviewer_output(Vec::new()));
+    let mut next = pr.clone();
+    next.base_branch = "next".to_owned();
+    next.base_sha = sha("f");
+    h.fake.open(next, h.rule(&pr.repository));
+    h.poll_until("the approval on the third base branch", || {
+        h.publications() == 2
+    })
+    .await;
+    h.fake.open(release.clone(), h.rule(&pr.repository));
+    h.poll().await;
+    let retried = match h.retry(&release).await {
+        Ok(result) if result.head_sha == pr.head_sha && result.attempt == 3 => result.workflow_id,
+        other => {
+            panic!("the stopped review must get attempt 3 after the return, retry = {other:?}")
+        }
+    };
+    h.poll_until("the retried review", || h.publications() == 3)
+        .await;
+    h.settle().await;
+    let (published, notes, started, _) = h.fake.snapshot();
+    let mut workflows: Vec<&str> = started
+        .iter()
+        .map(|request| request.workflow_id.as_str())
+        .collect();
+    workflows.dedup();
+    let again = h.retry(&release).await;
+    assert_eq!(
+        (
+            count_notes(&notes, Level::Action, stop),
+            published[2].decision.clone(),
+            published[2].body.contains("full review of"),
+            workflows.len(),
+            workflows.last() == Some(&retried.as_str()),
+            again.as_ref().err().map(|err| error_code(err)),
+        ),
+        (
+            1,
+            Decision::Approve,
+            true,
+            4,
+            true,
+            Some("review_already_completed")
+        ),
+        "the retried review must approve the head in full on the base branch it stopped on, \
+         and a retry after it must be refused (stop notices, decision, full, reviews, last \
+         review retried, second retry)"
+    );
+    h.stop_engine().await;
+}
+
 #[tokio::test]
 async fn missing_previous_review_falls_back_to_a_full_review() {
     let mut h = start_harness(|_| {}).await;
