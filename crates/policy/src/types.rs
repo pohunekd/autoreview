@@ -624,6 +624,24 @@ pub(crate) fn is_owner(value: &str) -> bool {
     })
 }
 
+/// Reports whether value is a lowercase Enterprise Managed User login, `handle_shortcode`.
+///
+/// The handle is groups of letters and digits joined by single hyphens, and the short code is
+/// letters and digits, as GitHub normalizes a managed user's name.
+pub(crate) fn is_managed_user(value: &str) -> bool {
+    if value.len() > MAX_OWNER_LEN {
+        return false;
+    }
+    let Some((handle, code)) = value.split_once('_') else {
+        return false;
+    };
+    !code.is_empty()
+        && code.bytes().all(is_lower_alnum)
+        && handle
+            .split('-')
+            .all(|group| !group.is_empty() && group.bytes().all(is_lower_alnum))
+}
+
 /// Reports whether value is a repository name without its owner.
 pub(crate) fn is_repo_name(value: &str) -> bool {
     is_token(value, MAX_REPO_NAME_LEN, is_repo_byte, is_repo_byte)

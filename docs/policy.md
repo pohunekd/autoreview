@@ -245,7 +245,7 @@ authors:
 
 | Key | Value |
 |---|---|
-| `trusted` | `any`, or a mapping with `logins` (lowercase logins: a user as `name`, a GitHub App or bot as `name[bot]`, quoted in YAML, such as `"devin-ai-integration[bot]"`), `permission` (`write`, `maintain` or `admin`), or both. An author matching either is trusted |
+| `trusted` | `any`, or a mapping with `logins` (lowercase logins: a user as `name` or, for an Enterprise Managed User, `handle_shortcode`, a GitHub App or bot as `name[bot]`, quoted in YAML, such as `"devin-ai-integration[bot]"`), `permission` (`write`, `maintain` or `admin`), or both. An author matching either is trusted |
 | `untrusted` | Required unless `trusted: any`. `skip`, or a mapping with `pipeline`, `on_findings` and `on_clean` |
 
 Rules for the untrusted section:

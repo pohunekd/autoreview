@@ -9,7 +9,7 @@ use autoreview_engine::error::Error;
 use autoreview_engine::integrations::PullRequestState;
 use autoreview_engine::model::{PullRequest, repository_valid, sha_valid};
 use autoreview_go_compat::{go_time, null_default, null_entries};
-use autoreview_policy::{Trigger, TriggerKind};
+use autoreview_policy::{Trigger, TriggerKind, login_valid};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -20,9 +20,6 @@ const MAX_TITLE_BYTES: usize = 1024;
 
 /// Largest branch name in bytes.
 const MAX_BRANCH_BYTES: usize = 255;
-
-/// Largest author login in bytes, before the `[bot]` suffix.
-const MAX_AUTHOR_BYTES: usize = 39;
 
 /// Page size of the review events API.
 const EVENTS_PER_PAGE: usize = 100;
@@ -37,9 +34,6 @@ const BOT_TYPENAME: &str = "Bot";
 
 /// The pull request state that the engine reviews.
 const OPEN_STATE: &str = "OPEN";
-
-/// The suffix that GitHub adds to the login of an app author.
-const BOT_SUFFIX: &str = "[bot]";
 
 /// The repository that the query names, `null` when there is none.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -361,31 +355,12 @@ pub(super) fn url_matches(url: &str, host: &str, repository: &str, number: i64) 
     url.eq_ignore_ascii_case(&format!("https://{host}/{repository}/pull/{number}"))
 }
 
-/// Reports whether an author login passes Go's `authorPattern`.
+/// Reports whether a lowercased author login is a GitHub login (`login_valid`).
 ///
-/// An empty login is a deleted account and passes. Otherwise the login is one ASCII letter or
-/// digit, then up to 38 letters, digits or hyphens, with an optional `[bot]` suffix.
+/// An empty login is a deleted account and passes. An Enterprise Managed User login
+/// (`handle_shortcode`) passes, which Go's `authorPattern` refuses.
 fn author_valid(author: &str) -> bool {
-    if author.is_empty() {
-        return true;
-    }
-    let login = author.strip_suffix(BOT_SUFFIX).unwrap_or(author);
-    if login.is_empty() || login.len() > MAX_AUTHOR_BYTES {
-        return false;
-    }
-    let bytes = login.as_bytes();
-    let Some(first) = bytes.first() else {
-        return false;
-    };
-    if !first.is_ascii_alphanumeric() {
-        return false;
-    }
-    for byte in bytes.iter().skip(1) {
-        if !byte.is_ascii_alphanumeric() && *byte != b'-' {
-            return false;
-        }
-    }
-    true
+    author.is_empty() || login_valid(author)
 }
 
 /// Reports whether a branch name passes Go's `branchPattern`.
@@ -737,6 +712,79 @@ mod tests {
                 head_sha: "a".repeat(40),
             }
         );
+    }
+
+    #[test]
+    fn author_logins_follow_the_github_login_grammar() {
+        let trigger = Trigger {
+            kind: TriggerKind::ReviewRequested,
+            label: String::new(),
+        };
+        // A managed user is `handle_shortcode`; the whole login has at most 39 bytes.
+        let longest = format!("{}_octo", "a".repeat(34));
+        let too_long = format!("{}_octo", "a".repeat(35));
+        let accepted = [
+            "octocat",
+            "a--b-",
+            "coding-agent[bot]",
+            "mona-cat_octo",
+            "Mona-Cat_octo",
+            "octo_admin",
+            "2abvd19d_admin",
+            longest.as_str(),
+        ];
+        let refused = [
+            "_octo",
+            "mona_",
+            "mona__octo",
+            "mona_cat_octo",
+            "-mona_octo",
+            "mona-_octo",
+            "mona--cat_octo",
+            "mona_oc-to",
+            "mona_octo[bot]",
+            "mona.cat_octo",
+            "mona/cat_octo",
+            "mona%2f_octo",
+            "mona cat_octo",
+            "mona_\u{f6}cto",
+            ".",
+            "..",
+            "app/devin",
+            too_long.as_str(),
+        ];
+        let response = |login: &str| {
+            let author = format!(r#""login":"{login}""#);
+            HUMAN_RESPONSE.replacen(r#""login":"colleague""#, &author, 1)
+        };
+        let decode = |response: &str| {
+            let pull_request = decode_pull_request_response(response)
+                .and_then(|raw| decode_pull_request(&raw, HOST, LOGIN, &trigger))
+                .map(|pr| pr.author);
+            let state = decode_pull_request_state("acme/widget", 4, response, HOST, LOGIN)
+                .map(|state| state.author);
+            (pull_request, state)
+        };
+        for login in accepted {
+            let (pull_request, state) = decode(&response(login));
+            let want = login.to_ascii_lowercase();
+            match (pull_request, state) {
+                (Ok(author), Ok(state_author)) => assert!(
+                    author == want && state_author == want,
+                    "{login}: author {author:?} and state author {state_author:?}, want {want:?}"
+                ),
+                (Err(error), _) | (_, Err(error)) => panic!("{login}: {error}"),
+            }
+        }
+        for login in refused {
+            let (pull_request, state) = decode(&response(login));
+            let codes = (
+                pull_request.map_err(|error| error_code(&error).to_owned()),
+                state.map_err(|error| error_code(&error).to_owned()),
+            );
+            let invalid = Err("github_response_invalid".to_owned());
+            assert_eq!(codes, (invalid.clone(), invalid), "{login} must be refused");
+        }
     }
 
     #[test]

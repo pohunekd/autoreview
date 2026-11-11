@@ -346,6 +346,16 @@ What is not compatible, by decision:
   hold. `testdata/review-policy.yaml` stays without the section for the Go tests;
   the Rust tests add `trusted: any` to its rules before parsing, and the golden
   case `fixture_via_load` loads such a copy from a temporary directory.
+- **Enterprise Managed User logins (#227):** the pull request decoder and
+  `authors.trusted.logins` accept a managed user's login, `handle_shortcode`
+  (`autoreview_policy::login_valid`): groups of letters and digits joined by
+  single hyphens, one `_`, then letters and digits, 39 bytes at most. An app's
+  `name[bot]` and every other login keep Go's grammar. Go's `authorPattern`
+  (`cmd/autoreview/github.go:40`) refuses the underscore, so Go fails such a
+  pull request as `github_response_invalid` (`github.go:174`, `github.go:228`).
+  No stored row changes, and a rollback to Go brings the Go behaviour back. The
+  regression tests are `author_logins_follow_the_github_login_grammar` and
+  `trusted_logins_follow_the_github_login_grammar`.
 
 Intentional parsing divergences (stricter than Go; each gets a golden case in G1
 with the expected Rust error code):

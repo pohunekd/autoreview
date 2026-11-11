@@ -1511,6 +1511,70 @@ notifications:
     }
 
     #[test]
+    fn trusted_logins_follow_the_github_login_grammar() {
+        // A managed user is `handle_shortcode`; the whole login has at most 39 bytes.
+        let longest = format!("{}_octo", "a".repeat(34));
+        let too_long = format!("{}_octo", "a".repeat(35));
+        let accepted = [
+            "octocat",
+            "a--b-",
+            "coding-agent[bot]",
+            "mona-cat_octo",
+            "octo_admin",
+            "2abvd19d_admin",
+            longest.as_str(),
+        ];
+        let refused = [
+            "_octo",
+            "mona_",
+            "mona__octo",
+            "mona_cat_octo",
+            "-mona_octo",
+            "mona-_octo",
+            "mona--cat_octo",
+            "mona_oc-to",
+            "mona_octo[bot]",
+            "mona.cat_octo",
+            "mona/cat_octo",
+            "mona%2f_octo",
+            "mona cat_octo",
+            "mona_\u{f6}cto",
+            ".",
+            "..",
+            "app/devin",
+            too_long.as_str(),
+            "Mona-Cat_octo",
+        ];
+        let document = |login: &str| {
+            let value = format!("{{trusted: {{logins: [\"{login}\"]}}, untrusted: skip}}");
+            with_authors(VALID_POLICY, &value)
+        };
+        for login in accepted {
+            match parse(document(login).as_bytes(), prompts) {
+                Ok(parsed) => assert!(
+                    matches!(
+                        parsed.authors("acme/special"),
+                        Some(Authors::Restricted { trusted, .. }) if trusted.logins == [login]
+                    ),
+                    "{login}: authors = {:?}",
+                    parsed.authors("acme/special")
+                ),
+                Err(error) => panic!("{login}: {error}"),
+            }
+        }
+        for login in refused {
+            let want = format!("authors.trusted.logins: {login:?} must be");
+            match parse(document(login).as_bytes(), prompts) {
+                Ok(_) => panic!("{login}: parse succeeded, want an error mentioning {want:?}"),
+                Err(error) => assert!(
+                    error.to_string().contains(&want),
+                    "{login}: error = {error}, want it to mention {want:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
     fn every_example_policy_parses() {
         let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
         let mut names = Vec::new();

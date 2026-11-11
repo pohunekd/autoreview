@@ -12,7 +12,9 @@ use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
-use crate::types::{Checkout, OnClean, OnFindings, OnNotes, Pipeline, Rule, is_owner};
+use crate::types::{
+    Checkout, OnClean, OnFindings, OnNotes, Pipeline, Rule, is_managed_user, is_owner,
+};
 
 /// The trusted value that trusts every author.
 const TRUSTED_ANY: &str = "any";
@@ -375,6 +377,18 @@ pub(crate) fn parse_authors(
     Ok(Authors::Restricted { trusted, untrusted })
 }
 
+/// Reports whether `login` is a lowercase GitHub login, or an app's login with `[bot]`.
+///
+/// A user login is a plain login or an Enterprise Managed User login (`handle_shortcode`). An
+/// app's name has no underscore, and no login has a path character.
+#[must_use]
+pub fn login_valid(login: &str) -> bool {
+    match login.strip_suffix(BOT_SUFFIX) {
+        Some(app) => is_owner(app),
+        None => is_owner(login) || is_managed_user(login),
+    }
+}
+
 /// Validates the trusted mapping: at least one key, valid logins listed once, a known permission.
 fn parse_trusted(raw: &FileTrusted) -> Result<TrustedAuthors, Error> {
     if raw.logins.is_empty() && raw.permission.is_empty() {
@@ -382,10 +396,7 @@ fn parse_trusted(raw: &FileTrusted) -> Result<TrustedAuthors, Error> {
     }
     let mut logins: Vec<String> = Vec::new();
     for login in &raw.logins {
-        // A user is a plain login and an app is `name[bot]`; is_owner refuses app/ and other
-        // suffixes.
-        let name = login.strip_suffix(BOT_SUFFIX).unwrap_or(login);
-        if !is_owner(name) || logins.contains(login) {
+        if !login_valid(login) || logins.contains(login) {
             return Err(Error::AuthorsLogin {
                 login: login.clone(),
             });
