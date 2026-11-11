@@ -325,6 +325,8 @@ pub(crate) fn queue_entries(
 /// Explains where the engine stands with one request.
 ///
 /// The serving engine keeps the state records current, so they are read as stored.
+/// A skip comes from the latest discovery pass, so it outranks a published record, which is
+/// history, and every schedule phase but `running`.
 pub(crate) fn queue_status(
     policy: &Policy,
     state: &QueueState,
@@ -337,21 +339,28 @@ pub(crate) fn queue_status(
             QueuePriority::AwaitingApproval,
         );
     }
-    if let Some(record) = state.schedule.get(key)
-        && record.phase != "completed"
+    let pending = state
+        .schedule
+        .get(key)
+        .filter(|record| record.phase != "completed");
+    if let Some(record) = pending
+        && record.phase == "running"
     {
+        return schedule_status(record);
+    }
+    if let Some(reason) = state.skipped.get(key) {
+        return (
+            format!("AI review skipped: {reason}"),
+            QueuePriority::Skipped,
+        );
+    }
+    if let Some(record) = pending {
         return schedule_status(record);
     }
     if let Some(record) = state.published.get(key) {
         return (
             format!("AI review published {}", decision_text(&record.decision)),
             QueuePriority::Other,
-        );
-    }
-    if let Some(reason) = state.skipped.get(key) {
-        return (
-            format!("AI review skipped: {reason}"),
-            QueuePriority::Skipped,
         );
     }
     let covered = policy
@@ -786,6 +795,27 @@ notifications:
                 "skipped under a label trigger",
                 labelled,
                 |state, key| {
+                    state
+                        .skipped
+                        .insert(key.to_owned(), "untrusted_author".to_owned());
+                },
+                "AI review skipped: untrusted_author",
+                QueuePriority::Skipped,
+            ),
+            (
+                "skipped after a published review",
+                connection,
+                |state, key| {
+                    state
+                        .schedule
+                        .insert(key.to_owned(), record("completed", ""));
+                    state.published.insert(
+                        key.to_owned(),
+                        PublishedRecord {
+                            decision: Decision::Comment,
+                            ..PublishedRecord::default()
+                        },
+                    );
                     state
                         .skipped
                         .insert(key.to_owned(), "untrusted_author".to_owned());

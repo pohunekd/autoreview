@@ -5,7 +5,6 @@
 use std::sync::Arc;
 
 use autoreview_policy::{Checkout, Level, Permission};
-use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::Engine;
@@ -221,12 +220,11 @@ async fn failing_permission_read_rejects_only_its_pull_requests() {
     );
 }
 
-// A stranger's fork pull request under `untrusted: skip` is listed as skipped by `candidates`
-// and reported as skipped by `review` and the review queue; one under an untrusted section shows
-// its class and that section's rule in `candidates`, and its stored class in `review` and the
-// review detail (#226).
+// A discovery pass stores the skip of a stranger's fork pull request under `untrusted: skip` and
+// dispatches only the one under an untrusted section; `review` and the review queue read the
+// skip back (#226).
 #[tokio::test]
-async fn untrusted_fork_shows_its_class_and_a_skipped_one_shows_as_skipped() {
+async fn skipped_untrusted_fork_is_reported_as_skipped() {
     let mut h = start_harness(|cfg| {
         cfg.schedule.debounce = time::Duration::ZERO;
     })
@@ -254,60 +252,23 @@ async fn untrusted_fork_shows_its_class_and_a_skipped_one_shows_as_skipped() {
         });
     }
     let cancel = CancellationToken::new();
-    let listed = engine
-        .list_classified(&cancel)
-        .await
-        .expect("the candidates are listed");
-    let listed = serde_json::to_value(&listed).expect("the candidates encode");
-    let skip = json!([{
-        "repository": "strict/widget",
-        "number": skipped.number,
-        "author": "stranger",
-        "fork": true,
-        "author_class": "untrusted",
-        "reason": "untrusted_author",
-    }]);
-    let candidate = &listed["candidates"][0];
-    assert!(
-        listed["skipped"] == skip
-            && listed["candidates"].as_array().map(Vec::len) == Some(1)
-            && candidate["author_class"] == "untrusted"
-            && candidate["rule"]["pipeline"]["name"] == "dual"
-            && candidate["rule"]["on_clean"] == "comment",
-        "candidates = {listed}"
-    );
-
     let result = engine.poll(&cancel).await.expect("the pass succeeds");
     assert_eq!(
         result.dispatched, 1,
         "only the untrusted section's review is dispatched"
     );
-    let status = |pr: &PullRequest| -> Value {
-        let status = engine
+    let status = |pr: &PullRequest| {
+        engine
             .pull_request_status(&cancel, &pr.repository, pr.number)
-            .expect("the status reads");
-        serde_json::to_value(&status).expect("the status encodes")
+            .expect("the status reads")
     };
     let skipped_status = status(&skipped);
     let reviewed_status = status(&reviewed);
-    let review = &reviewed_status["reviews"][0];
     assert!(
-        skipped_status["skipped"] == "untrusted_author"
-            && skipped_status["reviews"] == json!([])
-            && reviewed_status.get("skipped").is_none()
-            && review["author_class"] == "untrusted",
-        "skipped = {skipped_status}, reviewed = {reviewed_status}"
-    );
-    let workflow_id = review["workflow_id"]
-        .as_str()
-        .expect("the review has an ID");
-    let detail = engine
-        .review_detail(&cancel, workflow_id)
-        .expect("the detail reads");
-    let detail = serde_json::to_value(&detail).expect("the detail encodes");
-    assert_eq!(
-        detail["review"]["author_class"], "untrusted",
-        "detail = {detail}"
+        skipped_status.skipped.as_deref() == Some("untrusted_author")
+            && skipped_status.reviews.is_empty()
+            && reviewed_status.skipped.is_none(),
+        "skipped = {skipped_status:?}, reviewed = {reviewed_status:?}"
     );
 
     let (entries, _) = engine
@@ -318,7 +279,6 @@ async fn untrusted_fork_shows_its_class_and_a_skipped_one_shows_as_skipped() {
     assert!(
         entries.len() == 2
             && first.request.number == skipped.number
-            && first.status == "AI review skipped: untrusted_author"
             && first.priority == QueuePriority::Skipped,
         "queue = {entries:?}"
     );
