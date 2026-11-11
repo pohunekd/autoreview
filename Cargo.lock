@@ -103,7 +103,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autoreview"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "autoreview-engine",
  "autoreview-external",
@@ -128,14 +128,14 @@ dependencies = [
 
 [[package]]
 name = "autoreview-changelog"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "pohunek-companion-changelog",
 ]
 
 [[package]]
 name = "autoreview-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "autoreview-go-compat",
  "autoreview-policy",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "autoreview-external"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "autoreview-engine",
  "autoreview-go-compat",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "autoreview-go-compat"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "autoreview-policy"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "autoreview-go-compat",
  "hex",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "autoreview-schedule"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "autoreview-go-compat",
  "serde",
