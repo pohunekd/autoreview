@@ -179,7 +179,10 @@ What is not compatible, by decision:
   the JSON or base64 decoder text; Rust logs only the code, so no decoder text
   quotes untrusted output. For a Codex run that exits without a result, Rust
   logs `review_result_invalid` with the adapter's reason line: a line of
-  Codex's stderr, bounded to 512 bytes and neutralized (#283).
+  Codex's stderr or the adapter's refusal after the run, bounded to 512 bytes
+  and neutralized (#283, #304). For a Claude Code run with an exit code other
+  than 0, Rust logs `review_wrapper_invalid` with the end of its stderr, bounded
+  and neutralized the same way (#304).
 - **CLI wording and usage text** (`main.go:16`); the JSON error object keeps its
   keys and codes (`command.go:22-47`).
 - **In-flight Go reviews** (statuses `queued`, `running`, `awaiting` at

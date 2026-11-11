@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::error::{BoxError, Error};
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
+use crate::protocol::reason::leading_reason;
 use crate::protocol::validate::{
     count_over, review_adapter_outdated, review_head_unavailable, sort_findings,
 };
@@ -29,41 +30,6 @@ const EXIT_LINE_PREFIX: &str = "[pohunek-codex-review exited with status ";
 
 /// Opens the adapter's base64 reason line before the exit line of a failed run.
 const REASON_MARKER: &str = "[pohunek-codex-review-reason-v1:";
-
-/// Most UTF-8 bytes of a reason that the engine logs, as the adapter's `REASON_MAX_BYTES`.
-const REASON_MAX_BYTES: usize = 512;
-
-/// Every character of general category Cf (format) in Unicode 16.0, as inclusive ranges.
-///
-/// A logged reason shows them as `?`: bidi controls, soft hyphens, tags and invisible
-/// characters could make a log line read differently than it is. The adapter neutralizes by
-/// Python's Unicode data, which may be another version; the engine applies this table anyway.
-const FORMAT_CHARACTERS: [(char, char); 21] = [
-    ('\u{00AD}', '\u{00AD}'),
-    ('\u{0600}', '\u{0605}'),
-    ('\u{061C}', '\u{061C}'),
-    ('\u{06DD}', '\u{06DD}'),
-    ('\u{070F}', '\u{070F}'),
-    ('\u{0890}', '\u{0891}'),
-    ('\u{08E2}', '\u{08E2}'),
-    ('\u{180E}', '\u{180E}'),
-    ('\u{200B}', '\u{200F}'),
-    ('\u{202A}', '\u{202E}'),
-    ('\u{2060}', '\u{2064}'),
-    ('\u{2066}', '\u{206F}'),
-    ('\u{FEFF}', '\u{FEFF}'),
-    ('\u{FFF9}', '\u{FFFB}'),
-    ('\u{110BD}', '\u{110BD}'),
-    ('\u{110CD}', '\u{110CD}'),
-    ('\u{13430}', '\u{1343F}'),
-    ('\u{1BCA0}', '\u{1BCA3}'),
-    ('\u{1D173}', '\u{1D17A}'),
-    ('\u{E0001}', '\u{E0001}'),
-    ('\u{E0020}', '\u{E007F}'),
-];
-
-/// The line separator (Zl) and the paragraph separator (Zp), the only characters of either.
-const LINE_SEPARATORS: [char; 2] = ['\u{2028}', '\u{2029}'];
 
 /// Line breaks that may separate the report from the exit line.
 const SEPARATORS: [&str; 6] = ["\n", "\r\n", "\n\n", "\n\r\n", "\r\n\n", "\r\n\r\n"];
@@ -329,7 +295,7 @@ fn exit_reason(raw: &str) -> Option<String> {
                         .strip_suffix(']')
                 })
         })?;
-    let reason = bounded_reason(&decode_go_base64(encoded)?);
+    let reason = leading_reason(&decode_go_base64(encoded)?);
     (!reason.is_empty()).then_some(reason)
 }
 
@@ -341,37 +307,6 @@ fn failed_status(status: &str) -> bool {
     !digits.is_empty()
         && digits.bytes().all(|byte| byte.is_ascii_digit())
         && digits.bytes().any(|byte| byte != b'0')
-}
-
-/// Returns the reason that `bytes` carry: decoded lossily, neutralized and cut to the bound.
-///
-/// Each character that `is_neutralized` names becomes `?`; the text is then cut to
-/// `REASON_MAX_BYTES` UTF-8 bytes at a character boundary, as the adapter cuts it.
-fn bounded_reason(bytes: &[u8]) -> String {
-    let cut = bytes.get(..REASON_MAX_BYTES).unwrap_or(bytes);
-    let mut reason: String = go_utf8_lossy(cut)
-        .chars()
-        .map(|character| {
-            if is_neutralized(character) {
-                '?'
-            } else {
-                character
-            }
-        })
-        .collect();
-    reason.truncate(reason.floor_char_boundary(REASON_MAX_BYTES));
-    reason
-}
-
-/// Reports whether a logged reason shows `character` as `?`.
-///
-/// Controls (Cc), format characters (Cf) and the line and paragraph separators (Zl, Zp).
-fn is_neutralized(character: char) -> bool {
-    character.is_control()
-        || LINE_SEPARATORS.contains(&character)
-        || FORMAT_CHARACTERS
-            .iter()
-            .any(|(low, high)| (*low..=*high).contains(&character))
 }
 
 /// Reports whether `character` belongs to the base64 alphabet that the envelope accepts.
@@ -530,6 +465,22 @@ mod tests {
                 format!("{reason}\n[pohunek-codex-review exited with status 0]\n"),
                 None,
             ),
+            (
+                "adapter refusal after the run",
+                format!(
+                    "{}\n[pohunek-codex-review exited with status 64]\n",
+                    line(b"codex-adapter: Codex did not produce a review result")
+                ),
+                Some("codex-adapter: Codex did not produce a review result".to_owned()),
+            ),
+            (
+                "head marker before the reason",
+                format!(
+                    "[pohunek-codex-review-refused-v1:head_unavailable]\n{reason}\n\
+                     [pohunek-codex-review exited with status 64]\n"
+                ),
+                Some("ERROR: model-x is not supported".to_owned()),
+            ),
         ];
         for (name, output, reason) in cases {
             let err = parse_codex_output(&test_config(), &pr, &output).expect_err(name);
@@ -563,6 +514,14 @@ checkout";
             (
                 "refusal",
                 format!("{marker}\n{refused}"),
+                "review_head_unavailable",
+            ),
+            (
+                "refusal after the run",
+                format!(
+                    "[pohunek-codex-review-reason-v1:Y29kZXgtYWRhcHRlcjogeA==]\n{marker}\n\
+                     {refused}\n"
+                ),
                 "review_head_unavailable",
             ),
             (

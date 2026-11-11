@@ -34,7 +34,8 @@ EXIT_LINE_FORMAT = "[pohunek-codex-review exited with status {}]"
 REFUSAL_MARKER_FORMAT = "[pohunek-codex-review-refused-v1:{}]"
 REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
 # Right before the exit line of a failed Codex run, it holds the base64 of the reason
-# that `exit_reason` takes from Codex's stderr; empty when stderr has no line.
+# that `exit_reason` takes from Codex's stderr; empty when stderr has no line. A refusal
+# after the run puts the adapter's own message there, before any head marker.
 REASON_MARKER_FORMAT = "[pohunek-codex-review-reason-v1:{}]"
 # Most UTF-8 bytes of a reason, as the engine's bound; a longer one is cut at a character.
 REASON_MAX_BYTES = 512
@@ -262,15 +263,24 @@ def exit_after_retention(exit_status: int, retention_seconds: int, marker: str =
     raise SystemExit(exit_status)
 
 
-def refuse(error: InputFrameError, retention_seconds: int) -> NoReturn:
-    """Ends a run whose request or checkout the adapter refuses, with the exit line."""
+def refuse(error: InputFrameError, retention_seconds: int, after_run: bool) -> NoReturn:
+    """Ends a run whose request, checkout or result the adapter refuses, with the exit line."""
     print(f"{PROGRAM_NAME}: {error}", file=sys.stderr, flush=True)
-    marker = (
-        REFUSAL_MARKER_FORMAT.format(REFUSAL_HEAD_UNAVAILABLE)
-        if isinstance(error, HeadUnavailableError)
-        else ""
-    )
-    exit_after_retention(EXIT_USAGE, retention_seconds, marker)
+    exit_after_retention(EXIT_USAGE, retention_seconds, refusal_marker(error, after_run))
+
+
+def refusal_marker(error: InputFrameError, after_run: bool) -> str:
+    """Returns the lines a refusal prints right before its exit line; empty for none.
+
+    After the Codex run, the message that `refuse` prints goes on a reason line, as Codex's
+    error line does. The head marker stays last, right before the exit line.
+    """
+    lines = []
+    if after_run:
+        lines.append(reason_marker(f"{PROGRAM_NAME}: {error}".encode("utf-8")))
+    if isinstance(error, HeadUnavailableError):
+        lines.append(REFUSAL_MARKER_FORMAT.format(REFUSAL_HEAD_UNAVAILABLE))
+    return "\n".join(lines)
 
 
 def is_neutralized(character: str) -> bool:
@@ -655,7 +665,7 @@ def main() -> NoReturn:
     try:
         expected_head_sha, checkout_sha = verify_review_checkout(prompt)
     except InputFrameError as error:
-        refuse(error, maximum_retention_seconds)
+        refuse(error, maximum_retention_seconds, after_run=False)
 
     with tempfile.TemporaryDirectory(prefix="codex-adapter-") as directory:
         temporary_directory = Path(directory)
@@ -684,7 +694,7 @@ def main() -> NoReturn:
             verify_review_checkout_after_run(prompt, checkout_sha)
             result = encoded_result(result_path, maximum_result_bytes, expected_head_sha)
         except InputFrameError as error:
-            refuse(error, maximum_retention_seconds)
+            refuse(error, maximum_retention_seconds, after_run=True)
         print(f"\n{RESULT_MARKER_PREFIX}{result}]", flush=True)
         exit_after_retention(0, maximum_retention_seconds)
 
