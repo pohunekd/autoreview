@@ -8,6 +8,7 @@
 use autoreview_policy::Level;
 use serde_json::json;
 
+use crate::error::error_code;
 use crate::integrations::SessionRequest;
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
@@ -576,6 +577,66 @@ async fn readded_label_during_the_review_of_a_retarget_gets_a_full_review() {
     h.fake
         .open(retargeted.clone(), h.rule(&retargeted.repository));
     expect_the_review_after_the_superseded_one(&h, "review_label_removed").await;
+    h.stop_engine().await;
+}
+
+// The review of a retarget that stopped can be retried by hand: the review on the old base
+// branch does not complete the head on the new one. The retried review then does (#301).
+#[tokio::test]
+async fn stopped_review_of_a_retarget_is_retried_by_head_prefix() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+        "line": 3, "title": "Broken", "body": "It breaks.",
+    })]));
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    h.set_output(|_: &SessionRequest| "{\"protocol\":\"broken\"}\n".to_owned());
+    let mut retargeted = pr.clone();
+    retargeted.base_branch = "release".to_owned();
+    retargeted.base_sha = sha("e");
+    h.fake.open(retargeted.clone(), h.rule(&pr.repository));
+    h.poll_until("the stop notification", || {
+        h.fake
+            .has_note(Level::Action, "No further automatic attempt is scheduled")
+    })
+    .await;
+    h.set_output(reviewer_output(Vec::new()));
+    let retried = match h.retry(&retargeted).await {
+        Ok(result) if result.head_sha == pr.head_sha && result.attempt == 2 => result.workflow_id,
+        other => panic!("the stopped retarget review must get attempt 2, retry = {other:?}"),
+    };
+    h.poll_until("the retried review", || h.publications() == 2)
+        .await;
+    h.settle().await;
+    let (published, _, started, _) = h.fake.snapshot();
+    let mut workflows: Vec<&str> = started
+        .iter()
+        .map(|request| request.workflow_id.as_str())
+        .collect();
+    workflows.dedup();
+    let again = h.retry(&retargeted).await;
+    assert_eq!(
+        (
+            published[1].decision.clone(),
+            published[1].body.contains("full review of"),
+            workflows.len(),
+            workflows.last() == Some(&retried.as_str()),
+            again.as_ref().err().map(|err| error_code(err)),
+        ),
+        (
+            Decision::Approve,
+            true,
+            3,
+            true,
+            Some("review_already_completed")
+        ),
+        "the retried review must approve the head in full on the new base branch, and a retry \
+         after it must be refused (decision, full, reviews, last review retried, second retry)"
+    );
     h.stop_engine().await;
 }
 
