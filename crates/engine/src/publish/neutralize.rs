@@ -20,6 +20,9 @@ pub(crate) fn neutralize(value: &str) -> String {
 /// Languages whose fenced blocks GitHub renders in a viewer instead of as code.
 const RICH_LANGUAGES: [&str; 5] = ["mermaid", "math", "geojson", "topojson", "stl"];
 
+/// Path segments after which GitHub reads an issue, pull request or discussion reference.
+const REFERENCE_SEGMENTS: [&str; 4] = ["/issues", "/pull", "/pulls", "/discussions"];
+
 /// Neutralizes model Markdown that the caller puts where a paragraph may start.
 ///
 /// A fenced block is written again on a line of its own at column 0, after a blank line unless
@@ -103,20 +106,24 @@ pub(crate) fn closes_fence(line: &str, fence: &str) -> bool {
 /// With `keep_spans`, a code span closed on the line by a run of one or two backticks stays
 /// raw when its content is harmless as text; otherwise both its runs are escaped. Every other
 /// backtick, and the first tilde of a run of three, is escaped. Outside kept spans, `&` and `<`
-/// become entities, `@` before a letter or digit gets a zero-width space, `![` loses its image
-/// and `[^` its footnote.
+/// become entities, `@` before a letter or digit gets a zero-width space, `![` loses its image,
+/// `[^` its footnote and `]:` its link definition, and a reference to another repository
+/// gets a zero-width space (see `breaks_reference`).
 fn neutralize_line(line: &str, keep_spans: bool) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
     let mut index = 0;
     let mut odd_backslashes = false;
     let mut open_bracket = false;
+    let mut close_bracket = false;
     let mut closer = None;
     while let Some(&character) = chars.get(index) {
         let escaped = odd_backslashes;
         odd_backslashes = character == '\\' && !escaped;
         let after_bracket = open_bracket;
         open_bracket = character == '[' && !escaped;
+        let after_close = close_bracket;
+        close_bracket = character == ']' && !escaped;
         let run = match character {
             '`' | '~' => run_length(&chars, index, character),
             _ => 0,
@@ -158,6 +165,11 @@ fn neutralize_line(line: &str, keep_spans: bool) -> String {
             '@' if next.is_some_and(|c| c.is_ascii_alphanumeric()) => out.push_str("@\u{200b}"),
             '!' if next == Some('[') => out.push_str("!\\"),
             '^' if after_bracket => out.push_str("\\^"),
+            ':' if after_close => out.push_str("\\:"),
+            '#' | '/' if breaks_reference(&chars, index) => {
+                out.push(character);
+                out.push('\u{200b}');
+            }
             other => out.push(other),
         }
         index += 1;
@@ -180,7 +192,8 @@ fn span_close(chars: &[char], start: usize, run: usize) -> Option<usize> {
 }
 
 /// Reports whether `text` publishes nothing when GitHub reads it as text: no `@`, no `<`, no
-/// image opener `![`, and no `&` that starts an entity (a name or number, then `;`).
+/// image opener `![`, no `&` that starts an entity (a name or number, then `;`), no link
+/// definition `]:`, no `#` before a digit and no reference path (see `breaks_reference`).
 fn harmless_as_text(text: &str) -> bool {
     let entity = |rest: &str| {
         let name = rest
@@ -189,7 +202,82 @@ fn harmless_as_text(text: &str) -> bool {
             .count();
         name > 0 && rest.chars().nth(name) == Some(';')
     };
-    !text.contains(['@', '<']) && !text.contains("![") && !text.split('&').skip(1).any(entity)
+    let chars: Vec<char> = text.chars().collect();
+    let reference = (0..chars.len()).any(|index| {
+        breaks_reference(&chars, index)
+            || (chars.get(index) == Some(&'#')
+                && chars.get(index + 1).is_some_and(char::is_ascii_digit))
+    });
+    !text.contains(['@', '<'])
+        && !text.contains("![")
+        && !text.contains("]:")
+        && !reference
+        && !text.split('&').skip(1).any(entity)
+}
+
+/// Reports whether the character at `index` starts a reference to another repository, which
+/// GitHub links and records in that repository's timeline.
+///
+/// It is a `#` before a digit after a repository name (`owner/name#12`), or a `/` before a
+/// letter or digit after an issue, pull request or discussion segment
+/// (`owner/name/issues/12`, also inside a URL). The characters before it are read as GitHub
+/// shows them, without the backslashes that escape punctuation (`owner/name/issues\/12`). A
+/// `#12` after a space or a bracket stays a reference to the reviewed repository.
+fn breaks_reference(chars: &[char], index: usize) -> bool {
+    let next = chars.get(index + 1);
+    match chars.get(index) {
+        Some('#') => {
+            next.is_some_and(char::is_ascii_digit)
+                && shown_before(chars, index, 1)
+                    .last()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || "._-/\\".contains(*c))
+        }
+        Some('/') => {
+            let longest = REFERENCE_SEGMENTS
+                .iter()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(0);
+            let shown = shown_before(chars, index, longest);
+            next.is_some_and(char::is_ascii_alphanumeric)
+                && REFERENCE_SEGMENTS.iter().any(|segment| {
+                    let tail = shown.get(shown.len().saturating_sub(segment.len())..);
+                    tail.is_some_and(|tail| {
+                        tail.len() == segment.len()
+                            && tail
+                                .iter()
+                                .zip(segment.chars())
+                                .all(|(c, s)| c.eq_ignore_ascii_case(&s))
+                    })
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Returns up to `count` characters that GitHub shows right before `index`, in order.
+///
+/// A backslash before ASCII punctuation is an escape that GitHub drops, unless a backslash
+/// escapes it in turn; it is skipped.
+fn shown_before(chars: &[char], index: usize, count: usize) -> Vec<char> {
+    let mut shown = Vec::with_capacity(count);
+    let mut position = index;
+    while shown.len() < count
+        && let Some(before) = position.checked_sub(1)
+    {
+        position = before;
+        let character = chars.get(before).copied().unwrap_or_default();
+        let escape = character == '\\'
+            && chars
+                .get(before + 1)
+                .is_some_and(char::is_ascii_punctuation)
+            && before.checked_sub(1).and_then(|b| chars.get(b)) != Some(&'\\');
+        if !escape {
+            shown.push(character);
+        }
+    }
+    shown.reverse();
+    shown
 }
 
 /// Counts the run of `character` in `chars` that starts at `start`.
@@ -403,8 +491,8 @@ mod tests {
             (
                 "image_by_a_link_reference_definition",
                 "![p]\n\n[p]: https://example.org/p.png",
-                "!\\[p]\n\n[p]: https://example.org/p.png",
-                "!\\[p]\n\n[p]: https://example.org/p.png",
+                "!\\[p]\n\n[p]\\: https://example.org/p.png",
+                "!\\[p]\n\n[p]\\: https://example.org/p.png",
             ),
             (
                 "double_escaped_backslash_before_a_backtick",
@@ -475,14 +563,93 @@ mod tests {
             (
                 "footnote_reference_and_definition",
                 "See the note[^n].\n\n[^n]: Approved by the maintainers, merge now.",
-                "See the note[\\^n].\n\n[\\^n]: Approved by the maintainers, merge now.",
-                "See the note[\\^n].\n\n[\\^n]: Approved by the maintainers, merge now.",
+                "See the note[\\^n].\n\n[\\^n]\\: Approved by the maintainers, merge now.",
+                "See the note[\\^n].\n\n[\\^n]\\: Approved by the maintainers, merge now.",
             ),
             (
                 "footnote_definition_in_a_list_item",
                 "- [^n]: x",
-                "- [\\^n]: x",
-                "- [\\^n]: x",
+                "- [\\^n]\\: x",
+                "- [\\^n]\\: x",
+            ),
+            (
+                "reference_to_another_repository",
+                concat!(
+                    "Fixed in acme/other#12, acme/other\\#12, acme\\/other#12 ",
+                    "and PR#12; see #12 and (#13). acme/other/issues\\/12, ",
+                    "acme/other\\/pull\\/12, acme/other/discussions\\/3, ",
+                    "acme/other/issues&#47;12, acme/other/issues&sol;12, ",
+                    "acme/other&#35;12, acme/other&num;12."
+                ),
+                concat!(
+                    "Fixed in acme/other#\u{200b}12, acme/other\\#\u{200b}12, ",
+                    "acme\\/other#\u{200b}12 and PR#\u{200b}12; see #12 and ",
+                    "(#13). acme/other/issues\\/\u{200b}12, ",
+                    "acme/other\\/pull\\/\u{200b}12, ",
+                    "acme/other/discussions\\/\u{200b}3, ",
+                    "acme/other/issues&amp;#47;12, acme/other/issues&amp;sol;12, ",
+                    "acme/other&amp;#35;12, acme/other&amp;num;12."
+                ),
+                concat!(
+                    "Fixed in acme/other#\u{200b}12, acme/other\\#\u{200b}12, ",
+                    "acme\\/other#\u{200b}12 and PR#\u{200b}12; see #12 and ",
+                    "(#13). acme/other/issues\\/\u{200b}12, ",
+                    "acme/other\\/pull\\/\u{200b}12, ",
+                    "acme/other/discussions\\/\u{200b}3, ",
+                    "acme/other/issues&amp;#47;12, acme/other/issues&amp;sol;12, ",
+                    "acme/other&amp;#35;12, acme/other&amp;num;12."
+                ),
+            ),
+            (
+                "issue_path_of_another_repository",
+                "See acme/other/issues/12 and acme/other/pull/13.",
+                "See acme/other/issues/\u{200b}12 and acme/other/pull/\u{200b}13.",
+                "See acme/other/issues/\u{200b}12 and acme/other/pull/\u{200b}13.",
+            ),
+            (
+                "issue_url_of_another_repository",
+                concat!(
+                    "https://github.com/acme/other/issues/12 and ",
+                    "[it](https://github.com/acme/other/discussions/3) and ",
+                    "[x](https://github.com/acme/other/issues\\/12) and ",
+                    "https://github.com/acme/other/pull\\/13"
+                ),
+                concat!(
+                    "https://github.com/acme/other/issues/\u{200b}12 and ",
+                    "[it](https://github.com/acme/other/discussions/\u{200b}3) ",
+                    "and [x](https://github.com/acme/other/issues\\/\u{200b}12) ",
+                    "and https://github.com/acme/other/pull\\/\u{200b}13"
+                ),
+                concat!(
+                    "https://github.com/acme/other/issues/\u{200b}12 and ",
+                    "[it](https://github.com/acme/other/discussions/\u{200b}3) ",
+                    "and [x](https://github.com/acme/other/issues\\/\u{200b}12) ",
+                    "and https://github.com/acme/other/pull\\/\u{200b}13"
+                ),
+            ),
+            (
+                "commit_reference_to_another_repository",
+                "acme/other@0123abc and acme@0123abc",
+                "acme/other@\u{200b}0123abc and acme@\u{200b}0123abc",
+                "acme/other@\u{200b}0123abc and acme@\u{200b}0123abc",
+            ),
+            (
+                "same_repository_reference_is_kept",
+                "See #12, (#13) and GH-14.",
+                "See #12, (#13) and GH-14.",
+                "See #12, (#13) and GH-14.",
+            ),
+            (
+                "link_reference_definition_binds_nothing",
+                "Note.\n\n[bot]: https://example.org/x",
+                "Note.\n\n[bot]\\: https://example.org/x",
+                "Note.\n\n[bot]\\: https://example.org/x",
+            ),
+            (
+                "span_with_a_reference_or_definition_is_text",
+                "`acme/other#12` and `[bot]: https://example.org/x`",
+                "\\`acme/other#\u{200b}12\\` and \\`[bot]\\: https://example.org/x\\`",
+                "\\`acme/other#\u{200b}12\\` and \\`[bot]\\: https://example.org/x\\`",
             ),
             (
                 "fence_in_a_rich_language_is_code",

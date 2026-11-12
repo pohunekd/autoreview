@@ -1114,6 +1114,7 @@ mod tests {
         );
     }
 
+    /// The answered verdict's note also defines a link for the engine-written login (#338).
     #[test]
     fn open_prior_finding_blocks_and_is_counted_in_the_marker() {
         let input = test_input(
@@ -1151,8 +1152,8 @@ mod tests {
             },
             verdict: PriorVerdict {
                 status: PRIOR_ANSWERED.to_owned(),
-                note: "Waived by the reviewer.".to_owned(),
-                relies_on: "reviewer".to_owned(),
+                note: "Waived by the reviewer.\n\n[bot]: https://example.org/x".to_owned(),
+                relies_on: "name[bot]".to_owned(),
                 ..PriorVerdict::default()
             },
             ..PriorResult::default()
@@ -1186,7 +1187,8 @@ mod tests {
             review.comments.is_empty()
                 && review.marker.contains(":findings=1:")
                 && review.body.contains("**Still open, blocking**: O001 HIGH")
-                && review.body.contains("relying on a comment by reviewer"),
+                && review.body.contains("relying on a comment by name[bot]")
+                && review.body.contains("\n[bot]\\: https://example.org/x"),
             "marker={} comments={} body={}",
             review.marker,
             review.comments.len(),
@@ -1200,7 +1202,7 @@ mod tests {
         );
         let message = approval_requested_message(200, &input, &artifact);
         let check = format!(
-            "check before approving:\n{} Name (relies on a comment by reviewer)",
+            "check before approving:\n{} Name (relies on a comment by name[bot])",
             artifact.prior_results[0].finding.key
         );
         assert!(
