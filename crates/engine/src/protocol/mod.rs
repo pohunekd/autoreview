@@ -491,15 +491,6 @@ mod tests {
                 "review_result_invalid",
             ),
             (
-                "codex_result_naming_another_repository",
-                codex(),
-                codex_report(
-                    &pr,
-                    json!({"findings": [], "prior_findings": [], "repository": "acme/other"}),
-                ),
-                "review_result_invalid",
-            ),
-            (
                 "codex_result_asking_for_approval",
                 codex(),
                 codex_report(

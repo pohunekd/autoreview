@@ -113,9 +113,11 @@ attack it models. `scripts/gates` runs them with the other Rust tests.
   reviewed head, written into a summary (as text, in a code span and in a code
   block), a finding title and a validation line, never reach the body as
   markers.
-- Result parsing (`protocol`): a result for another repository, pull request
-  number or head is refused, and the reviewer gets a fresh run. A decision in
-  the result is refused in a Codex result and never read from a Claude result.
+- Result parsing (`protocol`): a Claude result for another repository, pull
+  request number or head is refused, and so is a Codex result for another
+  head; a Codex result carries only the head. The reviewer then gets a fresh
+  run. A decision in the result is refused in a Codex result and never read
+  from a Claude result.
 - Decision planning (`publish::plan`): a finding that asks for an approval is
   planned by its blocking flag only, so on an `on_clean: await` rule the
   approval still waits for a person.
