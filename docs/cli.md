@@ -412,6 +412,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `stats_range_too_long` | The `stats` range covers more than 366 days |
 | `project_route_not_found`, `project_route_ambiguous` | The repository is registered on no review host that answered, or as two projects on the host that serves it |
 | `pohunek_request_failed`, `pohunek_request_timeout`, `pohunek_session_start_failed` | The review host did not answer or could not start a session |
+| `host_state_ineligible` | A `pohunek.host_state` rule held back a host that may serve the repository and no allowed host has it; the review waits for a review host |
 | `pohunek_session_lost` | The review host lost the session's worker while the session started; retried on a fresh branch. A leftover session that cannot be removed raises `cleanup_manual`, see [stale sessions](knowledge/runbooks/stale-sessions-and-branches.md#when-a-session-cannot-be-removed) |
 | `pohunek_base_fetch_ref_locked`, `pohunek_session_warning` | The session start hit a locked base fetch or reported a warning; retried on a fresh branch |
 | `pohunek_session_cleanup_failed` | A session could not be removed, see `cleanup_manual` |

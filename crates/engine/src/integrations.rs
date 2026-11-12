@@ -15,8 +15,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::NotifyRoute;
 use crate::error::Error;
 use crate::model::{
-    CandidateList, Decision, Discussion, PriorFinding, ProjectRoute, PublishResult, PullRequest,
-    SessionIdentity,
+    CandidateList, Decision, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
+    PullRequest, SessionIdentity,
 };
 
 /// A draft that discovery marked ready for review.
@@ -162,6 +162,13 @@ pub trait Integrations {
         repository: &str,
         sources: &[String],
     ) -> impl Future<Output = Result<Vec<ProjectRoute>, Error>> + Send;
+
+    /// Returns the state that the `moc.host-state` plugin reports for one pohunek host.
+    fn host_capacity(
+        &self,
+        cancel: &CancellationToken,
+        host: &str,
+    ) -> impl Future<Output = Result<HostCapacity, Error>> + Send;
 
     /// Starts the reviewer session, or returns the live session with the same name.
     fn ensure_session(

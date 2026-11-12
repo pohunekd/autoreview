@@ -18,6 +18,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -29,8 +30,8 @@ use crate::integrations::{
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
-    Candidate, CandidateList, Discussion, PriorFinding, ProjectRoute, PublishResult, PullRequest,
-    RejectedCandidate, SessionIdentity,
+    Candidate, CandidateList, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
+    PullRequest, RejectedCandidate, SessionIdentity,
 };
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
 use crate::protocol::request::{checkout_name, go_json};
@@ -155,6 +156,12 @@ pub(crate) struct FakeState {
     pub(crate) host_fail: BTreeMap<String, String>,
     /// Every host whose project list was asked for, in order.
     pub(crate) route_queries: Vec<String>,
+    /// State that the host-state call of each host returns, keyed by host; an absent host fails.
+    ///
+    /// The fake stamps each answer with the current time.
+    pub(crate) capacities: BTreeMap<String, HostCapacity>,
+    /// Every host whose state was asked for, in order.
+    pub(crate) capacity_queries: Vec<String>,
     /// Repository permission of each author, keyed by `repository login`; absent is below write.
     pub(crate) permissions: BTreeMap<String, Permission>,
     /// Every permission read, as `repository login`, in order.
@@ -478,6 +485,25 @@ impl Integrations for FakeIntegration {
                     host: host.to_owned(),
                     project_id: "project".to_owned(),
                 }]),
+            }
+        };
+        ready(result)
+    }
+
+    fn host_capacity(
+        &self,
+        _cancel: &CancellationToken,
+        host: &str,
+    ) -> impl Future<Output = Result<HostCapacity, Error>> + Send {
+        let result = {
+            let mut state = self.lock();
+            state.capacity_queries.push(host.to_owned());
+            match state.capacities.get(host) {
+                Some(capacity) => Ok(HostCapacity {
+                    timestamp: OffsetDateTime::now_utc(),
+                    ..capacity.clone()
+                }),
+                None => Err(Error::workflow("pohunek_request_failed", false, None)),
             }
         };
         ready(result)

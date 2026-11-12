@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use autoreview_engine::Error;
-use autoreview_engine::config::{Config, MatrixRooms, RouteOverride, SECRET_ENV_PREFIX};
+use autoreview_engine::config::{
+    Config, HostOrder, HostStateChoice, HostStateRules, MatrixRooms, RouteOverride,
+    SECRET_ENV_PREFIX,
+};
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_policy::{EVENTS, Event, Policy, user_login_valid};
@@ -56,6 +59,8 @@ const EXCERPT_DIVISOR: i64 = 4;
 const PORT_MAX: u32 = 65_535;
 /// Largest GitHub review body or comment, in bytes.
 const GITHUB_BODY_MAX_BYTES_LIMIT: i64 = 65_536;
+/// Largest value of `pohunek.host_state.min_battery_percent`.
+const BATTERY_PERCENT_MAX: i64 = 100;
 
 /// A configuration value read without type coercion, so that each key decides what it accepts and
 /// names itself when it refuses.
@@ -265,6 +270,32 @@ struct PohunekFile {
     hosts: Option<Value>,
     /// Pins a repository registered on more than one host.
     route_overrides: Option<BTreeMap<String, RouteOverrideFile>>,
+    /// Picks review hosts by their state; without it the hosts are tried in configured order.
+    /// A null section reads as a section without keys, so its first key is reported missing.
+    #[serde(default, deserialize_with = "present_section")]
+    host_state: Option<HostStateFile>,
+}
+
+/// The `pohunek.host_state` section.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostStateFile {
+    /// Largest distance of a state's timestamp from now, in seconds.
+    max_age_seconds: Option<Value>,
+    /// `skip` or `eligible`: a host whose state is unknown.
+    unknown_state: Option<Value>,
+    /// `idle_first` or `configured`: the order of the eligible hosts.
+    order: Option<Value>,
+    /// `skip` or `eligible`: a host on battery.
+    on_battery: Option<Value>,
+    /// Lowest battery charge of a host on battery, in percent; 0 sets no limit.
+    min_battery_percent: Option<Value>,
+    /// Least free memory of a host, in MB; 0 sets no limit.
+    min_free_memory_mb: Option<Value>,
+    /// Local models that a host must serve.
+    required_models: Option<Value>,
+    /// `skip` or `eligible`: a host outside its policy window.
+    outside_window: Option<Value>,
 }
 
 /// One entry of `pohunek.route_overrides`.
@@ -731,6 +762,7 @@ fn map_file(
         Some(overrides) => route_overrides(overrides)?,
         None => return Err(missing("pohunek.route_overrides")),
     };
+    let host_state = host_state_rules(&pohunek.host_state)?;
     let session = section(&file.session, "session")?;
     let session_branch_prefix = branch_prefix(&session.branch_prefix)?;
     let session_name_prefix = name_prefix(&session.name_prefix)?;
@@ -870,6 +902,7 @@ fn map_file(
         pohunek_runtime,
         pohunek_hosts,
         route_overrides,
+        host_state,
         matrix_homeserver_url: shape.homeserver_url,
         matrix_access_token: shape.access_token,
         secret_variables: secret_variables.take(),
@@ -1089,6 +1122,79 @@ fn route_overrides(
         out.insert(repository.clone(), RouteOverride { host, project_id });
     }
     Ok(out)
+}
+
+/// Maps `pohunek.host_state`; `None` when the section is absent.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for an absent key of the section (`max_age_seconds` for a
+/// null section) and `configuration_invalid` for a value outside its choices or range.
+fn host_state_rules(section: &Option<HostStateFile>) -> Result<Option<HostStateRules>, Error> {
+    let Some(rules) = section else {
+        return Ok(None);
+    };
+    let max_age = seconds(&rules.max_age_seconds, "pohunek.host_state.max_age_seconds")?;
+    let unknown_state = state_choice(&rules.unknown_state, "pohunek.host_state.unknown_state")?;
+    let order_key = "pohunek.host_state.order";
+    let order = match text(&rules.order, order_key)?.as_str() {
+        "idle_first" => HostOrder::IdleFirst,
+        "configured" => HostOrder::Configured,
+        _ => return Err(invalid(order_key, "must be idle_first or configured")),
+    };
+    let on_battery = state_choice(&rules.on_battery, "pohunek.host_state.on_battery")?;
+    let battery_key = "pohunek.host_state.min_battery_percent";
+    let range = "must be from 0 to 100";
+    let battery = bounded(
+        &rules.min_battery_percent,
+        battery_key,
+        BATTERY_PERCENT_MAX,
+        range,
+    )?;
+    let min_battery_percent = u8::try_from(battery).map_err(|_| invalid(battery_key, range))?;
+    let memory_key = "pohunek.host_state.min_free_memory_mb";
+    let negative = "must not be negative";
+    let memory = bounded(&rules.min_free_memory_mb, memory_key, i64::MAX, negative)?;
+    let min_free_memory_mb = u64::try_from(memory).map_err(|_| invalid(memory_key, negative))?;
+    let models_key = "pohunek.host_state.required_models";
+    let required_models = text_list(&rules.required_models, models_key)?;
+    if required_models.iter().any(|model| model.trim().is_empty()) {
+        return Err(invalid(models_key, "must list model names"));
+    }
+    let outside_window = state_choice(&rules.outside_window, "pohunek.host_state.outside_window")?;
+    Ok(Some(HostStateRules {
+        max_age,
+        unknown_state,
+        order,
+        on_battery,
+        min_battery_percent,
+        min_free_memory_mb,
+        required_models,
+        outside_window,
+    }))
+}
+
+/// Reads `skip` or `eligible`.
+fn state_choice(value: &Option<Value>, key: &str) -> Result<HostStateChoice, Error> {
+    match text(value, key)?.as_str() {
+        "skip" => Ok(HostStateChoice::Skip),
+        "eligible" => Ok(HostStateChoice::Eligible),
+        _ => Err(invalid(key, "must be skip or eligible")),
+    }
+}
+
+/// Reads an integer from 0 to `max`; `message` names the range when it is outside.
+fn bounded(
+    value: &Option<Value>,
+    key: &str,
+    max: i64,
+    message: &'static str,
+) -> Result<i64, Error> {
+    let number = integer(present(value, key)?, key)?;
+    if !(0..=max).contains(&number) {
+        return Err(invalid(key, message));
+    }
+    Ok(number)
 }
 
 /// A validated entry of `notify.backends`.
@@ -2850,6 +2956,113 @@ pub(crate) mod tests {
         let unknown = format!("{full}  bearer_token_env: AUTOREVIEW_METRICS_TOKEN\n");
         assert!(
             parse_file(&unknown).is_err(),
+            "the section refuses a key it does not know"
+        );
+    }
+
+    #[test]
+    fn host_state_section_is_optional_and_every_key_is_required() {
+        let config = parse(EXAMPLE, secret, example_policy).expect("the example loads");
+        assert_eq!(config.host_state, None, "the example reads no host state");
+        let anchor = "  route_overrides: {}\n";
+        let section = concat!(
+            "  host_state:\n",
+            "    max_age_seconds: 120\n",
+            "    unknown_state: skip\n",
+            "    order: idle_first\n",
+            "    on_battery: eligible\n",
+            "    min_battery_percent: 30\n",
+            "    min_free_memory_mb: 0\n",
+            "    required_models: [model-a]\n",
+            "    outside_window: skip\n",
+        );
+        let with = |section: &str| mutated(anchor, &format!("{anchor}{section}"));
+        let config = parse(&with(section), secret, example_policy).expect("the section loads");
+        let rules = HostStateRules {
+            max_age: Duration::from_secs(120),
+            unknown_state: HostStateChoice::Skip,
+            order: HostOrder::IdleFirst,
+            on_battery: HostStateChoice::Eligible,
+            min_battery_percent: 30,
+            min_free_memory_mb: 0,
+            required_models: vec!["model-a".to_owned()],
+            outside_window: HostStateChoice::Skip,
+        };
+        assert_eq!(config.host_state, Some(rules));
+        let missing = "configuration_missing: pohunek.host_state.";
+        let invalid = "configuration_invalid: pohunek.host_state.";
+        // (old, new, expected error after the key prefix)
+        let cases = [
+            (section, "  host_state:\n", "max_age_seconds"),
+            ("    max_age_seconds: 120\n", "", "max_age_seconds"),
+            ("    unknown_state: skip\n", "", "unknown_state"),
+            ("    order: idle_first\n", "", "order"),
+            ("    on_battery: eligible\n", "", "on_battery"),
+            ("    min_battery_percent: 30\n", "", "min_battery_percent"),
+            ("    min_free_memory_mb: 0\n", "", "min_free_memory_mb"),
+            ("    required_models: [model-a]\n", "", "required_models"),
+            ("    outside_window: skip\n", "", "outside_window"),
+            (
+                "min_battery_percent: 30",
+                "min_battery_percent: null",
+                "min_battery_percent",
+            ),
+        ];
+        for (old, new, key) in cases {
+            let text = with(&section.replacen(old, new, 1));
+            let expected = format!("{missing}{key}");
+            assert_eq!(error_text(parse(&text, secret, example_policy)), expected);
+        }
+        let cases = [
+            (
+                "max_age_seconds: 120",
+                "max_age_seconds: 0",
+                "max_age_seconds: must be a positive integer",
+            ),
+            (
+                "unknown_state: skip",
+                "unknown_state: ignore",
+                "unknown_state: must be skip or eligible",
+            ),
+            (
+                "order: idle_first",
+                "order: random",
+                "order: must be idle_first or configured",
+            ),
+            (
+                "on_battery: eligible",
+                "on_battery: true",
+                "on_battery: must be text",
+            ),
+            (
+                "min_battery_percent: 30",
+                "min_battery_percent: 101",
+                "min_battery_percent: must be from 0 to 100",
+            ),
+            (
+                "min_free_memory_mb: 0",
+                "min_free_memory_mb: -1",
+                "min_free_memory_mb: must not be negative",
+            ),
+            (
+                "required_models: [model-a]",
+                "required_models: [\" \"]",
+                "required_models: must list model names",
+            ),
+            (
+                "outside_window: skip",
+                "outside_window: allow",
+                "outside_window: must be skip or eligible",
+            ),
+        ];
+        for (old, new, expected) in cases {
+            let text = with(&section.replacen(old, new, 1));
+            let expected = format!("{invalid}{expected}");
+            assert_eq!(error_text(parse(&text, secret, example_policy)), expected);
+        }
+        let unknown = with(&format!("{section}    prefer_idle: true\n"));
+        assert!(
+            parse(&unknown, secret, example_policy).is_err(),
             "the section refuses a key it does not know"
         );
     }

@@ -17,7 +17,7 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::Config;
 use autoreview_engine::error::BoxError;
-use autoreview_engine::model::{ProjectRoute, repository_valid};
+use autoreview_engine::model::{HostCapacity, ProjectRoute, repository_valid};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -36,6 +36,12 @@ const PAGER_VARIABLE: &str = "PAGER";
 
 /// Value of [`PAGER_VARIABLE`] that prints straight to the output.
 const PAGER_VALUE: &str = "cat";
+
+/// Package of the `moc.host-state` plugin.
+const HOST_STATE_PACKAGE: &str = "moc.host-state";
+
+/// Command of the `moc.host-state` plugin that prints one `HostCapacity` document.
+const HOST_STATE_COMMAND: &str = "host-state";
 
 /// Field names of the pohunek JSON, in lower case; a key that only differs in case is refused.
 const KNOWN_KEYS: [&str; 30] = [
@@ -373,6 +379,34 @@ pub(crate) async fn host_routes(
 ) -> Result<Vec<ProjectRoute>, Error> {
     let output = pohunek_call(config, cancel, &projects_arguments(host)).await?;
     route_candidates(host, &config.github_host, repository, sources, &output)
+}
+
+/// Returns the arguments of the host-state command on `host`.
+///
+/// `host command run` names the host itself, so the arguments carry no `--host`.
+fn host_state_arguments(host: &str) -> Vec<String> {
+    [
+        "host",
+        "command",
+        "run",
+        host,
+        HOST_STATE_PACKAGE,
+        HOST_STATE_COMMAND,
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// Returns the state that the `moc.host-state` plugin reports for `host`.
+///
+/// One `host command run` call; its standard output is the document.
+pub(crate) async fn host_capacity(
+    config: &Config,
+    cancel: &CancellationToken,
+    host: &str,
+) -> Result<HostCapacity, Error> {
+    let output = pohunek_call(config, cancel, &host_state_arguments(host)).await?;
+    HostCapacity::parse(&output)
 }
 
 /// Returns the `owner/name` that a project origin URL names on `host`, or an empty string.

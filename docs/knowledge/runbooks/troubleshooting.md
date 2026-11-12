@@ -123,6 +123,14 @@ Check the tunnel to the host, the pohunek versions of the CLI and the daemon, an
 the `pohunek.timeout_seconds` value. See
 [waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host).
 
+With `pohunek.host_state`, a host that a rule refuses is logged as
+`review host skipped` with `host_state_ineligible` and the `rule`, and is not asked
+for its projects. When no allowed host has the repository, the review waits with
+`host_state_ineligible` instead of failing with `project_route_not_found`; the
+wait is not announced. A `review host state unknown` warning means that the
+host's `moc.host-state` state could not be read or was too old. See
+[choose a host by its state](../guides/multihost.md#choose-a-host-by-its-state).
+
 ### project_route_ambiguous
 
 The repository is registered as two or more projects on the host that serves

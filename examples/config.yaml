@@ -23,6 +23,17 @@ pohunek:
   timeout_seconds: 45
   hosts: [review-host]
   route_overrides: {}
+  # Optional: pick hosts by the state of the moc.host-state plugin; every key is
+  # required when the section is present.
+  # host_state:
+  #   max_age_seconds: 120
+  #   unknown_state: skip
+  #   order: idle_first
+  #   on_battery: skip
+  #   min_battery_percent: 0
+  #   min_free_memory_mb: 0
+  #   required_models: []
+  #   outside_window: skip
 
 session:
   group: autoreview

@@ -12,8 +12,8 @@ use autoreview_engine::integrations::{
     ReviewRequestList, SessionRequest,
 };
 use autoreview_engine::model::{
-    CandidateList, Discussion, PriorFinding, ProjectRoute, PublishResult, PullRequest,
-    SessionIdentity,
+    CandidateList, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
+    PullRequest, SessionIdentity,
 };
 use autoreview_policy::{Level, Permission, Policy, Protocol, Trigger};
 use reqwest::Client;
@@ -146,6 +146,14 @@ impl Integrations for External {
         sources: &[String],
     ) -> Result<Vec<ProjectRoute>, Error> {
         pohunek::host_routes(&self.config, cancel, host, repository, sources).await
+    }
+
+    async fn host_capacity(
+        &self,
+        cancel: &CancellationToken,
+        host: &str,
+    ) -> Result<HostCapacity, Error> {
+        pohunek::host_capacity(&self.config, cancel, host).await
     }
 
     async fn ensure_session(

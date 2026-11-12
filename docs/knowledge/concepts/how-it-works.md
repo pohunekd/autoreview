@@ -108,6 +108,10 @@ repository, the review waits for a review host: it stays due, uses no retry of
 [`schedule.retry_delays_seconds`](../../configuration.md#schedule), and starts on
 the first discovery pass after a host answers (see
 [waiting for a review host](state-and-recovery.md#waiting-for-a-review-host)).
+With [`pohunek.host_state`](../../configuration.md#pohunekhost_state), only the
+hosts whose state the rules allow are asked, idle hosts first if configured;
+when a rule held a host back and no allowed host has the repository, the review
+waits for a review host with `host_state_ineligible`.
 `pohunek.route_overrides` pins the repository to one `{host, project_id}` pair:
 only that host is asked, and an override that matches none of its projects
 behaves as no match. The two route errors fail through the scheduler and end
