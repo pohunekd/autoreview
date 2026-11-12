@@ -270,7 +270,13 @@ Model text is neutralized before it is rendered:
   harmless as text (no `@`, `<`, `![` or HTML entity); every other backtick,
   and a run of three tildes, is escaped. Titles, tests and the other one-line
   fields keep no code. HTML entities are shown as written, and footnote
-  syntax is escaped, so no model text renders after the signature. A fenced
+  syntax is escaped, so no model text renders after the signature. A reference
+  to an issue, pull request or discussion of another repository
+  (`owner/repo#12`, `owner/repo/issues/12`, or a GitHub URL to it) and a commit
+  reference `owner/repo@sha` get a zero-width space, so GitHub neither links
+  them nor records them in that repository; `#12` and `GH-12` stay references
+  to the reviewed repository. A link reference definition is escaped, so it
+  cannot turn engine text such as a login into a link. A fenced
   block in a language that GitHub renders in a viewer (`mermaid`, `math`,
   `geojson`, `topojson`, `stl`) is shown as plain code. The path and line of a
   finding are a code span in a paragraph of their own.

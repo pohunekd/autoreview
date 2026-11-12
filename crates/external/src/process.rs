@@ -272,8 +272,11 @@ mod tests {
     use std::collections::BTreeSet;
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
+    use std::time::Duration;
 
-    use super::{GH_INHERITED, POHUNEK_INHERITED, child_environment};
+    use tokio_util::sync::CancellationToken;
+
+    use super::{GH_INHERITED, POHUNEK_INHERITED, child_environment, run};
 
     /// Every variable that a child may inherit, then variables that no child inherits.
     const PARENT: [&str; 40] = [
@@ -347,8 +350,11 @@ mod tests {
         kept: &'static [&'static str],
     }
 
-    #[test]
-    fn child_environment_passes_only_the_inherited_variables() {
+    /// The parent holds [`PARENT`] and every allowlisted name, so a name added to an allowlist
+    /// shows in the output. The runner then starts `env` with the built environment, and the
+    /// child must see exactly that environment (#341).
+    #[tokio::test]
+    async fn child_environment_passes_only_the_inherited_variables() {
         let cases = [
             Case {
                 inherited: &GH_INHERITED,
@@ -404,6 +410,7 @@ mod tests {
         {
             let mut parent: Vec<(OsString, OsString)> = PARENT
                 .iter()
+                .chain(inherited.iter().filter(|name| !PARENT.contains(name)))
                 .map(|name| (OsString::from(name), parent_value(name)))
                 .collect();
             parent.push((
@@ -416,11 +423,29 @@ mod tests {
                 .collect();
             expected.extend(pairs(extra));
 
-            assert_eq!(
-                child_environment(parent, inherited, &BTreeSet::new(), pairs(extra)),
-                expected,
-                "allowlist {inherited:?}"
-            );
+            let environment = child_environment(parent, inherited, &BTreeSet::new(), pairs(extra));
+            assert_eq!(environment, expected, "allowlist {inherited:?}");
+
+            let printed = run(
+                &CancellationToken::new(),
+                "/usr/bin/env",
+                &[],
+                b"",
+                &environment,
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("env runs");
+            let seen: BTreeSet<String> = printed
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .map(|(name, _)| name.to_owned())
+                .collect();
+            let built: BTreeSet<String> = environment
+                .iter()
+                .map(|(name, _)| name.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(seen, built, "the child of allowlist {inherited:?}");
         }
     }
 
