@@ -4,7 +4,9 @@
 
 use autoreview_policy::{HumanReview, OnFindings, Reviewer, match_glob};
 
-use super::neutralize::{closes_fence, neutralize, opening_fence};
+use super::neutralize::{
+    closes_fence, defuse_comment_delimiters, neutralize, neutralize_block, opening_fence,
+};
 use super::plan::{PublicationPlan, blocking_count};
 use super::publication_marker;
 use crate::error::Error;
@@ -70,7 +72,7 @@ pub(crate) fn render_review(
         sections.push(format!(
             "**{}:** {}",
             neutralize(&summary.label),
-            model_text(&summary.summary)
+            close_open_fence(&neutralize(&summary.summary))
         ));
     }
     let verification = verification_line(artifact.verification.as_ref());
@@ -139,9 +141,8 @@ fn blocking_comments(
             });
         } else {
             unanchored.push(format!(
-                "{heading}\n`{}:{}`\n\n{}",
-                neutralize(&finding.path),
-                finding.line,
+                "{heading}\n{}\n\n{}",
+                location(finding),
                 model_text(&finding.body)
             ));
         }
@@ -229,12 +230,7 @@ fn render_notes(notes: &[Finding]) -> String {
     let items: Vec<String> = notes
         .iter()
         .map(|note| {
-            let location = format!(
-                "{}\n`{}:{}`",
-                finding_heading(note),
-                neutralize(&note.path),
-                note.line
-            );
+            let location = format!("{}\n{}", finding_heading(note), location(note));
             if demoted(note) {
                 format!("{location}\n\n{}", model_text(&note.body))
             } else {
@@ -274,12 +270,11 @@ fn render_prior(results: &[PriorResult]) -> String {
             status.push_str(&neutralize(&result.verdict.relies_on));
         }
         lines.push(format!(
-            "- {status}: {} {} — {} `{}:{}` (review of `{}`)\n\n{}",
+            "- {status}: {} {} — {} {} (review of `{}`)\n\n{}",
             finding.id,
             finding.severity.to_ascii_uppercase(),
             neutralize(&finding.title),
-            neutralize(&finding.path),
-            finding.line,
+            code_span(&format!("{}:{}", finding.path, finding.line)),
             head_prefix(&finding.head_sha),
             model_text(&result.verdict.note)
         ));
@@ -287,33 +282,53 @@ fn render_prior(results: &[PriorResult]) -> String {
     lines.join("\n\n")
 }
 
-/// Renders multi-line model text as a self-contained block.
+/// Renders multi-line model text that starts a block as a self-contained block.
 fn model_text(value: &str) -> String {
-    close_open_fence(&neutralize(value))
+    close_open_fence(&neutralize_block(value))
 }
 
-/// Appends the closing fence of a block that model text leaves open, so the block cannot
-/// swallow the markup that follows it.
-fn close_open_fence(value: &str) -> String {
-    let mut fence = String::new();
-    for line in value.split('\n') {
-        let indent = line.len() - line.trim_start_matches(' ').len();
-        if indent > 3 {
-            continue;
-        }
-        let trimmed = &line[indent..];
-        if !fence.is_empty() {
-            if closes_fence(trimmed, &fence) {
-                fence.clear();
-            }
-            continue;
-        }
-        fence = opening_fence(trimmed).unwrap_or_default().to_owned();
+/// Writes the path and line of a finding as one code span.
+fn location(finding: &Finding) -> String {
+    code_span(&format!("{}:{}", finding.path, finding.line))
+}
+
+/// Writes `text` as one code span that no backtick inside it can close.
+///
+/// The delimiter is one backtick longer than the longest run in the text. A text that starts
+/// or ends with a backtick is padded with a space on both sides, which CommonMark strips.
+fn code_span(text: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for character in text.chars() {
+        run = if character == '`' { run + 1 } else { 0 };
+        longest = longest.max(run);
     }
-    if fence.is_empty() {
-        value.to_owned()
+    let delimiter = "`".repeat(longest + 1);
+    let pad = if text.starts_with('`') || text.ends_with('`') {
+        " "
     } else {
-        format!("{value}\n{fence}")
+        ""
+    };
+    defuse_comment_delimiters(&format!("{delimiter}{pad}{text}{pad}{delimiter}"))
+}
+
+/// Appends the closing fence of a block that neutralized model text leaves open, so the block
+/// cannot swallow the markup that follows it. It reads fences as `neutralize` does.
+fn close_open_fence(value: &str) -> String {
+    let mut fence: Option<&str> = None;
+    for line in value.split('\n') {
+        match fence {
+            Some(current) => {
+                if closes_fence(line, current) {
+                    fence = None;
+                }
+            }
+            None => fence = opening_fence(line),
+        }
+    }
+    match fence {
+        Some(marker) => format!("{value}\n{marker}"),
+        None => value.to_owned(),
     }
 }
 
@@ -429,6 +444,9 @@ mod tests {
     /// The Rust review leaves it out and renders the rest of the case unchanged.
     const GO_NOTE_BODY: &str = "\n\nRename it:\n```go\nfunc better() {\n```";
 
+    /// Golden case whose address Rust defuses as a mention, which Go keeps.
+    const ADDRESS_CASE: &str = "mixed_inline_and_outside";
+
     /// One golden case: a named input, and either the Go review or the Go error code.
     #[derive(Debug, Deserialize)]
     struct Case {
@@ -470,7 +488,7 @@ mod tests {
     }
 
     /// One inline comment of a golden review.
-    #[derive(Debug, PartialEq, Eq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     struct GoComment {
         path: String,
         line: i64,
@@ -626,6 +644,18 @@ mod tests {
                     body: "Outside the diff.".to_owned(),
                     ..Finding::default()
                 },
+                Finding {
+                    id: "O003".to_owned(),
+                    reviewer_label: "Opus".to_owned(),
+                    severity: "low".to_owned(),
+                    confidence: "high".to_owned(),
+                    path: "a` @victim <sub>approved</sub> `b.go".to_owned(),
+                    line: 3,
+                    title: "Note".to_owned(),
+                    body: "Details.".to_owned(),
+                    non_blocking: true,
+                    ..Finding::default()
+                },
             ],
             ..Artifact::default()
         };
@@ -658,7 +688,7 @@ mod tests {
         for kept in [
             "`$client->send(@payload)`",
             "$map = ['a' => $b->c()]; // @param int $x",
-            "dev@example.com",
+            "dev@\u{200b}example.com",
         ] {
             assert!(
                 comment.contains(kept),
@@ -677,6 +707,9 @@ mod tests {
             review.body.starts_with(&review.marker)
                 && review.body.matches("<!--").count() == review.marker.matches("<!--").count()
                 && review.body.contains("`src/b.go:9`")
+                && review
+                    .body
+                    .contains("\n``a` @victim <sub>approved</sub> `b.go:3``\n")
                 && !review.body.contains("@someone"),
             "body = {}",
             review.body
@@ -1222,7 +1255,15 @@ mod tests {
                             body: comment.body.clone(),
                         })
                         .collect();
-                    assert_eq!(comments, want.comments, "case {}", case.name);
+                    let mut want_comments = want.comments.clone();
+                    if case.name == ADDRESS_CASE {
+                        for comment in &mut want_comments {
+                            comment.body = comment
+                                .body
+                                .replace("dev@example.com", "dev@\u{200b}example.com");
+                        }
+                    }
+                    assert_eq!(comments, want_comments, "case {}", case.name);
                 }
                 _ => panic!(
                     "case {} must hold exactly one of output and error",
