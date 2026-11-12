@@ -14,7 +14,8 @@ pub(crate) mod review;
 pub use finding::{Finding, ReviewerResult, ReviewerSummary};
 #[doc(inline)]
 pub use host_state::{
-    HostCapacity, HostCpu, HostGpu, HostMemory, HostModels, HostPolicy, HostWindow,
+    HOST_STATE_UNAVAILABLE, HostCapacity, HostCpu, HostGpu, HostMemory, HostModels, HostPolicy,
+    HostWindow,
 };
 #[doc(inline)]
 pub use ids::{HEAD_PREFIX_MIN_LEN, SHA_LEN, head_prefix_valid, repository_valid, sha_valid};

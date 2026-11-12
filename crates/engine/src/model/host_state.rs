@@ -13,6 +13,9 @@ use crate::error::Error;
 /// Error code of a host state document that does not read as `HostCapacity` v1.
 pub(crate) const HOST_STATE_INVALID: &str = "host_state_invalid";
 
+/// Error code of a host whose daemon answered but could not run the host-state command.
+pub const HOST_STATE_UNAVAILABLE: &str = "host_state_unavailable";
+
 /// The only `schemaVersion` this reader accepts.
 const SCHEMA_VERSION: &str = "v1";
 

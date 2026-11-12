@@ -250,7 +250,7 @@ when the section is present; `host_state:` without a value is refused with
 | Key | Meaning |
 |---|---|
 | `max_age_seconds` | Largest distance of the state's `timestamp` from now, either way; a state further off is unknown. Positive |
-| `unknown_state` | `skip` or `eligible`: a host whose state cannot be read, does not read as `HostCapacity` v1 (`host_state_invalid`) or is too old (`host_state_stale`) |
+| `unknown_state` | `skip` or `eligible`: a host whose daemon answers but cannot run the plugin's command (`host_state_unavailable`), whose state does not read as `HostCapacity` v1 (`host_state_invalid`), or whose timestamp is too far from now, either way (`host_state_stale`) |
 | `order` | `idle_first`: hosts that report `idle` first, each group in the order of `hosts`; `configured`: the order of `hosts` |
 | `on_battery` | `skip` or `eligible`: a host that runs on battery |
 | `min_battery_percent` | Lowest battery charge of a host on battery, from 0 to 100; `0` sets no limit |
@@ -274,11 +274,16 @@ pohunek:
 ```
 
 A host whose state is unknown logs `review host state unknown` at WARN with the
-code. A host that a rule refuses is not asked for its projects and logs
-`review host skipped` with `error_code` `host_state_ineligible` and the `rule`
-(the key, or `unknown_state`). When no allowed host has the repository and a rule
-refused a host, the review waits for a review host with `host_state_ineligible`
-instead of failing with `project_route_not_found`. A pinned repository is never
+code. A state read that fails as a pohunek call (the host does not answer, a
+timeout, a daemon error other than a `command_*` code) logs
+`review host state not read` and counts as a failed host of the pass, as a
+failed project list does: the review waits for a review host and the outage is
+announced. A host that a rule refuses logs `review host skipped` with
+`error_code` `host_state_ineligible` and the `rule` (the key, or
+`unknown_state`). It is asked for its projects only when no allowed host has the
+repository: when a refused host has it, the review waits for a review host with
+`host_state_ineligible`; when no host has it, the review fails with
+`project_route_not_found` as without the section. A pinned repository is never
 filtered by state.
 
 ## session

@@ -10,16 +10,23 @@ use std::future::Future;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use super::route::HostFailures;
+use super::route::{HostFailure, HostFailures};
 use crate::config::{HostOrder, HostStateChoice, HostStateRules};
+use crate::engine::is_permanent;
 use crate::error::{Error, error_code};
-use crate::model::HostCapacity;
+use crate::model::host_state::HOST_STATE_INVALID;
+use crate::model::{HOST_STATE_UNAVAILABLE, HostCapacity};
 
 /// Error code of a review that the state of no host allows.
 pub(crate) const HOST_STATE_INELIGIBLE: &str = "host_state_ineligible";
 
 /// Error code of a state whose timestamp is further from now than `max_age_seconds`.
 const HOST_STATE_STALE: &str = "host_state_stale";
+
+/// Error codes of a state read that reached the host but gave no usable document.
+///
+/// Any other failed read is a host failure of the pass, as a failed project list is.
+const STATE_UNKNOWN_CODES: [&str; 2] = [HOST_STATE_INVALID, HOST_STATE_UNAVAILABLE];
 
 /// What the host-state rules make of one host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +59,8 @@ pub(crate) struct StateHosts {
 ///
 /// `capacity` reads the state of one host. A host's verdict is kept in `verdicts`, so each host
 /// is read at most once per pass. A host in `failures` is not read and stays a candidate that is
-/// not idle, so the route search replays its failure. A state that is not known logs one WARN
-/// line.
+/// not idle, so the route search replays its failure. A read that fails as a pohunek call adds
+/// the host to `failures` the same way. Each failed or unknown read logs one WARN line.
 ///
 /// # Errors
 ///
@@ -64,7 +71,7 @@ pub(crate) async fn state_hosts<'a, F, Fut>(
     now: OffsetDateTime,
     cancel: &CancellationToken,
     verdicts: &mut HostVerdicts,
-    failures: &HostFailures,
+    failures: &mut HostFailures,
     mut capacity: F,
 ) -> Result<StateHosts, Error>
 where
@@ -82,6 +89,19 @@ where
                 let state = match capacity(host).await {
                     Ok(state) => Ok(state),
                     Err(err) if cancel.is_cancelled() => return Err(err),
+                    Err(err) if !STATE_UNKNOWN_CODES.contains(&error_code(&err)) => {
+                        // The call itself failed, as a project list can: the host is out.
+                        let code = error_code(&err).to_owned();
+                        tracing::warn!(
+                            host = host.as_str(),
+                            error_code = code.as_str(),
+                            "review host state not read"
+                        );
+                        let permanent = is_permanent(&err);
+                        failures.insert(host.clone(), HostFailure { code, permanent });
+                        others.push(host.clone());
+                        continue;
+                    }
                     Err(err) => Err(error_code(&err).to_owned()),
                 };
                 let unknown = match &state {
@@ -433,7 +453,7 @@ mod tests {
             Err("host_state_invalid".to_owned()),
             "a document that does not read is invalid"
         );
-        let failed = Err("pohunek_request_failed".to_owned());
+        let failed = Err("host_state_unavailable".to_owned());
         let mut rules = rules();
         for (choice, want) in [(skip, refused("unknown_state")), (allow, busy)] {
             rules.unknown_state = choice;
@@ -448,7 +468,7 @@ mod tests {
     #[tokio::test]
     async fn hosts_are_ordered_idle_first_and_each_state_is_read_once_per_pass() {
         let cancel = CancellationToken::new();
-        let hosts: Vec<String> = ["a", "b", "c", "d", "e"].map(str::to_owned).to_vec();
+        let hosts: Vec<String> = ["a", "b", "c", "d", "e", "f"].map(str::to_owned).to_vec();
         let sample = read(SAMPLE).expect("the sample reads");
         let busy = HostCapacity {
             idle: false,
@@ -458,7 +478,7 @@ mod tests {
             ac_power: false,
             ..sample.clone()
         };
-        // a busy, b on battery, c idle, d not read, e idle.
+        // a busy, b on battery, c idle, d not reached, e idle, f without the plugin.
         let states: BTreeMap<&str, HostCapacity> = [
             ("a", busy),
             ("b", on_battery),
@@ -471,13 +491,13 @@ mod tests {
         let cases = [
             (
                 HostOrder::IdleFirst,
-                ["c", "e", "a"],
-                [("b", "on_battery"), ("d", "unknown_state")],
+                ["c", "e", "a", "d"],
+                [("b", "on_battery"), ("f", "unknown_state")],
             ),
             (
                 HostOrder::Configured,
-                ["a", "c", "e"],
-                [("b", "on_battery"), ("d", "unknown_state")],
+                ["a", "c", "d", "e"],
+                [("b", "on_battery"), ("f", "unknown_state")],
             ),
         ];
         for (order, eligible, refused) in cases {
@@ -487,7 +507,7 @@ mod tests {
                 refused: refused.map(|(host, rule)| (host.to_owned(), rule)).to_vec(),
             };
             let mut verdicts = HostVerdicts::new();
-            let failures = HostFailures::new();
+            let mut failures = HostFailures::new();
             let mut reads = Vec::new();
             for pass_resolve in 0..2 {
                 let result = state_hosts(
@@ -496,11 +516,14 @@ mod tests {
                     NOW,
                     &cancel,
                     &mut verdicts,
-                    &failures,
+                    &mut failures,
                     |host| {
                         reads.push(host.to_owned());
                         ready(match states.get(host) {
                             Some(state) => Ok(state.clone()),
+                            None if host == "f" => {
+                                Err(Error::workflow("host_state_unavailable", false, None))
+                            }
                             None => Err(Error::workflow("pohunek_request_failed", false, None)),
                         })
                     },
@@ -509,6 +532,13 @@ mod tests {
                 assert_eq!(result.ok(), Some(want.clone()), "{order:?} {pass_resolve}");
             }
             assert_eq!(reads, hosts, "{order:?}: each host is read once per pass");
+            let failed: Vec<&String> = failures.keys().collect();
+            assert_eq!(
+                failed,
+                ["d"],
+                "{order:?}: a read that fails as a call is a host failure"
+            );
+            assert_eq!(failures["d"].code, "pohunek_request_failed", "{order:?}");
         }
         let mut failures = HostFailures::new();
         failures.insert(
@@ -525,7 +555,7 @@ mod tests {
             NOW,
             &cancel,
             &mut HostVerdicts::new(),
-            &failures,
+            &mut failures,
             |host| {
                 reads.push(host.to_owned());
                 ready(Ok(states["b"].clone()))
@@ -546,7 +576,7 @@ mod tests {
             NOW,
             &cancel,
             &mut verdicts,
-            &HostFailures::new(),
+            &mut HostFailures::new(),
             |_| ready(Err(Error::workflow("pohunek_request_failed", false, None))),
         )
         .await;

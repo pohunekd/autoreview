@@ -73,11 +73,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the pohunek host and project that run the reviews of `repository`.
     ///
     /// With host-state rules, a repository without a route override tries only the hosts the
-    /// rules allow, in their order; each refused host logs one WARN line.
+    /// rules allow, in their order, and asks the refused hosts only when none of them serves
+    /// the repository; each refused host logs one WARN line.
     ///
     /// # Errors
     ///
-    /// Returns the errors of [`state_hosts`] and [`search_route`].
+    /// Returns the errors of [`state_hosts`] and [`search_state_route`].
     pub(crate) async fn resolve_route(
         &self,
         cancel: &CancellationToken,
@@ -87,7 +88,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ) -> Result<ProjectRoute, Error> {
         let configured = &self.config.pohunek_hosts;
         let rules = self.config.host_state.as_ref();
-        let (hosts, held_back) = match rules {
+        let (hosts, refused) = match rules {
             Some(rules) if !self.config.route_overrides.contains_key(repository) => {
                 let checked = state_hosts(
                     configured,
@@ -95,7 +96,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     self.clock.wall_now(),
                     cancel,
                     &mut pass.verdicts,
-                    &pass.failures,
+                    &mut pass.failures,
                     |host| self.integration.host_capacity(cancel, host),
                 )
                 .await?;
@@ -108,17 +109,18 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                         "review host skipped"
                     );
                 }
-                (checked.eligible, !checked.refused.is_empty())
+                let refused = checked.refused.into_iter().map(|(host, _)| host).collect();
+                (checked.eligible, refused)
             }
-            _ => (configured.clone(), false),
+            _ => (configured.clone(), Vec::new()),
         };
-        search_route(
+        search_state_route(
             &hosts,
+            &refused,
             &self.config.route_overrides,
             repository,
             cancel,
             pass,
-            held_back,
             |host| {
                 self.integration
                     .host_routes(cancel, host, repository, sources)
@@ -190,15 +192,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 ///
 /// `list` returns the routes of one host. A host in the pass's failures is skipped without a
 /// call; a host whose call fails is skipped and added to them, and a host whose call succeeds is
-/// added to the pass's answers. Every skip logs one WARN line. `held_back` says that the
-/// host-state rules took hosts out of `hosts`.
+/// added to the pass's answers. Every skip logs one WARN line.
 ///
 /// # Errors
 ///
 /// When no later host serves the repository, returns the first skipped host's failure whose
 /// code the scheduler retries, else the first skipped host's failure; returns
-/// `host_state_ineligible` when every host asked answered, none serves it and hosts were held
-/// back, `project_route_not_found` when every host answered and none serves it,
+/// `project_route_not_found` when every host answered and none serves it,
 /// `project_route_ambiguous` when two projects of the chosen host serve it, and the error of
 /// `list` at once when `cancel` is cancelled.
 pub(crate) async fn search_route<'a, F, Fut>(
@@ -207,7 +207,6 @@ pub(crate) async fn search_route<'a, F, Fut>(
     repository: &str,
     cancel: &CancellationToken,
     pass: &mut HostPass,
-    held_back: bool,
     mut list: F,
 ) -> Result<ProjectRoute, Error>
 where
@@ -256,14 +255,44 @@ where
             return Ok(route);
         }
     }
-    // A held-back host may serve the repository, so the review waits for one instead.
-    Err(first_retryable.or(first_failure).unwrap_or_else(|| {
-        if held_back {
-            Error::workflow(HOST_STATE_INELIGIBLE, false, None)
-        } else {
-            Error::workflow(PROJECT_ROUTE_NOT_FOUND, true, None)
+    Err(first_retryable
+        .or(first_failure)
+        .unwrap_or_else(|| Error::workflow(PROJECT_ROUTE_NOT_FOUND, true, None)))
+}
+
+/// Returns the route of the first allowed host, in order, whose projects serve `repository`.
+///
+/// `hosts` are the hosts that the host-state rules allow and `refused` the hosts they held
+/// back. When no allowed host serves the repository, the refused hosts are asked for their
+/// projects the same way, so a repository that no host serves is not found.
+///
+/// # Errors
+///
+/// Returns `host_state_ineligible` when only a refused host serves `repository`, else the
+/// errors of [`search_route`] over `hosts`, then over `refused` when no allowed host failed.
+pub(crate) async fn search_state_route<'a, F, Fut>(
+    hosts: &'a [String],
+    refused: &'a [String],
+    overrides: &BTreeMap<String, RouteOverride>,
+    repository: &str,
+    cancel: &CancellationToken,
+    pass: &mut HostPass,
+    mut list: F,
+) -> Result<ProjectRoute, Error>
+where
+    F: FnMut(&'a str) -> Fut,
+    Fut: Future<Output = Result<Vec<ProjectRoute>, Error>>,
+{
+    match search_route(hosts, overrides, repository, cancel, pass, &mut list).await {
+        Err(err) if !refused.is_empty() && error_code(&err) == PROJECT_ROUTE_NOT_FOUND => {
+            match search_route(refused, overrides, repository, cancel, pass, &mut list).await {
+                // The review waits until the state of a host that serves it allows it.
+                Ok(_) => Err(Error::workflow(HOST_STATE_INELIGIBLE, false, None)),
+                Err(err) => Err(err),
+            }
         }
-    }))
+        found => found,
+    }
 }
 
 /// Returns the hosts to try, in order: the pinned host alone, or every configured host.
@@ -306,7 +335,7 @@ mod tests {
 
     use autoreview_schedule::scheduler::retryable;
 
-    use super::{HostFailure, HostFailures, HostPass, host_unavailable, search_route};
+    use super::{HostFailure, HostFailures, HostPass, host_unavailable, search_state_route};
     use crate::config::RouteOverride;
     use crate::engine::is_permanent;
     use crate::error::{Error, error_code};
@@ -350,32 +379,34 @@ mod tests {
         failures: &mut HostFailures,
         cancel: &CancellationToken,
     ) -> (Result<ProjectRoute, Error>, Vec<String>) {
-        search_held(hosts, answers, overrides, failures, cancel, false).await
+        search_held(hosts, &[], answers, overrides, failures, cancel).await
     }
 
-    /// Searches as [`search`] does, after the host-state rules held hosts back if `held_back`.
+    /// Searches as [`search`] does, with the hosts that the host-state rules held back.
     async fn search_held(
         hosts: &[&str],
+        refused: &[&str],
         answers: &[(&str, Answer)],
         overrides: &BTreeMap<String, RouteOverride>,
         failures: &mut HostFailures,
         cancel: &CancellationToken,
-        held_back: bool,
     ) -> (Result<ProjectRoute, Error>, Vec<String>) {
-        let hosts: Vec<String> = hosts.iter().map(|host| (*host).to_owned()).collect();
+        let owned =
+            |hosts: &[&str]| -> Vec<String> { hosts.iter().map(|h| (*h).to_owned()).collect() };
+        let (hosts, refused) = (owned(hosts), owned(refused));
         let answers: BTreeMap<&str, Answer> = answers.iter().copied().collect();
         let mut called = Vec::new();
         let mut pass = HostPass {
             failures: std::mem::take(failures),
             ..HostPass::default()
         };
-        let result = search_route(
+        let result = search_state_route(
             &hosts,
+            &refused,
             overrides,
             REPOSITORY,
             cancel,
             &mut pass,
-            held_back,
             |host| {
                 called.push(host.to_owned());
                 let answer = answers.get(host).copied().unwrap_or(Ok(&[]));
@@ -487,31 +518,72 @@ mod tests {
                 );
             }
         }
-        // The host-state rules held hosts back, which may serve the repository.
-        let held: Vec<(&[&str], Answers, Outcome)> = vec![
-            (&["a"], vec![("a", Ok(&["p1"]))], Ok(route("a", "p1"))),
-            (&["a"], vec![], Err("host_state_ineligible".to_owned())),
-            (&[], vec![], Err("host_state_ineligible".to_owned())),
+        // The host-state rules held `r` back: it is asked only when no allowed host serves the
+        // repository, and a repository that no host serves is not found.
+        // (allowed hosts, answers, expected outcome, expected calls)
+        let held: Vec<(&[&str], Answers, Outcome, &[&str])> = vec![
             (
-                &["a", "b"],
-                vec![("a", Err("pohunek_request_timeout"))],
+                &["a"],
+                vec![("a", Ok(&["p1"]))],
+                Ok(route("a", "p1")),
+                &["a"],
+            ),
+            (
+                &["a"],
+                vec![("r", Ok(&["p1"]))],
+                Err("host_state_ineligible".to_owned()),
+                &["a", "r"],
+            ),
+            (
+                &["a"],
+                vec![],
+                Err("project_route_not_found".to_owned()),
+                &["a", "r"],
+            ),
+            (
+                &[],
+                vec![("r", Ok(&["p1"]))],
+                Err("host_state_ineligible".to_owned()),
+                &["r"],
+            ),
+            (
+                &[],
+                vec![],
+                Err("project_route_not_found".to_owned()),
+                &["r"],
+            ),
+            (
+                &["a"],
+                vec![("a", Err("pohunek_request_timeout")), ("r", Ok(&["p1"]))],
                 Err("pohunek_request_timeout".to_owned()),
+                &["a"],
             ),
             (
                 &["a"],
                 vec![("a", Ok(&["p1", "p2"]))],
                 Err("project_route_ambiguous".to_owned()),
+                &["a"],
+            ),
+            (
+                &["a"],
+                vec![("r", Err("pohunek_request_failed"))],
+                Err("pohunek_request_failed".to_owned()),
+                &["a", "r"],
+            ),
+            (
+                &["a"],
+                vec![("r", Ok(&["p1", "p2"]))],
+                Err("project_route_ambiguous".to_owned()),
+                &["a", "r"],
             ),
         ];
-        for (hosts, answers, want) in held {
+        for (hosts, answers, want, want_called) in held {
             let mut failures = HostFailures::new();
-            let (result, _) =
-                search_held(hosts, &answers, &none, &mut failures, &cancel, true).await;
-            assert_eq!(
-                outcome(&result),
-                want,
-                "held back: hosts={hosts:?} {answers:?}"
-            );
+            let (result, called) =
+                search_held(hosts, &["r"], &answers, &none, &mut failures, &cancel).await;
+            let case = format!("held back: hosts={hosts:?} {answers:?}");
+            assert_eq!(outcome(&result), want, "{case}");
+            assert_eq!(called, want_called, "{case}");
         }
     }
 

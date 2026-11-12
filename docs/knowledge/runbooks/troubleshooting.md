@@ -124,11 +124,14 @@ the `pohunek.timeout_seconds` value. See
 [waiting for a review host](../concepts/state-and-recovery.md#waiting-for-a-review-host).
 
 With `pohunek.host_state`, a host that a rule refuses is logged as
-`review host skipped` with `host_state_ineligible` and the `rule`, and is not asked
-for its projects. When no allowed host has the repository, the review waits with
-`host_state_ineligible` instead of failing with `project_route_not_found`; the
-wait is not announced. A `review host state unknown` warning means that the
-host's `moc.host-state` state could not be read or was too old. See
+`review host skipped` with `host_state_ineligible` and the `rule`. It is asked
+for its projects only when no allowed host has the repository; when it has the
+repository, the review waits with `host_state_ineligible` and the wait is not
+announced. A `review host state unknown` warning means that the host's daemon
+could not run the `moc.host-state` command, or that its state did not read or
+was too far from now, either way. A `review host state not read` warning means
+that the read failed as a pohunek call: the host counts as failed and its outage
+is announced as above. See
 [choose a host by its state](../guides/multihost.md#choose-a-host-by-its-state).
 
 ### project_route_ambiguous

@@ -17,13 +17,15 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::Config;
 use autoreview_engine::error::BoxError;
-use autoreview_engine::model::{HostCapacity, ProjectRoute, repository_valid};
+use autoreview_engine::model::{
+    HOST_STATE_UNAVAILABLE, HostCapacity, ProjectRoute, repository_valid,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{child_environment, run};
+use crate::process::{ProcessError, child_environment, run};
 
 /// Variable that points the pohunek child at the state home.
 const STATE_HOME_VARIABLE: &str = "XDG_STATE_HOME";
@@ -42,6 +44,12 @@ const HOST_STATE_PACKAGE: &str = "moc.host-state";
 
 /// Command of the `moc.host-state` plugin that prints one `HostCapacity` document.
 const HOST_STATE_COMMAND: &str = "host-state";
+
+/// Text before the code of a daemon error on the stderr of the pohunek CLI.
+const DAEMON_ERROR_MARKER: &str = "daemon error: ";
+
+/// Prefix of the daemon codes of a package command that did not run.
+const COMMAND_CODE_PREFIX: &str = "command_";
 
 /// Field names of the pohunek JSON, in lower case; a key that only differs in case is refused.
 const KNOWN_KEYS: [&str; 30] = [
@@ -399,14 +407,59 @@ fn host_state_arguments(host: &str) -> Vec<String> {
 
 /// Returns the state that the `moc.host-state` plugin reports for `host`.
 ///
-/// One `host command run` call; its standard output is the document.
+/// One `host command run` call; its standard output is the document. A daemon that answers
+/// with a `command_*` code (the plugin is not installed, the command is unsupported, not
+/// exposed or busy) gives `host_state_unavailable`: the host answers, its state is unknown.
+/// Any other failure is the pohunek failure of the call, as for a project list.
 pub(crate) async fn host_capacity(
     config: &Config,
     cancel: &CancellationToken,
     host: &str,
 ) -> Result<HostCapacity, Error> {
-    let output = pohunek_call(config, cancel, &host_state_arguments(host)).await?;
-    HostCapacity::parse(&output)
+    let environment = pohunek_environment(config, std::env::vars_os());
+    let arguments = host_state_arguments(host);
+    match run(
+        cancel,
+        &config.pohunek_bin,
+        &arguments,
+        &[],
+        &environment,
+        config.pohunek_timeout,
+    )
+    .await
+    {
+        Ok(output) => HostCapacity::parse(&output),
+        Err(error) => {
+            let command = match &error {
+                ProcessError::Exit { stderr, .. } if !cancel.is_cancelled() => {
+                    daemon_command_code(stderr)
+                }
+                _ => None,
+            };
+            match command {
+                Some(code) => Err(Error::workflow(
+                    HOST_STATE_UNAVAILABLE,
+                    false,
+                    Some(Box::new(Error::pohunek_code(code, Box::new(error)))),
+                )),
+                None => {
+                    let output = error.stdout().to_owned();
+                    Err(pohunek_failure(&output, Box::new(error)))
+                }
+            }
+        }
+    }
+}
+
+/// Returns the `command_*` code of a daemon error that the CLI printed on stderr.
+///
+/// The CLI prints `pohunek: daemon error: <area>/<code>: <text>` without `--json`. Returns `None`
+/// when the text holds no daemon error or when its code is not a `command_*` error code.
+fn daemon_command_code(stderr: &str) -> Option<String> {
+    let (_, rest) = stderr.split_once(DAEMON_ERROR_MARKER)?;
+    let qualified = rest.split([':', ' ', '\n']).next()?;
+    let code = qualified.rsplit('/').next()?.trim();
+    (code.starts_with(COMMAND_CODE_PREFIX) && is_error_code(code)).then(|| code.to_owned())
 }
 
 /// Returns the `owner/name` that a project origin URL names on `host`, or an empty string.
@@ -735,7 +788,7 @@ fn is_error_code(text: &str) -> bool {
 mod tests {
     use std::ffi::OsString;
 
-    use super::local_environment;
+    use super::{daemon_command_code, local_environment};
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items
@@ -769,5 +822,45 @@ mod tests {
                 ("PAGER", "cat"),
             ])
         );
+    }
+
+    #[test]
+    fn only_a_command_code_of_the_daemon_leaves_the_host_state_unknown() {
+        // (stderr of a failed `host command run`, expected code)
+        let cases = [
+            (
+                "pohunek: daemon error: runtime/command_package_not_installed: the package is \
+                 not installed\nhint: run pohunek plugin enable",
+                Some("command_package_not_installed"),
+            ),
+            (
+                "pohunek: daemon error: command_unsupported: the daemon has no command.run",
+                Some("command_unsupported"),
+            ),
+            (
+                "pohunek: daemon error: runtime/command_busy: one run per command",
+                Some("command_busy"),
+            ),
+            (
+                "pohunek: host 'review-host-b' was not found in any configured overlay\nhint: x",
+                None,
+            ),
+            (
+                "pohunek: daemon error: overlay/peer_unreachable: no route",
+                None,
+            ),
+            (
+                "pohunek: daemon error: runtime/Command_Busy: mixed case",
+                None,
+            ),
+            (
+                "pohunek: daemon error: runtime/command_busy",
+                Some("command_busy"),
+            ),
+            ("", None),
+        ];
+        for (stderr, want) in cases {
+            assert_eq!(daemon_command_code(stderr).as_deref(), want, "{stderr:?}");
+        }
     }
 }
