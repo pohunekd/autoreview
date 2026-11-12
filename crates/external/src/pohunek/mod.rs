@@ -1,8 +1,8 @@
 //! The pohunek CLI calls of the engine: project routing, the session list and the session start.
 //!
 //! Mirrors `cmd/autoreview/pohunek.go:1-252`. Every call is an argv list, never a shell. The child
-//! gets the cleaned environment of [`crate::process::child_environment`] and its own state and
-//! runtime paths; a [`local_pohunek_json`] child keeps the caller's paths instead.
+//! gets the [`POHUNEK_INHERITED`] variables of the engine and its own state and runtime paths;
+//! a [`local_pohunek_json`] child keeps the caller's paths instead.
 
 // Rust guideline compliant 2026-06-26
 
@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{ProcessError, child_environment, run};
+use crate::process::{POHUNEK_INHERITED, ProcessError, child_environment, run};
 
 /// Variable that points the pohunek child at the state home.
 const STATE_HOME_VARIABLE: &str = "XDG_STATE_HOME";
@@ -134,14 +134,15 @@ struct FailureDetail {
 
 autoreview_go_compat::object_only_serde!(FailureDetail);
 
-/// Returns the environment of a pohunek child: the engine's variables without the pohunek session
-/// identity and the secrets, then the state, runtime and pager settings.
+/// Returns the environment of a pohunek child: the engine's [`POHUNEK_INHERITED`] variables
+/// without the secrets, then the configured state and runtime paths and the pager setting.
 pub(crate) fn pohunek_environment(
     config: &Config,
     parent: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Vec<(OsString, OsString)> {
     child_environment(
         parent,
+        &POHUNEK_INHERITED,
         &config.secret_variables,
         [
             (
@@ -159,15 +160,16 @@ pub(crate) fn pohunek_environment(
 
 /// Returns the environment of a pohunek child that reaches the caller's own daemon.
 ///
-/// It is `parent` without the pohunek session identity, the token variables and every
-/// `AUTOREVIEW_` variable, then the pager setting. Every `*_env` key of the configuration names
-/// an `AUTOREVIEW_` variable, so no configuration is needed to drop the secrets. The state and
-/// runtime directories stay the caller's.
+/// It is the [`POHUNEK_INHERITED`] variables of `parent` without the `AUTOREVIEW_` variables,
+/// then the pager setting. Every `*_env` key of the configuration names an `AUTOREVIEW_`
+/// variable, so no configuration is needed to drop the secrets. The state and runtime
+/// directories stay the caller's.
 pub(crate) fn local_environment(
     parent: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Vec<(OsString, OsString)> {
     child_environment(
         parent,
+        &POHUNEK_INHERITED,
         &BTreeSet::new(),
         [(OsString::from(PAGER_VARIABLE), OsString::from(PAGER_VALUE))],
     )
@@ -808,17 +810,18 @@ mod tests {
             ("GH_TOKEN", "synthetic-gh"),
             ("MATRIX_ACCESS_TOKEN", "synthetic-matrix"),
             ("AUTOREVIEW_GH_TOKEN", "synthetic-autoreview"),
+            ("SHARED_TOOL_TOKEN", "synthetic-shared"),
+            ("GITHUB_TOKEN", "synthetic-github"),
+            ("HTTPS_PROXY", "http://proxy.example:3128"),
             ("PAGER", "less"),
         ]);
 
-        // The child sees the last of two equal names, so `PAGER=cat` wins.
         assert_eq!(
             local_environment(parent),
             pairs(&[
                 ("PATH", "/usr/bin"),
                 ("XDG_STATE_HOME", "/home/operator/.local/state"),
                 ("XDG_RUNTIME_DIR", "/run/user/1000"),
-                ("PAGER", "less"),
                 ("PAGER", "cat"),
             ])
         );

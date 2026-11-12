@@ -151,9 +151,10 @@ A Codex flag with `--agent claude`, or a missing one with `--agent codex`, is
 
 It calls the `pohunek` found on `PATH` for the host check, once when `--host`
 is `local` and twice otherwise, and once for `pohunek plugin list --json`. Each
-call runs as the engine's pohunek calls run: with `PAGER=cat`, without the
-pohunek session identity, `GH_TOKEN`, `MATRIX_ACCESS_TOKEN` and every
-`AUTOREVIEW_` variable, and killed after `--pohunek-timeout-seconds`. It keeps
+call runs as the engine's pohunek calls run: with `PAGER=cat`, with only the
+variables a pohunek child inherits (see
+[secrets](knowledge/safety/secrets.md#what-child-processes-receive)), and killed
+after `--pohunek-timeout-seconds`. It keeps
 the caller's `XDG_STATE_HOME` and `XDG_RUNTIME_DIR`, so it reaches the daemon of
 the user who runs it. The
 base runtime must be served by exactly one official package that is enabled,

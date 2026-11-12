@@ -1,7 +1,7 @@
 //! The `gh` CLI calls of the engine and the decoding of their JSON output.
 //!
 //! Mirrors `cmd/autoreview/github.go:1-326`. Every call is an argv list, never a shell, and the
-//! child gets a cleaned environment that carries the GitHub token.
+//! child gets the [`GH_INHERITED`] variables of the engine and the GitHub token.
 
 // Rust guideline compliant 2026-06-26
 
@@ -24,7 +24,7 @@ use serde::Serialize;
 use serde::de::IgnoredAny;
 use tokio_util::sync::CancellationToken;
 
-use crate::process::{child_environment, run};
+use crate::process::{GH_INHERITED, child_environment, run};
 
 /// Fields of a pull request in the GraphQL selection, in Go's order.
 const PULL_REQUEST_FIELDS: &str = concat!(
@@ -144,7 +144,12 @@ impl GitHub {
                 .iter()
                 .map(|(name, value)| (OsString::from(*name), OsString::from(*value))),
         );
-        let environment = child_environment(std::env::vars_os(), &self.secret_variables, extra);
+        let environment = child_environment(
+            std::env::vars_os(),
+            &GH_INHERITED,
+            &self.secret_variables,
+            extra,
+        );
         let output = run(
             cancel,
             &self.binary,

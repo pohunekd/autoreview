@@ -131,6 +131,11 @@ backend secrets), write the values in an editor, and never on a command line. Se
 sudo install -m 0600 -o root -g root /dev/null /etc/autoreview/autoreview.env
 ```
 
+The `gh` and `pohunek` processes that autoreview starts inherit only the
+variables listed in [secrets](knowledge/safety/secrets.md#what-child-processes-receive);
+any other variable of the unit, such as a token of another tool, stays with
+autoreview.
+
 Both units set `RuntimeDirectoryPreserve=yes`, so the hourly oneshot cannot remove `/run/autoreview` while `serve` runs.
 
 `/etc/systemd/system/autoreview.service`:

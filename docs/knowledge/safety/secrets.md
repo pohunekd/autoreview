@@ -30,10 +30,31 @@ Each `gh` child gets the token as `GH_TOKEN` in its own
 environment, and no other process that autoreview starts receives a GitHub token.
 
 Every name in an `*_env` key, including `token_env`, must start with `AUTOREVIEW_`.
-The `gh` and `pohunek` processes that autoreview starts inherit no variable that
-starts with `AUTOREVIEW_` or that an `*_env` key names, no `GH_TOKEN` or
-`MATRIX_ACCESS_TOKEN`, and no pohunek session identity variables. The `gh` child
-gets the token set explicitly as `GH_TOKEN`.
+
+## What child processes receive
+
+The `gh` and `pohunek` processes that autoreview starts inherit only the
+variables of an allowlist from the service's environment, never one that starts
+with `AUTOREVIEW_` or that an `*_env` key names:
+
+- `gh`: `PATH`, `HOME`, `TMPDIR`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
+  `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `GH_CONFIG_DIR`, the proxy variables
+  `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` (upper or lower case),
+  `SSL_CERT_FILE`, `SSL_CERT_DIR`, `GH_TELEMETRY` and `DO_NOT_TRACK`.
+  autoreview sets `GH_TOKEN` to the credential's token, `GH_PAGER=cat` and
+  `GH_PROMPT_DISABLED=1`.
+- `pohunek`: `PATH`, `HOME`, `TMPDIR`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`,
+  `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_RUNTIME_DIR` and
+  `POHUNEK_REMOTE_PORT`. autoreview sets `PAGER=cat`; the engine's calls also get
+  `XDG_STATE_HOME` and `XDG_RUNTIME_DIR` from `pohunek.state_home` and
+  `pohunek.runtime_dir`.
+
+No other variable reaches a child: not a token of another tool in a shared
+environment file, not `GITHUB_TOKEN`, `GH_HOST` or `GH_DEBUG`, and not the pohunek
+session identity variables. A variable that gh or pohunek needs and that is not
+on the list makes its call fail: `serve` refuses to start when its first `gh`
+call, the token's login, fails, and a failed pohunek call fails as
+`pohunek_request_failed`, with the CLI's error output as its cause, and is retried.
 
 The review agents are started by the pohunek daemon, not by autoreview, and run
 with the daemon's environment, which autoreview does not control. Keep secrets
