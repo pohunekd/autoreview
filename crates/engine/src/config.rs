@@ -116,6 +116,45 @@ pub struct RouteOverride {
     pub project_id: String,
 }
 
+/// What the host-state rules do with a host in one state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostStateChoice {
+    /// The host is not asked for the review.
+    Skip,
+    /// The host may run the review.
+    Eligible,
+}
+
+/// The order of the eligible review hosts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostOrder {
+    /// Idle hosts first, each group in the order of `pohunek.hosts`.
+    IdleFirst,
+    /// The order of `pohunek.hosts`.
+    Configured,
+}
+
+/// The rules that pick review hosts by the state that `moc.host-state` reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostStateRules {
+    /// Largest distance of a state's timestamp from now; a state further off is unknown.
+    pub max_age: Duration,
+    /// What happens to a host whose state is unknown.
+    pub unknown_state: HostStateChoice,
+    /// The order of the eligible hosts.
+    pub order: HostOrder,
+    /// What happens to a host that runs on battery.
+    pub on_battery: HostStateChoice,
+    /// Lowest battery charge of a host on battery, in percent; 0 sets no limit.
+    pub min_battery_percent: u8,
+    /// Least free memory of a host, in MB; 0 sets no limit.
+    pub min_free_memory_mb: u64,
+    /// Local models that a host must serve; empty sets no requirement.
+    pub required_models: Vec<String>,
+    /// What happens to a host outside its policy window.
+    pub outside_window: HostStateChoice,
+}
+
 /// The Matrix rooms of each level and of each event with its own route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatrixRooms {
@@ -168,6 +207,8 @@ pub struct Config {
     pub pohunek_hosts: Vec<String>,
     /// Routing overrides keyed by repository.
     pub route_overrides: BTreeMap<String, RouteOverride>,
+    /// The host-state rules, or `None` when hosts are tried in configured order only.
+    pub host_state: Option<HostStateRules>,
     /// The Matrix homeserver URL; HTTPS, or plain HTTP on the loopback address.
     pub matrix_homeserver_url: String,
     /// The Matrix access token; it never appears in debug output.
@@ -1041,6 +1082,7 @@ mod tests {
             pohunek_runtime: "/run/pohunek".to_owned(),
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
+            host_state: None,
             matrix_homeserver_url: "https://matrix.example.org".to_owned(),
             matrix_access_token: "placeholder-token".to_owned(),
             secret_variables: std::collections::BTreeSet::new(),

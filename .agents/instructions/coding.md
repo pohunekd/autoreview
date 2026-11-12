@@ -237,7 +237,16 @@ What is not compatible, by decision:
   `project_route_ambiguous` (`pohunek.go:85-125`). The route is stored in the
   review input as in Go. The tests are
   `hosts_are_tried_in_order_and_a_failing_host_is_skipped` and
-  `failing_first_host_is_skipped_and_the_review_runs_on_the_second`.
+  `failing_first_host_is_skipped_and_the_review_runs_on_the_second`. With
+  `pohunek.host_state` (Rust only) the hosts of a repository without a route
+  override are first filtered and ordered by their `moc.host-state` state
+  (`discovery::host_state`); when no allowed host serves the repository, the
+  held-back hosts are asked, and a route that only they serve waits for a host
+  as `host_state_ineligible`. A state read that fails as a pohunek call is a host
+  failure of the pass; a daemon `command_*` answer is an unknown state. The
+  tests are `host_state_rules_judge_each_state`,
+  `hosts_are_ordered_idle_first_and_each_state_is_read_once_per_pass` and
+  `only_a_command_code_of_the_daemon_leaves_the_host_state_unknown`.
 - **Reserved finding prefix:** a reviewer whose `finding_prefix` is `P` is refused
   when the policy is parsed, with the message `reviewer <id>: finding_prefix P is
   reserved for republished findings`. `P` numbers the prior findings published

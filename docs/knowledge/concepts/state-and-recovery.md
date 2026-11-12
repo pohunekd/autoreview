@@ -161,6 +161,14 @@ host's outage ends on the first pass in which that host answers; its next
 outage, or an outage of another host while a review still waits, is announced
 again.
 
+A review also waits when the
+[`pohunek.host_state`](../../configuration.md#pohunekhost_state) rules held back
+the only hosts that have the repository, with the code `host_state_ineligible`.
+That wait is no outage: it is not announced, and it ends on the first pass in
+which the state of a host that has the repository allows it. A host whose state
+read fails as a pohunek call is a failed host, and its outage is announced as
+above.
+
 A due review asks its hosts in order until one serves the repository. When no
 due review asked a host with a stored outage in a pass, the end of that pass asks the host once for its project
 list, so a host that recovers while no review waits ends its outage, and its

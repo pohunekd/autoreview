@@ -11,14 +11,18 @@ use std::time::{Duration, Instant};
 
 use autoreview_policy::{Event, Level};
 use serde_json::json;
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::NotifyRoute;
+use crate::config::{HostOrder, HostStateChoice, HostStateRules, NotifyRoute};
 use crate::engine::{Engine, SystemClock};
 use crate::error::{Error, error_code};
 use crate::integrations::SessionRequest;
 use crate::model::review::Decision;
-use crate::model::{PullRequest, RejectedCandidate};
+use crate::model::{
+    HostCapacity, HostCpu, HostGpu, HostMemory, HostModels, HostPolicy, HostWindow, PullRequest,
+    RejectedCandidate,
+};
 use crate::protocol::fixtures::sha;
 use crate::review::input::NOTIFY_STEP_PREFIX;
 use crate::testing::fake::{INTEGRATION_POLICY, count_notes, reviewer_output};
@@ -527,29 +531,94 @@ async fn event_routes_carry_their_events_and_the_rest_keep_their_levels() {
 }
 
 // A review host that fails is skipped: the review runs on the next host of `pohunek.hosts`
-// (#180).
+// (#180). With host-state rules the idle host is tried first and a host on battery is never
+// asked for its projects.
 #[tokio::test]
 async fn failing_first_host_is_skipped_and_the_review_runs_on_the_second() {
     let mut h = start_harness(|cfg| {
-        cfg.pohunek_hosts = vec!["host-a".to_owned(), "host-b".to_owned()];
+        cfg.pohunek_hosts = ["host-a", "host-b", "host-c"].map(str::to_owned).to_vec();
+        cfg.host_state = Some(HostStateRules {
+            max_age: Duration::from_secs(120),
+            unknown_state: HostStateChoice::Skip,
+            order: HostOrder::IdleFirst,
+            on_battery: HostStateChoice::Skip,
+            min_battery_percent: 0,
+            min_free_memory_mb: 0,
+            required_models: Vec::new(),
+            outside_window: HostStateChoice::Skip,
+        });
     })
     .await;
-    h.fake
-        .lock()
-        .host_fail
-        .insert("host-a".to_owned(), "pohunek_request_timeout".to_owned());
+    // The fake stamps each state with the current time.
+    let state = |idle, ac_power| HostCapacity {
+        schema_version: "v1".to_owned(),
+        host_alias: "host".to_owned(),
+        timestamp: OffsetDateTime::UNIX_EPOCH,
+        idle,
+        idle_reason: "test".to_owned(),
+        seconds_since_input: 0,
+        ac_power,
+        battery_percent: None,
+        cpu: HostCpu {
+            cores: 1,
+            load1m: 0.0,
+        },
+        memory: HostMemory {
+            total_mb: 1,
+            free_mb: 1,
+        },
+        gpu: HostGpu {
+            present: false,
+            name: None,
+            free_mb: None,
+        },
+        local_models: HostModels {
+            reachable: false,
+            models: Vec::new(),
+        },
+        policy: HostPolicy {
+            allowed_window: HostWindow {
+                start: "00:00".to_owned(),
+                end: "00:00".to_owned(),
+            },
+            inside_window: true,
+            max_concurrent_agents: 1,
+        },
+    };
+    {
+        let mut fake = h.fake.lock();
+        fake.capacities
+            .insert("host-a".to_owned(), state(false, true));
+        fake.capacities
+            .insert("host-b".to_owned(), state(true, true));
+        fake.capacities
+            .insert("host-c".to_owned(), state(true, false));
+        fake.host_fail
+            .insert("host-b".to_owned(), "pohunek_request_timeout".to_owned());
+    }
     let pr = integration_pull_request("acme/widget", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the review on the second host", || h.publications() == 1)
         .await;
     let (_, _, started, _) = h.fake.snapshot();
-    let queries = h.fake.lock().route_queries.clone();
+    let (queries, states) = {
+        let fake = h.fake.lock();
+        (fake.route_queries.clone(), fake.capacity_queries.clone())
+    };
     assert!(
-        queries.starts_with(&["host-a".to_owned(), "host-b".to_owned()]),
+        queries.starts_with(&["host-b".to_owned(), "host-a".to_owned()]),
         "route queries = {queries:?}"
     );
     assert!(
-        !started.is_empty() && started.iter().all(|request| request.route.host == "host-b"),
+        !queries.iter().any(|host| host == "host-c"),
+        "the host on battery is never asked: {queries:?}"
+    );
+    assert!(
+        states.starts_with(&["host-a", "host-b", "host-c"].map(str::to_owned)),
+        "state reads = {states:?}"
+    );
+    assert!(
+        !started.is_empty() && started.iter().all(|request| request.route.host == "host-a"),
         "session hosts = {:?}",
         started
             .iter()

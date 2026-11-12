@@ -21,6 +21,7 @@ use crate::store::DiscoveryState;
 
 pub(crate) mod authors;
 pub(crate) mod commands;
+pub(crate) mod host_state;
 pub(crate) mod plan;
 pub(crate) mod poll;
 pub(crate) mod records;

@@ -235,6 +235,57 @@ answers (see
 A `route_overrides` entry asks only its host.
 See [run on several hosts](knowledge/guides/multihost.md).
 
+### pohunek.host_state
+
+Optional. Without it the hosts are tried in the order of `hosts` and no host
+state is read. With it, a repository without a `route_overrides` entry tries only
+the hosts whose state the rules allow, in the order the rules set. The state is
+the `HostCapacity` document of the `moc.host-state` pohunek plugin, read once per
+host and discovery pass with `pohunek host command run HOST moc.host-state
+host-state`; each review host needs a pohunek daemon that runs package commands
+(0.38.1 or later) with the plugin enabled and selected. Every key is required
+when the section is present; `host_state:` without a value is refused with
+`configuration_missing: pohunek.host_state.max_age_seconds`.
+
+| Key | Meaning |
+|---|---|
+| `max_age_seconds` | Largest distance of the state's `timestamp` from now, either way; a state further off is unknown. Positive |
+| `unknown_state` | `skip` or `eligible`: a host whose daemon answers but cannot run the plugin's command (`host_state_unavailable`), whose state does not read as `HostCapacity` v1 (`host_state_invalid`), or whose timestamp is too far from now, either way (`host_state_stale`) |
+| `order` | `idle_first`: hosts that report `idle` first, each group in the order of `hosts`; `configured`: the order of `hosts` |
+| `on_battery` | `skip` or `eligible`: a host that runs on battery |
+| `min_battery_percent` | Lowest battery charge of a host on battery, from 0 to 100; `0` sets no limit |
+| `min_free_memory_mb` | Least free memory, in MB; `0` sets no limit |
+| `required_models` | Local models that a host must serve, with its model server reachable; `[]` sets no requirement |
+| `outside_window` | `skip` or `eligible`: a host outside the policy window of its plugin configuration |
+
+```yaml
+pohunek:
+  hosts: [review-host-a, review-host-b]
+  route_overrides: {}
+  host_state:
+    max_age_seconds: 120
+    unknown_state: skip
+    order: idle_first
+    on_battery: skip
+    min_battery_percent: 0
+    min_free_memory_mb: 8192
+    required_models: []
+    outside_window: skip
+```
+
+A host whose state is unknown logs `review host state unknown` at WARN with the
+code. A state read that fails as a pohunek call (the host does not answer, a
+timeout, a daemon error other than a `command_*` code) logs
+`review host state not read` and counts as a failed host of the pass, as a
+failed project list does: the review waits for a review host and the outage is
+announced. A host that a rule refuses logs `review host skipped` with
+`error_code` `host_state_ineligible` and the `rule` (the key, or
+`unknown_state`). It is asked for its projects only when no allowed host has the
+repository: when a refused host has it, the review waits for a review host with
+`host_state_ineligible`; when no host has it, the review fails with
+`project_route_not_found` as without the section. A pinned repository is never
+filtered by state.
+
 ## session
 
 How reviewer sessions are named, started, read and cleaned up.

@@ -302,6 +302,7 @@ pub(crate) mod tests {
             pohunek_runtime: "/run/pohunek".to_owned(),
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
+            host_state: None,
             matrix_homeserver_url: "https://matrix.example.org".to_owned(),
             matrix_access_token: "placeholder-token".to_owned(),
             secret_variables: std::collections::BTreeSet::new(),
