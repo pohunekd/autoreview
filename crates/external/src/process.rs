@@ -445,7 +445,11 @@ mod tests {
                 .iter()
                 .map(|(name, _)| name.to_string_lossy().into_owned())
                 .collect();
-            assert_eq!(seen, built, "the child of allowlist {inherited:?}");
+            let differing = seen.symmetric_difference(&built).count();
+            assert_eq!(
+                differing, 0,
+                "names that differ in the child of {inherited:?}"
+            );
         }
     }
 

@@ -218,25 +218,31 @@ fn harmless_as_text(text: &str) -> bool {
 /// Reports whether the character at `index` starts a reference to another repository, which
 /// GitHub links and records in that repository's timeline.
 ///
-/// It is a `#` before a digit after a repository name (`owner/name#12`, also escaped as
-/// `owner/name\#12`), or a `/` before a letter or digit after an issue, pull request or
-/// discussion segment (`owner/name/issues/12`, also inside a URL). A `#12` after a space or a
-/// bracket stays a reference to the reviewed repository.
+/// It is a `#` before a digit after a repository name (`owner/name#12`), or a `/` before a
+/// letter or digit after an issue, pull request or discussion segment
+/// (`owner/name/issues/12`, also inside a URL). The characters before it are read as GitHub
+/// shows them, without the backslashes that escape punctuation (`owner/name/issues\/12`). A
+/// `#12` after a space or a bracket stays a reference to the reviewed repository.
 fn breaks_reference(chars: &[char], index: usize) -> bool {
     let next = chars.get(index + 1);
     match chars.get(index) {
         Some('#') => {
             next.is_some_and(char::is_ascii_digit)
-                && index
-                    .checked_sub(1)
-                    .and_then(|before| chars.get(before))
+                && shown_before(chars, index, 1)
+                    .last()
                     .is_some_and(|c| c.is_ascii_alphanumeric() || "._-/\\".contains(*c))
         }
         Some('/') => {
+            let longest = REFERENCE_SEGMENTS
+                .iter()
+                .map(|s| s.len())
+                .max()
+                .unwrap_or(0);
+            let shown = shown_before(chars, index, longest);
             next.is_some_and(char::is_ascii_alphanumeric)
                 && REFERENCE_SEGMENTS.iter().any(|segment| {
-                    let start = index.saturating_sub(segment.len());
-                    chars.get(start..index).is_some_and(|tail| {
+                    let tail = shown.get(shown.len().saturating_sub(segment.len())..);
+                    tail.is_some_and(|tail| {
                         tail.len() == segment.len()
                             && tail
                                 .iter()
@@ -247,6 +253,31 @@ fn breaks_reference(chars: &[char], index: usize) -> bool {
         }
         _ => false,
     }
+}
+
+/// Returns up to `count` characters that GitHub shows right before `index`, in order.
+///
+/// A backslash before ASCII punctuation is an escape that GitHub drops, unless a backslash
+/// escapes it in turn; it is skipped.
+fn shown_before(chars: &[char], index: usize, count: usize) -> Vec<char> {
+    let mut shown = Vec::with_capacity(count);
+    let mut position = index;
+    while shown.len() < count
+        && let Some(before) = position.checked_sub(1)
+    {
+        position = before;
+        let character = chars.get(before).copied().unwrap_or_default();
+        let escape = character == '\\'
+            && chars
+                .get(before + 1)
+                .is_some_and(char::is_ascii_punctuation)
+            && before.checked_sub(1).and_then(|b| chars.get(b)) != Some(&'\\');
+        if !escape {
+            shown.push(character);
+        }
+    }
+    shown.reverse();
+    shown
 }
 
 /// Counts the run of `character` in `chars` that starts at `start`.
@@ -543,14 +574,30 @@ mod tests {
             ),
             (
                 "reference_to_another_repository",
-                "Fixed in acme/other#12, acme/other\\#12 and PR#12; see #12 and (#13).",
                 concat!(
-                    "Fixed in acme/other#\u{200b}12, acme/other\\#\u{200b}12 and PR#\u{200b}12; ",
-                    "see #12 and (#13)."
+                    "Fixed in acme/other#12, acme/other\\#12, acme\\/other#12 ",
+                    "and PR#12; see #12 and (#13). acme/other/issues\\/12, ",
+                    "acme/other\\/pull\\/12, acme/other/discussions\\/3, ",
+                    "acme/other/issues&#47;12, acme/other/issues&sol;12, ",
+                    "acme/other&#35;12, acme/other&num;12."
                 ),
                 concat!(
-                    "Fixed in acme/other#\u{200b}12, acme/other\\#\u{200b}12 and PR#\u{200b}12; ",
-                    "see #12 and (#13)."
+                    "Fixed in acme/other#\u{200b}12, acme/other\\#\u{200b}12, ",
+                    "acme\\/other#\u{200b}12 and PR#\u{200b}12; see #12 and ",
+                    "(#13). acme/other/issues\\/\u{200b}12, ",
+                    "acme/other\\/pull\\/\u{200b}12, ",
+                    "acme/other/discussions\\/\u{200b}3, ",
+                    "acme/other/issues&amp;#47;12, acme/other/issues&amp;sol;12, ",
+                    "acme/other&amp;#35;12, acme/other&amp;num;12."
+                ),
+                concat!(
+                    "Fixed in acme/other#\u{200b}12, acme/other\\#\u{200b}12, ",
+                    "acme\\/other#\u{200b}12 and PR#\u{200b}12; see #12 and ",
+                    "(#13). acme/other/issues\\/\u{200b}12, ",
+                    "acme/other\\/pull\\/\u{200b}12, ",
+                    "acme/other/discussions\\/\u{200b}3, ",
+                    "acme/other/issues&amp;#47;12, acme/other/issues&amp;sol;12, ",
+                    "acme/other&amp;#35;12, acme/other&amp;num;12."
                 ),
             ),
             (
@@ -563,15 +610,21 @@ mod tests {
                 "issue_url_of_another_repository",
                 concat!(
                     "https://github.com/acme/other/issues/12 and ",
-                    "[it](https://github.com/acme/other/discussions/3)"
+                    "[it](https://github.com/acme/other/discussions/3) and ",
+                    "[x](https://github.com/acme/other/issues\\/12) and ",
+                    "https://github.com/acme/other/pull\\/13"
                 ),
                 concat!(
                     "https://github.com/acme/other/issues/\u{200b}12 and ",
-                    "[it](https://github.com/acme/other/discussions/\u{200b}3)"
+                    "[it](https://github.com/acme/other/discussions/\u{200b}3) ",
+                    "and [x](https://github.com/acme/other/issues\\/\u{200b}12) ",
+                    "and https://github.com/acme/other/pull\\/\u{200b}13"
                 ),
                 concat!(
                     "https://github.com/acme/other/issues/\u{200b}12 and ",
-                    "[it](https://github.com/acme/other/discussions/\u{200b}3)"
+                    "[it](https://github.com/acme/other/discussions/\u{200b}3) ",
+                    "and [x](https://github.com/acme/other/issues\\/\u{200b}12) ",
+                    "and https://github.com/acme/other/pull\\/\u{200b}13"
                 ),
             ),
             (
