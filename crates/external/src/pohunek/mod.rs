@@ -12,6 +12,7 @@ pub(crate) mod sessions;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use autoreview_engine::Error;
@@ -44,6 +45,14 @@ const HOST_STATE_PACKAGE: &str = "moc.host-state";
 
 /// Command of the `moc.host-state` plugin that prints one `HostCapacity` document.
 const HOST_STATE_COMMAND: &str = "host-state";
+
+/// Option of `host command run` that sets the daemon's time limit of the command.
+const TIMEOUT_OPTION: &str = "--timeout-ms";
+
+/// Exit statuses of `host command run` for a `command_*` answer of the daemon.
+///
+/// pohunek 0.38.1 and later: 40 to 51 name one code each, 52 a code that the CLI does not know.
+const COMMAND_EXIT_STATUSES: RangeInclusive<i32> = 40..=52;
 
 /// Text before the code of a daemon error on the stderr of the pohunek CLI.
 const DAEMON_ERROR_MARKER: &str = "daemon error: ";
@@ -391,10 +400,12 @@ pub(crate) async fn host_routes(
     route_candidates(host, &config.github_host, repository, sources, &output)
 }
 
-/// Returns the arguments of the host-state command on `host`.
+/// Returns the arguments of the host-state command on `host`, limited to `timeout`.
 ///
-/// `host command run` names the host itself, so the arguments carry no `--host`.
-fn host_state_arguments(host: &str) -> Vec<String> {
+/// `host command run` names the host itself, so the arguments carry no `--host`. The daemon
+/// stops the command after `timeout` and answers with `command_timed_out`.
+fn host_state_arguments(host: &str, timeout: Duration) -> Vec<String> {
+    let millis = timeout.as_millis().to_string();
     [
         "host",
         "command",
@@ -402,6 +413,8 @@ fn host_state_arguments(host: &str) -> Vec<String> {
         host,
         HOST_STATE_PACKAGE,
         HOST_STATE_COMMAND,
+        TIMEOUT_OPTION,
+        millis.as_str(),
     ]
     .map(str::to_owned)
     .to_vec()
@@ -409,17 +422,19 @@ fn host_state_arguments(host: &str) -> Vec<String> {
 
 /// Returns the state that the `moc.host-state` plugin reports for `host`.
 ///
-/// One `host command run` call; its standard output is the document. A daemon that answers
-/// with a `command_*` code (the plugin is not installed, the command is unsupported, not
-/// exposed or busy) gives `host_state_unavailable`: the host answers, its state is unknown.
-/// Any other failure is the pohunek failure of the call, as for a project list.
+/// One `host command run` call, which the daemon stops after `timeout`; its standard output is
+/// the document. A daemon that answers with a `command_*` code (the plugin is not installed,
+/// the command is unsupported, not exposed, busy or timed out) gives `host_state_unavailable`:
+/// the host answers, its state is unknown. Any other failure is the pohunek failure of the
+/// call, as for a project list.
 pub(crate) async fn host_capacity(
     config: &Config,
     cancel: &CancellationToken,
     host: &str,
+    timeout: Duration,
 ) -> Result<HostCapacity, Error> {
     let environment = pohunek_environment(config, std::env::vars_os());
-    let arguments = host_state_arguments(host);
+    let arguments = host_state_arguments(host, timeout);
     match run(
         cancel,
         &config.pohunek_bin,
@@ -432,18 +447,23 @@ pub(crate) async fn host_capacity(
     {
         Ok(output) => HostCapacity::parse(&output),
         Err(error) => {
-            let command = match &error {
-                ProcessError::Exit { stderr, .. } if !cancel.is_cancelled() => {
-                    daemon_command_code(stderr)
+            // `Some` for a daemon answer, holding the `command_*` code that stderr names.
+            let answer = match &error {
+                ProcessError::Exit { code, stderr, .. }
+                    if !cancel.is_cancelled() && daemon_answered(*code, stderr) =>
+                {
+                    Some(daemon_command_code(stderr))
                 }
                 _ => None,
             };
-            match command {
-                Some(code) => Err(Error::workflow(
-                    HOST_STATE_UNAVAILABLE,
-                    false,
-                    Some(Box::new(Error::pohunek_code(code, Box::new(error)))),
-                )),
+            match answer {
+                Some(command) => {
+                    let cause: BoxError = match command {
+                        Some(code) => Box::new(Error::pohunek_code(code, Box::new(error))),
+                        None => Box::new(error),
+                    };
+                    Err(Error::workflow(HOST_STATE_UNAVAILABLE, false, Some(cause)))
+                }
                 None => {
                     let output = error.stdout().to_owned();
                     Err(pohunek_failure(&output, Box::new(error)))
@@ -451,6 +471,15 @@ pub(crate) async fn host_capacity(
             }
         }
     }
+}
+
+/// Returns whether a failed `host command run` is a `command_*` answer of the daemon.
+///
+/// An exit status from 40 to 52 is one, and so is a `command_*` code on stderr. Exit 1 without
+/// such a code (an unreachable host, a transport error), a usage error and a signal are not.
+fn daemon_answered(code: Option<i32>, stderr: &str) -> bool {
+    code.is_some_and(|code| COMMAND_EXIT_STATUSES.contains(&code))
+        || daemon_command_code(stderr).is_some()
 }
 
 /// Returns the `command_*` code of a daemon error that the CLI printed on stderr.
@@ -790,7 +819,7 @@ fn is_error_code(text: &str) -> bool {
 mod tests {
     use std::ffi::OsString;
 
-    use super::{daemon_command_code, local_environment};
+    use super::{daemon_answered, daemon_command_code, local_environment};
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items
@@ -829,40 +858,77 @@ mod tests {
 
     #[test]
     fn only_a_command_code_of_the_daemon_leaves_the_host_state_unknown() {
-        // (stderr of a failed `host command run`, expected code)
+        // (exit status, stderr of a failed `host command run`, unknown state, expected code)
         let cases = [
             (
+                Some(41),
                 "pohunek: daemon error: runtime/command_package_not_installed: the package is \
                  not installed\nhint: run pohunek plugin enable",
+                true,
                 Some("command_package_not_installed"),
             ),
             (
+                Some(40),
                 "pohunek: daemon error: command_unsupported: the daemon has no command.run",
+                true,
                 Some("command_unsupported"),
             ),
             (
+                Some(46),
                 "pohunek: daemon error: runtime/command_busy: one run per command",
+                true,
                 Some("command_busy"),
             ),
             (
+                Some(48),
+                "pohunek: daemon error: runtime/command_timed_out: the command did not finish \
+                 within its time limit and was stopped\nhint: retry, or raise the timeout",
+                true,
+                Some("command_timed_out"),
+            ),
+            (Some(48), "", true, None),
+            (Some(51), "pohunek: unexpected text", true, None),
+            (Some(52), "", true, None),
+            (
+                Some(1),
                 "pohunek: host 'review-host-b' was not found in any configured overlay\nhint: x",
+                false,
                 None,
             ),
             (
+                Some(1),
                 "pohunek: daemon error: overlay/peer_unreachable: no route",
+                false,
                 None,
             ),
             (
+                Some(1),
                 "pohunek: daemon error: runtime/Command_Busy: mixed case",
+                false,
                 None,
             ),
             (
+                Some(1),
                 "pohunek: daemon error: runtime/command_busy",
+                true,
                 Some("command_busy"),
             ),
-            ("", None),
+            (
+                Some(2),
+                "error: unexpected argument '--timeout-ms' found",
+                false,
+                None,
+            ),
+            (Some(39), "", false, None),
+            (Some(53), "", false, None),
+            (None, "", false, None),
         ];
-        for (stderr, want) in cases {
+        for (status, stderr, unknown, want) in cases {
+            assert_eq!(
+                daemon_answered(status, stderr),
+                unknown,
+                "{status:?} {stderr:?}"
+            );
             assert_eq!(daemon_command_code(stderr).as_deref(), want, "{stderr:?}");
         }
     }

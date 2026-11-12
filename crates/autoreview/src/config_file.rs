@@ -61,6 +61,16 @@ const PORT_MAX: u32 = 65_535;
 const GITHUB_BODY_MAX_BYTES_LIMIT: i64 = 65_536;
 /// Largest value of `pohunek.host_state.min_battery_percent`.
 const BATTERY_PERCENT_MAX: i64 = 100;
+/// Largest command time limit that the pohunek daemon honours, in seconds.
+///
+/// pohunek 0.41.0 lowers a larger `--timeout-ms` to `MAX_COMMAND_TIMEOUT_MS` (60000,
+/// `crates/protocol/src/limits.rs:87`).
+const DAEMON_COMMAND_TIMEOUT_MAX_SECONDS: u64 = 60;
+/// How long the pohunek CLI waits for a command's reply beyond its time limit, in seconds.
+///
+/// pohunek 0.41.0 waits `min(limit, 60 s) + 1 s`: `DEDICATED_WAIT_TRANSPORT_HEADROOM`
+/// (`crates/client/src/transport.rs:94`), added in `dedicated_request_timeout` (`:1725`).
+const CLI_REPLY_HEADROOM_SECONDS: u64 = 1;
 
 /// A configuration value read without type coercion, so that each key decides what it accepts and
 /// names itself when it refuses.
@@ -282,6 +292,8 @@ struct PohunekFile {
 struct HostStateFile {
     /// Largest distance of a state's timestamp from now, in seconds.
     max_age_seconds: Option<Value>,
+    /// The daemon's time limit for one state read, in seconds.
+    read_timeout_seconds: Option<Value>,
     /// `skip` or `eligible`: a host whose state is unknown.
     unknown_state: Option<Value>,
     /// `idle_first` or `configured`: the order of the eligible hosts.
@@ -762,7 +774,7 @@ fn map_file(
         Some(overrides) => route_overrides(overrides)?,
         None => return Err(missing("pohunek.route_overrides")),
     };
-    let host_state = host_state_rules(&pohunek.host_state)?;
+    let host_state = host_state_rules(&pohunek.host_state, pohunek_timeout)?;
     let session = section(&file.session, "session")?;
     let session_branch_prefix = branch_prefix(&session.branch_prefix)?;
     let session_name_prefix = name_prefix(&session.name_prefix)?;
@@ -1126,15 +1138,34 @@ fn route_overrides(
 
 /// Maps `pohunek.host_state`; `None` when the section is absent.
 ///
+/// `pohunek_timeout` is `pohunek.timeout_seconds`: the daemon must stop a hung read first.
+///
 /// # Errors
 ///
 /// Returns `configuration_missing` for an absent key of the section (`max_age_seconds` for a
 /// null section) and `configuration_invalid` for a value outside its choices or range.
-fn host_state_rules(section: &Option<HostStateFile>) -> Result<Option<HostStateRules>, Error> {
+fn host_state_rules(
+    section: &Option<HostStateFile>,
+    pohunek_timeout: Duration,
+) -> Result<Option<HostStateRules>, Error> {
     let Some(rules) = section else {
         return Ok(None);
     };
     let max_age = seconds(&rules.max_age_seconds, "pohunek.host_state.max_age_seconds")?;
+    let read_key = "pohunek.host_state.read_timeout_seconds";
+    let read_timeout = seconds(&rules.read_timeout_seconds, read_key)?;
+    // A larger limit would be lowered by the daemon, so the key would not say what applies.
+    if read_timeout.as_secs() > DAEMON_COMMAND_TIMEOUT_MAX_SECONDS {
+        return Err(invalid(read_key, "must be at most 60"));
+    }
+    // The CLI must give its answer, or give up, before the call itself is killed.
+    let cli_wait = read_timeout.saturating_add(Duration::from_secs(CLI_REPLY_HEADROOM_SECONDS));
+    if cli_wait >= pohunek_timeout {
+        return Err(invalid(
+            read_key,
+            "must be at most pohunek.timeout_seconds - 2",
+        ));
+    }
     let unknown_state = state_choice(&rules.unknown_state, "pohunek.host_state.unknown_state")?;
     let order_key = "pohunek.host_state.order";
     let order = match text(&rules.order, order_key)?.as_str() {
@@ -1164,6 +1195,7 @@ fn host_state_rules(section: &Option<HostStateFile>) -> Result<Option<HostStateR
     let outside_window = state_choice(&rules.outside_window, "pohunek.host_state.outside_window")?;
     Ok(Some(HostStateRules {
         max_age,
+        read_timeout,
         unknown_state,
         order,
         on_battery,
@@ -2968,6 +3000,7 @@ pub(crate) mod tests {
         let section = concat!(
             "  host_state:\n",
             "    max_age_seconds: 120\n",
+            "    read_timeout_seconds: 20\n",
             "    unknown_state: skip\n",
             "    order: idle_first\n",
             "    on_battery: eligible\n",
@@ -2980,6 +3013,7 @@ pub(crate) mod tests {
         let config = parse(&with(section), secret, example_policy).expect("the section loads");
         let rules = HostStateRules {
             max_age: Duration::from_secs(120),
+            read_timeout: Duration::from_secs(20),
             unknown_state: HostStateChoice::Skip,
             order: HostOrder::IdleFirst,
             on_battery: HostStateChoice::Eligible,
@@ -2995,6 +3029,7 @@ pub(crate) mod tests {
         let cases = [
             (section, "  host_state:\n", "max_age_seconds"),
             ("    max_age_seconds: 120\n", "", "max_age_seconds"),
+            ("    read_timeout_seconds: 20\n", "", "read_timeout_seconds"),
             ("    unknown_state: skip\n", "", "unknown_state"),
             ("    order: idle_first\n", "", "order"),
             ("    on_battery: eligible\n", "", "on_battery"),
@@ -3018,6 +3053,22 @@ pub(crate) mod tests {
                 "max_age_seconds: 120",
                 "max_age_seconds: 0",
                 "max_age_seconds: must be a positive integer",
+            ),
+            (
+                "read_timeout_seconds: 20",
+                "read_timeout_seconds: 0",
+                "read_timeout_seconds: must be a positive integer",
+            ),
+            (
+                "read_timeout_seconds: 20",
+                "read_timeout_seconds: 61",
+                "read_timeout_seconds: must be at most 60",
+            ),
+            // The example's `pohunek.timeout_seconds` is 45; the CLI waits 1 s longer.
+            (
+                "read_timeout_seconds: 20",
+                "read_timeout_seconds: 44",
+                "read_timeout_seconds: must be at most pohunek.timeout_seconds - 2",
             ),
             (
                 "unknown_state: skip",
@@ -3060,6 +3111,11 @@ pub(crate) mod tests {
             let expected = format!("{invalid}{expected}");
             assert_eq!(error_text(parse(&text, secret, example_policy)), expected);
         }
+        // 43 s plus the CLI's 1 s wait still ends before the 45 s call timeout.
+        let longest = section.replacen("read_timeout_seconds: 20", "read_timeout_seconds: 43", 1);
+        let config = parse(&with(&longest), secret, example_policy).expect("43 loads");
+        let read_timeout = config.host_state.map(|rules| rules.read_timeout);
+        assert_eq!(read_timeout, Some(Duration::from_secs(43)));
         let unknown = with(&format!("{section}    prefer_idle: true\n"));
         assert!(
             parse(&unknown, secret, example_policy).is_err(),

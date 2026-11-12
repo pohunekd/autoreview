@@ -27,6 +27,8 @@ pohunek:
   # required when the section is present.
   # host_state:
   #   max_age_seconds: 120
+  #   # 1 to 60, and at most timeout_seconds - 2 (the CLI waits 1 s longer).
+  #   read_timeout_seconds: 20
   #   unknown_state: skip
   #   order: idle_first
   #   on_battery: skip

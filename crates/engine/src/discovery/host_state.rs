@@ -244,6 +244,7 @@ mod tests {
     fn rules() -> HostStateRules {
         HostStateRules {
             max_age: Duration::from_secs(120),
+            read_timeout: Duration::from_secs(20),
             unknown_state: HostStateChoice::Skip,
             order: HostOrder::IdleFirst,
             on_battery: HostStateChoice::Skip,

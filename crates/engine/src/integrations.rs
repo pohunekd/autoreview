@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::time::Duration;
 
 use autoreview_policy::{Checkout, Level, Permission, Protocol, Reviewer, Trigger};
 use serde::{Deserialize, Serialize};
@@ -164,10 +165,13 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<Vec<ProjectRoute>, Error>> + Send;
 
     /// Returns the state that the `moc.host-state` plugin reports for one pohunek host.
+    ///
+    /// `timeout` is the daemon's time limit for the plugin's command.
     fn host_capacity(
         &self,
         cancel: &CancellationToken,
         host: &str,
+        timeout: Duration,
     ) -> impl Future<Output = Result<HostCapacity, Error>> + Send;
 
     /// Starts the reviewer session, or returns the live session with the same name.

@@ -5,6 +5,8 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::time::Duration;
+
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, NotifyRoute};
 use autoreview_engine::integrations::{
@@ -152,8 +154,9 @@ impl Integrations for External {
         &self,
         cancel: &CancellationToken,
         host: &str,
+        timeout: Duration,
     ) -> Result<HostCapacity, Error> {
-        pohunek::host_capacity(&self.config, cancel, host).await
+        pohunek::host_capacity(&self.config, cancel, host, timeout).await
     }
 
     async fn ensure_session(

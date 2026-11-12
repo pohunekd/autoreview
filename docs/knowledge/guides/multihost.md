@@ -109,11 +109,13 @@ reports (idle, power, battery, free memory, local models, policy window) before
 the steps above:
 
 1. Each host's state is read once per discovery pass, with
-   `pohunek host command run HOST moc.host-state host-state`. A read that fails
-   as a pohunek call (no answer, a timeout, a daemon error) makes the host a
-   failed host of the pass, as a failed project list does, so its outage is
-   announced. A daemon that answers with a `command_*` code (the plugin is not
-   installed, an older daemon), a document that does not read as `HostCapacity`
+   `pohunek host command run HOST moc.host-state host-state --timeout-ms MS`,
+   where `MS` is `read_timeout_seconds` in milliseconds. A read that fails as a
+   pohunek call (no answer within `pohunek.timeout_seconds`, a daemon error)
+   makes the host a failed host of the pass, as a failed project list does, so
+   its outage is announced. A daemon that answers with a `command_*` code (the
+   plugin is not installed, an older daemon, or the plugin did not finish within
+   `read_timeout_seconds`), a document that does not read as `HostCapacity`
    v1, or a timestamp more than `max_age_seconds` away from now, either way, is
    an unknown state; `unknown_state` decides.
 2. A host on battery (`on_battery: skip`, or below `min_battery_percent`), with
@@ -260,8 +262,8 @@ For review limits and session timeouts, see
 | `project_route_ambiguous` | The host that serves the repository has it as two or more projects | Remove the extra registration, or add a `route_overrides` entry |
 | `review host skipped` (WARN) | A host did not answer its project list; the next host was asked | Check the host and the overlay |
 | `review host skipped` (WARN) with `host_state_ineligible` | A `pohunek.host_state` rule, named by `rule`, refused the host | Wait for the host's state to change, or relax the rule |
-| `review host state unknown` (WARN) | The host's daemon could not run the plugin's command, its state did not read as `HostCapacity` v1, or its timestamp was too far from now, either way | Check that the host runs the `moc.host-state` plugin and that its clock is right |
-| `review host state not read` (WARN) | The state read failed as a pohunek call; the host counts as failed for the pass | Check the host and the overlay, as for a failed project list |
+| `review host state unknown` (WARN) | The host's daemon could not run the plugin's command or stopped it at `read_timeout_seconds`, its state did not read as `HostCapacity` v1, or its timestamp was too far from now, either way | Check that the host runs the `moc.host-state` plugin and that its clock is right; a plugin that often hangs needs a fix on the host |
+| `review host state not read` (WARN) | The state read failed as a pohunek call; the host counts as failed for the pass | Check the host and the overlay, as for a failed project list; a slow link can make the answer of a stopped plugin miss the CLI's extra 1 s |
 | "Reviews wait for a review host" (`review_stopped`) | No host that may serve the repository answered; the review waits and starts once one does | Check the host, the overlay and the pohunek versions; no `autoreview retry` is needed |
 | `pohunek_request_timeout` | A host did not answer in time | Check the host and the overlay; raise `pohunek.timeout_seconds` for slow links |
 | `pohunek_session_start_failed` | The host could not start a session | Check the host's pohunek daemon and the profile installed on it |

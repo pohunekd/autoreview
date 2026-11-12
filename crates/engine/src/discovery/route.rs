@@ -90,6 +90,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let rules = self.config.host_state.as_ref();
         let (hosts, refused) = match rules {
             Some(rules) if !self.config.route_overrides.contains_key(repository) => {
+                let read_timeout = rules.read_timeout;
                 let checked = state_hosts(
                     configured,
                     rules,
@@ -97,7 +98,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     cancel,
                     &mut pass.verdicts,
                     &mut pass.failures,
-                    |host| self.integration.host_capacity(cancel, host),
+                    |host| self.integration.host_capacity(cancel, host, read_timeout),
                 )
                 .await?;
                 for (host, rule) in &checked.refused {
