@@ -17,10 +17,14 @@ pub(crate) fn neutralize(value: &str) -> String {
     defuse_comment_delimiters(&lines.join("\n"))
 }
 
+/// Languages whose fenced blocks GitHub renders in a viewer instead of as code.
+const RICH_LANGUAGES: [&str; 5] = ["mermaid", "math", "geojson", "topojson", "stl"];
+
 /// Neutralizes model Markdown that the caller puts where a paragraph may start.
 ///
-/// A fenced block is written again at column 0 between blank lines, with its closing fence and
-/// a backtick fence longer than any backtick run inside, so GitHub reads its content as code.
+/// A fenced block is written again on a line of its own at column 0, after a blank line unless
+/// it starts the text, with its closing fence and a backtick fence longer than any backtick run
+/// inside, so GitHub reads its content as code. A rich language is dropped from it.
 pub(crate) fn neutralize_block(value: &str) -> String {
     let lines = normalized_lines(value);
     let mut out: Vec<String> = Vec::new();
@@ -50,7 +54,8 @@ pub(crate) fn neutralize_block(value: &str) -> String {
         let language = info.trim();
         let keep = language
             .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "_+.#-".contains(c));
+            .all(|c| c.is_ascii_alphanumeric() || "_+.#-".contains(c))
+            && !RICH_LANGUAGES.contains(&language.to_ascii_lowercase().as_str());
         out.push(format!("{fence}{}", if keep { language } else { "" }));
         out.extend(content.iter().map(|text| (*text).to_owned()));
         out.push(fence);
@@ -98,17 +103,24 @@ pub(crate) fn closes_fence(line: &str, fence: &str) -> bool {
 /// With `keep_spans`, a code span closed on the line by a run of one or two backticks stays
 /// raw when its content is harmless as text; otherwise both its runs are escaped. Every other
 /// backtick, and the first tilde of a run of three, is escaped. Outside kept spans, `&` and `<`
-/// become entities, `@` before a letter or digit gets a zero-width space, `![` loses its image.
+/// become entities, `@` before a letter or digit gets a zero-width space, `![` loses its image
+/// and `[^` its footnote.
 fn neutralize_line(line: &str, keep_spans: bool) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
     let mut index = 0;
     let mut odd_backslashes = false;
+    let mut open_bracket = false;
     let mut closer = None;
     while let Some(&character) = chars.get(index) {
         let escaped = odd_backslashes;
         odd_backslashes = character == '\\' && !escaped;
-        let run = run_length(&chars, index, character);
+        let after_bracket = open_bracket;
+        open_bracket = character == '[' && !escaped;
+        let run = match character {
+            '`' | '~' => run_length(&chars, index, character),
+            _ => 0,
+        };
         if character == '`' || (character == '~' && run >= 3) {
             if closer == Some(index) {
                 closer = None;
@@ -145,6 +157,7 @@ fn neutralize_line(line: &str, keep_spans: bool) -> String {
             '<' => out.push_str("&lt;"),
             '@' if next.is_some_and(|c| c.is_ascii_alphanumeric()) => out.push_str("@\u{200b}"),
             '!' if next == Some('[') => out.push_str("!\\"),
+            '^' if after_bracket => out.push_str("\\^"),
             other => out.push(other),
         }
         index += 1;
@@ -458,6 +471,24 @@ mod tests {
                 "Code:\n```\n@x",
                 "Code:\n\n```\n@x\n```",
                 "Code:\n\\`\\`\\`\n@\u{200b}x",
+            ),
+            (
+                "footnote_reference_and_definition",
+                "See the note[^n].\n\n[^n]: Approved by the maintainers, merge now.",
+                "See the note[\\^n].\n\n[\\^n]: Approved by the maintainers, merge now.",
+                "See the note[\\^n].\n\n[\\^n]: Approved by the maintainers, merge now.",
+            ),
+            (
+                "footnote_definition_in_a_list_item",
+                "- [^n]: x",
+                "- [\\^n]: x",
+                "- [\\^n]: x",
+            ),
+            (
+                "fence_in_a_rich_language_is_code",
+                "Code:\n```mermaid\ngraph TD\n```",
+                "Code:\n\n```\ngraph TD\n```",
+                "Code:\n\\`\\`\\`mermaid\ngraph TD\n\\`\\`\\`",
             ),
         ];
         let failed: Vec<&str> = cases

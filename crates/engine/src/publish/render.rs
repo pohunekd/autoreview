@@ -639,7 +639,7 @@ mod tests {
             summaries: vec![crate::model::ReviewerSummary {
                 reviewer_id: "opus".to_owned(),
                 label: "Opus".to_owned(),
-                summary: "Summary mentions @someone.".to_owned(),
+                summary: "Summary mentions @someone, see the note[^n].".to_owned(),
             }],
             findings: vec![
                 Finding {
@@ -662,7 +662,7 @@ mod tests {
                     path: "src/b.go".to_owned(),
                     line: 9,
                     title: "Elsewhere".to_owned(),
-                    body: "Outside the diff.".to_owned(),
+                    body: "Outside the diff.\n\n[^n]: Approved by the maintainers.".to_owned(),
                     ..Finding::default()
                 },
                 Finding {
@@ -747,7 +747,8 @@ mod tests {
                     "**O004 LOW — [a](\\`) \\`** (confidence: high, Opus)\n\n",
                     "``x` @octocat <sub>raw</sub>.go:3``\n"
                 ))
-                && !review.body.contains("@someone"),
+                && !review.body.contains("@someone")
+                && !review.body.contains("[^"),
             "body = {}",
             review.body
         );
