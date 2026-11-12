@@ -2,13 +2,13 @@
 
 // Rust guideline compliant 2026-11-12
 
-use autoreview_policy::{HumanReview, OnFindings, Reviewer, match_glob};
+use autoreview_policy::{AuthorClass, HumanReview, OnFindings, Reviewer, match_glob};
 
 use super::neutralize::{defuse_comment_delimiters, neutralize, neutralize_block};
 use super::plan::{PublicationPlan, blocking_count};
 use super::publication_marker;
 use crate::error::Error;
-use crate::integrations::{GitHubReview, InlineComment};
+use crate::integrations::{ChangedFile, GitHubReview, InlineComment};
 use crate::messages::excerpt;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Artifact, Finding, PriorResult, ReviewInput};
@@ -320,36 +320,106 @@ pub(crate) fn reviewer_labels(reviewers: &[Reviewer]) -> String {
     labels.join(LABEL_SEPARATOR)
 }
 
-/// Lists the signals of a human review that the pull request matches: each configured label it
-/// carries, and the deleted files that match a test glob.
+/// The facts of a pull request and of its finished review that the human review signals read.
+pub(crate) struct HumanReviewFacts<'a> {
+    /// Labels the pull request carries when it was read.
+    pub(crate) labels: &'a [String],
+    /// Login of the pull request author.
+    pub(crate) author: &'a str,
+    /// Author class that the policy decided for the review.
+    pub(crate) author_class: &'a AuthorClass,
+    /// Files the pull request changes; empty when no signal reads them.
+    pub(crate) changed: &'a [ChangedFile],
+    /// Set when the changed-files listing stopped before its end.
+    pub(crate) truncated: bool,
+    /// Notes of the finished review.
+    pub(crate) notes: i64,
+}
+
+/// Lists the signals of a human review that the pull request matches, in a fixed order: a
+/// truncated listing, labels, deleted test files, changed paths, changed lines, changed files,
+/// notes and author.
+///
+/// The first changed path in sorted order names a path signal, with the count of matching files.
 pub(crate) fn human_review_signals(
     signals: &HumanReview,
-    labels: &[String],
-    deleted: &[String],
+    facts: &HumanReviewFacts<'_>,
 ) -> Vec<String> {
     let mut matched = Vec::new();
+    if facts.truncated {
+        matched.push(format!(
+            "changed files exceed the listing limit ({} listed)",
+            facts.changed.len()
+        ));
+    }
     for label in &signals.labels {
-        if labels
+        if facts
+            .labels
             .iter()
             .any(|carried| labels_equal_fold(carried, label))
         {
             matched.push(format!("label {label}"));
         }
     }
-    let mut tests: Vec<String> = deleted
+    let mut tests: Vec<&str> = facts
+        .changed
         .iter()
         .filter(|file| {
-            signals
-                .deleted_tests
-                .iter()
-                .any(|glob| match_glob(glob, file))
+            file.status == "removed"
+                && signals
+                    .deleted_tests
+                    .iter()
+                    .any(|glob| match_glob(glob, &file.path))
         })
-        .cloned()
+        .map(|file| file.path.as_str())
         .collect();
     if !tests.is_empty() {
-        tests.sort();
+        tests.sort_unstable();
         matched.push(format!("deleted test files {}", tests.join(", ")));
     }
+    let mut paths: Vec<&str> = facts
+        .changed
+        .iter()
+        .map(|file| file.path.as_str())
+        .filter(|path| signals.paths.iter().any(|glob| match_glob(glob, path)))
+        .collect();
+    paths.sort_unstable();
+    if let Some(first) = paths.first() {
+        matched.push(format!(
+            "changed path {first} ({} matching files)",
+            paths.len()
+        ));
+    }
+    if let Some(limit) = signals.max_changed_lines {
+        let total = facts.changed.iter().fold(0_i64, |sum, file| {
+            sum.saturating_add(file.additions)
+                .saturating_add(file.deletions)
+        });
+        if total > limit {
+            matched.push(format!("changed lines {total}, limit {limit}"));
+        }
+    }
+    if let Some(limit) = signals.max_changed_files {
+        let count = i64::try_from(facts.changed.len()).unwrap_or(i64::MAX);
+        if count > limit {
+            matched.push(format!("changed files {count}, limit {limit}"));
+        }
+    }
+    if let Some(limit) = signals.max_notes
+        && facts.notes > limit
+    {
+        matched.push(format!("notes {}, limit {limit}", facts.notes));
+    }
+    let author = signals.authors.iter().find_map(|entry| {
+        if entry == facts.author_class.as_str() {
+            Some(format!("author class {entry}"))
+        } else if entry.eq_ignore_ascii_case(facts.author) {
+            Some(format!("author {}", facts.author))
+        } else {
+            None
+        }
+    });
+    matched.extend(author);
     matched
 }
 
@@ -388,13 +458,14 @@ fn fold_ascii(character: char) -> char {
 #[cfg(test)]
 mod tests {
     use autoreview_policy::{
-        Checkout, HumanReview, OnClean, OnFindings, OnNotes, Pipeline, Protocol, Reviewer, Rule,
-        Trigger, TriggerKind,
+        AuthorClass, Checkout, HumanReview, OnClean, OnFindings, OnNotes, Pipeline, Protocol,
+        Reviewer, Rule, Trigger, TriggerKind,
     };
     use serde::Deserialize;
 
-    use super::{RenderSettings, human_review_signals, render_review};
+    use super::{HumanReviewFacts, RenderSettings, human_review_signals, render_review};
     use crate::error::error_code;
+    use crate::integrations::ChangedFile;
     use crate::integrations::GitHubReview;
     use crate::messages::{APPROVAL_REQUESTED_TITLE, approval_requested_message};
     use crate::model::ids::INPUT_VERSION;
@@ -1055,40 +1126,193 @@ mod tests {
     }
 
     #[test]
-    fn human_review_signals_name_matched_labels_and_deleted_test_files() {
+    fn human_review_signals_name_each_matched_signal() {
         let signals = HumanReview {
             labels: vec!["needs-human".to_owned(), "risky".to_owned()],
             deleted_tests: vec!["tests/**".to_owned(), "**/tests/**".to_owned()],
+            paths: vec!["db/**".to_owned(), "**/Dockerfile".to_owned()],
+            max_changed_lines: Some(100),
+            max_changed_files: Some(3),
+            max_notes: Some(1),
+            authors: vec!["trusted".to_owned(), "octocat".to_owned()],
         };
         let strings = |values: &[&str]| values.iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
-        let cases = [
+        let file = |path: &str, status: &str, additions: i64, deletions: i64| ChangedFile {
+            path: path.to_owned(),
+            status: status.to_owned(),
+            additions,
+            deletions,
+        };
+        // Each case: name, labels, changed files, notes, author login, author class, signals.
+        type Case = (
+            &'static str,
+            Vec<String>,
+            Vec<ChangedFile>,
+            i64,
+            &'static str,
+            AuthorClass,
+            bool,
+            Vec<String>,
+        );
+        let cases: Vec<Case> = vec![
             (
                 "nothing matches",
                 strings(&["bug"]),
-                strings(&["src/a.go", "testsuite/a.go"]),
+                vec![
+                    file("src/a.go", "modified", 5, 1),
+                    file("testsuite/a.go", "modified", 1, 1),
+                ],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
                 strings(&[]),
             ),
             (
                 "label case is ignored",
                 strings(&["NEEDS-HUMAN"]),
-                strings(&[]),
+                vec![],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
                 strings(&["label needs-human"]),
             ),
             (
                 "deleted tests are sorted",
                 strings(&[]),
-                strings(&["pkg/tests/b.php", "tests/a.php", "src/c.go"]),
+                vec![
+                    file("pkg/tests/b.php", "removed", 0, 40),
+                    file("tests/a.php", "removed", 0, 3),
+                    file("src/c.go", "removed", 0, 2),
+                ],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
                 strings(&["deleted test files pkg/tests/b.php, tests/a.php"]),
             ),
             (
-                "both",
+                "paths name the first sorted match and the count",
+                strings(&[]),
+                vec![
+                    file("docker/Dockerfile", "modified", 1, 0),
+                    file("db/migrations/2.sql", "added", 4, 0),
+                    file("db/migrations/1.sql", "added", 2, 0),
+                ],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path db/migrations/1.sql (3 matching files)"]),
+            ),
+            (
+                "lines at the limit do not match",
+                strings(&[]),
+                vec![file("src/a.go", "modified", 60, 40)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&[]),
+            ),
+            (
+                "lines over the limit match",
+                strings(&[]),
+                vec![file("src/a.go", "modified", 60, 41)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed lines 101, limit 100"]),
+            ),
+            (
+                "files over the limit match",
+                strings(&[]),
+                vec![
+                    file("src/a.go", "modified", 1, 0),
+                    file("src/b.go", "modified", 1, 0),
+                    file("src/c.go", "modified", 1, 0),
+                    file("src/d.go", "modified", 1, 0),
+                ],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed files 4, limit 3"]),
+            ),
+            (
+                "notes over the limit match",
+                strings(&[]),
+                vec![],
+                2,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["notes 2, limit 1"]),
+            ),
+            (
+                "author login is case-insensitive",
+                strings(&[]),
+                vec![],
+                0,
+                "OctoCat",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["author OctoCat"]),
+            ),
+            (
+                "author class",
+                strings(&[]),
+                vec![],
+                0,
+                "someone",
+                AuthorClass::Trusted,
+                false,
+                strings(&["author class trusted"]),
+            ),
+            (
+                "listing truncated",
+                strings(&[]),
+                vec![file("src/a.go", "modified", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                true,
+                strings(&["changed files exceed the listing limit (1 listed)"]),
+            ),
+            (
+                "every signal at once",
                 strings(&["risky"]),
-                strings(&["tests/a.php"]),
-                strings(&["label risky", "deleted test files tests/a.php"]),
+                vec![
+                    file("db/x.sql", "added", 3, 0),
+                    file("tests/a.php", "removed", 0, 1),
+                    file("src/big.go", "modified", 100, 1),
+                ],
+                2,
+                "octocat",
+                AuthorClass::Untrusted,
+                false,
+                strings(&[
+                    "label risky",
+                    "deleted test files tests/a.php",
+                    "changed path db/x.sql (1 matching files)",
+                    "changed lines 105, limit 100",
+                    "notes 2, limit 1",
+                    "author octocat",
+                ]),
             ),
         ];
-        for (name, labels, deleted, want) in cases {
-            let got = human_review_signals(&signals, &labels, &deleted);
+        for (name, labels, changed, notes, author, class, truncated, want) in cases {
+            let facts = HumanReviewFacts {
+                labels: &labels,
+                author,
+                author_class: &class,
+                changed: &changed,
+                truncated,
+                notes,
+            };
+            let got = human_review_signals(&signals, &facts);
             assert_eq!(got, want, "{name}");
         }
     }

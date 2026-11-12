@@ -1,5 +1,5 @@
-//! Changed files of a pull request: the paged file list, the commentable lines and the deleted
-//! files.
+//! Changed files of a pull request: the paged file list, the commentable lines and the changed
+//! files with their line counts.
 //!
 //! Mirrors `cmd/autoreview/github.go:628-748`. Every file is visited once, in listing order, and
 //! the first error stops the read, as Go's visit callback does.
@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use autoreview_engine::error::Error;
-use autoreview_engine::integrations::CommentableLines;
+use autoreview_engine::integrations::{ChangedFile, ChangedFiles, CommentableLines};
 use autoreview_engine::model::PullRequest;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -19,22 +19,41 @@ use super::{GitHub, response_invalid};
 /// Files per page of the changed-files API; a short page ends the listing.
 const FILES_PER_PAGE: usize = 100;
 
+/// Most files that the changed-files API lists for one pull request.
+const LISTED_FILES_CAP: usize = 3000;
+
 /// Prefix of the marker line that GitHub writes after a file without a final newline.
 const NO_NEWLINE_MARKER: &str = "\\ No newline at end of file";
 
 /// One file of the changed-files API, with the fields that the engine reads.
+///
+/// The line counts have no default: a record without them fails the read instead of counting as
+/// an empty change.
 #[derive(Debug, Default, Deserialize, Serialize)]
-#[serde(default, remote = "Self")]
+#[serde(remote = "Self")]
 struct ChangedFileRecord {
     /// Path of the file, relative to the repository root.
-    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    #[serde(
+        default,
+        deserialize_with = "autoreview_go_compat::null_default::deserialize"
+    )]
     filename: String,
     /// Change status, such as `added`, `modified`, `renamed` or `removed`.
-    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    #[serde(
+        default,
+        deserialize_with = "autoreview_go_compat::null_default::deserialize"
+    )]
     status: String,
     /// Unified diff of the file; empty when GitHub omits it, as for binary files.
-    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    #[serde(
+        default,
+        deserialize_with = "autoreview_go_compat::null_default::deserialize"
+    )]
     patch: String,
+    /// Lines the pull request adds to the file.
+    additions: i64,
+    /// Lines the pull request deletes from the file.
+    deletions: i64,
 }
 
 autoreview_go_compat::object_only_serde!(ChangedFileRecord);
@@ -250,51 +269,101 @@ fn files_args(repository: &str, number: i64, page: i64) -> Vec<String> {
     ]
 }
 
+/// How a page-by-page read of the changed files ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListingEnd {
+    /// A short page ended the listing, so every file was read.
+    Complete,
+    /// The engine's page limit ended the listing on a full page.
+    PageLimit,
+    /// The file cap ended the listing on a full page.
+    Cap,
+}
+
+/// Decides after a page whether the listing ends, and how; `None` reads the next page.
+///
+/// `cap` is the most files the caller reads; `None` reads on until the page limit.
+fn listing_end(
+    page_len: usize,
+    page: i64,
+    page_limit: i64,
+    listed: usize,
+    cap: Option<usize>,
+) -> Option<ListingEnd> {
+    if page_len < FILES_PER_PAGE {
+        return Some(ListingEnd::Complete);
+    }
+    if page >= page_limit {
+        return Some(ListingEnd::PageLimit);
+    }
+    match cap {
+        Some(limit) if listed >= limit => Some(ListingEnd::Cap),
+        _ => None,
+    }
+}
+
 impl GitHub {
     /// Returns the commentable lines of every changed file, keyed by path (`github.go:715-728`).
+    ///
+    /// Reads on past the file cap, as before the cap existed; only the page limit ends it early.
     pub(crate) async fn commentable_lines(
         &self,
         cancel: &CancellationToken,
         pr: &PullRequest,
     ) -> Result<CommentableLines, Error> {
         let mut result: CommentableLines = CommentableLines::new();
-        self.visit_changed_files(cancel, pr, |file| {
-            let lines = commentable_lines_from_patch(&file.patch)?;
-            result.insert(file.filename.clone(), lines);
-            Ok(())
-        })
-        .await?;
+        let end = self
+            .visit_changed_files(cancel, pr, None, |file| {
+                let lines = commentable_lines_from_patch(&file.patch)?;
+                result.insert(file.filename.clone(), lines);
+                Ok(())
+            })
+            .await?;
+        if end == ListingEnd::PageLimit {
+            return Err(Error::workflow("github_search_limit_exceeded", true, None));
+        }
         Ok(result)
     }
 
-    /// Returns the paths of the files that the pull request removes (`github.go:731-747`).
-    pub(crate) async fn deleted_files(
+    /// Returns the changed files with their status and line counts, in listing order.
+    ///
+    /// The listing is the one `github.go:685-712` reads; the counts come from the same records.
+    /// A listing that stops at a limit is returned with `truncated` set.
+    pub(crate) async fn changed_files(
         &self,
         cancel: &CancellationToken,
         pr: &PullRequest,
-    ) -> Result<Vec<String>, Error> {
-        let mut removed: Vec<String> = Vec::new();
-        self.visit_changed_files(cancel, pr, |file| {
-            if file.status == "removed" {
-                removed.push(file.filename.clone());
-            }
-            Ok(())
+    ) -> Result<ChangedFiles, Error> {
+        let mut files: Vec<ChangedFile> = Vec::new();
+        let end = self
+            .visit_changed_files(cancel, pr, Some(LISTED_FILES_CAP), |file| {
+                files.push(ChangedFile {
+                    path: file.filename.clone(),
+                    status: file.status.clone(),
+                    additions: file.additions,
+                    deletions: file.deletions,
+                });
+                Ok(())
+            })
+            .await?;
+        Ok(ChangedFiles {
+            files,
+            truncated: end != ListingEnd::Complete,
         })
-        .await?;
-        Ok(removed)
     }
 
     /// Visits every changed file once, in listing order, with a validated path
     /// (`github.go:685-712`).
     ///
-    /// A page that is short ends the listing. A file whose name is invalid or repeated fails the
-    /// read before `visit` sees it.
+    /// The read ends at a short page, at the page limit, or at `cap` files when one is given. A file
+    /// whose name is invalid or repeated fails the read before `visit` sees it.
     async fn visit_changed_files(
         &self,
         cancel: &CancellationToken,
         pr: &PullRequest,
+        cap: Option<usize>,
         mut visit: impl FnMut(&ChangedFileRecord) -> Result<(), Error>,
-    ) -> Result<(), Error> {
+    ) -> Result<ListingEnd, Error> {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for page in 1..=self.search_page_limit {
             let arguments = files_args(&pr.repository, pr.number, page);
@@ -307,14 +376,13 @@ impl GitHub {
                 seen.insert(file.filename.clone());
                 visit(file)?;
             }
-            if files.len() < FILES_PER_PAGE {
-                return Ok(());
-            }
-            if page == self.search_page_limit {
-                return Err(Error::workflow("github_search_limit_exceeded", true, None));
+            if let Some(end) =
+                listing_end(files.len(), page, self.search_page_limit, seen.len(), cap)
+            {
+                return Ok(end);
             }
         }
-        Err(Error::workflow("github_search_limit_exceeded", true, None))
+        Ok(ListingEnd::PageLimit)
     }
 }
 
@@ -332,5 +400,36 @@ at end of file",
             .expect("a deleted file parses");
         assert!(deleted.is_empty());
         assert!(super::commentable_lines_from_patch("@@ broken @@").is_err());
+    }
+
+    #[test]
+    fn listing_end_reads_past_the_cap_only_when_no_cap_is_given() {
+        use super::ListingEnd::{Cap, Complete, PageLimit};
+        // Each case: page length, page, page limit, files listed, cap, and where the read ends.
+        type Case = (
+            usize,
+            i64,
+            i64,
+            usize,
+            Option<usize>,
+            Option<super::ListingEnd>,
+        );
+        let cases: [Case; 8] = [
+            (40, 1, 100, 40, Some(3000), Some(Complete)),
+            (40, 100, 100, 9940, None, Some(Complete)),
+            (100, 1, 100, 100, None, None),
+            (100, 5, 100, 500, Some(3000), None),
+            (100, 30, 100, 3000, Some(3000), Some(Cap)),
+            (100, 30, 100, 3000, None, None),
+            (100, 3, 3, 300, None, Some(PageLimit)),
+            (100, 3, 3, 300, Some(3000), Some(PageLimit)),
+        ];
+        for (page_len, page, limit, listed, cap, want) in cases {
+            assert_eq!(
+                super::listing_end(page_len, page, limit, listed, cap),
+                want,
+                "listing_end({page_len}, {page}, {limit}, {listed}, {cap:?})"
+            );
+        }
     }
 }

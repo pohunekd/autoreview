@@ -196,6 +196,7 @@ repositories before their owner wildcard.
 | `on_clean` | What a review without blocking findings does: `approve`, `await` (wait for a human approval) or `comment` |
 | `on_notes` | Optional. `comment`: a review whose findings are all notes goes to the author as a comment first, see [notes hand-off](knowledge/concepts/decisions.md#notes-hand-off). Pull requests authored by bots skip the hand-off and wait for approval directly |
 | `authors` | Required. Who counts as a trusted author and what an untrusted author gets, see below |
+| `human_review` | Optional, needs `on_clean: approve`. The signals that hold a clean review for a person, see [human review signals](#human-review-signals) |
 
 Validation rules:
 
@@ -210,6 +211,54 @@ Validation rules:
 Whatever the rule says, a pull request **authored by the reviewing account**
 (the login of the repository's credential) gets a comment: GitHub lets no author approve or request changes on their own
 pull request. Findings on it raise the `findings_on_own_pr` event.
+
+### Human review signals
+
+`human_review` holds a clean review of an approving rule for a person. A matching
+signal turns the approval into a wait for a human approval, the same wait as
+`on_clean: await`, and the review body and the notification name each matched
+signal. A review with blocking findings keeps its `on_findings` outcome, and the
+verifier escalation keeps its own wait.
+
+Every key is optional and an absent key turns its signal off. The section needs
+at least one key.
+
+| Key | Matches when | Example |
+|---|---|---|
+| `labels` | the pull request carries one of the labels, case-insensitively; an author adds one to ask for a human | `labels: [needs-human]` |
+| `deleted_tests` | the pull request deletes (status `removed`) a file that matches one of the globs | `deleted_tests: ["**/tests/**"]` |
+| `paths` | a changed file matches one of the globs, such as migrations, permission code or CI files | `paths: ["migrations/**", "**/auth/**", ".github/**"]` |
+| `max_changed_lines` | the additions and deletions of the pull request add up to more than the number | `max_changed_lines: 1000` |
+| `max_changed_files` | the pull request changes more files than the number | `max_changed_files: 40` |
+| `max_notes` | the finished review has more notes (non-blocking findings) than the number | `max_notes: 5` |
+| `authors` | the author login matches an entry, case-insensitively, or the author class is listed | `authors: ["octocat"]` |
+
+Rules:
+
+- Globs are slash-separated relative patterns. `*`, `?` and character classes
+  match within one path segment, and `**` as a whole segment matches any number
+  of segments: `**/tests/**` matches `tests/a.php` and `pkg/tests/unit/a.php`, but
+  not `src/testsuite/a.php`.
+- Logins are lowercase. The names `trusted` and `untrusted` are read as author
+  classes, so a login with either name cannot be listed. A class entry matches
+  the author class that the policy decided for the review.
+- Each list holds at most 50 entries. Every label, glob and author is listed
+  once, and every number is a positive integer. A value that breaks one of these
+  rules fails the policy at startup.
+- The changed files are read once per review, and only when a `paths`,
+  `deleted_tests`, `max_changed_lines` or `max_changed_files` key is set. Line and
+  file counts cover the whole pull request. A listing that stops at the engine's
+  `search_page_limit` or at GitHub's cap of 3,000 files is truncated: the clean
+  review waits for a human, with the signal `changed files exceed the listing limit
+  (N listed)`, whatever the other keys say. A rule that sets none of those four keys
+  never reads the listing, so truncation never holds it. A review with blocking
+  findings keeps its `on_findings` outcome.
+- The signals are evaluated when the review finishes and stored with it, so a
+  resumed review keeps its decision.
+
+```yaml
+human_review: {labels: [needs-human], deleted_tests: ["**/tests/**"], paths: ["migrations/**", ".github/**"], max_changed_lines: 1000, max_changed_files: 40, max_notes: 5, authors: ["octocat"]}
+```
 
 ### Authors
 

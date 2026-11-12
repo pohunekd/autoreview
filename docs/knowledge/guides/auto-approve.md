@@ -143,6 +143,26 @@ autoreview retry --repository pohunekd/pohunek.dev 17 3f2a9c1d0b7e
 including those waiting on their author. Run it from a timer if you want that
 list on a schedule.
 
+## Send risky changes to a person
+
+A clean review still publishes without a person when nothing else holds it. Add
+`human_review` to the rule to hold the risky ones: a pull request that carries a
+label, deletes a test, changes a listed path or is too large waits for a human
+approval, as `approval_requested`, and the review body and the notification
+name the signals that matched, for example
+`changed path migrations/0042.sql (2 matching files)`.
+
+```yaml
+    on_clean: approve
+    human_review: {labels: [needs-human], deleted_tests: ["**/tests/**"], paths: ["migrations/**", ".github/**"], max_changed_lines: 1000, max_changed_files: 40, max_notes: 5}
+```
+
+Path and size signals hold a share of ordinary pull requests too. Start with the
+labels and the deleted tests, and add the path and size signals once you know how
+often they would hold a pull request. Every signal, its example and the glob rules are in the
+[policy reference](../../policy.md#human-review-signals). The verifier's own
+escalation is described in [verification](../concepts/verification.md#escalation-on-auto-approve-rules).
+
 ## Variations
 
 - **Stricter escalation.** Set `escalate_severities: [critical, high]` and

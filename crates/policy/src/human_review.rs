@@ -1,14 +1,15 @@
-//! Human review signals: the labels and deleted-test globs that hold a clean review for a person,
-//! and the glob matching they use.
+//! Human review signals: the labels, globs, size limits, note limit and authors that hold a clean
+//! review for a person, and the glob matching they use.
 
 // Rust guideline compliant 2026-06-26
 
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
+use crate::authors::login_valid;
 use crate::types::{OnClean, is_label};
 
-/// Most labels and most deleted-test globs a human_review section may list.
+/// Most entries of each list a human_review section may hold.
 const MAX_HUMAN_REVIEW_ENTRIES: usize = 50;
 
 /// Longest accepted glob in bytes.
@@ -33,9 +34,46 @@ pub struct HumanReview {
     /// the only proof of a contract.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deleted_tests: Vec<String>,
+    /// Path globs; a changed file that matches one holds the review.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    /// Holds the review when the diff changes more lines than this (additions plus deletions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_changed_lines: Option<i64>,
+    /// Holds the review when the pull request changes more files than this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_changed_files: Option<i64>,
+    /// Holds the review when the finished review has more notes than this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_notes: Option<i64>,
+    /// Logins, matched case-insensitively, and author classes (`trusted`, `untrusted`) whose pull
+    /// requests always wait.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<String>,
 }
 
 autoreview_go_compat::object_only_serde!(HumanReview);
+
+impl HumanReview {
+    /// Reports whether a signal reads the changed files of the pull request.
+    #[must_use]
+    pub fn needs_changed_files(&self) -> bool {
+        !self.deleted_tests.is_empty()
+            || !self.paths.is_empty()
+            || self.max_changed_lines.is_some()
+            || self.max_changed_files.is_some()
+    }
+
+    /// Reports whether a signal beyond labels and deleted tests is set; the digest hashes those
+    /// only then, so policies that use neither keep their digest.
+    pub(crate) fn has_extended_signals(&self) -> bool {
+        !self.paths.is_empty()
+            || self.max_changed_lines.is_some()
+            || self.max_changed_files.is_some()
+            || self.max_notes.is_some()
+            || !self.authors.is_empty()
+    }
+}
 
 /// The human_review section of a rule as written in the policy file.
 #[derive(Debug, Default, Deserialize)]
@@ -47,6 +85,18 @@ pub(crate) struct FileHumanReview {
     /// Deleted tests from the file.
     #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
     pub(crate) deleted_tests: Vec<String>,
+    /// Paths from the file.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    pub(crate) paths: Vec<String>,
+    /// Changed-line limit from the file; null is the same as absent.
+    pub(crate) max_changed_lines: Option<i64>,
+    /// Changed-file limit from the file; null is the same as absent.
+    pub(crate) max_changed_files: Option<i64>,
+    /// Note limit from the file; null is the same as absent.
+    pub(crate) max_notes: Option<i64>,
+    /// Authors from the file.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    pub(crate) authors: Vec<String>,
 }
 
 /// Validates the human_review section of a rule and returns its signals.
@@ -54,7 +104,8 @@ pub(crate) struct FileHumanReview {
 /// # Errors
 ///
 /// Returns an error when the section sits on a rule whose clean outcome is not approve, sets no
-/// entries, lists too many entries, or repeats or malforms a label or glob.
+/// signal, lists too many entries, repeats or malforms a label, glob or author, or sets a limit
+/// below 1.
 pub(crate) fn parse_human_review(
     raw: Option<&FileHumanReview>,
     on_clean: OnClean,
@@ -66,12 +117,23 @@ pub(crate) fn parse_human_review(
         // Every other clean outcome already waits for a human or only comments.
         return Err(Error::HumanReviewNeedsApprove);
     }
-    if raw.labels.is_empty() && raw.deleted_tests.is_empty() {
+    let empty = raw.labels.is_empty()
+        && raw.deleted_tests.is_empty()
+        && raw.paths.is_empty()
+        && raw.authors.is_empty()
+        && raw.max_changed_lines.is_none()
+        && raw.max_changed_files.is_none()
+        && raw.max_notes.is_none();
+    if empty {
         return Err(Error::HumanReviewEmpty);
     }
-    if raw.labels.len() > MAX_HUMAN_REVIEW_ENTRIES
-        || raw.deleted_tests.len() > MAX_HUMAN_REVIEW_ENTRIES
-    {
+    let lists = [
+        raw.labels.len(),
+        raw.deleted_tests.len(),
+        raw.paths.len(),
+        raw.authors.len(),
+    ];
+    if lists.iter().any(|len| *len > MAX_HUMAN_REVIEW_ENTRIES) {
         return Err(Error::HumanReviewTooManyEntries {
             limit: MAX_HUMAN_REVIEW_ENTRIES,
         });
@@ -89,17 +151,58 @@ pub(crate) fn parse_human_review(
         }
         labels.push(label.clone());
     }
-    let mut globs = Vec::new();
-    for glob in &raw.deleted_tests {
-        if !valid_glob(glob) || globs.contains(glob) {
-            return Err(Error::HumanReviewGlob { glob: glob.clone() });
-        }
-        globs.push(glob.clone());
-    }
     Ok(Some(HumanReview {
         labels,
-        deleted_tests: globs,
+        deleted_tests: parse_globs("deleted_tests", &raw.deleted_tests)?,
+        paths: parse_globs("paths", &raw.paths)?,
+        max_changed_lines: positive("max_changed_lines", raw.max_changed_lines)?,
+        max_changed_files: positive("max_changed_files", raw.max_changed_files)?,
+        max_notes: positive("max_notes", raw.max_notes)?,
+        authors: parse_authors(&raw.authors)?,
     }))
+}
+
+/// Validates the globs of one list, each a valid relative glob listed once.
+fn parse_globs(key: &'static str, globs: &[String]) -> Result<Vec<String>, Error> {
+    let mut parsed: Vec<String> = Vec::new();
+    for glob in globs {
+        if !valid_glob(glob) || parsed.contains(glob) {
+            return Err(Error::HumanReviewGlob {
+                key,
+                glob: glob.clone(),
+            });
+        }
+        parsed.push(glob.clone());
+    }
+    Ok(parsed)
+}
+
+/// Refuses a limit below 1; an absent limit stays absent.
+fn positive(key: &'static str, value: Option<i64>) -> Result<Option<i64>, Error> {
+    match value {
+        Some(number) if number < 1 => Err(Error::HumanReviewNumber { key }),
+        other => Ok(other),
+    }
+}
+
+/// Validates the authors: a login or an author class, each listed once whatever its case.
+fn parse_authors(entries: &[String]) -> Result<Vec<String>, Error> {
+    let mut parsed: Vec<String> = Vec::new();
+    for entry in entries {
+        let known = is_author_class(entry) || login_valid(entry);
+        if !known || parsed.iter().any(|other| other.eq_ignore_ascii_case(entry)) {
+            return Err(Error::HumanReviewAuthor {
+                author: entry.clone(),
+            });
+        }
+        parsed.push(entry.clone());
+    }
+    Ok(parsed)
+}
+
+/// Reports whether value is one of the author classes that the policy decides for a pull request.
+fn is_author_class(value: &str) -> bool {
+    matches!(value, "trusted" | "untrusted")
 }
 
 /// Reports whether glob is a slash-separated relative pattern whose segments are path patterns or

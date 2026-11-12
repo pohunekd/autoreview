@@ -9,7 +9,7 @@ use autoreview_policy::Level;
 use serde_json::json;
 
 use crate::error::error_code;
-use crate::integrations::SessionRequest;
+use crate::integrations::{ChangedFile, SessionRequest};
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_OPEN, prior_key};
@@ -1011,9 +1011,25 @@ async fn open_prior_finding_without_an_open_thread_is_published_again() {
 #[tokio::test]
 async fn human_review_signal_holds_a_clean_automatic_approval_for_the_user() {
     let mut h = start_harness(|_| {}).await;
-    h.fake.lock().deleted = vec![
-        "src/kept.go".to_owned(),
-        "pkg/tests/OwnerTest.php".to_owned(),
+    h.fake.lock().changed = vec![
+        ChangedFile {
+            path: "src/kept.go".to_owned(),
+            status: "modified".to_owned(),
+            additions: 2,
+            deletions: 1,
+        },
+        ChangedFile {
+            path: "pkg/tests/OwnerTest.php".to_owned(),
+            status: "removed".to_owned(),
+            additions: 0,
+            deletions: 40,
+        },
+        ChangedFile {
+            path: "db/migrations/0002.sql".to_owned(),
+            status: "added".to_owned(),
+            additions: 12,
+            deletions: 0,
+        },
     ];
     let mut pr = integration_pull_request("risky/widget", &sha("a"));
     pr.labels = vec!["Needs-Human".to_owned()];
@@ -1026,7 +1042,7 @@ async fn human_review_signal_holds_a_clean_automatic_approval_for_the_user() {
         h.fake.has_note(
             Level::Action,
             "human review signals: label needs-human; deleted test files \
-             pkg/tests/OwnerTest.php."
+             pkg/tests/OwnerTest.php; changed path db/migrations/0002.sql (1 matching files)."
         ) && h.publications() == 0,
         "the approval request must name the matched signals and nothing may be posted yet"
     );
@@ -1050,7 +1066,12 @@ async fn human_review_signal_holds_a_clean_automatic_approval_for_the_user() {
 #[tokio::test]
 async fn human_review_without_a_match_approves_without_the_user() {
     let mut h = start_harness(|_| {}).await;
-    h.fake.lock().deleted = vec!["src/removed.go".to_owned()];
+    h.fake.lock().changed = vec![ChangedFile {
+        path: "src/removed.go".to_owned(),
+        status: "removed".to_owned(),
+        additions: 0,
+        deletions: 3,
+    }];
     let mut pr = integration_pull_request("risky/widget", &sha("a"));
     pr.labels = vec!["enhancement".to_owned()];
     h.fake.open(pr.clone(), h.rule(&pr.repository));
