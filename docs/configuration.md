@@ -526,9 +526,10 @@ Besides each key's own range, `validate` enforces:
 
 autoreview reads no other variable; `GH_TOKEN` in its own environment is
 ignored and is set only for each `gh` child, to the token of its credential.
-The `gh` and `pohunek` processes that autoreview starts inherit no variable
-named by an `*_env` key or starting with `AUTOREVIEW_`, nor the Go engine's
-`GH_TOKEN` and `MATRIX_ACCESS_TOKEN`.
+The `gh` and `pohunek` processes that autoreview starts inherit only the
+variables listed in
+[secrets](knowledge/safety/secrets.md#what-child-processes-receive), never a
+variable named by an `*_env` key or starting with `AUTOREVIEW_`.
 
 Never put a secret value in `config.yaml`, `policy.yaml` or a prompt. To check
 that a variable is set without printing it:
