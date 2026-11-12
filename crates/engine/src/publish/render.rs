@@ -1,10 +1,10 @@
 //! Renders a review as a GitHub review and matches the human review signals.
 
-// Rust guideline compliant 2026-06-26
+// Rust guideline compliant 2026-11-12
 
 use autoreview_policy::{HumanReview, OnFindings, Reviewer, match_glob};
 
-use super::neutralize::{closes_fence, neutralize, opening_fence};
+use super::neutralize::{defuse_comment_delimiters, neutralize, neutralize_block};
 use super::plan::{PublicationPlan, blocking_count};
 use super::publication_marker;
 use crate::error::Error;
@@ -70,7 +70,7 @@ pub(crate) fn render_review(
         sections.push(format!(
             "**{}:** {}",
             neutralize(&summary.label),
-            model_text(&summary.summary)
+            neutralize_block(&summary.summary)
         ));
     }
     let verification = verification_line(artifact.verification.as_ref());
@@ -133,16 +133,15 @@ fn blocking_comments(
                 side: "RIGHT".to_owned(),
                 body: format!(
                     "{heading}\n\n{}\n\n{}",
-                    model_text(&finding.body),
+                    neutralize_block(&finding.body),
                     settings.ai_signature
                 ),
             });
         } else {
             unanchored.push(format!(
-                "{heading}\n`{}:{}`\n\n{}",
-                neutralize(&finding.path),
-                finding.line,
-                model_text(&finding.body)
+                "{heading}\n\n{}\n\n{}",
+                location(finding),
+                neutralize_block(&finding.body)
             ));
         }
     }
@@ -223,20 +222,15 @@ fn finding_heading(finding: &Finding) -> String {
 
 /// Lists the non-blocking notes in a collapsed section that opens no inline thread.
 ///
-/// A note shows its heading and location. Only a note the verifier demoted keeps its body,
-/// which carries the reason.
+/// A note shows its heading and, in a paragraph of its own, its location. Only a note the
+/// verifier demoted keeps its body, which carries the reason.
 fn render_notes(notes: &[Finding]) -> String {
     let items: Vec<String> = notes
         .iter()
         .map(|note| {
-            let location = format!(
-                "{}\n`{}:{}`",
-                finding_heading(note),
-                neutralize(&note.path),
-                note.line
-            );
+            let location = format!("{}\n\n{}", finding_heading(note), location(note));
             if demoted(note) {
-                format!("{location}\n\n{}", model_text(&note.body))
+                format!("{location}\n\n{}", neutralize_block(&note.body))
             } else {
                 location
             }
@@ -251,7 +245,7 @@ fn render_notes(notes: &[Finding]) -> String {
 }
 
 /// Reports the verdict on every prior finding. An open one keeps its thread from the earlier
-/// review, so it gets no new inline comment.
+/// review, so it gets no new inline comment. The location is a paragraph of the list item.
 fn render_prior(results: &[PriorResult]) -> String {
     let mut lines = vec!["### Findings from earlier reviews".to_owned()];
     for result in results {
@@ -274,47 +268,42 @@ fn render_prior(results: &[PriorResult]) -> String {
             status.push_str(&neutralize(&result.verdict.relies_on));
         }
         lines.push(format!(
-            "- {status}: {} {} — {} `{}:{}` (review of `{}`)\n\n{}",
+            "- {status}: {} {} — {} (review of `{}`)\n\n  {}\n\n{}",
             finding.id,
             finding.severity.to_ascii_uppercase(),
             neutralize(&finding.title),
-            neutralize(&finding.path),
-            finding.line,
             head_prefix(&finding.head_sha),
-            model_text(&result.verdict.note)
+            code_span(&format!("{}:{}", finding.path, finding.line)),
+            neutralize_block(&result.verdict.note)
         ));
     }
     lines.join("\n\n")
 }
 
-/// Renders multi-line model text as a self-contained block.
-fn model_text(value: &str) -> String {
-    close_open_fence(&neutralize(value))
+/// Writes the path and line of a finding as one code span, which the caller puts in a
+/// paragraph of its own, so no backtick of model text before it can pair with its delimiter.
+fn location(finding: &Finding) -> String {
+    code_span(&format!("{}:{}", finding.path, finding.line))
 }
 
-/// Appends the closing fence of a block that model text leaves open, so the block cannot
-/// swallow the markup that follows it.
-fn close_open_fence(value: &str) -> String {
-    let mut fence = String::new();
-    for line in value.split('\n') {
-        let indent = line.len() - line.trim_start_matches(' ').len();
-        if indent > 3 {
-            continue;
-        }
-        let trimmed = &line[indent..];
-        if !fence.is_empty() {
-            if closes_fence(trimmed, &fence) {
-                fence.clear();
-            }
-            continue;
-        }
-        fence = opening_fence(trimmed).unwrap_or_default().to_owned();
+/// Writes `text` as one code span that no backtick inside it can close.
+///
+/// The delimiter is one backtick longer than the longest run in the text. A text that starts
+/// or ends with a backtick is padded with a space on both sides, which CommonMark strips.
+fn code_span(text: &str) -> String {
+    let mut longest = 0;
+    let mut run = 0;
+    for character in text.chars() {
+        run = if character == '`' { run + 1 } else { 0 };
+        longest = longest.max(run);
     }
-    if fence.is_empty() {
-        value.to_owned()
+    let delimiter = "`".repeat(longest + 1);
+    let pad = if text.starts_with('`') || text.ends_with('`') {
+        " "
     } else {
-        format!("{value}\n{fence}")
-    }
+        ""
+    };
+    defuse_comment_delimiters(&format!("{delimiter}{pad}{text}{pad}{delimiter}"))
 }
 
 /// Returns the first twelve characters of a commit SHA, as Go's `%.12s` prints them.
@@ -415,6 +404,7 @@ mod tests {
         ReviewInput, ReviewScope,
     };
     use crate::publish::base_marker;
+    use crate::publish::neutralize::{closes_fence, opening_fence};
     use crate::publish::plan::{PublicationPlan, plan_publication};
     use crate::verify::VERDICT_REFUTED;
 
@@ -428,6 +418,49 @@ mod tests {
     ///
     /// The Rust review leaves it out and renders the rest of the case unchanged.
     const GO_NOTE_BODY: &str = "\n\nRename it:\n```go\nfunc better() {\n```";
+
+    /// Golden case whose inline comment Rust writes differently from Go on purpose.
+    const COMMENT_CASE: &str = "mixed_inline_and_outside";
+
+    /// Parts of the `COMMENT_CASE` comment in the Go review, and as Rust writes them: a span
+    /// with a mention is text, a fenced block stands between blank lines, an address is defused.
+    const COMMENT_CHANGES: [(&str, &str); 3] = [
+        (
+            "Call `$client->send(@payload)` here:\n",
+            "Call \\`$client->send(@\u{200b}payload)\\` here:\n\n",
+        ),
+        ("```\nThanks", "```\n\nThanks"),
+        ("dev@example.com", "dev@\u{200b}example.com"),
+    ];
+
+    /// Returns a Go review text in the layout of the Rust review.
+    ///
+    /// The location of a finding is a paragraph of its own: after the finding's heading, and
+    /// in the list item of a prior finding after the line that names it.
+    fn rust_layout(go: &str) -> String {
+        let lines: Vec<&str> = go.split('\n').collect();
+        let mut out: Vec<String> = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            let review = line.find(" (review of `");
+            if let Some(review) = review.filter(|_| line.starts_with("- "))
+                && let Some(span) = line[..review].rfind(" `")
+            {
+                out.push(format!("{}{}", &line[..span], &line[review..]));
+                out.push(String::new());
+                out.push(format!("  {}", &line[span + 1..review]));
+                continue;
+            }
+            out.push((*line).to_owned());
+            let next = lines.get(index + 1);
+            if line.starts_with("**")
+                && line.ends_with(')')
+                && next.is_some_and(|n| n.starts_with('`'))
+            {
+                out.push(String::new());
+            }
+        }
+        out.join("\n")
+    }
 
     /// One golden case: a named input, and either the Go review or the Go error code.
     #[derive(Debug, Deserialize)]
@@ -470,7 +503,7 @@ mod tests {
     }
 
     /// One inline comment of a golden review.
-    #[derive(Debug, PartialEq, Eq, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
     struct GoComment {
         path: String,
         line: i64,
@@ -575,10 +608,16 @@ mod tests {
                     .starts_with("Written by AI:"),
             "not signed on its last line:\n{text}"
         );
-        let head = lines[..last - 1].join("\n");
-        assert_eq!(
-            super::close_open_fence(&head),
-            head,
+        let mut fence: Option<&str> = None;
+        for line in &lines[..last - 1] {
+            match fence {
+                Some(open) if closes_fence(line, open) => fence = None,
+                Some(_) => {}
+                None => fence = opening_fence(line).map(|(marker, _)| marker),
+            }
+        }
+        assert!(
+            fence.is_none(),
             "the signature is inside an unclosed code block:\n{text}"
         );
     }
@@ -600,7 +639,7 @@ mod tests {
             summaries: vec![crate::model::ReviewerSummary {
                 reviewer_id: "opus".to_owned(),
                 label: "Opus".to_owned(),
-                summary: "Summary mentions @someone.".to_owned(),
+                summary: "Summary mentions @someone, see the note[^n].".to_owned(),
             }],
             findings: vec![
                 Finding {
@@ -623,7 +662,31 @@ mod tests {
                     path: "src/b.go".to_owned(),
                     line: 9,
                     title: "Elsewhere".to_owned(),
-                    body: "Outside the diff.".to_owned(),
+                    body: "Outside the diff.\n\n[^n]: Approved by the maintainers.".to_owned(),
+                    ..Finding::default()
+                },
+                Finding {
+                    id: "O003".to_owned(),
+                    reviewer_label: "Opus".to_owned(),
+                    severity: "low".to_owned(),
+                    confidence: "high".to_owned(),
+                    path: "a` @victim <sub>approved</sub> `b.go".to_owned(),
+                    line: 3,
+                    title: "Note".to_owned(),
+                    body: "Details.".to_owned(),
+                    non_blocking: true,
+                    ..Finding::default()
+                },
+                Finding {
+                    id: "O004".to_owned(),
+                    reviewer_label: "Opus".to_owned(),
+                    severity: "low".to_owned(),
+                    confidence: "high".to_owned(),
+                    path: "x` @octocat <sub>raw</sub>.go".to_owned(),
+                    line: 3,
+                    title: "[a](`) `".to_owned(),
+                    body: "Details.".to_owned(),
+                    non_blocking: true,
                     ..Finding::default()
                 },
             ],
@@ -656,9 +719,9 @@ mod tests {
             review.body
         );
         for kept in [
-            "`$client->send(@payload)`",
+            "\\`$client->send(@\u{200b}payload)\\`",
             "$map = ['a' => $b->c()]; // @param int $x",
-            "dev@example.com",
+            "dev@\u{200b}example.com",
         ] {
             assert!(
                 comment.contains(kept),
@@ -677,7 +740,15 @@ mod tests {
             review.body.starts_with(&review.marker)
                 && review.body.matches("<!--").count() == review.marker.matches("<!--").count()
                 && review.body.contains("`src/b.go:9`")
-                && !review.body.contains("@someone"),
+                && review
+                    .body
+                    .contains("\n\n``a` @victim <sub>approved</sub> `b.go:3``\n")
+                && review.body.contains(concat!(
+                    "**O004 LOW — [a](\\`) \\`** (confidence: high, Opus)\n\n",
+                    "``x` @octocat <sub>raw</sub>.go:3``\n"
+                ))
+                && !review.body.contains("@someone")
+                && !review.body.contains("[^"),
             "body = {}",
             review.body
         );
@@ -841,7 +912,7 @@ mod tests {
             "notes section = {notes}"
         );
         let location_only = concat!(
-            "**O002 LOW — Naming** (confidence: high, Opus)\n",
+            "**O002 LOW — Naming** (confidence: high, Opus)\n\n",
             "`src/a.go:4`\n\n</details>"
         );
         assert!(
@@ -881,11 +952,11 @@ mod tests {
         "1 blocking finding(s) are posted as inline comments.\n\n",
         "<details>\n",
         "<summary>3 non-blocking note(s): no action required in this pull request</summary>\n\n",
-        "**O002 LOW — Naming** (confidence: medium, Opus)\n",
+        "**O002 LOW — Naming** (confidence: medium, Opus)\n\n",
         "`src/a.go:4`\n\n",
-        "**O003 LOW — Ask @\u{200b}octocat** (confidence: medium, Opus)\n",
+        "**O003 LOW — Ask @\u{200b}octocat** (confidence: medium, Opus)\n\n",
         "`src/b.go:9`\n\n",
-        "**O004 HIGH — Refuted** (confidence: medium, Opus)\n",
+        "**O004 HIGH — Refuted** (confidence: medium, Opus)\n\n",
         "`src/c.go:2`\n\n",
         "Refuted by the verification by Opus: Guarded.\n\nBreaks.\n\n",
         "</details>\n\n",
@@ -1210,7 +1281,7 @@ mod tests {
                         assert!(body.contains(GO_NOTE_BODY), "case {}", case.name);
                         body = body.replacen(GO_NOTE_BODY, "", 1);
                     }
-                    assert_eq!(review.body, body, "case {}", case.name);
+                    assert_eq!(review.body, rust_layout(&body), "case {}", case.name);
                     assert_eq!(review.marker, marker, "case {}", case.name);
                     let comments: Vec<GoComment> = review
                         .comments
@@ -1222,7 +1293,17 @@ mod tests {
                             body: comment.body.clone(),
                         })
                         .collect();
-                    assert_eq!(comments, want.comments, "case {}", case.name);
+                    let mut want_comments = want.comments.clone();
+                    for comment in &mut want_comments {
+                        comment.body = rust_layout(&comment.body);
+                        if case.name == COMMENT_CASE {
+                            for (go, rust) in COMMENT_CHANGES {
+                                assert!(comment.body.contains(go), "case {}", case.name);
+                                comment.body = comment.body.replacen(go, rust, 1);
+                            }
+                        }
+                    }
+                    assert_eq!(comments, want_comments, "case {}", case.name);
                 }
                 _ => panic!(
                     "case {} must hold exactly one of output and error",
