@@ -259,11 +259,14 @@ Model text is neutralized before it is rendered:
   on render, so an image would send a request to a host of the model's choosing.
 - HTML comment delimiters are replaced, so model text cannot hide content or
   imitate the marker.
-- Code is kept only where GitHub is sure to read code: a fence that starts a
-  line, and a code span closed on its own line without a `|`. Every other
-  backtick, and a run of three tildes, is escaped, so model text cannot pass
-  for code. HTML entities are shown as written. A finding path is shown in one
-  code span that no backtick in it can close.
+- Model text is defused wherever GitHub might read it as text, whatever GitHub
+  decides about code. A fenced block in a summary, finding body or note is
+  written again with the engine's own fence between blank lines, so GitHub
+  reads it as code. An inline code span is kept only when its content is
+  harmless as text (no `@`, `<`, `![` or HTML entity); every other backtick,
+  and a run of three tildes, is escaped. Titles, tests and the other one-line
+  fields keep no code. HTML entities are shown as written. The path and line
+  of a finding are a code span in a paragraph of their own.
 - Code fences are closed, so an unclosed fence cannot swallow the signature.
 
 ## 10. Notifications
