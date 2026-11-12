@@ -539,6 +539,7 @@ async fn failing_first_host_is_skipped_and_the_review_runs_on_the_second() {
         cfg.pohunek_hosts = ["host-a", "host-b", "host-c"].map(str::to_owned).to_vec();
         cfg.host_state = Some(HostStateRules {
             max_age: Duration::from_secs(120),
+            read_timeout: Duration::from_secs(20),
             unknown_state: HostStateChoice::Skip,
             order: HostOrder::IdleFirst,
             on_battery: HostStateChoice::Skip,

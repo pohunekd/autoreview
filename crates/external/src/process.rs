@@ -95,6 +95,8 @@ pub(crate) enum ProcessError {
     Exit {
         /// Go's text of the exit status, for example `exit status 1`.
         status: String,
+        /// The exit code, or `None` for a child ended by a signal.
+        code: Option<i32>,
         /// The child's stderr, trimmed.
         stderr: String,
         /// The child's stdout.
@@ -229,6 +231,7 @@ pub(crate) async fn run(
     if !status.success() {
         return Err(ProcessError::Exit {
             status: status_text(status),
+            code: status.code(),
             stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
         });

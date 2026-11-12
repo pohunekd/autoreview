@@ -139,6 +139,8 @@ pub enum HostOrder {
 pub struct HostStateRules {
     /// Largest distance of a state's timestamp from now; a state further off is unknown.
     pub max_age: Duration,
+    /// The daemon's time limit for one state read; shorter than the pohunek call timeout.
+    pub read_timeout: Duration,
     /// What happens to a host whose state is unknown.
     pub unknown_state: HostStateChoice,
     /// The order of the eligible hosts.

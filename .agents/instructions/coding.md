@@ -243,7 +243,8 @@ What is not compatible, by decision:
   (`discovery::host_state`); when no allowed host serves the repository, the
   held-back hosts are asked, and a route that only they serve waits for a host
   as `host_state_ineligible`. A state read that fails as a pohunek call is a host
-  failure of the pass; a daemon `command_*` answer is an unknown state. The
+  failure of the pass; a daemon `command_*` answer (exit status 40 to 52, also
+  the daemon's timeout at `read_timeout_seconds`) is an unknown state. The
   tests are `host_state_rules_judge_each_state`,
   `hosts_are_ordered_idle_first_and_each_state_is_read_once_per_pass` and
   `only_a_command_code_of_the_daemon_leaves_the_host_state_unknown`.

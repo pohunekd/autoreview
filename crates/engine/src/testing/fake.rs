@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::{Future, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use autoreview_policy::TriggerKind;
 use autoreview_policy::{
@@ -494,6 +494,7 @@ impl Integrations for FakeIntegration {
         &self,
         _cancel: &CancellationToken,
         host: &str,
+        _timeout: Duration,
     ) -> impl Future<Output = Result<HostCapacity, Error>> + Send {
         let result = {
             let mut state = self.lock();
