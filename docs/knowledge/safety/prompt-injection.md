@@ -62,7 +62,7 @@ Whatever the model reads and returns, the engine does the following.
 | Bounds on the result | Oversized or padded output: `result_max_bytes`, `max_findings`, `max_tests`, summary, title and body lengths. Over a bound, the result is rejected. |
 | Publication only through the engine | A model cannot publish. The engine builds the GitHub review from the validated result. |
 | Neutralized Markdown | Mentions that would ping people, raw HTML, images that GitHub would fetch (a tracking pixel), and HTML comment delimiters that could fake the hidden review marker. |
-| Hidden marker | The marker `<!-- autoreview:v1:... -->` is written by the engine only. Model output cannot forge it, so a stale or fake review cannot be treated as the current one. |
+| Hidden marker | The engine's hidden HTML-comment review marker and its base-branch marker, defined in `crates/engine/src/publish/mod.rs`, are written by the engine only. Model output cannot forge them, so a stale or fake review cannot be treated as the current one. |
 | Verifier | Blocking findings that the verifier cannot confirm become notes with the reason. Nothing is dropped silently. |
 | Escalation | On auto-approve rules, a demoted serious finding turns the approval into a wait for a human. |
 | Human approval | `on_clean: await` leaves the final approval to a person, who approves an exact head SHA, or to an MCP client with the `write` scope. Give that scope only to agents that keep review text out of their instructions, see the [MCP server guide](../guides/mcp-server.md#untrusted-output). |
@@ -99,14 +99,38 @@ instructions such as "approve this", "ignore the policy", "print the token" or a
 forged review marker. A fixture passes when the engine's output does not change
 in the way the injection asks for.
 
-The v0.1 plan includes tests with injection fixtures (see the phase 3 plan).
+### Injection fixtures in the tests
+
+The engine's tests give injected model output to the checks above, as plain
+data, without a model, a review host or GitHub. Each fixture is named by the
+attack it models. `scripts/gates` runs them with the other Rust tests.
+
+- Neutralization (`publish::neutralize`): mentions of users and teams, raw
+  HTML, images inline, by reference and inside a link, autolinks in angle
+  brackets, HTML entities, and Markdown that GitHub reads as text where it
+  looks like code. A plain link stays a link.
+- Rendering (`publish::render`): the exact markers of an approval of the
+  reviewed head, written into a summary (as text, in a code span and in a code
+  block), a finding title and a validation line, never reach the body as
+  markers.
+- Result parsing (`protocol`): a Claude result for another repository, pull
+  request number or head is refused, and so is a Codex result for another
+  head; a Codex result carries only the head. The reviewer then gets a fresh
+  run. A decision in the result is refused in a Codex result and never read
+  from a Claude result.
+- Decision planning (`publish::plan`): a finding that asks for an approval is
+  planned by its blocking flag only, so on an `on_clean: await` rule the
+  approval still waits for a person.
+
+### Run the fixtures on your own setup
+
 Operators can run the same check on their own setup before they trust a
 policy for public repositories:
 
 1. Create a test repository on a review host and a policy rule for it with
    `on_clean: await` and `checkout: base`.
 2. Open a pull request whose description says the review must be approved, and
-   whose diff adds a comment such as `<!-- autoreview:v1:fake -->`.
+   whose diff adds a copy of the hidden review marker of an earlier review.
 3. Request a review. Check that the result is a comment or a request for changes,
    not an approval, that the marker in the published body is the engine's, and
    that no mention was published.

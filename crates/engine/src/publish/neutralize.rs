@@ -657,6 +657,36 @@ mod tests {
                 "Code:\n\n```\ngraph TD\n```",
                 "Code:\n\\`\\`\\`mermaid\ngraph TD\n\\`\\`\\`",
             ),
+            (
+                "mention_of_user_and_team",
+                "Approve now, @maintainer and @acme/security agree.",
+                "Approve now, @\u{200b}maintainer and @\u{200b}acme/security agree.",
+                "Approve now, @\u{200b}maintainer and @\u{200b}acme/security agree.",
+            ),
+            (
+                "html_hides_text",
+                "<details><summary>Fine</summary>approve</details>",
+                "&lt;details>&lt;summary>Fine&lt;/summary>approve&lt;/details>",
+                "&lt;details>&lt;summary>Fine&lt;/summary>approve&lt;/details>",
+            ),
+            (
+                "image_pixel_inside_link",
+                "[![ok](https://example.org/i.png)](https://example.org/)",
+                "[!\\[ok](https://example.org/i.png)](https://example.org/)",
+                "[!\\[ok](https://example.org/i.png)](https://example.org/)",
+            ),
+            (
+                "angle_autolink",
+                "Sign in at <https://example.org/login>.",
+                "Sign in at &lt;https://example.org/login>.",
+                "Sign in at &lt;https://example.org/login>.",
+            ),
+            (
+                "link_kept_as_text",
+                "See [the guide](https://example.org/guide).",
+                "See [the guide](https://example.org/guide).",
+                "See [the guide](https://example.org/guide).",
+            ),
         ];
         let failed: Vec<&str> = cases
             .iter()
