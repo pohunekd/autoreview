@@ -2372,6 +2372,66 @@ pub(crate) mod tests {
                 assert_eq!(searched, *label, "scope row {index}: {name} labels");
             }
         }
+        // An earlier credential's pattern inside a broader one's search is left out (#371).
+        /// Credentials as (name, match), the searching credential, and its negative
+        /// qualifiers in the review request, label and queue searches.
+        type ExclusionRow<'a> = (&'a [(&'a str, &'a str)], &'a str, [&'a [&'a str]; 3]);
+        let exclusion_rows: [ExclusionRow<'_>; 5] = [
+            (&[("default", "[\"*\"]")], "default", [&[], &[], &[]]),
+            (
+                &[("org", "[example-org/*]"), ("rest", "[\"*\"]")],
+                "rest",
+                [&[], &[], &["-user:example-org"]],
+            ),
+            (
+                &[("repo", "[example-org/example-repo]"), ("rest", "[\"*\"]")],
+                "rest",
+                [
+                    &["-repo:example-org/example-repo"],
+                    &[],
+                    &["-repo:example-org/example-repo"],
+                ],
+            ),
+            (
+                &[
+                    ("repo", "[example-org/example-repo]"),
+                    ("org", "[example-org/*]"),
+                    ("rest", "[\"*\"]"),
+                ],
+                "org",
+                [
+                    &["-repo:example-org/example-repo"],
+                    &[],
+                    &["-repo:example-org/example-repo"],
+                ],
+            ),
+            (
+                &[("tool", "[example-owner/tool]"), ("rest", "[\"*\"]")],
+                "rest",
+                [
+                    &[],
+                    &["-repo:example-owner/tool"],
+                    &["-repo:example-owner/tool"],
+                ],
+            ),
+        ];
+        for (index, (credentials, name, expected)) in exclusion_rows.into_iter().enumerate() {
+            let config =
+                load(credentials).unwrap_or_else(|error| panic!("exclusion row {index}: {error}"));
+            let policy = config.policy.as_ref().expect("the policy loads");
+            let credentials = &config.credentials;
+            let credential = (credentials.iter())
+                .find(|credential| credential.name == name)
+                .expect("the row names a credential");
+            let requested = credentials.search_scopes(credential, &policy.review_request_scopes());
+            let labelled =
+                credentials.search_scopes(credential, &policy.label_matches("ai:review"));
+            let searches = [requested, labelled, credential.matches.clone()];
+            for (search, want) in searches.iter().zip(expected) {
+                let excluded = credentials.search_exclusions(credential, search);
+                assert_eq!(excluded, want, "exclusion row {index}: {name} {search:?}");
+            }
+        }
     }
 
     /// Reads a prompt of the example in `directory` as its README installs it.

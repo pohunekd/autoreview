@@ -186,8 +186,8 @@ impl Credentials {
     /// Returns the parts of the policy patterns `scopes` that `credential` searches, in order.
     ///
     /// A part is a pattern of `credential` narrowed to a scope, left out when an earlier
-    /// credential matches all of it. Its search may still find repositories of an earlier,
-    /// narrower credential; the caller drops them with [`Credentials::serving`].
+    /// credential matches all of it. The earlier credentials' patterns inside a part are left
+    /// out of its search by [`Credentials::search_exclusions`].
     #[must_use]
     pub fn search_scopes(&self, credential: &Credential, scopes: &[String]) -> Vec<String> {
         let earlier: Vec<&Credential> = (self.list.iter())
@@ -207,6 +207,30 @@ impl Credentials {
             }
         }
         parts
+    }
+
+    /// Returns the negative search qualifiers of the earlier credentials' patterns in `parts`.
+    ///
+    /// Each pattern of a credential before `credential` that a part covers gives
+    /// `-user:<owner>` for `owner/*` and `-repo:<pattern>` otherwise, in file order.
+    /// The first credential gets none.
+    #[must_use]
+    pub fn search_exclusions(&self, credential: &Credential, parts: &[String]) -> Vec<String> {
+        let earlier = (self.list.iter()).take_while(|first| first.name != credential.name);
+        let mut exclusions: Vec<String> = Vec::new();
+        for pattern in earlier.flat_map(|first| &first.matches) {
+            if !parts.iter().any(|part| covers(part, pattern)) {
+                continue;
+            }
+            let qualifier = match pattern.split_once('/') {
+                Some((owner, "*")) => format!("-user:{owner}"),
+                _ => format!("-repo:{pattern}"),
+            };
+            if !exclusions.contains(&qualifier) {
+                exclusions.push(qualifier);
+            }
+        }
+        exclusions
     }
 
     /// Returns the credential when it is the only one.

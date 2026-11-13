@@ -307,11 +307,16 @@ fn decode_search_identities(output: &str, poll_limit: i64) -> Result<Vec<SearchI
     Ok(identities)
 }
 
-/// Returns the argv of a review request search with `extra` flags and the scope flags
-/// (`searchRequested`).
+/// Returns the argv of a review request search with `extra` flags, the scope flags and the
+/// negative qualifiers `exclusions` (`searchRequested`).
 ///
 /// A scope `owner/*` searches by `--owner`; any other scope searches by `--repo`.
-fn search_requested_args(poll_limit: i64, scopes: &[String], extra: &[String]) -> Vec<String> {
+fn search_requested_args(
+    poll_limit: i64,
+    scopes: &[String],
+    extra: &[String],
+    exclusions: &[String],
+) -> Vec<String> {
     let mut args = vec![
         "search".to_owned(),
         "prs".to_owned(),
@@ -324,6 +329,19 @@ fn search_requested_args(poll_limit: i64, scopes: &[String], extra: &[String]) -
     ];
     args.extend(extra.iter().cloned());
     args.extend(scope_args(scopes));
+    args.extend(query_args(exclusions));
+    args
+}
+
+/// Returns the negative qualifiers `exclusions` as query words after `--`, none when empty.
+///
+/// `--` keeps `gh` from reading a word that starts with `-` as a flag.
+fn query_args(exclusions: &[String]) -> Vec<String> {
+    if exclusions.is_empty() {
+        return Vec::new();
+    }
+    let mut args = vec!["--".to_owned()];
+    args.extend(exclusions.iter().cloned());
     args
 }
 
@@ -345,11 +363,11 @@ fn scope_args(scopes: &[String]) -> Vec<String> {
 }
 
 /// Returns the argv of the search of requested reviews in the credential patterns `matches`
-/// (`ListReviewRequests`).
+/// without the negative qualifiers `exclusions` (`ListReviewRequests`).
 ///
 /// The search asks for one result more than `max`. `wrapping_add` keeps Go's `int` wrap at the
 /// largest value. With the pattern `*`, it searches every repository.
-fn list_review_requests_args(max: i64, matches: &[String]) -> Vec<String> {
+fn list_review_requests_args(max: i64, matches: &[String], exclusions: &[String]) -> Vec<String> {
     let mut args = vec![
         "search".to_owned(),
         "prs".to_owned(),
@@ -364,6 +382,7 @@ fn list_review_requests_args(max: i64, matches: &[String]) -> Vec<String> {
     if !matches.iter().any(|pattern| pattern == "*") {
         args.extend(scope_args(matches));
     }
+    args.extend(query_args(exclusions));
     args
 }
 
@@ -413,14 +432,17 @@ fn decode_review_request_search(
     })
 }
 
-/// Returns the search query of a label trigger in the match patterns `scopes`.
+/// Returns the search query of a label trigger in the match patterns `scopes`, without the
+/// negative qualifiers `exclusions`.
 ///
 /// The label is quoted as Go's `%q` quotes it. The policy parser admits only the label pattern,
 /// which contains nothing that `%q` escapes.
-fn label_search_query(label: &str, scopes: &[String]) -> String {
+fn label_search_query(label: &str, scopes: &[String], exclusions: &[String]) -> String {
+    let mut qualifiers = Policy::search_qualifiers(scopes);
+    qualifiers.extend(exclusions.iter().cloned());
     format!(
         "is:pr is:open draft:false label:\"{label}\" {} sort:created-asc",
-        Policy::search_qualifiers(scopes).join(" ")
+        qualifiers.join(" ")
     )
 }
 
@@ -596,7 +618,9 @@ impl GitHub {
         credential: &Credential,
         max: i64,
     ) -> Result<ReviewRequestList, Error> {
-        let args = list_review_requests_args(max, &credential.matches);
+        let matches = &credential.matches;
+        let exclusions = self.credentials.search_exclusions(credential, matches);
+        let args = list_review_requests_args(max, matches, &exclusions);
         let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_review_request_search(&output, max, &self.host)
     }
@@ -610,7 +634,8 @@ impl GitHub {
         scopes: &[String],
         extra: &[String],
     ) -> Result<Vec<SearchIdentity>, Error> {
-        let args = search_requested_args(self.poll_limit, scopes, extra);
+        let exclusions = self.credentials.search_exclusions(credential, scopes);
+        let args = search_requested_args(self.poll_limit, scopes, extra, &exclusions);
         let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_search_identities(&output, self.poll_limit)
     }
@@ -671,7 +696,8 @@ impl GitHub {
         name: &str,
         scopes: &[String],
     ) -> Result<CandidateList, Error> {
-        let query = label_search_query(name, scopes);
+        let exclusions = self.credentials.search_exclusions(credential, scopes);
+        let query = label_search_query(name, scopes, &exclusions);
         let mut after = String::new();
         let mut list = CandidateList::default();
         let trigger = Trigger {
@@ -705,6 +731,9 @@ impl GitHub {
     }
 
     /// Reports whether `credential` serves `repository`; another credential's result is dropped.
+    ///
+    /// The negative qualifiers leave the earlier credentials' repositories out of the search,
+    /// so they do not count toward its limits; this check drops any other credential's result.
     fn owns(&self, credential: &Credential, repository: &str) -> bool {
         (self.credentials.serving(repository)).is_ok_and(|serving| serving.name == credential.name)
     }
@@ -721,7 +750,8 @@ mod tests {
     };
     use super::{
         classify, covering, decode_label_search_page, decode_mark_ready_response,
-        decode_review_request_search, list_review_requests_args, search_requested_args,
+        decode_review_request_search, label_search_query, list_review_requests_args,
+        search_requested_args,
     };
 
     /// Login of the reviewing account in the captured responses.
@@ -932,8 +962,8 @@ notifications:
 
     #[test]
     fn draft_with_a_requested_review_is_not_a_candidate() {
-        let args =
-            search_requested_args(100, &["acme/*".to_owned()], &["--draft=false".to_owned()]);
+        let draft = ["--draft=false".to_owned()];
+        let args = search_requested_args(100, &["acme/*".to_owned()], &draft, &[]);
         assert!(args.iter().any(|arg| arg == "--draft=false"));
 
         let trigger = review_requested();
@@ -963,7 +993,7 @@ notifications:
             "--author".to_owned(),
             "app/example-agent".to_owned(),
         ];
-        let args = search_requested_args(100, &["acme/*".to_owned()], &extra);
+        let args = search_requested_args(100, &["acme/*".to_owned()], &extra, &[]);
         assert!(args.iter().any(|arg| arg == "--draft=true"));
         assert!(args.iter().any(|arg| arg == "app/example-agent"));
 
@@ -994,7 +1024,7 @@ notifications:
     #[test]
     fn list_review_requests_searches_all_repositories_and_skips_foreign_urls() {
         // The argv of a `*` credential is the one of the single-credential search.
-        let args = list_review_requests_args(50, &["*".to_owned()]);
+        let args = list_review_requests_args(50, &["*".to_owned()], &[]);
         let all = [
             "search",
             "prs",
@@ -1008,9 +1038,42 @@ notifications:
         ];
         assert_eq!(args, all);
         let narrow = ["acme/*".to_owned(), "beta/tool".to_owned()];
-        let args = list_review_requests_args(50, &narrow);
-        let scopes = ["--owner", "acme", "--repo", "beta/tool"];
+        let exclusions = ["-repo:acme/tool".to_owned()];
+        let args = list_review_requests_args(50, &narrow, &exclusions);
+        let scopes = [
+            "--owner",
+            "acme",
+            "--repo",
+            "beta/tool",
+            "--",
+            "-repo:acme/tool",
+        ];
         assert_eq!(args, [all.as_slice(), scopes.as_slice()].concat());
+        // Discovery's review request and label searches leave out the same patterns, last.
+        let acme = ["acme/*".to_owned()];
+        let draft = ["--draft=false".to_owned()];
+        let args = search_requested_args(100, &acme, &draft, &exclusions);
+        let requested = [
+            "search",
+            "prs",
+            "--review-requested=@me",
+            "--state=open",
+            "--limit",
+            "100",
+            "--json",
+            "number,repository",
+            "--draft=false",
+            "--owner",
+            "acme",
+            "--",
+            "-repo:acme/tool",
+        ];
+        assert_eq!(args, requested);
+        assert_eq!(
+            label_search_query("ai:review", &acme, &exclusions),
+            "is:pr is:open draft:false label:\"ai:review\" user:acme -repo:acme/tool \
+             sort:created-asc"
+        );
 
         let result =
             decode_review_request_search(SEARCH_RESPONSE, 50, HOST).expect("search decodes");
