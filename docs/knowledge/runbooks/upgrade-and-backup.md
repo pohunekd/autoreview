@@ -72,6 +72,26 @@ retention settings (`store.review_retention_seconds`,
 Reviews running at shutdown resume on the new process. See
 [retry and recovery](retry-and-recovery.md#restarts).
 
+### With the systemd units of path b
+
+The installer of [path b](../../install.md#b-systemd-units) replaces steps 3 and
+5. It runs `validate` with the new binary before it replaces the old one, and
+restarts the service only when that passed. Do steps 1 and 2, then step 4: the
+`agent_profiles` come from `policy.yaml`, so `validate` of the installed binary
+lists them. Then run the installer from the new archive:
+
+```sh
+sudo -u autoreview autoreview --config /etc/autoreview/config.yaml \
+  --env-file /etc/autoreview/autoreview.env validate
+sudo "autoreview-$version-$target/deploy/install.sh" \
+  --binary "autoreview-$version-$target/autoreview"
+```
+
+Its line `autoreview.service restarted` is the restart of step 4's window. When
+`validate` fails, it stops with exit code 4 and the old binary keeps running;
+fix the configuration and run it again. It also installs the units of the new
+archive. Check the state as in step 5.
+
 ## Upgrade the container
 
 The container image is not in 0.2.0 and is planned in #40; this section
@@ -89,10 +109,6 @@ docker compose up -d
 The `validate` run uses the new image, so the pohunek version it checks is the
 one bundled in that image. A tag pins the version; do not use `latest` for a
 service that reviews code.
-
-## Upgrade the workflow plugin
-
-Not available yet: there is no workflow plugin. Planned in #41.
 
 ## Store migrations
 

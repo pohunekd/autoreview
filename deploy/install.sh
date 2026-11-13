@@ -71,9 +71,25 @@ parse_arguments() {
         [ -d "$root" ] || fail 1 "--root $root is not a directory"
         root=$(cd -- "$root" && pwd -P)
         [ "$root" != / ] || fail 1 "--root / is the system itself; run without --root"
+        check_root_parents
     elif [ "$(id -u)" -ne 0 ]; then
         fail 2 "run as root, or pass --root DIR to install into DIR"
     fi
+}
+
+# Refuses a symlink among the directories that hold the installed paths under
+# --root, so that no write lands outside DIR. Runs before any write.
+check_root_parents() {
+    local dir prefix component
+    for dir in /etc /etc/autoreview /etc/systemd /etc/systemd/system /var /var/lib \
+        /var/lib/autoreview /usr /usr/local /usr/local/bin; do
+        prefix=$root
+        for component in ${dir//\// }; do
+            prefix=$prefix/$component
+            [ ! -L "$prefix" ] \
+                || fail 1 "--root: $prefix is a symlink; DIR must hold real directories only"
+        done
+    done
 }
 
 # Checks that $binary is an autoreview release binary and prints its version.
@@ -213,17 +229,38 @@ replace_files() {
     done
 }
 
+# Succeeds when systemd holds an older definition of one of the units than its file.
+units_need_reload() {
+    local states
+    states=$(systemctl show -p NeedDaemonReload --value "${UNITS[@]}" 2>/dev/null) || return 1
+    [[ $'\n'$states$'\n' == *$'\n'yes$'\n'* ]]
+}
+
+# Succeeds when the main process of autoreview.service runs another file than the
+# installed binary, such as one a later run replaced ("(deleted)" in /proc/<pid>/exe).
+service_binary_stale() {
+    local pid running
+    pid=$(systemctl show -p MainPID --value autoreview.service 2>/dev/null) || return 1
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+    running=$(readlink "/proc/$pid/exe" 2>/dev/null) || return 1
+    [ "$running" != "$(readlink -f -- "$BIN")" ]
+}
+
 # Enables the service and the timer, and restarts what changed or is stopped.
+# A run after an interrupted one converges: it reloads and restarts while systemd
+# holds an older unit, and restarts while the service runs another binary.
 # $1 is 1 when the binary changed; $2... are the changed units.
 step_systemctl() {
-    local binary_changed=$1
+    local binary_changed=$1 reloaded=0
     shift
     if [ -n "$root" ]; then
         report "systemctl" "skipped (--root)"
         return
     fi
-    if [ "$#" -gt 0 ]; then
+    if [ "$#" -gt 0 ] || units_need_reload; then
         systemctl daemon-reload || fail 5 "systemctl daemon-reload failed"
+        reloaded=1
+        report "systemctl daemon-reload" "done"
     fi
     if [ "$(systemctl is-enabled autoreview.service 2>/dev/null)" != enabled ] \
         || [ "$(systemctl is-enabled autoreview-queue.timer 2>/dev/null)" != enabled ]; then
@@ -231,14 +268,14 @@ step_systemctl() {
             || fail 5 "systemctl enable failed"
         report "systemctl enable" "done"
     fi
-    if [ "$binary_changed" -eq 1 ] || [ "$#" -gt 0 ] \
-        || ! systemctl is-active --quiet autoreview.service; then
+    if [ "$binary_changed" -eq 1 ] || [ "$reloaded" -eq 1 ] \
+        || ! systemctl is-active --quiet autoreview.service || service_binary_stale; then
         systemctl restart autoreview.service || fail 5 "systemctl restart failed"
         report "autoreview.service" "restarted"
     else
         report "autoreview.service" "running"
     fi
-    if [ "$#" -gt 0 ] || ! systemctl is-active --quiet autoreview-queue.timer; then
+    if [ "$reloaded" -eq 1 ] || ! systemctl is-active --quiet autoreview-queue.timer; then
         systemctl restart autoreview-queue.timer || fail 5 "systemctl restart failed"
         report "autoreview-queue.timer" "restarted"
     fi

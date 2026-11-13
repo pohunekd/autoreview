@@ -2,7 +2,7 @@
 type: Reference
 id: reference/install
 title: Install autoreview
-description: Prerequisites, the four install paths (release archive with checksum and attestation, systemd units with their installer, container image planned in #40, pohunek workflow plugin planned in #41), building from source, first configuration, the first review and where to go for upgrades.
+description: Prerequisites, the three install paths (release archive with checksum and attestation, systemd units with their installer, container image planned in #40), building from source, first configuration, the first review and where to go for upgrades.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -54,7 +54,6 @@ a dedicated server user.
 | a. Release binary (default) | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
 | b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `deploy/install.sh`, which installs `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
 | c. Container | You run containers | `ghcr.io/pohunekd/autoreview:<version>`, planned in #40 |
-| d. pohunek workflow plugin | Not available yet | Planned in #41 |
 
 Paths a and b need the `autoreview` system user that path b creates.
 
@@ -206,10 +205,6 @@ volumes:
 
 Set `github.gh_bin` and `pohunek.bin` to the paths of the bundled tools inside
 the image. The image layout is not documented yet.
-
-## d. pohunek workflow plugin
-
-Not available yet: the repository contains no workflow plugin. Planned in #41.
 
 ## First configuration
 

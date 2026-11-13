@@ -99,7 +99,7 @@ one versioned JSON document for a dashboard of your own.
 - The GitHub CLI and one token, of your own account or a machine user; several
   tokens are planned in #13. [GitHub identity](knowledge/concepts/github-identity.md)
 - Linux with systemd, or a container runtime for the container image that comes
-  planned in #40; the pohunek workflow plugin is planned in #41.
+  planned in #40.
 
 ## Documentation map
 
