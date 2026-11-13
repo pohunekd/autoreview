@@ -5,6 +5,8 @@
 //! with this module's own fence, and the code spans whose content is harmless as text. All
 //! other text has its mentions, HTML, entities and images defused. `<!--` and `-->` are defused
 //! everywhere, code included, so model output cannot hide content or imitate the review marker.
+//! Each bidi control and zero-width character of the model, code included, is shown as
+//! `<U+XXXX>` (see `push_visible`); the zero-width spaces that defuse mentions stay raw.
 
 // Rust guideline compliant 2026-11-12
 
@@ -60,7 +62,7 @@ pub(crate) fn neutralize_block(value: &str) -> String {
             .all(|c| c.is_ascii_alphanumeric() || "_+.#-".contains(c))
             && !RICH_LANGUAGES.contains(&language.to_ascii_lowercase().as_str());
         out.push(format!("{fence}{}", if keep { language } else { "" }));
-        out.extend(content.iter().map(|text| (*text).to_owned()));
+        out.extend(content.iter().map(|text| visible(text)));
         out.push(fence);
         if index < lines.len() {
             out.push(String::new());
@@ -108,7 +110,8 @@ pub(crate) fn closes_fence(line: &str, fence: &str) -> bool {
 /// backtick, and the first tilde of a run of three, is escaped. Outside kept spans, `&` and `<`
 /// become entities, `@` before a letter or digit gets a zero-width space, `![` loses its image,
 /// `[^` its footnote and `]:` its link definition, and a reference to another repository
-/// gets a zero-width space (see `breaks_reference`).
+/// gets a zero-width space (see `breaks_reference`). Model characters go through
+/// `push_visible`, kept spans included; the zero-width spaces written here stay raw.
 fn neutralize_line(line: &str, keep_spans: bool) -> String {
     let chars: Vec<char> = line.chars().collect();
     let mut out = String::with_capacity(line.len());
@@ -143,7 +146,9 @@ fn neutralize_line(line: &str, keep_spans: bool) -> String {
                     .iter()
                     .collect();
                 if harmless_as_text(&content) {
-                    out.extend(chars.get(index..close + run).unwrap_or_default());
+                    for kept in chars.get(index..close + run).unwrap_or_default() {
+                        push_visible(&mut out, *kept);
+                    }
                     index = close + run;
                     continue;
                 }
@@ -170,7 +175,7 @@ fn neutralize_line(line: &str, keep_spans: bool) -> String {
                 out.push(character);
                 out.push('\u{200b}');
             }
-            other => out.push(other),
+            other => push_visible(&mut out, other),
         }
         index += 1;
     }
@@ -312,6 +317,43 @@ pub(crate) fn defuse_comment_delimiters(text: &str) -> String {
     out
 }
 
+/// Writes `character` to `out`, a bidi control or zero-width character as `<U+XXXX>`.
+///
+/// Such a character can make a text show something else than it holds. The written text has
+/// no backtick, `!`, `-` or `:`, and `<U` before `+` starts no HTML tag or autolink, so it
+/// reads as plain text in Markdown, code spans and fenced blocks alike.
+pub(crate) fn push_visible(out: &mut String, character: char) {
+    if hidden(character) {
+        out.push_str(&format!("<U+{:04X}>", u32::from(character)));
+    } else {
+        out.push(character);
+    }
+}
+
+/// Returns `text` with each bidi control and zero-width character written as `<U+XXXX>`.
+pub(crate) fn visible(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for character in text.chars() {
+        push_visible(&mut out, character);
+    }
+    out
+}
+
+/// Reports whether a character is a bidi control (`Bidi_Control`) or has no width.
+///
+/// Bidi controls reorder the shown text; zero-width characters hide a difference between names.
+fn hidden(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061C}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -435,8 +477,38 @@ mod tests {
             (
                 "mention_after_a_zero_width_space",
                 "\u{200b}@victim",
-                "\u{200b}@\u{200b}victim",
-                "\u{200b}@\u{200b}victim",
+                "<U+200B>@\u{200b}victim",
+                "<U+200B>@\u{200b}victim",
+            ),
+            (
+                "model_zero_width_space_beside_the_engine_defusing",
+                "@\u{200b}victim, @victim, acme/other#\u{200b}12 and acme/other#12",
+                concat!(
+                    "@<U+200B>victim, @\u{200b}victim, ",
+                    "acme/other#<U+200B>12 and acme/other#\u{200b}12"
+                ),
+                concat!(
+                    "@<U+200B>victim, @\u{200b}victim, ",
+                    "acme/other#<U+200B>12 and acme/other#\u{200b}12"
+                ),
+            ),
+            (
+                "bidi_override_in_text",
+                "Rename \u{202e}fdp.exe, <!\u{2066}-- x -\u{2069}->",
+                "Rename <U+202E>fdp.exe, &lt;!<U+2066>-- x -<U+2069>->",
+                "Rename <U+202E>fdp.exe, &lt;!<U+2066>-- x -<U+2069>->",
+            ),
+            (
+                "zero_width_space_in_a_kept_code_span",
+                "Call `a\u{200b}b()` or ``x ` \u{2060}``",
+                "Call `a<U+200B>b()` or ``x ` <U+2060>``",
+                "Call \\`a<U+200B>b()\\` or \\`\\`x \\` <U+2060>\\`\\`",
+            ),
+            (
+                "byte_order_mark_in_a_fenced_block",
+                "```\n\u{feff}x = 1\n```\u{200b}\n@y\n```",
+                "\n````\n<U+FEFF>x = 1\n```<U+200B>\n@y\n````",
+                "\\`\\`\\`\n<U+FEFF>x = 1\n\\`\\`\\`<U+200B>\n@\u{200b}y\n\\`\\`\\`",
             ),
             (
                 "tilde_fence_in_a_blockquote",

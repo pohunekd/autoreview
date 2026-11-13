@@ -4,7 +4,7 @@
 
 use autoreview_policy::{AuthorClass, HumanReview, OnFindings, Reviewer, match_glob};
 
-use super::neutralize::{defuse_comment_delimiters, neutralize, neutralize_block};
+use super::neutralize::{defuse_comment_delimiters, neutralize, neutralize_block, push_visible};
 use super::plan::{PublicationPlan, blocking_count};
 use super::publication_marker;
 use crate::error::Error;
@@ -309,8 +309,8 @@ fn code_span(text: &str) -> String {
 /// Replaces every run of line breaks and control characters with one space, so that a value stays
 /// on one line and cannot end a paragraph inside its code span.
 ///
-/// Each bidi control and zero-width character is written as `<U+XXXX>`, so a value cannot show
-/// a different name than it holds. The `<` and `>` of that text cannot form `<!--` or `-->`.
+/// Each bidi control and zero-width character is written as `<U+XXXX>` (see `push_visible`),
+/// so a value cannot show a different name than it holds.
 fn single_line(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_break = false;
@@ -321,30 +321,11 @@ fn single_line(text: &str) -> String {
             }
             in_break = true;
         } else {
-            if hidden(character) {
-                out.push_str(&format!("<U+{:04X}>", u32::from(character)));
-            } else {
-                out.push(character);
-            }
+            push_visible(&mut out, character);
             in_break = false;
         }
     }
     out
-}
-
-/// Reports whether a character is a bidi control (`Bidi_Control`) or has no width.
-///
-/// Bidi controls reorder the shown text; zero-width characters hide a difference between names.
-fn hidden(character: char) -> bool {
-    matches!(
-        character,
-        '\u{061C}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'
-            | '\u{2066}'..='\u{2069}'
-            | '\u{FEFF}'
-    )
 }
 
 /// Writes values as code spans in order while they fit `budget` bytes; the rest are counted.
@@ -1015,7 +996,16 @@ mod tests {
             200,
             &input,
             &Artifact {
-                findings: artifact.findings.iter().skip(1).cloned().collect(),
+                // A right-to-left override would show this path as `src/a.go`.
+                findings: artifact
+                    .findings
+                    .iter()
+                    .skip(1)
+                    .map(|note| Finding {
+                        path: "src/\u{202e}og.a".to_owned(),
+                        ..note.clone()
+                    })
+                    .collect(),
                 ..Artifact::default()
             },
         );
@@ -1024,7 +1014,7 @@ mod tests {
         assert!(
             message.starts_with(APPROVAL_REQUESTED_TITLE)
                 && message.contains("Blocking findings: 0\nNon-blocking notes: 1")
-                && message.contains("O002 [NOTE, LOW")
+                && message.contains("O002 [NOTE, LOW, confidence: high] src/<U+202E>og.a:4 Naming")
                 && reply.is_some()
                 && reply <= notes_at,
             "approval request = {message}"
