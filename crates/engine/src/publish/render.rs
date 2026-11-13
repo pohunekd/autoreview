@@ -308,6 +308,9 @@ fn code_span(text: &str) -> String {
 
 /// Replaces every run of line breaks and control characters with one space, so that a value stays
 /// on one line and cannot end a paragraph inside its code span.
+///
+/// Each bidi control and zero-width character is written as `<U+XXXX>`, so a value cannot show
+/// a different name than it holds. The `<` and `>` of that text cannot form `<!--` or `-->`.
 fn single_line(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut in_break = false;
@@ -318,11 +321,30 @@ fn single_line(text: &str) -> String {
             }
             in_break = true;
         } else {
-            out.push(character);
+            if hidden(character) {
+                out.push_str(&format!("<U+{:04X}>", u32::from(character)));
+            } else {
+                out.push(character);
+            }
             in_break = false;
         }
     }
     out
+}
+
+/// Reports whether a character is a bidi control (`Bidi_Control`) or has no width.
+///
+/// Bidi controls reorder the shown text; zero-width characters hide a difference between names.
+fn hidden(character: char) -> bool {
+    matches!(
+        character,
+        '\u{061C}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
 }
 
 /// Writes values as code spans in order while they fit `budget` bytes; the rest are counted.
@@ -1125,7 +1147,13 @@ mod tests {
             max_changed_lines: Some(100),
             max_changed_files: Some(3),
             max_notes: Some(1),
-            authors: vec!["trusted".to_owned(), "octocat".to_owned()],
+            // The last two logins are refused by the policy; they reach `code_span` only here.
+            authors: vec![
+                "trusted".to_owned(),
+                "octocat".to_owned(),
+                "octo\u{200b}cat".to_owned(),
+                "\u{202e}\u{200b}\u{feff}".to_owned(),
+            ],
         };
         let strings = |values: &[&str]| values.iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
         let file = |path: &str, status: &str, additions: i64, deletions: i64| ChangedFile {
@@ -1359,6 +1387,66 @@ mod tests {
                 AuthorClass::Untrusted,
                 false,
                 strings(&["changed path ``db/[x](y)*a*`b`@octocat.sql`` (1 matching files)"]),
+            ),
+            (
+                "a right-to-left override in a path is shown",
+                strings(&[]),
+                vec![file("db/\u{202e}lqs.exe", "added", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path `db/<U+202E>lqs.exe` (1 matching files)"]),
+            ),
+            (
+                "a zero-width space in a login is shown",
+                strings(&[]),
+                vec![],
+                0,
+                "octo\u{200b}cat",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["author `octo<U+200B>cat`"]),
+            ),
+            (
+                "a byte order mark at the start of a deleted test path is shown",
+                strings(&[]),
+                vec![file("\u{feff}pkg/tests/a.php", "removed", 0, 1)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["deleted test files `<U+FEFF>pkg/tests/a.php`"]),
+            ),
+            (
+                "a value of hidden characters only is shown",
+                strings(&[]),
+                vec![],
+                0,
+                "\u{202e}\u{200b}\u{feff}",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["author `<U+202E><U+200B><U+FEFF>`"]),
+            ),
+            (
+                "a hidden character beside backticks keeps one code span and defused delimiters",
+                strings(&[]),
+                vec![file("db/a`\u{2066}-->`", "added", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path `` db/a`<U+2066>--&gt;` `` (1 matching files)"]),
+            ),
+            (
+                "shown hidden characters never form a comment delimiter",
+                strings(&[]),
+                vec![file("db/<!\u{200b}--\u{200b}>.sql", "added", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path `db/<!<U+200B>--<U+200B>>.sql` (1 matching files)"]),
             ),
             (
                 "every signal at once",

@@ -279,7 +279,8 @@ Model text is neutralized before it is rendered:
   cannot turn engine text such as a login into a link. A fenced
   block in a language that GitHub renders in a viewer (`mermaid`, `math`,
   `geojson`, `topojson`, `stl`) is shown as plain code. The path and line of a
-  finding are a code span in a paragraph of their own.
+  finding are a code span in a paragraph of their own, with each bidi control
+  or zero-width character shown as `<U+XXXX>`.
 - Code fences are closed, so an unclosed fence cannot swallow the signature.
 
 ## 10. Notifications
