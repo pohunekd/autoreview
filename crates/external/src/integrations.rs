@@ -7,10 +7,10 @@
 use std::time::Duration;
 
 use autoreview_engine::Error;
-use autoreview_engine::config::{Config, NotifyRoute};
+use autoreview_engine::config::{Config, Credential, NotifyRoute};
 use autoreview_engine::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft,
-    ReviewRequestList, SessionRequest,
+    ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use autoreview_engine::model::{
     CandidateList, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
@@ -87,16 +87,6 @@ impl External {
             http,
         })
     }
-
-    /// Returns the login of the account behind the GitHub token, in lower case.
-    ///
-    /// # Errors
-    ///
-    /// Returns the error of the `gh api user` call, and `github_response_invalid` when its
-    /// output holds no login.
-    pub async fn viewer_login(&self, cancel: &CancellationToken) -> Result<String, Error> {
-        self.github.viewer_login(cancel).await
-    }
 }
 
 impl Integrations for External {
@@ -140,6 +130,14 @@ impl Integrations for External {
         self.github
             .author_permission(cancel, repository, login)
             .await
+    }
+
+    async fn check_token(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+    ) -> Result<TokenAnswer, Error> {
+        self.github.check_token(cancel, credential).await
     }
 
     async fn host_routes(

@@ -257,9 +257,13 @@ binary carries another adapter.
 
 ### `autoreview validate`
 
+```
+autoreview validate [--check-credentials]
+```
+
 Loads the configuration and the policy, reads every prompt and prints the
-policy digest and the agent profiles the policy needs. It makes no GitHub or
-pohunek call. Prints:
+policy digest and the agent profiles the policy needs. Without
+`--check-credentials` it makes no GitHub or pohunek call. Prints:
 
 ```json
 {
@@ -268,24 +272,42 @@ pohunek call. Prints:
 }
 ```
 
-Token checks in `validate` are planned in #15, and the pohunek version check in #9.
+`--check-credentials` also runs the [startup check](#autoreview-serve) of every
+credential and adds what GitHub answered, in file order:
+
+```json
+"credentials": [
+  {"name": "default", "login": "review-bot", "expires_at": "2026-12-31T23:59:59Z"}
+]
+```
+
+`expires_at` is the token's expiry in UTC; it is `null` when GitHub sends no
+expiry, as for a token that never expires. Token values are never printed. The
+pohunek version check is planned in #9.
 
 ## Service
 
 ### `autoreview serve`
 
-Runs discovery and reviews until stopped. Before it starts, it asks GitHub for
-the login of the token and refuses with `configuration_invalid` naming
-`github.credentials.login` when the token belongs to another account, see
-[credentials](configuration.md#credentials). A second `serve` on the same database is refused. Reviews
-running at shutdown resume from their stored steps on the next start. A SIGINT
-or SIGTERM during the login check or while the engine runs is a normal stop:
-`serve` logs `pull request review engine stopping` and exits with status 0.
+Runs discovery and reviews until stopped. Before it starts, it checks every
+credential in file order: it asks GitHub for the login behind the token
+(`GET /user`) with that credential's token only. A token that GitHub refuses
+(revoked, expired or never valid) fails with `credential_invalid`, and a token
+of another account with `credential_login_mismatch` naming
+`github.credentials.login`. An expiry that is not a time fails with
+`github_response_invalid`. Each message names the credential, see
+[credentials](configuration.md#credentials). Each checked credential is logged
+as `credential checked` with its name, and with `expires_at` when GitHub sent one.
+
+A second `serve` on the same database is refused. Reviews running at shutdown
+resume from their stored steps on the next start. A SIGINT or SIGTERM during
+the credential check or while the engine runs is a normal stop: `serve` logs
+`pull request review engine stopping` and exits with status 0.
 
 With a [`metrics` section](configuration.md#metrics), `serve` also answers
 `GET /metrics` on `metrics.listen`, see
 [Prometheus metrics](stats.md#prometheus-metrics). It binds that address after
-the login check and before it takes the engine lock, so a second `serve` with
+the credential check and before it takes the engine lock, so a second `serve` with
 the same section fails with `metrics_listen_failed` before it reaches
 `engine_already_running`; one without the section, or with another port, fails
 with `engine_already_running`.
@@ -394,6 +416,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 |---|---|
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it |
 | `credential_not_covered`, `credential_unused` | A policy rule has a repository that no credential matches, or a credential serves no repository of the policy, see [credentials](configuration.md#credentials) |
+| `credential_invalid`, `credential_login_mismatch` | GitHub refuses a credential's token, or the token belongs to another account than its `login`; the message names the credential, see [`serve`](#autoreview-serve). At startup, `github_response_invalid` names the credential whose token expiry is not a time |
 | `command_invalid` | Wrong arguments |
 | `init_file_exists` | `init` found a file in the way; the `configuration` field names it |
 | `init_write_failed` | `init` could not check, create or write a path; the `configuration` field names it |

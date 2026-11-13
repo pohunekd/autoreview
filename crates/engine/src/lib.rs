@@ -3,6 +3,7 @@
 // Rust guideline compliant 2026-06-26
 
 pub mod config;
+pub mod credential_check;
 pub(crate) mod discovery;
 pub mod discussion;
 pub(crate) mod engine;

@@ -41,7 +41,8 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
-| `configuration_invalid` naming `github.credentials.login` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
+| `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
+| `credential_invalid` | GitHub refuses the token: revoked, expired or never valid | Replace the token in the variable that `token_env` names |
 | `configuration_invalid` naming `github.credentials` or `github.credentials.match` | Several credentials outside `validate`, or a `match` entry that an earlier one covers | [Credential errors](#credential-errors) |
 | `credential_not_covered`, `credential_unused` | A policy rule has a repository that no credential matches, or a credential serves no repository of the policy | [Credential errors](#credential-errors) |
 | A fine-grained token sees nothing | Organization approval pending, wrong resource owner, or repository not selected | [A fine-grained token sees nothing](#a-fine-grained-token-sees-nothing) |
@@ -473,13 +474,14 @@ credential's `token_env`.
 
 ### Token of another account
 
-`serve` asks GitHub for the token's login before it starts. When the token
-belongs to another account than the `login` of the credential, it refuses with
-`configuration_invalid` naming `github.credentials.login`, and the logged error
-names the token's login. Either correct `login`, or replace the token with one
-of that account. A token that GitHub refuses stops `serve` with the error of
-that call. A startup check of every token is planned in #15, and checks while
-running in #19.
+`serve` asks GitHub for the login behind every credential's token before it
+starts. When a token belongs to another account than the `login` of its
+credential, it refuses with `credential_login_mismatch`, and the message names
+the credential and the token's login. Either correct `login`, or replace the
+token with one of that account. A token that GitHub refuses stops `serve` with
+`credential_invalid` naming the credential. Checks while running are planned in
+#19. `autoreview validate --check-credentials` runs the same check and prints
+each credential's login and expiry.
 
 To see which login a token belongs to, load the environment file into a shell
 without printing it, then ask GitHub with the token of that variable. Never print the

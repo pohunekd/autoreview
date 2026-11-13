@@ -17,7 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use autoreview_engine::config::Config;
+use autoreview_engine::config::{Config, Credentials};
+use autoreview_engine::credential_check::{CredentialStatus, check_credentials};
 use autoreview_engine::mcp::McpConfig;
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::model::{
@@ -57,9 +58,6 @@ const ESCAPE: &str = "--";
 
 /// Configuration key named when the configuration holds no policy.
 const POLICY_KEY: &str = "policy_file";
-
-/// Configuration key named when the token belongs to another login than the credential.
-const LOGIN_KEY: &str = "github.credentials.login";
 
 /// Configuration key named when a command that calls GitHub finds several credentials.
 const CREDENTIALS_KEY: &str = "github.credentials";
@@ -111,10 +109,18 @@ enum Invocation {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Validates the configuration and the policy and prints the policy digest.
-    Validate,
+    Validate(ValidateArguments),
     /// A command that runs on the store and the engine.
     #[command(flatten)]
     Engine(EngineCommand),
+}
+
+/// The options of `validate`.
+#[derive(Debug, Args)]
+struct ValidateArguments {
+    /// Also checks every credential's token with GitHub and prints its login and expiry.
+    #[arg(long)]
+    check_credentials: bool,
 }
 
 /// The commands that open the store and build the engine first.
@@ -184,6 +190,9 @@ struct ValidationResult {
     policy_digest: String,
     /// The pohunek agent profiles that the policy's reviewers run.
     agent_profiles: Vec<String>,
+    /// Each credential's login and token expiry; only with `--check-credentials`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credentials: Option<Vec<CredentialStatus>>,
 }
 
 /// What `backup-db` prints after the copy was written.
@@ -294,21 +303,22 @@ async fn run(
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;
     match command {
-        Command::Validate => validate(&config),
+        Command::Validate(arguments) => {
+            validate(&config, arguments.check_credentials, &cancel).await
+        }
         Command::Engine(command) => {
-            // The startup check, the `gh` calls without a repository and the logins of the `gh`
-            // client need one credential until #15 to #17 land.
-            let Some(credential) = config.credentials.single() else {
+            // The `gh` calls without a repository and the logins of the `gh` client need one
+            // credential until #16 and #17 land.
+            if config.credentials.single().is_none() {
                 return Err(Error::config(
                     CONFIGURATION_INVALID,
                     CREDENTIALS_KEY,
                     Some("several credentials pass validate only, until #14 to #17".into()),
                 ));
-            };
-            let github_login = credential.login.clone();
+            }
             let external = Arc::new(External::new(config.clone())?);
             let sections = Sections { mcp, metrics };
-            run_engine(command, config, &github_login, sections, external, &cancel).await
+            run_engine(command, config, sections, external, &cancel).await
         }
     }
 }
@@ -322,17 +332,15 @@ struct Sections {
 }
 
 /// Opens the store, builds the engine and runs `command` on them.
-///
-/// `github_login` is the login that `serve` expects behind the token.
 async fn run_engine(
     command: EngineCommand,
     config: Config,
-    github_login: &str,
     sections: Sections,
     external: Arc<External>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
     let review_list_limit = config.review_list_limit;
+    let credentials = config.credentials.clone();
     let store = Arc::new(Store::open(
         Path::new(&config.state_db_path),
         Box::new(OffsetDateTime::now_utc),
@@ -352,7 +360,7 @@ async fn run_engine(
     });
     match command {
         EngineCommand::Serve => {
-            serve(&engine, &external, github_login, sections.metrics, cancel).await
+            serve(&engine, &external, &credentials, sections.metrics, cancel).await
         }
         EngineCommand::Mcp => {
             let Some(mcp) = sections.mcp else {
@@ -418,32 +426,41 @@ async fn run_engine(
     }
 }
 
-/// Prints the policy digest and agent profiles of the loaded configuration.
-fn validate(config: &Config) -> Result<(), Error> {
+/// Prints the policy digest and agent profiles, and with `check` each credential's check.
+///
+/// Without `check`, it makes no GitHub call.
+async fn validate(config: &Config, check: bool, cancel: &CancellationToken) -> Result<(), Error> {
     let Some(policy) = config.policy.as_ref() else {
         return Err(Error::config(CONFIGURATION_INVALID, POLICY_KEY, None));
+    };
+    let credentials = if check {
+        let external = External::new(config.clone())?;
+        Some(check_credentials(&external, &config.credentials, cancel).await?)
+    } else {
+        None
     };
     print_json(&ValidationResult {
         policy_digest: policy.digest().to_owned(),
         agent_profiles: policy.agent_profiles(),
+        credentials,
     })
 }
 
-/// Runs the engine after checking that the token belongs to the configured login.
+/// Runs the engine after checking every credential's token with GitHub.
 ///
-/// With `metrics`, the endpoint is bound after the login check and before the engine takes
-/// its lock, and it stops when the engine stops. A review panic ends the process, as a
-/// goroutine panic ends Go's. A signal during the login check is a normal stop, as a signal
-/// while the engine runs: it logs the engine's stop line and returns `Ok`.
+/// With `metrics`, the endpoint is bound after the credential check and before the engine
+/// takes its lock, and it stops when the engine stops. A review panic ends the process, as a
+/// goroutine panic ends Go's. A signal during the credential check is a normal stop, as a
+/// signal while the engine runs: it logs the engine's stop line and returns `Ok`.
 async fn serve(
     engine: &Arc<Engine<External, SystemClock>>,
     external: &External,
-    github_login: &str,
+    credentials: &Credentials,
     metrics: Option<MetricsConfig>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
-    let login = match external.viewer_login(cancel).await {
-        Ok(login) => login,
+    let statuses = match check_credentials(external, credentials, cancel).await {
+        Ok(statuses) => statuses,
         // Read from the token: the unit's SIGTERM may kill `gh` first, which fails as an exit.
         Err(_) if cancel.is_cancelled() => {
             tracing::info!("pull request review engine stopping");
@@ -451,12 +468,9 @@ async fn serve(
         }
         Err(err) => return Err(err),
     };
-    if login != github_login {
-        return Err(Error::config(
-            CONFIGURATION_INVALID,
-            LOGIN_KEY,
-            Some(format!("token belongs to {login}").into()),
-        ));
+    for status in &statuses {
+        let (name, expires_at) = (&status.name, status.expires_at.as_deref());
+        tracing::info!(credential = %name, expires_at, "credential checked");
     }
     let Some(metrics) = metrics else {
         return engine.serve(cancel).await;
