@@ -476,6 +476,16 @@ Check that a variable is set without printing its value:
 `test -n "$AUTOREVIEW_GH_TOKEN" && echo set`. Use the variable name from the
 credential's `token_env`.
 
+### Token expires soon
+
+`credential_expiring` names a credential whose token expires within
+`github.expiry_warning_days`; the log line `credential token expires soon` has
+its `expires_at`. Create a new token for the same account with the same access,
+put it into the variable that `token_env` names, and restart `serve`. The
+warning repeats at most once a UTC day until then. A check that fails on its
+own is logged as `credential check failed` with its error code and changes
+nothing.
+
 ### Token of another account
 
 `serve` asks GitHub for the login behind every credential's token before it
@@ -483,9 +493,10 @@ starts. When a token belongs to another account than the `login` of its
 credential, it refuses with `credential_login_mismatch`, and the message names
 the credential and the token's login. Either correct `login`, or replace the
 token with one of that account. A token that GitHub refuses stops `serve` with
-`credential_invalid` naming the credential. Checks while running are planned in
-#19. `autoreview validate --check-credentials` runs the same check and prints
-each credential's login and expiry.
+`credential_invalid` naming the credential. While it runs, `serve` checks every
+token again every `github.credential_check_hours`.
+`autoreview validate --check-credentials` runs the same check and prints each
+credential's login and expiry.
 
 To see which login a token belongs to, load the environment file into a shell
 without printing it, then ask GitHub with the token of that variable. Never print the

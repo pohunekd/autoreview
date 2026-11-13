@@ -162,8 +162,8 @@ notify:
 | `host` | GitHub host; `github.com` in this release |
 | `gh_bin` | Absolute path of the GitHub CLI |
 | `timeout_seconds` | Timeout of one `gh` call |
-| `credential_check_hours` | Interval of the token check while the service runs, which is planned in #19 |
-| `expiry_warning_days` | Days before a token's expiry for the expiry warning, which is planned in #19 |
+| `credential_check_hours` | Hours between two checks of every token while `serve` runs, 1-8760; `serve` also checks once when it starts |
+| `expiry_warning_days` | Days before a token's expiry from which a check raises `credential_expiring`, 1-366 |
 | `credentials` | One or more credentials; the first whose `match` covers a repository serves it, see below |
 
 ### Credentials
@@ -217,11 +217,14 @@ How the credential applies:
   the login behind each credential's token. A token that GitHub refuses fails
   with `credential_invalid`, a token of another account with
   `credential_login_mismatch`; the message names the credential.
-  `validate --check-credentials` runs the same check. Checks while running and
-  the suspension of a failing credential are planned in #19.
+  `validate --check-credentials` runs the same check. While it runs, `serve`
+  checks every token again every `credential_check_hours`. The suspension of a
+  failing credential is planned in #19.
 - **Expiry.** The check reads the token's expiry from GitHub;
   `validate --check-credentials` prints it as `expires_at`, `null` for a token
-  without an expiry. A warning before a token expires is planned in #19.
+  without an expiry. A token that expires within `expiry_warning_days` raises
+  `credential_expiring`, at most once a UTC day per credential while `serve`
+  runs, see [expiry](knowledge/concepts/github-identity.md#expiry).
 
 A fine-grained token covers one resource owner, and an organization may
 require an admin to approve it before it sees anything. See

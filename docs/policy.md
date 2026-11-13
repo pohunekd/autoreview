@@ -125,7 +125,7 @@ per owner, each with its own token, works too.
 | `ready_draft_authors` | no | Lowercase GitHub logins of coding agents whose drafts are marked ready, see [drafts](#drafts-of-coding-agents) |
 | `approval` | yes | `timeout_hours`: 1-720, how long a clean review waits for a human approval |
 | `notes_handoff` | exactly when a rule sets `on_notes` | `reminder_hours`: 1-720 |
-| `notifications` | yes | A level for every [event](#notifications) |
+| `notifications` | yes | A level for every [event](#notifications); `credential_expiring` may be left out |
 
 The file is at most 256 KiB, holds exactly one YAML document, and unknown keys
 are an error.
@@ -359,11 +359,15 @@ events have their own route, is configured in [config.yaml](configuration.md#not
 | `changes_requested` | A request for changes was published |
 | `commented` | A comment review was published |
 | `approval_expired` | A wait for approval passed `approval.timeout_hours` |
+| `credential_expiring` | A credential's token expires within `github.expiry_warning_days`; at most once a UTC day per credential while `serve` runs |
 | `started` | A review started |
 | `retry_scheduled` | A failed review step is retried later |
 | `superseded` | A newer commit or a retarget to another base branch replaced a review, or the pull request stopped asking for one (review request or label removed, closed, back to draft) |
 
-Events for a rejected or an expiring GitHub token are planned in #19.
+`credential_expiring` is optional: a policy without it sends it at level
+`action`, and its digest stays the same. A level set for it is used and changes
+the policy digest. An event for a token GitHub refuses while the service runs
+is planned in #19.
 
 A message the notifier cannot deliver is dropped with a warning in the log, at
 every level; neither the review nor discovery waits for it or sends it again

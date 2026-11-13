@@ -73,8 +73,9 @@ only. A token that GitHub refuses (revoked, expired or never valid) stops it
 with `credential_invalid`, and a token of another account with
 `credential_login_mismatch`; the message names the credential. `validate`
 makes no GitHub call unless it runs with `--check-credentials`, which runs the
-same check. Checks while running with the suspension of a failing credential
-are planned in #19.
+same check. While it runs, `serve` checks every token again: once when the
+engine starts and then every `github.credential_check_hours`. The suspension
+of a failing credential is planned in #19.
 
 ### Expiry
 
@@ -83,8 +84,13 @@ GitHub sends a personal access token's expiry in the
 `2026-12-31 23:59:59 UTC`, or with a numeric offset such as `-0800`; another
 form fails the check with `github_response_invalid`. The startup check logs the
 expiry, and `validate --check-credentials` prints it as `expires_at`. A token
-without an expiry gets no header, and `expires_at` is `null`. A warning before
-the expiry is planned in #19.
+without an expiry gets no header, and `expires_at` is `null`.
+
+A check that finds a token expiring within `github.expiry_warning_days`, or
+already past its expiry, logs `credential token expires soon` and raises
+`credential_expiring`. The message names the credential and the expiry, never
+the token. Each credential gets at most one warning per UTC day while `serve`
+runs; the day is kept in memory, so a restart warns again at its first check.
 
 ## Token kinds and organization approval
 
