@@ -144,6 +144,14 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
         h.publications() == 2
     })
     .await;
+    // Only a search that GitHub refuses marks its credential for a token check (#19).
+    let checks = h.fake.lock().token_checks.len();
+    h.engine.recheck_tokens(&CancellationToken::new()).await;
+    assert_eq!(
+        h.fake.lock().token_checks.len(),
+        checks,
+        "a failed search checked its token"
+    );
     // A retry names the failed search, not a withdrawn review request.
     match h.retry(&next).await {
         Err(err) => assert_eq!(
@@ -234,6 +242,69 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
             "credential {name} was not warned exactly once a day"
         );
     }
+    // A refused token suspends only its credential (#19, D1): `credential_invalid` is raised
+    // once, `acme`'s pull requests wait unsearched, and `rest` still reviews.
+    let cancel = CancellationToken::new();
+    fail_credential(&h, Some(("acme", "credential_invalid")));
+    (h.fake.lock().token_answers).insert("acme-token".to_owned(), TokenAnswer::Rejected);
+    h.poll().await;
+    h.engine.recheck_tokens(&cancel).await;
+    let refused = "GitHub refuses the token of credential acme";
+    let fake = Arc::clone(&h.fake);
+    let notes = move || count_notes(&fake.lock().notes, Level::Action, refused);
+    assert_eq!(notes(), 1, "the refused search did not check the token");
+    let held = integration_pull_request("acme/held", &sha("f"));
+    h.fake.open(held.clone(), h.rule(&held.repository));
+    let other = integration_pull_request("risky/after", &sha("9"));
+    h.fake.open(other.clone(), h.rule(&other.repository));
+    h.poll_until("rest's review while acme is suspended", || {
+        h.publications() == 6
+    })
+    .await;
+    h.settle().await;
+    let before = h.fake.lock().listings;
+    h.poll().await;
+    h.engine.recheck_tokens(&cancel).await;
+    assert!(
+        notes() == 1
+            && h.fake.lock().listings == before + 1
+            && !h.fake.lock().published_heads.contains(&sha("f")),
+        "a suspended credential was searched or reviewed, or announced more than once"
+    );
+    // The check after the next poll accepts the token and lifts the suspension.
+    fail_credential(&h, None);
+    let accepted = TokenAnswer::Accepted {
+        login: "acme-bot".to_owned(),
+        expires_at: None,
+    };
+    (h.fake.lock().token_answers).insert("acme-token".to_owned(), accepted);
+    h.engine.recheck_tokens(&cancel).await;
+    h.poll_until("acme's review after the lift", || h.publications() == 7)
+        .await;
+    // A review queued before a start that refuses its token waits until the lift.
+    h.stop_engine().await;
+    let queued = integration_pull_request("acme/queued", &sha("8"));
+    h.fake.open(queued.clone(), h.rule(&queued.repository));
+    h.settle().await;
+    let waiting = h.store.ready_reviews().expect("the queue reads");
+    assert_eq!(waiting.len(), 1, "the review of acme/queued was not queued");
+    (h.fake.lock().token_answers).insert("acme-token".to_owned(), TokenAnswer::Rejected);
+    h.start();
+    h.wait_for("the start check of the new engine", || notes() == 2)
+        .await;
+    h.settle().await;
+    assert!(
+        h.publications() == 7 && h.store.ready_reviews().is_ok_and(|ready| ready.len() == 1),
+        "the queued review of a suspended credential started"
+    );
+    let accepted = TokenAnswer::Accepted {
+        login: "acme-bot".to_owned(),
+        expires_at: None,
+    };
+    (h.fake.lock().token_answers).insert("acme-token".to_owned(), accepted);
+    h.engine.recheck_tokens(&cancel).await;
+    h.wait_for("the queued review after the lift", || h.publications() == 8)
+        .await;
     h.stop_engine().await;
 }
 
