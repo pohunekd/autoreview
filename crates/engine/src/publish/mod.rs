@@ -86,30 +86,8 @@ pub(crate) fn decision_text(decision: &Decision) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
-
     use super::{base_marker, publication_marker, review_marker};
-    use crate::model::{Decision, Finding, PriorResult, PullRequest};
-
-    /// Go-written markers, shared with the Go reference tests.
-    const GOLDEN: &str = include_str!("../../../../testdata/parity/marker.json");
-
-    /// One golden case: a named input and the Go output.
-    #[derive(Debug, Deserialize)]
-    struct Case {
-        name: String,
-        input: Input,
-        output: String,
-    }
-
-    /// Input of a golden case; a Go nil slice is `null`.
-    #[derive(Debug, Deserialize)]
-    struct Input {
-        pull_request: PullRequest,
-        decision: Decision,
-        findings: Option<Vec<Finding>>,
-        open_prior: Option<Vec<PriorResult>>,
-    }
+    use crate::model::{Decision, Finding, PullRequest};
 
     fn sha(character: char) -> String {
         character.to_string().repeat(40)
@@ -165,21 +143,6 @@ mod tests {
             "a COMMENT on an own pull request must still tell clean from findings: \
              {clean_comment:?} and {comment_with_findings:?}"
         );
-    }
-
-    #[test]
-    fn marker_matches_go_golden() {
-        let cases: Vec<Case> = serde_json::from_str(GOLDEN).expect("golden is JSON");
-        assert_eq!(cases.len(), 7, "golden has the seven marker cases");
-        for case in &cases {
-            let marker = review_marker(
-                &case.input.pull_request,
-                &case.input.decision,
-                case.input.findings.as_deref().unwrap_or_default(),
-                case.input.open_prior.as_deref().unwrap_or_default(),
-            );
-            assert_eq!(marker, case.output, "case {}", case.name);
-        }
     }
 
     /// Each row is a base branch and the SHA-256 digest that its marker carries (#297).

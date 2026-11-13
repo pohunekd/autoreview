@@ -551,12 +551,4 @@ reviewed_head_sha to {}.",
         embedded["properties"]["summary"] = summary.clone();
         assert_eq!(request["json_schema"], embedded);
     }
-
-    #[test]
-    fn schema_copies_are_equal() {
-        assert_eq!(
-            REVIEW_SCHEMA,
-            include_bytes!("../../../../cmd/autoreview/review-schema.json")
-        );
-    }
 }

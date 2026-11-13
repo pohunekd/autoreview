@@ -54,33 +54,13 @@
   model output.
 - Panics are reserved for programmer errors, never for input.
 
-## Go reference (read-only until deleted)
-
-- The Go code (`cmd/`, `internal/`) is the behavioural reference for the port.
-  Do not add features to it; change it only to fix a defect the port must
-  reproduce or to keep it building. It is deleted once the port reaches parity.
-- Go version as in `go.mod` (1.25 or newer). Code is formatted by `gofmt`,
-  vetted by `go vet ./...`, and analysed by the staticcheck version pinned in
-  `scripts/gates`. A lint suppression needs a comment with the reason.
-- Standard library first. Add a module only when it clearly pays for itself,
-  and state the reason in the PR.
-- Errors are wrapped with `%w` and matched with `errors.Is` or `errors.As`. A
-  failed `gh` or pohunek call is a result the engine handles, never an empty
-  value that looks like success.
-- Pass `context.Context` into every external call; timeouts come from
-  configuration.
-- Run external programs with `exec.Command` and an argv list. Never build a
-  shell string from repository content, pull request text, or model output.
-- No `unsafe`. Panics are reserved for programmer errors, never for input.
-
 ## Porting from the Go reference
 
 The Rust engine opens the Go engine's database unchanged and continues its
 history. Supported cutover: from a drained queue (no row with status `queued`,
 `running` or `awaiting`). Resuming a Go review mid-workflow is not supported and
-not tested. Rollback to the Go binary is supported under the same drained rule,
-because nothing below changes what Go reads. Line references are to the Go
-reference as merged in #61.
+not tested. A rollback goes to an earlier autoreview release (Rust) under the same
+drained rule. Line references to Go code in this file are to the Go reference as merged in #61.
 
 What is compatible, as rules every slice that defines a persisted type must
 follow:
@@ -133,8 +113,7 @@ follow:
   zero time `0001-01-01T00:00:00Z`.
   Exception: `Artifact.reviewed_at`, written by `CombineResults`
   (`protocol.go:353`), is Go's `time.RFC3339` in UTC with whole seconds and no
-  fraction, written by `autoreview_go_compat::go_time::format_rfc3339_seconds`;
-  `testdata/parity/timestamps.json` records both forms per instant.
+  fraction, written by `autoreview_go_compat::go_time::format_rfc3339_seconds`.
 - **R10 Identifiers.** Byte-identical: `PullRequest::workflow_id` =
   `"prr-v2-" + hex(sha256("pr-review-v2\0{repo}\0{number}\0{head}\0{request_id}\0{attempt}"))`
   (`model.go:68-73`, prefix `model.go:18`), `review_id` (`model.go:62-64`), `key`
@@ -158,7 +137,8 @@ follow:
   reader that matches the marker as a substring is unaffected (#297, see "What
   is not compatible, by decision").
 - **R13 Policy digest.** `digestOf` (`policy.go:657-686`) is reproduced byte for
-  byte, including Go's `%s` of `Trigger` (`policy.go:60-65`); checked by golden.
+  byte, including Go's `%s` of `Trigger` (`policy.go:60-65`); checked by
+  `digest_matches_go_golden`.
 - **R14 Go semantics.** `fmt` `%.12s` truncates by runes (all its inputs are
   ASCII SHAs); `strings` functions work on bytes and `for range` on runes; Go
   RE2 `\b`, `\s`, `\w`, `\d` are ASCII, so ported patterns use `(?-u:...)` or
@@ -279,8 +259,8 @@ What is not compatible, by decision:
   adapter checked (`checked_checkout`), and Rust refuses a Claude reviewer or
   verifier result without it, or with another checkout than the pipeline's, as
   `review_adapter_outdated`, so an older Claude wrapper stops every Claude
-  review after the switch. Go ignores the field. In `protocol_matches_go_golden`
-  each Claude golden case gets `"checked_checkout":"base"` before it is parsed.
+  review after the switch. Go ignores the field. The Claude test wrapper
+  (`claude_session_raw`) sets `"checked_checkout":"base"` before the result is parsed.
   The regression tests are
   `test_base_checkout_without_the_head_is_refused_before_claude_runs` (adapter),
   `adapter_refusal_of_a_missing_head_is_not_retried` (Claude and Codex parsers)
@@ -334,8 +314,8 @@ What is not compatible, by decision:
   `validate_prior_verdicts`. Go refuses both fields (`DisallowUnknownFields`,
   `protocol.go:246`), blocks every Codex finding and gives a Codex pipeline no
   prior findings (`discovery.go:90`, `review.go:94`). In
-  `protocol_matches_go_golden` the golden case `codex_valid_report`, a report
-  without both fields, expects `review_adapter_outdated`. A rollback to Go
+  `codex_report_without_blocking_or_prior_findings_is_refused`, a report without both
+  fields is refused. A rollback to Go
   needs the older Codex wrapper back, and Go refuses a stored Codex input with
   prior findings, so a Codex review in flight at the rollback stops. The
   regression tests are `codex_finding_blocks_only_when_it_says_so`,
@@ -399,8 +379,8 @@ What is not compatible, by decision:
   (`field authors not found`, `policy.go:311`), so a policy that runs on Rust does
   not load on Go. A rollback to a binary built before #33 needs a policy whose
   rules all say `trusted: any`, and one built before #32 needs no `authors`.
-  `trusted: any` adds nothing to the digest, so the Go digest goldens
-  hold. `testdata/review-policy.yaml` stays without the section for the Go tests;
+  `trusted: any` adds nothing to the digest, so the stored digests
+  hold. `testdata/review-policy.yaml` stays without the section for the digest tests;
   the Rust tests add `trusted: any` to its rules before parsing, and the golden
   case `fixture_via_load` loads such a copy from a temporary directory.
   Each pass stores the pull requests it skips in the `rejected` discovery entry
@@ -442,8 +422,7 @@ What is not compatible, by decision:
   `pohunek.route_overrides` key stops the start (`config.go:304`), and a stored
   review of such a repository fails `reviewIdentityValid` (`model.go:539`,
   called from `review.go:40` and `discovery.go:540`). No stored row changes
-  shape. `testdata/parity/ids.json` gets no case: Go writes it, and
-  `TestWriteParityGolden` compares it byte for byte. The regression tests are
+  shape. The regression tests are
   `repository_owner_follows_the_github_login_grammar` and
   `rule_match_owner_follows_the_github_login_grammar`.
 - **Step runs table (#270):** the store holds the additive table
@@ -452,9 +431,7 @@ What is not compatible, by decision:
   schema, and `user_version` stays 1, so the Go store still opens the file. Go
   neither writes nor reads the table; its prune deletes the rows with their
   review through `ON DELETE CASCADE`, and reviews that Go runs after a rollback
-  count in no step. `go_store_golden_opens` leaves the table out of the Go golden
-  comparison and checks its SQL on its own; the golden is not regenerated. The
-  regression tests are `go_store_golden_opens`,
+  count in no step. The regression tests are
   `review_records_its_steps_with_their_retries`,
   `shutdown_after_the_last_reviewer_result_still_records_the_reviewers_step` and
   `verifier_failure_before_its_verification_is_stored_records_the_resumed_run`.
@@ -474,8 +451,7 @@ What is not compatible, by decision:
   `retarget_without_a_push_publishes_a_new_approval` and
   `dismissed_review_is_skipped_and_a_later_match_is_reused`.
 
-Intentional parsing divergences (stricter than Go; each gets a golden case in G1
-with the expected Rust error code):
+Intentional parsing divergences (stricter than Go):
 
 - JSON object keys match exactly; Go's `encoding/json` matches
   case-insensitively. Rust ignores a case-variant key such as `"TITLE"` as
@@ -504,7 +480,7 @@ with the expected Rust error code):
   writes only values that passed policy validation, so no Go-written row holds
   one.
 - The AI signature symbols in `config/symbols.rs` are Unicode 17.0.0 `So`, as
-  in Go 1.27. Go 1.26, which `go.mod` names, has Unicode 15.0.0, a subset, and
+  in Go 1.27. Go 1.26, the version the Go reference named, has Unicode 15.0.0, a subset, and
   reads a signature that leads with one of the 834 newer symbols as unsigned,
   so that comment can settle a finding without the user.
 - Logins, repository names and pull request URLs compare and lowercase ASCII

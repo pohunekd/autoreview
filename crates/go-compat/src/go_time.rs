@@ -283,34 +283,8 @@ fn format_date_time(value: &OffsetDateTime) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde::{Deserialize, Serialize};
-    use serde_json::Value;
-    use time::{Date, Duration, Month, OffsetDateTime, Time};
-
-    use super::{format_rfc3339_nano, format_rfc3339_seconds, parse_rfc3339};
+    use super::{format_rfc3339_nano, parse_rfc3339};
     use crate::Error;
-
-    /// Go-written timestamp cases, shared with the Go reference tests.
-    const GOLDEN: &str = include_str!("../../../testdata/parity/timestamps.json");
-
-    #[derive(Debug, Serialize, Deserialize)]
-    struct Stamp {
-        #[serde(with = "crate::go_time")]
-        at: OffsetDateTime,
-    }
-
-    fn golden_instant(input: &Value) -> OffsetDateTime {
-        if input["zero_time"].as_bool() == Some(true) {
-            let date = Date::from_calendar_date(1, Month::January, 1).expect("valid date");
-            return OffsetDateTime::new_utc(date, Time::MIDNIGHT);
-        }
-        let seconds = input["unix_seconds"]
-            .as_i64()
-            .expect("unix_seconds is an integer");
-        let nanos = input["nanos"].as_i64().expect("nanos is an integer");
-        OffsetDateTime::from_unix_timestamp(seconds).expect("valid timestamp")
-            + Duration::nanoseconds(nanos)
-    }
 
     #[test]
     fn parse_rfc3339_follows_go_json_decoding() {
@@ -336,107 +310,6 @@ mod tests {
             assert!(
                 matches!(parse_rfc3339(refused), Err(Error::Parse { .. })),
                 "{refused} must be rejected without panicking"
-            );
-        }
-    }
-
-    #[test]
-    fn go_time_matches_go_golden() {
-        let golden: Value = serde_json::from_str(GOLDEN).expect("golden is JSON");
-        let cases = golden.as_array().expect("golden is an array");
-        for case in cases {
-            let name = case["name"].as_str().expect("case has a name");
-            let instant = golden_instant(&case["input"]);
-            let output = &case["output"];
-            let published = output["published_record"]["published_at"]
-                .as_str()
-                .expect("published_at is a string");
-            let store = output["store_timestamp"]
-                .as_str()
-                .expect("store_timestamp is a string");
-            let reviewed = output["reviewed_at"]
-                .as_str()
-                .expect("reviewed_at is a string");
-            assert_eq!(
-                format_rfc3339_nano(instant),
-                published,
-                "{name}: published_at"
-            );
-            assert_eq!(
-                format_rfc3339_nano(instant),
-                store,
-                "{name}: store_timestamp"
-            );
-            assert_eq!(
-                format_rfc3339_seconds(instant),
-                reviewed,
-                "{name}: reviewed_at"
-            );
-            assert_eq!(
-                parse_rfc3339(published).expect("golden parses"),
-                instant,
-                "{name}"
-            );
-            assert_eq!(
-                parse_rfc3339(reviewed).expect("golden parses"),
-                instant.replace_nanosecond(0).expect("whole seconds"),
-                "{name}: reviewed_at"
-            );
-        }
-
-        // Expected values below were produced by Go 1.27 time.Format, time.Parse and json.Marshal.
-        let whole = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("valid timestamp");
-        let truncated = whole + Duration::nanoseconds(999_999_999);
-        assert_eq!(
-            format_rfc3339_nano(truncated),
-            "2026-01-01T00:00:00.999999999Z"
-        );
-        assert_eq!(format_rfc3339_seconds(truncated), "2026-01-01T00:00:00Z");
-
-        let parsed_offset = parse_rfc3339("2026-01-01T02:00:00+02:00").expect("offset parses");
-        assert_eq!(parsed_offset, whole);
-        assert_eq!(format_rfc3339_nano(parsed_offset), "2026-01-01T00:00:00Z");
-        let parsed_negative_zero =
-            parse_rfc3339("2026-01-01T00:00:00-00:00").expect("-00:00 parses");
-        assert_eq!(parsed_negative_zero, whole);
-
-        let fraction = parse_rfc3339("2026-01-01T00:00:00.1234567899Z").expect("fraction parses");
-        assert_eq!(
-            format_rfc3339_nano(fraction),
-            "2026-01-01T00:00:00.123456789Z"
-        );
-
-        let zero = parse_rfc3339("0001-01-01T00:00:00+00:00").expect("zero time parses");
-        assert_eq!(format_rfc3339_nano(zero), "0001-01-01T00:00:00Z");
-
-        let negative_year = Date::from_calendar_date(-1, Month::January, 1)
-            .expect("valid date")
-            .with_time(Time::MIDNIGHT)
-            .assume_utc();
-        assert_eq!(format_rfc3339_nano(negative_year), "-0001-01-01T00:00:00Z");
-        let stamp = Stamp { at: negative_year };
-        assert!(serde_json::to_string(&stamp).is_err());
-
-        let stamp = Stamp {
-            at: whole + Duration::nanoseconds(500_000_000),
-        };
-        assert_eq!(
-            serde_json::to_string(&stamp).expect("serializes"),
-            r#"{"at":"2026-01-01T00:00:00.5Z"}"#
-        );
-        let read: Stamp =
-            serde_json::from_str(r#"{"at":"2026-01-01T02:00:00+02:00"}"#).expect("deserializes");
-        assert_eq!(read.at, whole);
-
-        for invalid in [
-            "2026-01-01T00:00:00",
-            "2026-02-30T00:00:00Z",
-            "2026-01-01T23:59:60Z",
-            "2026-01-01T00:00:00+0200",
-        ] {
-            assert!(
-                matches!(parse_rfc3339(invalid), Err(Error::Parse { .. })),
-                "{invalid} must be rejected"
             );
         }
     }

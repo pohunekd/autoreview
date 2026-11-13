@@ -163,7 +163,7 @@ mod tests {
     use crate::{load, parse};
 
     /// Go-written policy digests, shared with the Go reference tests.
-    const GOLDEN: &str = include_str!("../../../testdata/parity/digest.json");
+    const GOLDEN: &str = include_str!("../../../testdata/stored-formats/digest.json");
 
     /// One golden case: a policy built from the fixture and its Go digest.
     #[derive(Debug, Deserialize)]

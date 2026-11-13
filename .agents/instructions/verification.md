@@ -32,21 +32,13 @@ Rust group, on the toolchain pinned in `rust-toolchain.toml`:
 6. `rust-test`: `cargo test --workspace --locked`
 7. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
 
-Go group (the Go reference), skipped with a reason while the repository has no
-`go.mod`:
-
-8. `fmt`: `gofmt -l .` lists no file.
-9. `vet`: `go vet ./...`
-10. `staticcheck`: the version pinned in `scripts/gates`, run with `go run`.
-11. `test`: `go test ./...`
-
 Planned, not a gate yet: validation of the example policies. It lands with M1,
 which also decides how `validate` can run in CI without tokens or a running
 pohunek daemon. Until then, the gate set above is the complete list.
 
 Run `scripts/gates` on the final revision before every push and report each
 gate's real result as printed. Never report a gate as passed when it was skipped
-or its output was cut off. A skipped Go gate is reported as skipped, not passed.
+or its output was cut off.
 
 ## Testing policy
 
@@ -75,10 +67,8 @@ Write a test only for:
   result, and published once. It is the only test that drives several packages
   together.
 
-Parity suite: tests ported from the Go reference and the parity goldens under
-`testdata/parity/` are kept until the Go code is deleted; this policy then
-applies to them. Outside the parity suite the rules above are unchanged, and a
-test is written only for really important logic.
+Tests ported from the former Go reference are not yet triaged against this policy;
+#350 tracks that triage.
 
 Do not write:
 
@@ -130,8 +120,6 @@ text. Describe checks against the owner's own daemons in words only.
 - `rust` runs `scripts/gates rust` on the toolchain pinned in
   `rust-toolchain.toml`, with the dependency cache restored from `main` and
   saved only by runs on `main`.
-- `go` runs `scripts/gates go`. Until `go.mod` exists the gates report
-  themselves as skipped, so the job is green.
 - `changelog` runs `scripts/changelog check` and, on a pull request, requires a fragment unless the pull request carries `no-changelog`.
 - `ci` is the only required status check. It fails unless every job succeeded.
 

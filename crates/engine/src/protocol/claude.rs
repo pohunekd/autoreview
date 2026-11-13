@@ -348,10 +348,12 @@ mod tests {
     use autoreview_policy::Checkout;
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use crate::error::error_code;
-    use crate::protocol::fixtures::{claude_output, claude_session, sha, test_pull_request};
+    use crate::protocol::fixtures::{
+        claude_output, claude_session, claude_session_raw, sha, test_pull_request,
+    };
     use crate::protocol::validate::reviewer_output_retryable;
 
     use super::{CLAUDE_RESULT_PROTOCOL, parse_claude_output};
@@ -397,6 +399,74 @@ mod tests {
         let err = parse_claude_output(&pr, &Checkout::Base, &claude_session(&structured))
             .expect_err("two keys that differ only in case are refused");
         assert_eq!(error_code(&err), "claude_result_invalid");
+    }
+
+    // One row per adapter stdout. The prose object rows reach the object branch of
+    // `check_prose_agreement`; the repeated key row is refused.
+    #[test]
+    fn prose_and_stdout_rows_follow_the_protocol() {
+        let pr = test_pull_request(5);
+        let structured = json!({
+            "repository": "acme/widget",
+            "number": 5,
+            "head_sha": sha("a"),
+            "summary": "Reviewed the change thoroughly and found the listed issues.",
+            "findings": []
+        });
+        let other = json!({
+            "repository": "acme/widget",
+            "number": 5,
+            "head_sha": sha("a"),
+            "summary": "Another summary.",
+            "findings": []
+        });
+        let session = |result: Value, output: &Value| {
+            json!({
+                "type": "result",
+                "subtype": "success",
+                "is_error": false,
+                "result": result,
+                "structured_output": output
+            })
+            .to_string()
+        };
+        let duplicate = format!(
+            r#"{{"type":"result","subtype":"success","is_error":false,"result":"Prose summary.","structured_output":{{"repository":"acme/widget","number":5,"head_sha":"{}","summary":"Reviewed the change thoroughly and found the listed issues.","findings":[],"findings":[{{"id":"C001","severity":"high","confidence":"high","path":"a.go","line":4,"side":"RIGHT","title":"Bug","body":"Details."}}]}}}}"#,
+            sha("a")
+        );
+        let rows: Vec<(&str, String, Option<&str>)> = vec![
+            (
+                "prose null",
+                session(json!("null"), &structured),
+                Some("claude_result_mismatch"),
+            ),
+            (
+                "prose object that differs",
+                session(json!(other.to_string()), &structured),
+                Some("claude_result_mismatch"),
+            ),
+            (
+                "prose object that matches",
+                session(json!(structured.to_string()), &structured),
+                None,
+            ),
+            (
+                "stdout null",
+                "null".to_owned(),
+                Some("claude_result_invalid"),
+            ),
+            ("repeated key", duplicate, Some("claude_result_invalid")),
+        ];
+        for (name, stdout, expected) in rows {
+            let raw = claude_session_raw(&stdout);
+            let outcome = parse_claude_output(&pr, &Checkout::Base, &raw);
+            match expected {
+                Some(code) => assert_eq!(error_code(&outcome.expect_err(name)), code, "{name}"),
+                None => {
+                    outcome.expect(name);
+                }
+            }
+        }
     }
 
     // A refusal envelope of the adapter names its reason. A head that is not in the review

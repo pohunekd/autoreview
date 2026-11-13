@@ -47,7 +47,7 @@ findings, and the new head must extend the reviewed head in a straight line:
   commits that no review has read, even when the new head extends the reviewed
   one. The log reason is `base_branch_changed`. A new base commit on the same
   branch is normal and keeps the review incremental. A review published by an
-  earlier release or by the Go engine records no base branch, so it does not
+  earlier release records no base branch, so it does not
   widen for this reason; the next published review records it.
 - A review that is still running when the pull request is retargeted publishes
   nothing. It ends as `superseded` with the code `base_branch_changed`, the same

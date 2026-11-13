@@ -1040,7 +1040,7 @@ notifications:
     /// The engine of the queue tests.
     type QueueEngine = Engine<FakeIntegration, FrozenClock>;
 
-    /// The deployed test configuration: `testdata/review.env` and `testdata/review-policy.yaml`.
+    /// The deployed test configuration, built from `crate::testing::deployed_policy_document`.
     fn queue_config() -> Config {
         let document = crate::testing::deployed_policy_document();
         let policy = autoreview_policy::parse(document.as_bytes(), |relative| {
