@@ -92,7 +92,7 @@ mod tests {
     use crate::model::{Decision, Finding, PriorResult, PullRequest};
 
     /// Go-written markers, shared with the Go reference tests.
-    const GOLDEN: &str = include_str!("../../../../testdata/parity/marker.json");
+    const GOLDEN: &str = include_str!("../../tests/fixtures/stored-formats/marker.json");
 
     /// One golden case: a named input and the Go output.
     #[derive(Debug, Deserialize)]

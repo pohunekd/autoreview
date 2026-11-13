@@ -314,59 +314,8 @@ pub(crate) fn defuse_comment_delimiters(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
 
     use super::{neutralize, neutralize_block};
-
-    /// Go-written neutralized text, shared with the Go reference tests.
-    const GOLDEN: &str = include_str!("../../../../testdata/parity/neutralize.json");
-
-    /// Golden cases whose Rust output differs from Go on purpose, with the Rust output.
-    ///
-    /// Rust writes a fenced block again with its own fence between blank lines, keeps a code
-    /// span only when its content is harmless as text, escapes every other backtick, and
-    /// defuses a mention whatever comes before it.
-    const CHANGED: [(&str, &str); 10] = [
-        ("indented_fence_is_code", "    \\`\\`\\`\n@\u{200b}victim"),
-        (
-            "fence_info_with_backtick_is_text",
-            "\\`\\`\\`a\\`b\n@\u{200b}victim",
-        ),
-        (
-            "mention_after_closed_fence",
-            "\n```go\nx := @y\n```\n\n@\u{200b}after",
-        ),
-        (
-            "tilde_fence_closed_by_tildes_only",
-            "\n```\n@kept\n~~~\n@kept too\n```",
-        ),
-        (
-            "html_outside_code_defused",
-            "&lt;img src=x> and \\`&lt;b>\\`",
-        ),
-        (
-            "comment_delimiters_inside_fence",
-            "\n```\n&lt;!-- hidden --&gt;\n```\n\n&lt;!-- out --&gt;",
-        ),
-        (
-            "address_kept_mention_defused",
-            "mail dev@\u{200b}example.com and @\u{200b}octocat",
-        ),
-        ("at_after_letter_kept", "a@\u{200b}b"),
-        ("unclosed_backtick", "a \\`b @\u{200b}octocat"),
-        (
-            "mention_inside_code_span_kept",
-            "\\`@\u{200b}octocat\\` and @\u{200b}octocat",
-        ),
-    ];
-
-    /// One golden case: a named input and the Go output.
-    #[derive(Debug, Deserialize)]
-    struct Case {
-        name: String,
-        input: String,
-        output: String,
-    }
 
     /// Each row is named by the Markdown shape it models and holds the input, the output of
     /// `neutralize_block` (Markdown that starts a paragraph) and of `neutralize` (a field that
@@ -696,24 +645,5 @@ mod tests {
             .map(|(name, _, _, _)| *name)
             .collect();
         assert!(failed.is_empty(), "neutralized differently: {failed:?}");
-    }
-
-    #[test]
-    fn neutralize_matches_go_golden() {
-        let cases: Vec<Case> = serde_json::from_str(GOLDEN).expect("golden is JSON");
-        assert_eq!(cases.len(), 13, "golden has the thirteen neutralize cases");
-        for (name, _) in CHANGED {
-            assert!(
-                cases.iter().any(|case| case.name == name),
-                "{name} is a golden case"
-            );
-        }
-        for case in &cases {
-            let want = CHANGED
-                .iter()
-                .find(|(name, _)| *name == case.name)
-                .map_or(case.output.as_str(), |(_, output)| *output);
-            assert_eq!(neutralize_block(&case.input), want, "case {}", case.name);
-        }
     }
 }

@@ -555,12 +555,10 @@ mod tests {
         AuthorClass, Checkout, HumanReview, OnClean, OnFindings, OnNotes, Pipeline, Protocol,
         Reviewer, Rule, Trigger, TriggerKind,
     };
-    use serde::Deserialize;
 
     use super::{
         HumanReviewFacts, RenderSettings, human_review_signals, human_review_text, render_review,
     };
-    use crate::error::error_code;
     use crate::integrations::ChangedFile;
     use crate::integrations::GitHubReview;
     use crate::messages::{APPROVAL_REQUESTED_TITLE, approval_requested_message};
@@ -572,111 +570,8 @@ mod tests {
     };
     use crate::publish::neutralize::{closes_fence, opening_fence};
     use crate::publish::plan::{PublicationPlan, plan_publication};
-    use crate::publish::{base_marker, publication_marker};
+    use crate::publish::publication_marker;
     use crate::verify::VERDICT_REFUTED;
-
-    /// Go-written render cases: the input and the GitHub review or the error code.
-    const GOLDEN: &str = include_str!("../../../../testdata/parity/render.json");
-
-    /// Golden case whose note body the Rust review leaves out (#175).
-    const NOTE_BODY_CASE: &str = "notes_handed_to_author";
-
-    /// Note body of `NOTE_BODY_CASE` in the Go review.
-    ///
-    /// The Rust review leaves it out and renders the rest of the case unchanged.
-    const GO_NOTE_BODY: &str = "\n\nRename it:\n```go\nfunc better() {\n```";
-
-    /// Golden case whose inline comment Rust writes differently from Go on purpose.
-    const COMMENT_CASE: &str = "mixed_inline_and_outside";
-
-    /// Parts of the `COMMENT_CASE` comment in the Go review, and as Rust writes them: a span
-    /// with a mention is text, a fenced block stands between blank lines, an address is defused.
-    const COMMENT_CHANGES: [(&str, &str); 3] = [
-        (
-            "Call `$client->send(@payload)` here:\n",
-            "Call \\`$client->send(@\u{200b}payload)\\` here:\n\n",
-        ),
-        ("```\nThanks", "```\n\nThanks"),
-        ("dev@example.com", "dev@\u{200b}example.com"),
-    ];
-
-    /// Returns a Go review text in the layout of the Rust review.
-    ///
-    /// The location of a finding is a paragraph of its own: after the finding's heading, and
-    /// in the list item of a prior finding after the line that names it.
-    fn rust_layout(go: &str) -> String {
-        let lines: Vec<&str> = go.split('\n').collect();
-        let mut out: Vec<String> = Vec::new();
-        for (index, line) in lines.iter().enumerate() {
-            let review = line.find(" (review of `");
-            if let Some(review) = review.filter(|_| line.starts_with("- "))
-                && let Some(span) = line[..review].rfind(" `")
-            {
-                out.push(format!("{}{}", &line[..span], &line[review..]));
-                out.push(String::new());
-                out.push(format!("  {}", &line[span + 1..review]));
-                continue;
-            }
-            out.push((*line).to_owned());
-            let next = lines.get(index + 1);
-            if line.starts_with("**")
-                && line.ends_with(')')
-                && next.is_some_and(|n| n.starts_with('`'))
-            {
-                out.push(String::new());
-            }
-        }
-        out.join("\n")
-    }
-
-    /// One golden case: a named input, and either the Go review or the Go error code.
-    #[derive(Debug, Deserialize)]
-    struct Case {
-        name: String,
-        input: Fixture,
-        #[serde(default)]
-        output: Option<Output>,
-        #[serde(default)]
-        error: Option<String>,
-    }
-
-    /// Input of a golden case, as Go marshals its arguments.
-    #[derive(Debug, Deserialize)]
-    struct Fixture {
-        config: GoConfig,
-        input: ReviewInput,
-        artifact: Artifact,
-        plan: PublicationPlan,
-    }
-
-    /// The configuration fields a render reads, under their Go names.
-    #[derive(Debug, Deserialize)]
-    struct GoConfig {
-        #[serde(rename = "AISignature")]
-        ai_signature: String,
-        #[serde(rename = "GitHubBodyMaxBytes")]
-        github_body_max_bytes: i64,
-        #[serde(rename = "ExcerptCharacters")]
-        excerpt_characters: i64,
-    }
-
-    /// The Go review of a golden case.
-    #[derive(Debug, Deserialize)]
-    struct Output {
-        decision: Decision,
-        body: String,
-        comments: Vec<GoComment>,
-        marker: String,
-    }
-
-    /// One inline comment of a golden review.
-    #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-    struct GoComment {
-        path: String,
-        line: i64,
-        side: String,
-        body: String,
-    }
 
     fn sha(character: char) -> String {
         character.to_string().repeat(40)
@@ -1748,71 +1643,5 @@ mod tests {
             review.comments.len(),
             review.body
         );
-    }
-
-    #[test]
-    fn render_matches_go_golden() {
-        let cases: Vec<Case> = serde_json::from_str(GOLDEN).expect("golden is JSON");
-        assert_eq!(cases.len(), 10, "golden has the ten render cases");
-        for case in &cases {
-            let settings = RenderSettings {
-                ai_signature: case.input.config.ai_signature.clone(),
-                github_body_max_bytes: case.input.config.github_body_max_bytes,
-                excerpt_characters: case.input.config.excerpt_characters,
-            };
-            let result = render_review(
-                &settings,
-                &case.input.input,
-                &case.input.artifact,
-                &case.input.plan,
-            );
-            match (&case.error, &case.output) {
-                (Some(code), None) => {
-                    let err = result.expect_err("golden case records an error");
-                    assert_eq!(error_code(&err), code, "case {}", case.name);
-                }
-                (None, Some(want)) => {
-                    let review = result.expect("golden case renders");
-                    assert_eq!(review.decision, want.decision, "case {}", case.name);
-                    // Go writes the legacy marker alone; the marker of the base branch
-                    // follows it (#297).
-                    let base = base_marker(&case.input.input.pull_request.base_branch);
-                    let marker = format!("{}{base}", want.marker);
-                    assert!(want.body.starts_with(&want.marker), "case {}", case.name);
-                    let mut body = want.body.replacen(&want.marker, &marker, 1);
-                    if case.name == NOTE_BODY_CASE {
-                        assert!(body.contains(GO_NOTE_BODY), "case {}", case.name);
-                        body = body.replacen(GO_NOTE_BODY, "", 1);
-                    }
-                    assert_eq!(review.body, rust_layout(&body), "case {}", case.name);
-                    assert_eq!(review.marker, marker, "case {}", case.name);
-                    let comments: Vec<GoComment> = review
-                        .comments
-                        .iter()
-                        .map(|comment| GoComment {
-                            path: comment.path.clone(),
-                            line: comment.line,
-                            side: comment.side.clone(),
-                            body: comment.body.clone(),
-                        })
-                        .collect();
-                    let mut want_comments = want.comments.clone();
-                    for comment in &mut want_comments {
-                        comment.body = rust_layout(&comment.body);
-                        if case.name == COMMENT_CASE {
-                            for (go, rust) in COMMENT_CHANGES {
-                                assert!(comment.body.contains(go), "case {}", case.name);
-                                comment.body = comment.body.replacen(go, rust, 1);
-                            }
-                        }
-                    }
-                    assert_eq!(comments, want_comments, "case {}", case.name);
-                }
-                _ => panic!(
-                    "case {} must hold exactly one of output and error",
-                    case.name
-                ),
-            }
-        }
     }
 }

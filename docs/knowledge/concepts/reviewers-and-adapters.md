@@ -150,7 +150,7 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   clean work tree, both trusted commits present, `HEAD` neither the head nor a
   commit that contains it, the trusted base `HEAD` or an ancestor of it, and the
   same `HEAD` after the run. A `head` checkout needs `HEAD` to be the trusted
-  head. A request without the checkout line comes from the Go engine; it is
+  head. A request without the checkout line is
   checked as `head`, with the head SHA of its `Head SHA:` line. A refused
   checkout prints only one result line, with exit code 64, no Claude Code
   output, the reason in `stderr_base64` and the field `refusal`:

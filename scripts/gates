@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 # Runs the repository gates, reports each gate's own result and exits non-zero
-# when any gate failed. Usage: scripts/gates [all|docs|adapters|rust|go]; CI runs
-# the docs, adapters, rust and go groups as separate jobs.
+# when any gate failed. Usage: scripts/gates [all|docs|adapters|rust]; CI runs
+# the docs, adapters and rust groups as separate jobs.
 set -uo pipefail
 # Deliberately no -e: a failing gate must not stop the others from running.
 
 cd "$(dirname "$0")/.." || exit 2
 
-# Pinned so that local runs and CI use the same analyzer.
-STATICCHECK_VERSION=v0.8.2
-
 group=${1:-all}
 case "$group" in
-    all | docs | adapters | rust | go) ;;
+    all | docs | adapters | rust) ;;
     *)
-        echo "usage: scripts/gates [all|docs|adapters|rust|go]" >&2
+        echo "usage: scripts/gates [all|docs|adapters|rust]" >&2
         exit 2
         ;;
 esac
@@ -42,17 +39,6 @@ skip_gate() {
     echo "==> $1: skipped, $2"
     names+=("$1")
     results+=("skipped ($2)")
-}
-
-# gofmt -l exits 0 even when it lists unformatted files, so the listing decides.
-check_fmt() {
-    local unformatted
-    unformatted="$(gofmt -l .)"
-    if [ -n "$unformatted" ]; then
-        echo "not gofmt-formatted:"
-        echo "$unformatted"
-        return 1
-    fi
 }
 
 # CI sets CI, so there a missing shellcheck fails the gate instead of skipping it.
@@ -88,31 +74,15 @@ rust_gates() {
     run_gate changelog scripts/changelog check
 }
 
-go_gates() {
-    if [ ! -f go.mod ]; then
-        skip_gate fmt "no go.mod yet"
-        skip_gate vet "no go.mod yet"
-        skip_gate staticcheck "no go.mod yet"
-        skip_gate test "no go.mod yet"
-        return
-    fi
-    run_gate fmt check_fmt
-    run_gate vet go vet ./...
-    run_gate staticcheck go run "honnef.co/go/tools/cmd/staticcheck@$STATICCHECK_VERSION" ./...
-    run_gate test go test ./...
-}
-
 case "$group" in
     all)
         docs_gates
         adapters_gates
         rust_gates
-        go_gates
         ;;
     docs) docs_gates ;;
     adapters) adapters_gates ;;
     rust) rust_gates ;;
-    go) go_gates ;;
 esac
 
 echo

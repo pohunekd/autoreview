@@ -154,7 +154,7 @@ mod tests {
     use crate::model::review::{AwaitRecord, PublishedRecord, prior_key};
 
     /// Go-written identifiers, shared with the Go reference tests.
-    const GOLDEN: &str = include_str!("../../../../testdata/parity/ids.json");
+    const GOLDEN: &str = include_str!("../../tests/fixtures/stored-formats/ids.json");
 
     /// One golden case: a named input and the Go output.
     #[derive(Debug, Deserialize)]

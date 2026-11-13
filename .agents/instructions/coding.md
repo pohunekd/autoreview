@@ -54,25 +54,6 @@
   model output.
 - Panics are reserved for programmer errors, never for input.
 
-## Go reference (read-only until deleted)
-
-- The Go code (`cmd/`, `internal/`) is the behavioural reference for the port.
-  Do not add features to it; change it only to fix a defect the port must
-  reproduce or to keep it building. It is deleted once the port reaches parity.
-- Go version as in `go.mod` (1.25 or newer). Code is formatted by `gofmt`,
-  vetted by `go vet ./...`, and analysed by the staticcheck version pinned in
-  `scripts/gates`. A lint suppression needs a comment with the reason.
-- Standard library first. Add a module only when it clearly pays for itself,
-  and state the reason in the PR.
-- Errors are wrapped with `%w` and matched with `errors.Is` or `errors.As`. A
-  failed `gh` or pohunek call is a result the engine handles, never an empty
-  value that looks like success.
-- Pass `context.Context` into every external call; timeouts come from
-  configuration.
-- Run external programs with `exec.Command` and an argv list. Never build a
-  shell string from repository content, pull request text, or model output.
-- No `unsafe`. Panics are reserved for programmer errors, never for input.
-
 ## Porting from the Go reference
 
 The Rust engine opens the Go engine's database unchanged and continues its
@@ -134,7 +115,7 @@ follow:
   Exception: `Artifact.reviewed_at`, written by `CombineResults`
   (`protocol.go:353`), is Go's `time.RFC3339` in UTC with whole seconds and no
   fraction, written by `autoreview_go_compat::go_time::format_rfc3339_seconds`;
-  `testdata/parity/timestamps.json` records both forms per instant.
+  `go_time_matches_go_golden` records both forms per instant.
 - **R10 Identifiers.** Byte-identical: `PullRequest::workflow_id` =
   `"prr-v2-" + hex(sha256("pr-review-v2\0{repo}\0{number}\0{head}\0{request_id}\0{attempt}"))`
   (`model.go:68-73`, prefix `model.go:18`), `review_id` (`model.go:62-64`), `key`
@@ -399,8 +380,8 @@ What is not compatible, by decision:
   (`field authors not found`, `policy.go:311`), so a policy that runs on Rust does
   not load on Go. A rollback to a binary built before #33 needs a policy whose
   rules all say `trusted: any`, and one built before #32 needs no `authors`.
-  `trusted: any` adds nothing to the digest, so the Go digest goldens
-  hold. `testdata/review-policy.yaml` stays without the section for the Go tests;
+  `trusted: any` adds nothing to the digest, so the stored digests
+  hold. `testdata/review-policy.yaml` stays without the section for the digest tests;
   the Rust tests add `trusted: any` to its rules before parsing, and the golden
   case `fixture_via_load` loads such a copy from a temporary directory.
   Each pass stores the pull requests it skips in the `rejected` discovery entry
@@ -442,8 +423,8 @@ What is not compatible, by decision:
   `pohunek.route_overrides` key stops the start (`config.go:304`), and a stored
   review of such a repository fails `reviewIdentityValid` (`model.go:539`,
   called from `review.go:40` and `discovery.go:540`). No stored row changes
-  shape. `testdata/parity/ids.json` gets no case: Go writes it, and
-  `TestWriteParityGolden` compares it byte for byte. The regression tests are
+  shape. `ids_match_go_golden` gets no case: its values were written by the Go
+  engine and compare byte for byte. The regression tests are
   `repository_owner_follows_the_github_login_grammar` and
   `rule_match_owner_follows_the_github_login_grammar`.
 - **Step runs table (#270):** the store holds the additive table
@@ -504,7 +485,7 @@ with the expected Rust error code):
   writes only values that passed policy validation, so no Go-written row holds
   one.
 - The AI signature symbols in `config/symbols.rs` are Unicode 17.0.0 `So`, as
-  in Go 1.27. Go 1.26, which `go.mod` names, has Unicode 15.0.0, a subset, and
+  in Go 1.27. Go 1.26, the version the Go reference named, has Unicode 15.0.0, a subset, and
   reads a signature that leads with one of the 834 newer symbols as unsigned,
   so that comment can settle a finding without the user.
 - Logins, repository names and pull request URLs compare and lowercase ASCII

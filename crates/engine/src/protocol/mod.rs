@@ -316,49 +316,6 @@ mod tests {
         }
     }
 
-    /// Projection of a reviewer result that the golden file also records.
-    fn project(result: &ReviewerResult) -> Value {
-        let findings: Vec<Value> = result
-            .findings
-            .iter()
-            .map(|finding| {
-                json!({
-                    "source_id": finding.source_id, "severity": finding.severity,
-                    "confidence": finding.confidence, "path": finding.path,
-                    "line": finding.line, "title": finding.title, "body": finding.body,
-                    "non_blocking": finding.non_blocking
-                })
-            })
-            .collect();
-        json!({
-            "reviewer_id": result.reviewer_id, "summary": result.summary,
-            "findings": findings, "tests": result.tests
-        })
-    }
-
-    /// Projection of a golden output, with the fields Go omits when empty filled in.
-    fn golden_projection(output: &Value) -> Value {
-        let findings: Vec<Value> = output["findings"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .map(|finding| {
-                let non_blocking = finding.get("non_blocking").cloned().unwrap_or(json!(false));
-                json!({
-                    "source_id": finding["source_id"], "severity": finding["severity"],
-                    "confidence": finding["confidence"], "path": finding["path"],
-                    "line": finding["line"], "title": finding["title"], "body": finding["body"],
-                    "non_blocking": non_blocking
-                })
-            })
-            .collect();
-        json!({
-            "reviewer_id": output["reviewer_id"], "summary": output["summary"],
-            "findings": findings, "tests": output["tests"]
-        })
-    }
-
     #[test]
     fn parse_reviewer_output_normalizes_both_protocols() {
         let cfg = test_config();
@@ -707,72 +664,5 @@ mod tests {
         let err = parse_reviewer_output(&cfg, &input, &Discussion::default(), &codex(), &partial)
             .expect_err("a Codex result that leaves a prior finding unsettled is refused");
         assert_eq!(error_code(&err), "review_output_invalid");
-    }
-
-    #[test]
-    fn protocol_matches_go_golden() {
-        let text = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../testdata/parity/protocol.json"
-        ))
-        .expect("the golden file is readable");
-        let cases: Vec<Value> = serde_json::from_str(&text).expect("the golden file is an array");
-        let cfg = test_config();
-        let mut checked = 0;
-        for case in &cases {
-            let name = case["name"].as_str().expect("each case has a name");
-            let reviewer = if name.starts_with("claude_") {
-                opus()
-            } else if name.starts_with("codex_") {
-                codex()
-            } else {
-                continue;
-            };
-            let golden_raw = case["input"]["raw"]
-                .as_str()
-                .expect("each case has its raw output");
-            // Go's Claude wrapper names no checked checkout, which Rust requires (#253); each
-            // Claude object gets the base checkout of the input, the rest of it unchanged.
-            let raw = match golden_raw.strip_prefix('{') {
-                Some(rest) if name.starts_with("claude_") => {
-                    format!("{{\"checked_checkout\":\"base\",{rest}")
-                }
-                _ => golden_raw.to_owned(),
-            };
-            let raw = raw.as_str();
-            let input = ReviewInput {
-                pull_request: test_pull_request(5),
-                ..ReviewInput::default()
-            };
-            // Go reads a Codex report without `blocking` and `prior_findings`; Rust refuses it
-            // (#23).
-            let expected = if name == "codex_valid_report" {
-                "review_adapter_outdated"
-            } else {
-                case["rust_expected_error"]
-                    .as_str()
-                    .or_else(|| case["error"].as_str())
-                    .unwrap_or_default()
-            };
-            match parse_reviewer_output(&cfg, &input, &Discussion::default(), &reviewer, raw) {
-                Err(err) => assert_eq!(error_code(&err), expected, "{name}"),
-                Ok(result) => {
-                    assert!(
-                        expected.is_empty(),
-                        "{name}: Rust accepts, expected {expected}"
-                    );
-                    assert_eq!(
-                        project(&result),
-                        golden_projection(&case["output"]),
-                        "{name}"
-                    );
-                }
-            }
-            checked += 1;
-        }
-        assert_eq!(
-            checked, 14,
-            "every reviewer case of the golden file is checked"
-        );
     }
 }

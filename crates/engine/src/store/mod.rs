@@ -394,10 +394,11 @@ mod tests {
     use crate::testing::harness::integration_config;
 
     /// Store golden written by the Go reference, shared with the Go reference tests.
-    const STORE_GOLDEN: &str = include_str!("../../../../testdata/parity/store-v1.json");
+    const STORE_GOLDEN: &str = include_str!("../../tests/fixtures/stored-formats/store-v1.json");
 
     /// Go golden of stored values that the current policy does not define.
-    const LENIENT_GOLDEN: &str = include_str!("../../../../testdata/parity/store-lenient.json");
+    const LENIENT_GOLDEN: &str =
+        include_str!("../../tests/fixtures/stored-formats/store-lenient.json");
 
     /// Page size of the list reads in `go_store_golden_opens`; the golden holds fewer reviews.
     const GOLDEN_LIST_LIMIT: i64 = 100;
