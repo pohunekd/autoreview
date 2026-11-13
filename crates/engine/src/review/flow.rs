@@ -367,6 +367,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             return Ok(Vec::new());
         }
         let author_class = &self.input.author_class;
+        let list_budget =
+            usize::try_from(self.engine.config.excerpt_characters).unwrap_or_default();
         let notes = i64::try_from(self.input.split_findings(&artifact.findings).1.len())
             .unwrap_or(i64::MAX);
         self.once::<Vec<String>, _>(STEP_HUMAN_REVIEW, || {
@@ -385,6 +387,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                     changed: &listing.files,
                     truncated: listing.truncated,
                     notes,
+                    list_budget,
                 };
                 Ok(human_review_signals(signals, &facts))
             }

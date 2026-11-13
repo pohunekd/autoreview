@@ -290,6 +290,7 @@ fn location(finding: &Finding) -> String {
 /// The delimiter is one backtick longer than the longest run in the text. A text that starts
 /// or ends with a backtick is padded with a space on both sides, which CommonMark strips.
 fn code_span(text: &str) -> String {
+    let text = &single_line(text);
     let mut longest = 0;
     let mut run = 0;
     for character in text.chars() {
@@ -303,6 +304,51 @@ fn code_span(text: &str) -> String {
         ""
     };
     defuse_comment_delimiters(&format!("{delimiter}{pad}{text}{pad}{delimiter}"))
+}
+
+/// Replaces every run of line breaks and control characters with one space, so that a value stays
+/// on one line and cannot end a paragraph inside its code span.
+fn single_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_break = false;
+    for character in text.chars() {
+        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+            if !in_break {
+                out.push(' ');
+            }
+            in_break = true;
+        } else {
+            out.push(character);
+            in_break = false;
+        }
+    }
+    out
+}
+
+/// Writes values as code spans in order while they fit `budget` bytes; the rest are counted.
+fn listed_spans(values: &[&str], budget: usize) -> String {
+    let mut spans: Vec<String> = Vec::new();
+    let mut length = 0_usize;
+    let mut dropped = 0_usize;
+    for value in values {
+        let span = code_span(value);
+        let added = span.len() + if spans.is_empty() { 0 } else { ", ".len() };
+        if dropped > 0 || length + added > budget {
+            dropped += 1;
+        } else {
+            length += added;
+            spans.push(span);
+        }
+    }
+    let mut text = spans.join(", ");
+    if dropped > 0 {
+        if text.is_empty() {
+            text = format!("and {dropped} more");
+        } else {
+            text.push_str(&format!(", and {dropped} more"));
+        }
+    }
+    text
 }
 
 /// Returns the first twelve characters of a commit SHA, as Go's `%.12s` prints them.
@@ -333,6 +379,8 @@ pub(crate) struct HumanReviewFacts<'a> {
     pub(crate) truncated: bool,
     /// Notes of the finished review.
     pub(crate) notes: i64,
+    /// Most bytes of the listed values one signal shows; a longer list shows the values that fit.
+    pub(crate) list_budget: usize,
 }
 
 /// Reports whether a path matches one of the globs, ASCII case-insensitively on both sides.
@@ -384,8 +432,10 @@ pub(crate) fn human_review_signals(
     }
     if !tests.is_empty() {
         tests.sort_unstable();
-        let spans: Vec<String> = tests.iter().map(|test| code_span(test)).collect();
-        matched.push(format!("deleted test files {}", spans.join(", ")));
+        matched.push(format!(
+            "deleted test files {}",
+            listed_spans(&tests, facts.list_budget)
+        ));
     }
     let mut paths: Vec<&str> = Vec::new();
     let mut matching_files = 0_usize;
@@ -409,9 +459,14 @@ pub(crate) fn human_review_signals(
     }
     paths.sort_unstable();
     if let Some(first) = paths.first() {
+        let shown = code_span(first);
+        let name = if shown.len() <= facts.list_budget {
+            format!("{shown} ")
+        } else {
+            String::new()
+        };
         matched.push(format!(
-            "changed path {} ({matching_files} matching files)",
-            code_span(first)
+            "changed path {name}({matching_files} matching files)"
         ));
     }
     if let Some(limit) = signals.max_changed_lines {
@@ -1381,6 +1436,26 @@ mod tests {
                 strings(&["deleted test files `Tests/A.php`"]),
             ),
             (
+                "a line break in a filename stays inside one code span",
+                strings(&[]),
+                vec![file("db/a\n\nb\r\u{2028}c.sql", "added", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path `db/a b c.sql` (1 matching files)"]),
+            ),
+            (
+                "a line break in a deleted test path stays inside one code span",
+                strings(&[]),
+                vec![file("tests/a\r\nb.php", "removed", 0, 1)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["deleted test files `tests/a b.php`"]),
+            ),
+            (
                 "a filename with Markdown, a backtick and a mention stays in its code span",
                 strings(&[]),
                 vec![file("db/[x](y)*a*`b`@octocat.sql", "added", 1, 0)],
@@ -1420,6 +1495,7 @@ mod tests {
                 changed: &changed,
                 truncated,
                 notes,
+                list_budget: 200,
             };
             let got = human_review_signals(&signals, &facts);
             assert_eq!(got, want, "{name}");
@@ -1458,6 +1534,56 @@ mod tests {
                 "{name}: unclosed backtick in {got}"
             );
         }
+        // A thousand deleted tests cannot make one signal, or the sentence, grow with the list: the
+        // list shows the values that fit the budget and counts the rest.
+        let budget = 200;
+        let signals = HumanReview {
+            deleted_tests: vec!["tests/**".to_owned()],
+            ..HumanReview::default()
+        };
+        let long: Vec<ChangedFile> = (0..1000)
+            .map(|index| ChangedFile {
+                path: format!("tests/{index:04}/{}Test.php", "x".repeat(300)),
+                status: "removed".to_owned(),
+                additions: 0,
+                deletions: 1,
+                previous_path: None,
+            })
+            .collect();
+        let short: Vec<ChangedFile> = (0..1000)
+            .map(|index| ChangedFile {
+                path: format!("tests/{index}.php"),
+                status: "removed".to_owned(),
+                additions: 0,
+                deletions: 1,
+                previous_path: None,
+            })
+            .collect();
+        fn facts(changed: &[ChangedFile], list_budget: usize) -> HumanReviewFacts<'_> {
+            HumanReviewFacts {
+                labels: &[],
+                author: "someone",
+                author_class: &AuthorClass::Untrusted,
+                changed,
+                truncated: false,
+                notes: 0,
+                list_budget,
+            }
+        }
+        let found = human_review_signals(&signals, &facts(&long, budget));
+        assert_eq!(
+            human_review_text(&found, 1000),
+            "deleted test files and 1000 more",
+            "long paths are counted, not listed"
+        );
+        let found = human_review_signals(&signals, &facts(&short, budget));
+        let text = human_review_text(&found, 1000);
+        assert!(
+            text.starts_with("deleted test files `tests/0.php`, ")
+                && text.ends_with(" more")
+                && text.len() <= "deleted test files ".len() + budget + ", and 1000 more".len(),
+            "short paths are listed to the budget: {text}"
+        );
     }
 
     #[test]
