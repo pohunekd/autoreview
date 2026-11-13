@@ -113,12 +113,13 @@ impl Integrations for External {
     async fn get_pull_request(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
         self.github
-            .get_pull_request(cancel, repository, number, trigger)
+            .get_pull_request(cancel, credential, repository, number, trigger)
             .await
     }
 
@@ -221,28 +222,36 @@ impl Integrations for External {
     async fn list_commentable_lines(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
     ) -> Result<CommentableLines, Error> {
-        self.github.commentable_lines(cancel, pull_request).await
+        self.github
+            .commentable_lines(cancel, credential, pull_request)
+            .await
     }
 
     async fn list_changed_files(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
     ) -> Result<ChangedFiles, Error> {
-        self.github.changed_files(cancel, pull_request).await
+        self.github
+            .changed_files(cancel, credential, pull_request)
+            .await
     }
 
     async fn list_discussion(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> Result<Discussion, Error> {
         self.github
             .list_discussion(
                 cancel,
+                credential,
                 pull_request,
                 prior,
                 self.config.max_discussion_characters,
@@ -265,22 +274,24 @@ impl Integrations for External {
     async fn publish_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> Result<PublishResult, Error> {
         self.github
-            .publish_review(cancel, pull_request, review)
+            .publish_review(cancel, credential, pull_request, review)
             .await
     }
 
     async fn find_published_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> Result<Option<PublishResult>, Error> {
         self.github
-            .published_review(cancel, pull_request, review)
+            .published_review(cancel, credential, pull_request, review)
             .await
     }
 

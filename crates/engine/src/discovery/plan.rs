@@ -281,6 +281,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow("review_input_invalid", true, None));
         };
         let pipeline = &candidate.rule.pipeline;
+        let credential = (self.config.credentials).serving(&candidate.pull_request.repository)?;
         Ok(ReviewInput {
             version: INPUT_VERSION,
             pull_request: candidate.pull_request.clone(),
@@ -298,9 +299,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             approval_timeout_seconds: i64::try_from(policy.approval_timeout().as_secs())
                 .unwrap_or(i64::MAX),
             policy_digest: policy.digest().to_owned(),
-            publisher_login: self
-                .served_login(&candidate.pull_request.repository)?
-                .to_owned(),
+            publisher_login: credential.login.clone(),
+            credential: credential.name.clone(),
             limits: self.config.run_limits(),
             prior,
             handoff,

@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::route::{HostPass, host_unavailable};
 use super::{Notice, record_event};
+use crate::config::Credential;
 use crate::engine::{Clock, Engine, STEP_PUBLICATION, is_permanent, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
@@ -463,11 +464,30 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         Ok(bases)
     }
 
+    /// Returns the credential that the stored review `workflow_id` reads and publishes with.
+    ///
+    /// `None` when the review is not stored or its credential no longer fits it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store.
+    fn stored_credential(&self, workflow_id: &str) -> Result<Option<&Credential>, Error> {
+        let Some(review) = self.store.get_review(workflow_id)? else {
+            return Ok(None);
+        };
+        let input = &review.input;
+        let name = self.review_credential(workflow_id, input, false)?;
+        let repository = &input.pull_request.repository;
+        let credentials = &self.config.credentials;
+        Ok((credentials.reviewing(&name, repository, &input.publisher_login)).ok())
+    }
+
     /// Reports whether the approval that `workflow_id` published on the head of `pr` stands.
     ///
     /// The lookup is the one of the publication, by the marker of the run's stored rendered
-    /// review; GitHub's `DISMISSED` state does not match. A run that published no approval
-    /// stands. A failed lookup is `Unknown`; a permanent failure keeps the approval standing.
+    /// review, with the run's credential; GitHub's `DISMISSED` state does not match. A run that
+    /// published no approval stands. A failed lookup is `Unknown`; a permanent failure, or a
+    /// credential that no longer fits the run, keeps the approval standing.
     ///
     /// # Errors
     ///
@@ -492,6 +512,15 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let Some(rendered) = rendered.filter(|rendered| rendered.error_code.is_empty()) else {
             return Ok(Approval::Stands);
         };
+        live(cancel)?;
+        let Some(credential) = self.stored_credential(workflow_id)? else {
+            tracing::warn!(
+                review_id = %pr.review_id(),
+                workflow_id,
+                "published approval not looked up: its credential no longer fits the review"
+            );
+            return Ok(Approval::Stands);
+        };
         let found = retry_step(
             STEP_FIND_APPROVAL,
             self.step_policy(),
@@ -499,7 +528,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             cancel,
             || {
                 self.integration
-                    .find_published_review(cancel, pr, &rendered.review)
+                    .find_published_review(cancel, credential, pr, &rendered.review)
             },
         )
         .await;
@@ -529,6 +558,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// A pull request missing from search is read directly first, because search lags behind.
     /// A wait of an unsearched repository stays; one that no credential serves ends unread.
+    /// The read uses the credential of the waiting review; a wait whose credential no longer
+    /// fits stays unread.
     ///
     /// # Errors
     ///
@@ -566,6 +597,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     "approval wait ended: no credential serves the repository"
                 );
             } else {
+                live(cancel)?;
+                let Some(credential) = self.stored_credential(&record.workflow_id)? else {
+                    // An approval stops the review with `credential_not_covered`.
+                    tracing::info!(
+                        repository = %record.repository,
+                        pull_request = record.number,
+                        "approval wait kept unread: its credential no longer fits the review"
+                    );
+                    continue;
+                };
                 let read = retry_step(
                     STEP_READ_PULL_REQUEST,
                     self.step_policy(),
@@ -574,6 +615,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     || {
                         self.integration.get_pull_request(
                             cancel,
+                            credential,
                             &record.repository,
                             record.number,
                             &record.trigger,

@@ -5,6 +5,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::{GitHubReview, InlineComment};
 use autoreview_engine::model::{Decision, PublishResult, PullRequest};
@@ -210,11 +211,15 @@ impl GitHub {
     pub(crate) async fn publish_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pr: &PullRequest,
         review: &GitHubReview,
     ) -> Result<PublishResult, Error> {
         check_review_marker(review)?;
-        if let Some(existing) = self.find_published_review(cancel, pr, review).await? {
+        if let Some(existing) = self
+            .find_published_review(cancel, credential, pr, review)
+            .await?
+        {
             return Ok(existing);
         }
         let comments = if review.comments.is_empty() {
@@ -229,14 +234,15 @@ impl GitHub {
             event: review.decision.clone(),
         };
         let arguments = reviews_post_args(&pr.repository, pr.number);
-        let credential = self.credentials.serving(&pr.repository)?;
         let output = match self
             .github(cancel, credential, &arguments, Some(&payload))
             .await
         {
             Ok(value) => value,
             Err(post_error) => {
-                let second = self.find_published_review(cancel, pr, review).await;
+                let second = self
+                    .find_published_review(cancel, credential, pr, review)
+                    .await;
                 if let Ok(Some(existing)) = second {
                     return Ok(existing);
                 }
@@ -253,21 +259,23 @@ impl GitHub {
     pub(crate) async fn published_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pr: &PullRequest,
         review: &GitHubReview,
     ) -> Result<Option<PublishResult>, Error> {
         check_review_marker(review)?;
-        self.find_published_review(cancel, pr, review).await
+        self.find_published_review(cancel, credential, pr, review)
+            .await
     }
 
     /// Returns the published review that carries the marker, reading every page.
     async fn find_published_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pr: &PullRequest,
         review: &GitHubReview,
     ) -> Result<Option<PublishResult>, Error> {
-        let credential = self.credentials.serving(&pr.repository)?;
         let login = &credential.login;
         for page in 1..=self.search_page_limit {
             let arguments = reviews_list_args(&pr.repository, pr.number, page);

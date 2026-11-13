@@ -562,7 +562,9 @@ impl GitHub {
                 if rule.trigger.kind != TriggerKind::ReviewRequested {
                     continue;
                 }
-                let raw = self.fetch_pull_request(cancel, &repository, number).await?;
+                let raw = self
+                    .fetch_pull_request(cancel, credential, &repository, number)
+                    .await?;
                 let login = &credential.login;
                 let Some(id) = ready_draft_id(&raw, author, &repository, number, login) else {
                     continue;
@@ -652,7 +654,7 @@ impl GitHub {
                 continue;
             }
             let outcome = self
-                .get_pull_request(cancel, &repository, number, &trigger)
+                .get_pull_request(cancel, credential, &repository, number, &trigger)
                 .await;
             classify(&mut list, &repository, number, covered, outcome)?;
         }

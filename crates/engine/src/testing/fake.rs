@@ -124,6 +124,12 @@ pub(crate) struct FakeState {
     pub(crate) published: Vec<GitHubReview>,
     /// Head SHA of each review in `published`, in the same order.
     pub(crate) published_heads: Vec<String>,
+    /// Name of the credential that posted each review in `published`, in the same order.
+    pub(crate) publishers: Vec<String>,
+    /// Login of the credential that posted each review in `published`, in the same order.
+    pub(crate) publisher_logins: Vec<String>,
+    /// Every pull request read, as `repository#number credential`, in order.
+    pub(crate) pull_request_reads: Vec<String>,
     /// Indexes into `published` of the reviews that GitHub dismissed.
     pub(crate) dismissed: BTreeSet<usize>,
     /// Number of lookups of a published review without a post.
@@ -187,8 +193,9 @@ pub(crate) struct FakeState {
 impl FakeState {
     /// Returns the index of the first published review that carries `marker` and stands.
     ///
-    /// With `head`, the review must also have been posted on that head.
-    fn standing_review(&self, marker: &str, head: Option<&str>) -> Option<usize> {
+    /// With `head`, the review must also have been posted on that head. Only a review posted
+    /// with `login` matches, as GitHub's lookup reads the reviews of its own login.
+    fn standing_review(&self, marker: &str, head: Option<&str>, login: &str) -> Option<usize> {
         self.published
             .iter()
             .zip(&self.published_heads)
@@ -197,6 +204,8 @@ impl FakeState {
                 !self.dismissed.contains(index)
                     && existing.body.contains(marker)
                     && head.is_none_or(|head| head == published_head.as_str())
+                    && (self.publisher_logins.get(*index))
+                        .is_some_and(|posted| posted.eq_ignore_ascii_case(login))
             })
             .map(|(index, _)| index)
     }
@@ -439,17 +448,17 @@ impl Integrations for FakeIntegration {
     fn get_pull_request(
         &self,
         _cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
         trigger: &Trigger,
     ) -> impl Future<Output = Result<PullRequest, Error>> + Send {
         let key = format!("{repository}#{number}");
         let result = {
-            let state = self.lock();
-            if state.transient() {
+            let mut state = self.lock();
+            (state.pull_request_reads).push(format!("{key} {}", credential.name));
+            if state.transient() || state.failing_credentials.contains_key(&credential.name) {
                 Err(transient_error())
-            } else if let Some(err) = state.credential_error(repository) {
-                Err(err)
             } else if let Some(code) = state.lapsed.get(&key) {
                 Err(Error::workflow(code.clone(), true, None))
             } else if let Some(pr) = state.current.get(&key) {
@@ -704,6 +713,7 @@ impl Integrations for FakeIntegration {
     fn list_commentable_lines(
         &self,
         _cancel: &CancellationToken,
+        _credential: &Credential,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<CommentableLines, Error>> + Send {
         let result = {
@@ -716,6 +726,7 @@ impl Integrations for FakeIntegration {
     fn list_changed_files(
         &self,
         _cancel: &CancellationToken,
+        _credential: &Credential,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send {
         let result = {
@@ -732,6 +743,7 @@ impl Integrations for FakeIntegration {
     fn list_discussion(
         &self,
         _cancel: &CancellationToken,
+        _credential: &Credential,
         _pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> impl Future<Output = Result<Discussion, Error>> + Send {
@@ -760,6 +772,7 @@ impl Integrations for FakeIntegration {
     fn publish_review(
         &self,
         _cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send {
@@ -770,7 +783,9 @@ impl Integrations for FakeIntegration {
             let mut state = self.lock();
             if let Some(code) = state.publish_fail.clone() {
                 (Err(Error::workflow(code, true, None)), None)
-            } else if let Some(index) = state.standing_review(&review.marker, None) {
+            } else if let Some(index) =
+                state.standing_review(&review.marker, None, &credential.login)
+            {
                 let reused = PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,
@@ -781,6 +796,8 @@ impl Integrations for FakeIntegration {
             } else {
                 state.published.push(review.clone());
                 state.published_heads.push(pull_request.head_sha.clone());
+                state.publishers.push(credential.name.clone());
+                state.publisher_logins.push(credential.login.clone());
                 state.answered.insert(pull_request.key());
                 let posted = PublishResult {
                     decision: review.decision.clone(),
@@ -803,6 +820,7 @@ impl Integrations for FakeIntegration {
     fn find_published_review(
         &self,
         _cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<Option<PublishResult>, Error>> + Send {
@@ -812,7 +830,11 @@ impl Integrations for FakeIntegration {
             let mut state = self.lock();
             state.lookups += 1;
             state
-                .standing_review(&review.marker, Some(&pull_request.head_sha))
+                .standing_review(
+                    &review.marker,
+                    Some(&pull_request.head_sha),
+                    &credential.login,
+                )
                 .map(|index| PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,

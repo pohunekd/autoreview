@@ -44,7 +44,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
 | `credential_invalid` | GitHub refuses the token: revoked, expired or never valid | Replace the token in the variable that `token_env` names |
 | `configuration_invalid` naming `github.credentials` or `github.credentials.match` | Several credentials outside `validate`, or a `match` entry that an earlier one covers | [Credential errors](#credential-errors) |
-| `credential_not_covered`, `credential_unused` | A policy rule has a repository that no credential matches, or a credential serves no repository of the policy | [Credential errors](#credential-errors) |
+| `credential_not_covered`, `credential_unused` | A policy rule has a repository that no credential matches, a credential serves no repository of the policy, or a review's credential no longer fits it | [Credential errors](#credential-errors) |
 | A fine-grained token sees nothing | Organization approval pending, wrong resource owner, or repository not selected | [A fine-grained token sees nothing](#a-fine-grained-token-sees-nothing) |
 | `engine_already_running` | Another `serve` uses the same database | Stop the other process |
 | `metrics_listen_failed` | A second `serve` or another process holds `metrics.listen` | Stop it |
@@ -467,6 +467,12 @@ that serves no repository of the policy (`credential_unused`; remove it). Only
 `configuration_invalid` naming `github.credentials` until #14 to #18. An empty
 or unset token variable is refused at load with `configuration_missing` naming
 `github.credentials.token_env`.
+
+A review that stops with `credential_not_covered` after its dispatch lost its
+credential: it was removed or renamed, its `match` no longer covers the
+repository, or its `login` changed. Nothing is posted with another account. A
+waiting approval of such a review stays until it is approved or expires. Run
+`autoreview retry` to review the head again with the credential that serves it now.
 
 Check that a variable is set without printing its value:
 `test -n "$AUTOREVIEW_GH_TOKEN" && echo set`. Use the variable name from the

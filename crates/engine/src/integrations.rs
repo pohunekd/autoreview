@@ -170,9 +170,12 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send;
 
     /// Reads a pull request and checks it against the trigger of its rule.
+    ///
+    /// It reads with `credential`'s token, and the trigger check uses its login.
     fn get_pull_request(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
         trigger: &Trigger,
@@ -259,25 +262,33 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// Returns the lines of the pull request that accept an inline comment.
+    ///
+    /// It reads with `credential`'s token.
     fn list_commentable_lines(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<CommentableLines, Error>> + Send;
 
     /// Returns the files the pull request changes, in listing order.
     ///
     /// A listing that stops at a limit returns what it listed with `truncated` set.
+    /// It reads with `credential`'s token.
     fn list_changed_files(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send;
 
     /// Reads the reply threads of the prior findings and the conversation, bounded in size.
+    ///
+    /// It reads with `credential`'s token; the replies of its login are the reviewer's.
     fn list_discussion(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> impl Future<Output = Result<Discussion, Error>> + Send;
@@ -292,9 +303,12 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<bool, Error>> + Send;
 
     /// Publishes one review of the pull request and returns what GitHub recorded.
+    ///
+    /// It posts with `credential`'s token and looks for an earlier review of its login.
     fn publish_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send;
@@ -302,9 +316,11 @@ pub trait Integrations {
     /// Returns the review with the marker of `review` already on the head, without posting.
     ///
     /// It is the lookup that [`Integrations::publish_review`] makes before it posts.
+    /// It reads with `credential`'s token and matches only reviews of its login.
     fn find_published_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<Option<PublishResult>, Error>> + Send;
