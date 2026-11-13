@@ -142,7 +142,6 @@ one versioned JSON document for a dashboard of your own.
 | [Notifiers](knowledge/guides/notifiers.md) | Matrix rooms per level or per event, the review queue |
 | [Combining patterns](knowledge/guides/combining.md) | Recipes that layer the above |
 | [Writing prompts](knowledge/guides/writing-prompts.md) | Review and verifier prompts |
-| [Approve from chat with Hermes](knowledge/guides/hermes-approval.md) | Optional Hermes Agent integration, planned in #43 |
 | [MCP server](knowledge/guides/mcp-server.md) | Reviews as MCP tools for any agent |
 
 | Operate | |

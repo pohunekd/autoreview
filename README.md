@@ -102,7 +102,7 @@ scenarios are guides without a policy of their own:
 - Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` (after 0.2.0)
   writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the
   installer of the install page writes the system units of a server user (after
-  0.3.0, as is the container image)
+  0.3.0, as is the container image, which is `linux/amd64` only)
 
 ## Security model
 
@@ -123,9 +123,9 @@ keeps untrusted authors behind a maintainer label.
   repositories (planned in #19).
 - Claude Code and Codex reviewers share one result contract, with the blocking
   flag of each finding and the verdicts on prior findings.
-- Clean reviews that wait for a human are approved through the CLI, with an
-  optional Hermes Agent integration (planned in #43); approval by GitHub comment and a GitHub
-  App identity come after v1 (#46, #47).
+- Clean reviews that wait for a human are approved through the CLI or the tools
+  of the [MCP server](docs/knowledge/guides/mcp-server.md); approval by GitHub comment and a
+  GitHub App identity come after v1 (#46, #47).
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
 - Distributed as static Linux release archives from 0.1.0 on, with systemd

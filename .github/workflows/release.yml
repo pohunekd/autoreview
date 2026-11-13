@@ -199,12 +199,44 @@ jobs:
           path: ${{ runner.temp }}/image/image.tar
           if-no-files-found: error
 
+  # Refuses a moved tag or a published release of the tag before anything is
+  # pushed. It runs no repository code and only reads; a draft is visible only
+  # with `contents: write`, so `release` checks for one again.
+  release-guard:
+    name: release-guard
+    needs: meta
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+      COMMIT: ${{ needs.meta.outputs.commit }}
+    steps:
+      - name: Refuse a moved tag or an existing release
+        run: |
+          set -euo pipefail
+          tagged="$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha)"
+          if [ "$tagged" != "$COMMIT" ]; then
+            echo "::error::$TAG points to $tagged, this run built $COMMIT"
+            exit 1
+          fi
+          existing="$(gh api --paginate "repos/$GH_REPO/releases" \
+            --jq '.[] | select(.tag_name == env.TAG) | .id')"
+          if [ -n "$existing" ]; then
+            echo "::error::a release for $TAG exists; delete it and run again"
+            exit 1
+          fi
+
   # The only job with `packages: write`. It runs no repository code: it pushes
   # the image that `image` checked as ghcr.io/<repository>:<version>, refuses a
   # tag that exists, and outputs the digest of the pushed manifest.
   image-push:
     name: image-push
-    needs: [meta, image]
+    needs: [meta, image, release-guard]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -214,6 +246,7 @@ jobs:
       digest: ${{ steps.push.outputs.digest }}
     env:
       VERSION: ${{ needs.meta.outputs.version }}
+      REPO: ${{ github.repository }}
       IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -228,10 +261,28 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
-          if docker manifest inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
-            echo "::error::$IMAGE:$VERSION exists; delete that package version and run again"
-            exit 1
-          fi
+          # Only a 404 with MANIFEST_UNKNOWN or NAME_UNKNOWN means the tag is absent; any
+          # other answer stops. `docker manifest inspect` cannot tell: it reports an
+          # unauthorized or unexpected answer as "no such manifest" too.
+          token="$(printf 'user = "%s:%s"\n' "$ACTOR" "$GH_TOKEN" | curl -fsS -K - \
+            "https://ghcr.io/token?scope=repository:$REPO:pull,push" | jq -r .token)"
+          echo "::add-mask::$token"
+          status="$(curl -sS -o "$RUNNER_TEMP/manifest.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+            "https://ghcr.io/v2/$REPO/manifests/$VERSION")"
+          code="$(jq -r '.errors[0].code // empty' "$RUNNER_TEMP/manifest.json" 2>/dev/null || true)"
+          case "$status $code" in
+            "404 MANIFEST_UNKNOWN" | "404 NAME_UNKNOWN") ;;
+            "200 "*)
+              echo "::error::$IMAGE:$VERSION exists; delete that package version and run again"
+              exit 1
+              ;;
+            *)
+              echo "::error::cannot tell whether $IMAGE:$VERSION exists: HTTP $status $code"
+              exit 1
+              ;;
+          esac
           docker load -i "$RUNNER_TEMP/image/image.tar"
           docker tag "autoreview:$VERSION" "$IMAGE:$VERSION"
           docker push "$IMAGE:$VERSION"

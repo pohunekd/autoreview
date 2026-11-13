@@ -185,6 +185,9 @@ gh attestation verify "oci://ghcr.io/pohunekd/autoreview:$version" --repo pohune
   --source-ref "refs/tags/v$version" --deny-self-hosted-runners
 ```
 
+The image digest is not reproducible: a rebuild of the same release gives another
+digest. The attestation is what ties the image to the release workflow and tag.
+
 The image holds autoreview as `/usr/local/bin/autoreview`, `gh` as
 `/usr/bin/gh` and the `pohunek` CLI as `/usr/local/bin/pohunek`, at the versions
 pinned in [`deploy/image/Dockerfile`](../deploy/image/Dockerfile). These are the
@@ -221,12 +224,17 @@ volumes:
 ```
 
 The secrets come from `./autoreview.env` (mode `0600`, outside `./config`) as
-environment variables; see [secrets](knowledge/safety/secrets.md). Write the
-configuration into `./config` with `init` from the image, then check it, as the
-user that owns `./config`:
+environment variables; see [secrets](knowledge/safety/secrets.md). `docker compose`
+reads the file as the user that runs it, so that user owns it. Get the compose file
+of the release, create the empty secrets file and write the values into it with an
+editor, never on a command line. Write the configuration into `./config` with `init`
+from the image, then check it, as the user that owns `./config`:
 
 ```sh
 export AUTOREVIEW_VERSION=$version
+curl -fLO \
+  "https://raw.githubusercontent.com/pohunekd/autoreview/v$version/deploy/compose/compose.yml"
+install -m 0600 /dev/null autoreview.env
 mkdir -m 0755 config
 docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD/config:/etc/autoreview" \
   "ghcr.io/pohunekd/autoreview:$version" init --dir /etc/autoreview --login <login> \
