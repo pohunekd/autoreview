@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use autoreview_policy::{EVENTS, Event, Level, Rule};
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{Credential, Credentials};
@@ -261,7 +262,6 @@ async fn missing_from_search_is_confirmed_before_a_wait_ends() {
     (h.store
         .in_tx(|transaction| save_discovery(transaction, &state)))
     .expect("the discovery state saves");
-    h.fake.lock().credentials = Some(h.config().credentials);
     h.fake.lock().failing_credentials =
         BTreeMap::from([("manual".to_owned(), "github_request_failed".to_owned())]);
     h.start();
@@ -281,6 +281,7 @@ async fn missing_from_search_is_confirmed_before_a_wait_ends() {
 
 // A waiting approval publishes with the credential that reviewed it, also after a restart
 // behind a narrower credential. A removed credential stops it; a retry takes the new one (#18).
+// A notes hand-off is read with the credential of its review (#373).
 #[tokio::test]
 async fn waiting_approval_publishes_with_the_credential_that_reviewed_it() {
     let phase = Arc::new(AtomicUsize::new(0));
@@ -292,19 +293,34 @@ async fn waiting_approval_publishes_with_the_credential_that_reviewed_it() {
             token: format!("{name}-token"),
             matches: vec![pattern.to_owned()],
         };
-        let list = match switch.load(Ordering::SeqCst) {
+        let phase = switch.load(Ordering::SeqCst);
+        let list = match phase {
             0 => vec![credential("rest", "reviewer", "*")],
             1 => vec![
                 credential("manual", "manual-bot", "acme/manual"),
                 credential("rest", "reviewer", "*"),
             ],
             2 => vec![credential("other", "reviewer", "*")],
-            _ => vec![
+            3 => vec![
                 credential("manual", "manual-bot", "acme/manual"),
                 credential("other", "reviewer", "*"),
             ],
+            4 => vec![
+                credential("manual", "manual-bot", "acme/manual"),
+                credential("notes", "notes-bot", "acme/notes"),
+                credential("other", "reviewer", "*"),
+            ],
+            _ => vec![
+                credential("manual", "manual-bot", "acme/manual"),
+                credential("notes", "notes-bot", "acme/notes"),
+                credential("spare", "reviewer", "*"),
+            ],
         };
         config.credentials = Credentials::new(list).expect("the credentials load");
+        if phase >= 4 {
+            // The hand-off is backdated past the reminder time and must not be pruned.
+            config.published_retention = std::time::Duration::from_secs(72 * 60 * 60);
+        }
     })
     .await;
     let pr = integration_pull_request("acme/manual", &sha("a"));
@@ -413,6 +429,65 @@ async fn waiting_approval_publishes_with_the_credential_that_reviewed_it() {
     h.wait_for("the stored approval", || h.publications() == 3)
         .await;
     assert_eq!(h.fake.lock().publishers, ["rest", "other", "other"]);
+    // Notes handed off by `other` are read with it behind a narrower credential of another
+    // login, and stay unread while its search fails.
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "low", "confidence": "high", "blocking": false, "path": "src/a.go",
+        "line": 3, "title": "Naming", "body": "Could be clearer.",
+    })]));
+    let notes = integration_pull_request("acme/notes", &sha("d"));
+    h.fake.open(notes.clone(), h.rule(&notes.repository));
+    h.poll_until("the hand-off comment", || h.publications() == 4)
+        .await;
+    h.stop_engine().await;
+    h.fake.lock().candidates.remove(&notes.key());
+    let mut state = h.store.load_discovery().expect("the discovery state loads");
+    let Some(handoff) = state.published.get_mut(&notes.key()) else {
+        panic!("the hand-off was not recorded");
+    };
+    handoff.published_at -= time::Duration::hours(25);
+    (h.store
+        .in_tx(|transaction| save_discovery(transaction, &state)))
+    .expect("the discovery state saves");
+    phase.store(4, Ordering::SeqCst);
+    h.fake.lock().failing_credentials =
+        BTreeMap::from([("other".to_owned(), "github_request_failed".to_owned())]);
+    h.start();
+    h.poll().await;
+    let reminder = format!(
+        "{} PR #{} wait for the author",
+        notes.repository, notes.number
+    );
+    assert!(
+        h.fake.lock().state_reads.is_empty() && !h.fake.has_note(Level::Action, &reminder),
+        "a hand-off was read while its credential's search failed"
+    );
+    h.fake.lock().failing_credentials.clear();
+    h.poll().await;
+    let reads = h.fake.lock().state_reads.clone();
+    assert!(
+        reads == [format!("{} other", notes.key())] && h.fake.has_note(Level::Action, &reminder),
+        "the hand-off was not read with the credential of its review: {reads:?}"
+    );
+    // Once its credential is gone, a due hand-off ends unread.
+    h.stop_engine().await;
+    let mut state = h.store.load_discovery().expect("the discovery state loads");
+    if let Some(handoff) = state.published.get_mut(&notes.key()) {
+        handoff.reminded = false;
+    }
+    (h.store
+        .in_tx(|transaction| save_discovery(transaction, &state)))
+    .expect("the discovery state saves");
+    phase.store(5, Ordering::SeqCst);
+    h.start();
+    h.poll().await;
+    let state = h.store.load_discovery().expect("the discovery state loads");
+    let ended = state.published.get(&notes.key());
+    assert!(
+        ended.is_some_and(|record| !record.awaits_author) && h.fake.lock().state_reads == reads,
+        "a hand-off whose credential is gone was read or kept: {ended:?}"
+    );
     h.stop_engine().await;
 }
 
