@@ -22,7 +22,7 @@ no-changelog label with the reason. -->
 
 ## Verification
 
-- `scripts/gates`: fmt, vet, staticcheck, test, check-docs: passed/failed each
+- `scripts/gates`: check-docs, shellcheck, setup-self-test, adapter-claude, adapter-codex, rust-fmt, rust-clippy, rust-test, changelog: passed/failed each
 - Manual: <!-- what was run and observed, against which pohunek version and
   which scratch repository; never tokens or private names -->
 

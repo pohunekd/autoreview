@@ -291,7 +291,7 @@ mod tests {
     use crate::Error;
 
     /// Go-written timestamp cases, shared with the Go reference tests.
-    const GOLDEN: &str = include_str!("../../engine/tests/fixtures/stored-formats/timestamps.json");
+    const GOLDEN: &str = include_str!("../../../testdata/stored-formats/timestamps.json");
 
     #[derive(Debug, Serialize, Deserialize)]
     struct Stamp {

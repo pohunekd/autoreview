@@ -326,14 +326,30 @@ mod tests {
     use serde_json::json;
 
     use crate::error::error_code;
-    use crate::protocol::fixtures::{codex_report, test_pull_request};
+    use crate::protocol::fixtures::{codex_report, sha, test_pull_request};
     use crate::protocol::validate::reviewer_output_retryable;
     use crate::protocol::validate::tests::test_config;
 
     use super::parse_codex_output;
 
-    // A Codex note does not block: a finding blocks only when it says so at a severity that
-    // holds the merge back (#23).
+    // A repeated key of the Codex report is refused, as the golden case records.
+    #[test]
+    fn repeated_status_key_is_refused() {
+        let pr = test_pull_request(3);
+        let report = format!(
+            r#"{{"findings":[],"summary":"Full review of the pull request diff; details follow.","tests":["go test ./..."],"status":"failed","status":"completed","reviewed_head_sha":"{}"}}"#,
+            sha("a")
+        );
+        let encoded = STANDARD.encode(report.as_bytes());
+        let raw = format!(
+            "[pohunek-codex-review-result-v1:{encoded}]\n[pohunek-codex-review exited with status 0]\n"
+        );
+        let err = parse_codex_output(&test_config(), &pr, &raw)
+            .expect_err("a repeated key of the report is refused");
+        assert_eq!(error_code(&err), "review_result_invalid");
+    }
+
+    // A refusal envelope of the adapter names its reason.    // holds the merge back (#23).
     #[test]
     fn codex_finding_blocks_only_when_it_says_so() {
         let pr = test_pull_request(3);

@@ -17,9 +17,7 @@ keeps its state in SQLite. The public design is in [README.md](README.md) and
 [docs/features.md](docs/features.md); the concepts are in
 [docs/knowledge/concepts/](docs/knowledge/concepts/).
 
-The engine is a Cargo workspace under `crates/`, ported slice by slice from the
-imported Go reference (`cmd/`, `internal/`), which stays buildable and gated,
-read-only, until the port reaches parity and it is deleted. The app is
+The engine is a Cargo workspace under `crates/`. The app is
 expected to change quickly. Optimize for small, fast, reversible changes: little
 ceremony, few tests, a fast CI.
 
@@ -31,7 +29,7 @@ Read a guide when its trigger applies.
   for autonomy, issues, branches, PRs, merge, and the rule to file problems
   instead of fixing them.
 - **Any code change:** [.agents/instructions/coding.md](.agents/instructions/coding.md)
-  for Rust, the Go reference, porting from it, the Python adapters, the pohunek
+  for Rust, the stored-format compatibility rules, the Python adapters, the pohunek
   boundary, configuration, security, and comment rules. The Rust guidelines
   under [.agents/rust-guidelines/](.agents/rust-guidelines/SKILL.md) are
   mandatory for every `.rs` file.
@@ -63,11 +61,10 @@ links to them. Edit only `.agents/skills/`.
 ## Commands
 
 ```bash
-scripts/gates                  # every gate: docs, adapters, rust, then the Go reference
+scripts/gates                  # every gate: docs, adapters, rust
 scripts/gates docs             # documentation and example checks only
 scripts/gates adapters         # the test suite of every adapters/<name>/tests directory
 scripts/gates rust             # fmt, clippy and test of the Cargo workspace
-scripts/gates go               # Go reference gates only (skipped with a reason without go.mod)
 python3 -I scripts/check-docs  # the documentation checker alone
 ```
 

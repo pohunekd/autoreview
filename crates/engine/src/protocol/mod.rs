@@ -211,8 +211,12 @@ pub(crate) mod fixtures {
             "result": "Prose summary.",
             "structured_output": structured
         });
-        let text = outer.to_string();
-        let encoded = STANDARD.encode(text.as_bytes());
+        claude_session_raw(&outer.to_string())
+    }
+
+    /// Wraps `stdout`, the raw text the Claude adapter ran, in the wrapper of a finished session.
+    pub(crate) fn claude_session_raw(stdout: &str) -> String {
+        let encoded = STANDARD.encode(stdout.as_bytes());
         let wrapper = serde_json::json!({
             "protocol": CLAUDE_RESULT_PROTOCOL,
             "mode": "structured",

@@ -348,6 +348,19 @@ mod tests {
                 "Code:\n\\~~~~\n@\u{200b}kept\n\\~~~\n@\u{200b}kept too\n\\~~~~",
             ),
             (
+                "comment_delimiters_inside_fence",
+                "```\n<!-- hidden -->\n```\n<!-- out -->",
+                "\n```\n&lt;!-- hidden --&gt;\n```\n\n&lt;!-- out --&gt;",
+                "\\`\\`\\`\n&lt;!-- hidden --&gt;\n\\`\\`\\`\n&lt;!-- out --&gt;",
+            ),
+            (
+                "multibyte_before_mention",
+                "é@octocat",
+                "é@\u{200b}octocat",
+                "é@\u{200b}octocat",
+            ),
+            ("at_underscore_not_mention", "@_x", "@_x", "@_x"),
+            (
                 "image_pixel",
                 "see ![x](https://example.org/a.png)",
                 "see !\\[x](https://example.org/a.png)",

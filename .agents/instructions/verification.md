@@ -62,13 +62,16 @@ Write a test only for:
   - config validation (every key required, `*_env` names).
 - **A fixed bug in that logic**, as a regression test that fails without the
   fix.
+- **Compatibility of stored and published formats** that production data depends on: store
+  schema and rows, review markers, identifiers, timestamps and the policy digest, checked
+  against the golden fixtures in `testdata/stored-formats/`.
 - **One behavioural scenario end to end** through the fake `Integrations`
   boundary: a candidate pull request is discovered, reviewed with a fake reviewer
   result, and published once. It is the only test that drives several packages
   together.
 
-Tests ported from the removed Go reference follow this policy like every other
-test. The Go reference and its goldens are no longer in the repository.
+Tests ported from the former Go reference are not yet triaged against this policy;
+#350 tracks that triage.
 
 Do not write:
 

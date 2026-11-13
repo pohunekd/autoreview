@@ -59,9 +59,8 @@
 The Rust engine opens the Go engine's database unchanged and continues its
 history. Supported cutover: from a drained queue (no row with status `queued`,
 `running` or `awaiting`). Resuming a Go review mid-workflow is not supported and
-not tested. Rollback to the Go binary is supported under the same drained rule,
-because nothing below changes what Go reads. Line references are to the Go
-reference as merged in #61.
+not tested. A rollback goes to an earlier autoreview release (Rust) under the same
+drained rule. The mirror comments in this file cite the removed Go reference; #346 tracks them.
 
 What is compatible, as rules every slice that defines a persisted type must
 follow:
@@ -260,8 +259,8 @@ What is not compatible, by decision:
   adapter checked (`checked_checkout`), and Rust refuses a Claude reviewer or
   verifier result without it, or with another checkout than the pipeline's, as
   `review_adapter_outdated`, so an older Claude wrapper stops every Claude
-  review after the switch. Go ignores the field. In `protocol_matches_go_golden`
-  each Claude golden case gets `"checked_checkout":"base"` before it is parsed.
+  review after the switch. Go ignores the field. The Claude test wrapper
+  (`claude_session_raw`) sets `"checked_checkout":"base"` before the result is parsed.
   The regression tests are
   `test_base_checkout_without_the_head_is_refused_before_claude_runs` (adapter),
   `adapter_refusal_of_a_missing_head_is_not_retried` (Claude and Codex parsers)
@@ -315,8 +314,8 @@ What is not compatible, by decision:
   `validate_prior_verdicts`. Go refuses both fields (`DisallowUnknownFields`,
   `protocol.go:246`), blocks every Codex finding and gives a Codex pipeline no
   prior findings (`discovery.go:90`, `review.go:94`). In
-  `protocol_matches_go_golden` the golden case `codex_valid_report`, a report
-  without both fields, expects `review_adapter_outdated`. A rollback to Go
+  `codex_report_without_blocking_or_prior_findings_is_refused`, a report without both
+  fields is refused. A rollback to Go
   needs the older Codex wrapper back, and Go refuses a stored Codex input with
   prior findings, so a Codex review in flight at the rollback stops. The
   regression tests are `codex_finding_blocks_only_when_it_says_so`,

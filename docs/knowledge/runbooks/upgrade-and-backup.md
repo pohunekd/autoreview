@@ -112,8 +112,7 @@ Roll back only with a backup taken before the upgrade:
    are not in the restored store; check them on GitHub before you retry.
 4. Run `validate` with the old version, then start the service.
 
-A rollback goes to an earlier autoreview release (Rust). The Go engine is no longer
-available after this release.
+A rollback goes to an earlier autoreview release (Rust).
 
 ## pohunek version compatibility
 

@@ -52,7 +52,7 @@ mod tests {
     };
 
     /// Go-written persisted values, shared with the Go reference tests.
-    const GOLDEN: &str = include_str!("../../tests/fixtures/stored-formats/persisted.json");
+    const GOLDEN: &str = include_str!("../../../../testdata/stored-formats/persisted.json");
 
     /// Golden cases of types that later slices port, so this test skips them.
     const LATER_CASES: &[&str] = &[];

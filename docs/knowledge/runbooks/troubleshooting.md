@@ -220,7 +220,7 @@ missing head is `review_result_invalid`:
 
 | Message | Cause | Fix |
 |---|---|---|
-| `review checkout HEAD does not match the trusted pull request head` | A `head` request in a worktree at another commit. A request without the `- Trusted checkout:` line counts as `head`. | Give Codex `checkout: head` when the review must run in a worktree at the trusted head. |
+| `review checkout HEAD does not match the trusted pull request head` | A `head` request in a worktree at another commit. A request without the `- Trusted checkout:` line counts as `head`. | Check the pipeline's `checkout` and the session's branch on the review host, so that the worktree is at the trusted head. |
 | `trusted pull request head is unavailable in the review checkout` | A `base` request whose head commit is not in the repository; the review stops with `review_head_unavailable` | See [Head commit unavailable](#head-commit-unavailable) |
 | `review checkout HEAD does not descend from the trusted pull request base`, `trusted pull request base is unavailable in the review checkout` | The base branch was force-pushed since GitHub recorded the pull request's base | A push to the pull request (or a rebase) records the new base; then `autoreview retry` |
 | `review checkout HEAD is the pull request head or contains it` | A `base` request in a worktree at the pull request code | Check the pipeline's `checkout` and the session's branch on the review host |

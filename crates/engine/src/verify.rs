@@ -733,6 +733,22 @@ mod tests {
             .expect("a complete verdict list parses");
         assert_eq!(result.findings.len(), 2);
         assert_eq!(result.prior.len(), 1);
+        let duplicate = format!(
+            r#"{{"type":"result","subtype":"success","is_error":false,"result":"Prose summary.","structured_output":{{"repository":"{}","number":{},"head_sha":"{}","findings":[],"findings":[{{"id":"O001","verdict":"confirmed","note":"Checked."}},{{"id":"S001","verdict":"refuted","note":"Checked."}}],"prior_findings":[{{"key":"{}","verdict":"reopened","note":"Checked."}}]}}}}"#,
+            pr.repository, pr.number, pr.head_sha, key
+        );
+        let err = parse_verifier_output(
+            &cfg,
+            &input,
+            &claims,
+            &fixtures::claude_session_raw(&duplicate),
+        )
+        .expect_err("a repeated key of the verifier output is refused");
+        assert_eq!(error_code(&err), "claude_result_invalid");
+        let err =
+            parse_verifier_output(&cfg, &input, &claims, &fixtures::claude_session_raw("null"))
+                .expect_err("a null stdout is refused");
+        assert_eq!(error_code(&err), "claude_result_invalid");
     }
 
     #[test]
