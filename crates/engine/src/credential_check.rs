@@ -224,7 +224,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
 #[cfg(test)]
 mod tests {
-    use time::macros::datetime;
+    use time::macros::{date, datetime};
 
     use super::*;
     use crate::config::Credential;
@@ -322,5 +322,52 @@ mod tests {
             assert_eq!(render(result), expected, "{case}");
             assert_eq!(fake.lock().token_checks, names[..checked], "{case}");
         }
+    }
+
+    /// The expiry window and the once-a-day rule of `credential_expiring` (#19, D3).
+    #[test]
+    fn expiry_warning_is_due_within_the_window_once_a_utc_day() {
+        let window = Duration::from_secs(14 * 24 * 60 * 60);
+        let noon = datetime!(2026-11-13 12:00:00 UTC);
+        let soon = datetime!(2026-11-20 08:00:00 UTC);
+        let midnight = datetime!(2026-11-14 00:00:30 UTC);
+        let local = datetime!(2026-11-14 00:30:00 +02:00);
+        let (today, yesterday) = (Some(date!(2026 - 11 - 13)), Some(date!(2026 - 11 - 12)));
+        // (case, expiry, now, last warning, due)
+        let cases = [
+            (
+                "past the window",
+                datetime!(2026-11-27 12:00:01 UTC),
+                noon,
+                None,
+                false,
+            ),
+            (
+                "at the window's end",
+                datetime!(2026-11-27 12:00:00 UTC),
+                noon,
+                None,
+                true,
+            ),
+            ("inside the window", soon, noon, None, true),
+            (
+                "expired",
+                datetime!(2026-11-12 08:00:00 UTC),
+                noon,
+                None,
+                true,
+            ),
+            ("warned today", soon, noon, today, false),
+            ("warned yesterday", soon, noon, yesterday, true),
+            ("a new UTC day", soon, midnight, today, true),
+            ("the UTC day of a local time", soon, local, today, false),
+        ];
+        for (case, expires_at, now, last_warned, due) in cases {
+            let found = expiry_warning_due(expires_at, window, now, last_warned);
+            assert_eq!(found, due, "{case}");
+        }
+        let far = datetime!(9999-12-31 23:59:59 UTC);
+        let due = expiry_warning_due(far, Duration::MAX, noon, None);
+        assert!(due, "a window past the time range covers every expiry");
     }
 }
