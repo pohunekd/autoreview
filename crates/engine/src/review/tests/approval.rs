@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use autoreview_policy::{EVENTS, Event, Level, Rule};
 
@@ -275,6 +275,130 @@ async fn missing_from_search_is_confirmed_before_a_wait_ends() {
         ended.is_some_and(|record| !record.awaits_author),
         "a stale hand-off outlived its credential: {ended:?}"
     );
+    h.stop_engine().await;
+}
+
+// A waiting approval publishes with the credential that reviewed it, also after a restart
+// behind a narrower credential. A removed credential stops it; a retry takes the new one (#18).
+#[tokio::test]
+async fn waiting_approval_publishes_with_the_credential_that_reviewed_it() {
+    let phase = Arc::new(AtomicUsize::new(0));
+    let switch = Arc::clone(&phase);
+    let mut h = start_harness(move |config| {
+        let credential = |name: &str, login: &str, pattern: &str| Credential {
+            name: name.to_owned(),
+            login: login.to_owned(),
+            token: format!("{name}-token"),
+            matches: vec![pattern.to_owned()],
+        };
+        let list = match switch.load(Ordering::SeqCst) {
+            0 => vec![credential("rest", "reviewer", "*")],
+            1 => vec![
+                credential("manual", "manual-bot", "acme/manual"),
+                credential("rest", "reviewer", "*"),
+            ],
+            2 => vec![credential("other", "reviewer", "*")],
+            _ => vec![
+                credential("manual", "manual-bot", "acme/manual"),
+                credential("other", "reviewer", "*"),
+            ],
+        };
+        config.credentials = Credentials::new(list).expect("the credentials load");
+    })
+    .await;
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
+    })
+    .await;
+    h.stop_engine().await;
+    phase.store(1, Ordering::SeqCst);
+    h.start();
+    // A wait missing from search is read with the credential of its review.
+    h.fake.lock().candidates.remove(&pr.key());
+    h.poll().await;
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    let readers: Vec<String> = (h.fake.lock().pull_request_reads.iter())
+        .filter_map(|read| read.rsplit_once(' '))
+        .filter(|(key, _)| *key == pr.key())
+        .map(|(_, credential)| credential.to_owned())
+        .collect();
+    assert!(
+        !readers.is_empty() && readers.iter().all(|credential| credential == "rest"),
+        "the waiting pull request was read with another credential: {readers:?}"
+    );
+    h.approve_when_awaiting(&pr)
+        .await
+        .expect("the approval is recorded");
+    h.wait_for("the approval", || h.publications() == 1).await;
+    assert_eq!(
+        h.fake.lock().publishers,
+        ["rest"],
+        "another account published"
+    );
+    let held = integration_pull_request("acme/manual", &sha("b"));
+    h.fake.open(held.clone(), h.rule(&held.repository));
+    h.poll_until("the second approval request", || {
+        let notes = &h.fake.lock().notes;
+        count_notes(notes, Level::Action, APPROVAL_REQUESTED_TITLE) == 2
+    })
+    .await;
+    h.stop_engine().await;
+    phase.store(2, Ordering::SeqCst);
+    h.start();
+    h.poll().await;
+    h.approve_when_awaiting(&held)
+        .await
+        .expect("a wait whose credential is gone stays");
+    let report = format!(
+        "Review for {} at {} stopped after your approval: it was not published \
+         (credential_not_covered)",
+        held.key(),
+        &held.head_sha[..HEAD_PREFIX_CHARS]
+    );
+    h.wait_for("the failure report", || {
+        h.fake.has_note(Level::Action, &report)
+    })
+    .await;
+    h.wait_for_async("an accepted retry", async || h.retry(&held).await.is_ok())
+        .await;
+    h.poll_until("the approval request of the retried review", || {
+        let notes = &h.fake.lock().notes;
+        count_notes(notes, Level::Action, APPROVAL_REQUESTED_TITLE) == 3
+    })
+    .await;
+    h.approve_when_awaiting(&held)
+        .await
+        .expect("the retried review is approved");
+    h.wait_for("the retried approval", || h.publications() == 2)
+        .await;
+    assert_eq!(h.fake.lock().publishers, ["rest", "other"]);
+    // A review stored before names adopts the serving credential once and keeps it.
+    let legacy = integration_pull_request("acme/manual", &sha("c"));
+    let mut input = test_input(h.rule(&legacy.repository), legacy.clone());
+    input.limits = h.engine.config.run_limits();
+    (h.store)
+        .in_tx(|transaction| {
+            h.store
+                .enqueue_review(transaction, &legacy.workflow_id(0), &input)
+        })
+        .expect("the review is enqueued");
+    h.fake.open(legacy.clone(), h.rule(&legacy.repository));
+    h.poll_until("the approval request of the stored review", || {
+        let notes = &h.fake.lock().notes;
+        count_notes(notes, Level::Action, APPROVAL_REQUESTED_TITLE) == 4
+    })
+    .await;
+    h.stop_engine().await;
+    phase.store(3, Ordering::SeqCst);
+    h.start();
+    h.approve_when_awaiting(&legacy)
+        .await
+        .expect("the stored review is approved");
+    h.wait_for("the stored approval", || h.publications() == 3)
+        .await;
+    assert_eq!(h.fake.lock().publishers, ["rest", "other", "other"]);
     h.stop_engine().await;
 }
 

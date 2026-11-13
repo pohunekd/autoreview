@@ -2,9 +2,13 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use autoreview_policy::Level;
 use serde_json::json;
 
+use crate::config::{Credential, Credentials};
 use crate::error::error_code;
 use crate::integrations::{ChangedFile, SessionRequest};
 use crate::messages::APPROVAL_REQUESTED_TITLE;
@@ -767,10 +771,31 @@ async fn stopped_review_is_retried_after_an_approval_on_a_third_base_branch() {
 
 // A return to a base branch whose approval GitHub dismissed at the retarget gets a review that
 // approves again; a return to one whose approval stands reviews nothing. Each return looks the
-// approval up once, and a settled pull request is not looked up again (#316).
+// approval up once, and a settled pull request is not looked up again (#316). A narrower
+// credential of another account added after the approvals does not change whose approval the
+// lookup finds (#18).
 #[tokio::test]
 async fn dismissed_approval_is_replaced_after_a_retarget_away_and_back() {
-    let mut h = start_harness(|_| {}).await;
+    let narrow = Arc::new(AtomicBool::new(false));
+    let switch = Arc::clone(&narrow);
+    let mut h = start_harness(move |config| {
+        if switch.load(Ordering::SeqCst) {
+            let only = config
+                .credentials
+                .single()
+                .cloned()
+                .expect("one credential");
+            let narrower = Credential {
+                name: "narrow".to_owned(),
+                login: "narrow-bot".to_owned(),
+                token: "narrow-token".to_owned(),
+                matches: vec!["claude/base".to_owned()],
+            };
+            config.credentials =
+                Credentials::new(vec![narrower, only]).expect("the credentials load");
+        }
+    })
+    .await;
     h.set_output(reviewer_output(Vec::new()));
     let pr = integration_pull_request("claude/base", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
@@ -782,6 +807,9 @@ async fn dismissed_approval_is_replaced_after_a_retarget_away_and_back() {
     h.fake.open(release.clone(), h.rule(&pr.repository));
     h.poll_until("the approval on release", || h.publications() == 2)
         .await;
+    h.stop_engine().await;
+    narrow.store(true, Ordering::SeqCst);
+    h.start();
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.settle().await;
     h.fake.open(release.clone(), h.rule(&pr.repository));

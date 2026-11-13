@@ -124,8 +124,12 @@ pub(crate) struct FakeState {
     pub(crate) published: Vec<GitHubReview>,
     /// Head SHA of each review in `published`, in the same order.
     pub(crate) published_heads: Vec<String>,
+    /// Name of the credential that posted each review in `published`, in the same order.
+    pub(crate) publishers: Vec<String>,
     /// Login of the credential that posted each review in `published`, in the same order.
     pub(crate) publisher_logins: Vec<String>,
+    /// Every pull request read, as `repository#number credential`, in order.
+    pub(crate) pull_request_reads: Vec<String>,
     /// Indexes into `published` of the reviews that GitHub dismissed.
     pub(crate) dismissed: BTreeSet<usize>,
     /// Number of lookups of a published review without a post.
@@ -451,7 +455,8 @@ impl Integrations for FakeIntegration {
     ) -> impl Future<Output = Result<PullRequest, Error>> + Send {
         let key = format!("{repository}#{number}");
         let result = {
-            let state = self.lock();
+            let mut state = self.lock();
+            (state.pull_request_reads).push(format!("{key} {}", credential.name));
             if state.transient() || state.failing_credentials.contains_key(&credential.name) {
                 Err(transient_error())
             } else if let Some(code) = state.lapsed.get(&key) {
@@ -791,6 +796,7 @@ impl Integrations for FakeIntegration {
             } else {
                 state.published.push(review.clone());
                 state.published_heads.push(pull_request.head_sha.clone());
+                state.publishers.push(credential.name.clone());
                 state.publisher_logins.push(credential.login.clone());
                 state.answered.insert(pull_request.key());
                 let posted = PublishResult {
