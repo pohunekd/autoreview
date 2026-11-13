@@ -15,7 +15,6 @@ pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "claude-otel-noninteractive/req
 
 /// The schema that a claude-structured reviewer must satisfy.
 ///
-/// It is a copy of the Go reference's schema, because `go:embed` cannot reach it from here.
 /// `review_schema` sets the summary bounds of the configuration on it for each request.
 const REVIEW_SCHEMA: &[u8] = include_bytes!("../../schemas/review-schema.json");
 

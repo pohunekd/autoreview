@@ -1,6 +1,4 @@
 //! The JSON object that a failed command prints on stdout.
-//!
-//! Mirrors `cmd/autoreview/command.go:22-47`.
 
 // Rust guideline compliant 2026-06-26
 

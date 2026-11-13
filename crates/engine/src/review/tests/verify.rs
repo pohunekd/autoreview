@@ -1,6 +1,4 @@
 //! Verifier scenarios of the engine against the fake integration.
-//!
-//! Mirrors `cmd/autoreview/verify_integration_test.go`.
 
 // Rust guideline compliant 2026-06-26
 

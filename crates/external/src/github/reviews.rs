@@ -1,7 +1,7 @@
 //! Publication of a review and its reconciliation by marker.
 //!
-//! Mirrors `cmd/autoreview/github.go:745-818`. A review is never posted twice: its marker is
-//! searched for before the POST and again after a POST that failed.
+//! A review is never posted twice: its marker is searched for before the POST and again after a
+//! POST that failed.
 
 // Rust guideline compliant 2026-06-26
 
@@ -84,8 +84,7 @@ enum PageStep {
     Done,
 }
 
-/// Refuses a review whose body does not carry its marker, before any `gh` call
-/// (`github.go:795-797`).
+/// Refuses a review whose body does not carry its marker, before any `gh` call.
 fn check_review_marker(review: &GitHubReview) -> Result<(), Error> {
     if review.marker.is_empty() || !review.body.contains(&review.marker) {
         return Err(Error::workflow("github_review_invalid", true, None));
@@ -93,8 +92,7 @@ fn check_review_marker(review: &GitHubReview) -> Result<(), Error> {
     Ok(())
 }
 
-/// Returns the state that GitHub reports for a published review of `decision`
-/// (`github.go:762-768`).
+/// Returns the state that GitHub reports for a published review of `decision`.
 fn expected_state(decision: &Decision) -> &'static str {
     match decision {
         Decision::Approve => "APPROVED",
@@ -131,7 +129,7 @@ fn fold_char(character: char) -> char {
     }
 }
 
-/// Decides what one page of the reviews lookup means (`github.go:766-793`).
+/// Decides what one page of the reviews lookup means.
 ///
 /// The first record, in listing order, that carries the marker on `head_sha` from `login` and is
 /// not dismissed is the review, and its state must be the expected state. A dismissed record is
@@ -173,8 +171,7 @@ fn review_page_step(
     }
 }
 
-/// Returns the result of a posted review, which needs a positive id and a URL
-/// (`github.go:812-815`).
+/// Returns the result of a posted review, which needs a positive id and a URL.
 fn posted_result(output: &str, decision: Decision) -> Result<PublishResult, Error> {
     let record: GitHubReviewRecord =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
@@ -189,7 +186,7 @@ fn posted_result(output: &str, decision: Decision) -> Result<PublishResult, Erro
     })
 }
 
-/// Returns the argv of one page of the reviews lookup (`github.go:766-770`).
+/// Returns the argv of one page of the reviews lookup.
 fn reviews_list_args(repository: &str, number: i64, page: i64) -> Vec<String> {
     vec![
         "api".to_owned(),
@@ -197,7 +194,7 @@ fn reviews_list_args(repository: &str, number: i64, page: i64) -> Vec<String> {
     ]
 }
 
-/// Returns the argv of the review POST, whose body is read from stdin (`github.go:803`).
+/// Returns the argv of the review POST, whose body is read from stdin.
 fn reviews_post_args(repository: &str, number: i64) -> Vec<String> {
     vec![
         "api".to_owned(),
@@ -209,7 +206,7 @@ fn reviews_post_args(repository: &str, number: i64) -> Vec<String> {
     ]
 }
 impl GitHub {
-    /// Publishes `review` unless its marker is already on the head (`github.go:794-817`).
+    /// Publishes `review` unless its marker is already on the head.
     pub(crate) async fn publish_review(
         &self,
         cancel: &CancellationToken,
@@ -259,8 +256,7 @@ impl GitHub {
         self.find_published_review(cancel, pr, review).await
     }
 
-    /// Returns the published review that carries the marker, reading every page
-    /// (`github.go:766-793`).
+    /// Returns the published review that carries the marker, reading every page.
     async fn find_published_review(
         &self,
         cancel: &CancellationToken,

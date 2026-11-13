@@ -1,6 +1,4 @@
 //! Approval, label and request scenarios of the engine against the fake integration.
-//!
-//! Mirrors the approval, label and request tests of `cmd/autoreview/review_integration_test.go`.
 
 // Rust guideline compliant 2026-06-26
 
@@ -25,7 +23,7 @@ fn unfinished(_: &SessionRequest) -> String {
     String::new()
 }
 
-/// The notification levels of the Go `notificationLevels` (`logic_test.go:23-36`).
+/// The notification level of every event in these scenarios.
 fn notification_levels() -> BTreeMap<Event, Level> {
     let mut levels: BTreeMap<Event, Level> = EVENTS
         .iter()
@@ -41,7 +39,7 @@ fn notification_levels() -> BTreeMap<Event, Level> {
     levels
 }
 
-/// The review input of the Go `testInput` (`logic_test.go:54-61`).
+/// The review input of `pull_request` under `rule`.
 fn test_input(rule: Rule, pull_request: PullRequest) -> ReviewInput {
     ReviewInput {
         version: INPUT_VERSION,

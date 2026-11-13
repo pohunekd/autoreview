@@ -123,7 +123,7 @@ fn has_case_variant_keys(value: &Value) -> bool {
     }
 }
 
-/// Fixtures of the ported Go tests. They keep only the fields the tests read.
+/// Fixtures of the protocol tests. They keep only the fields the tests read.
 #[cfg(test)]
 pub(crate) mod fixtures {
     use autoreview_policy::{Pipeline, Protocol, Reviewer, Rule};
@@ -305,12 +305,12 @@ mod tests {
 
     use super::parse_reviewer_output;
 
-    /// Verdict of `status` on `key` as Claude writes it, with the Go test note.
+    /// Verdict of `status` on `key` as Claude writes it, with the note `Checked.`.
     fn verdict_json(key: &str, status: &str) -> Value {
         json!({"key": key, "status": status, "note": "Checked.", "relies_on": ""})
     }
 
-    /// Verdict of `status` on `key` with the Go test note and no `relies_on`.
+    /// Verdict of `status` on `key` with the note `Checked.` and no `relies_on`.
     fn verdict(key: &str, status: &str) -> PriorVerdict {
         PriorVerdict {
             key: key.to_owned(),

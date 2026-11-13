@@ -24,14 +24,11 @@ pub const STATE_REJECTED: &str = "rejected";
 
 /// Key prefix of an announced host outage in the `rejected` entry.
 ///
-/// Go reads only the four entries above (`store.go:191-200`), so the outages share the
-/// `rejected` map; no `owner/name#N` key starts with this prefix, because an owner has no `:`.
+/// The outages share the `rejected` map; no `owner/name#N` key starts with this prefix,
+/// because an owner has no `:`.
 const HOST_OUTAGE_PREFIX: &str = "host:";
 
 /// Key prefix of a pull request that the last pass skipped, in the `rejected` entry.
-///
-/// Go's `reportRejected` (`discovery.go:45-63`) rebuilds that map from its own rejections, so
-/// it drops these keys on its first pass.
 const SKIPPED_PREFIX: &str = "skipped:";
 
 /// The discovery maps; all but `host_outages` are keyed by the `repository#number` key of a

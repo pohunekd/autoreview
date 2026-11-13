@@ -1,7 +1,5 @@
 //! The engine core: its state, the clock it reads, the retry of one workflow step and the claims
 //! that keep one review on one engine.
-//!
-//! Mirrors `cmd/autoreview/engine.go:1-205`.
 
 // Rust guideline compliant 2026-06-26
 
@@ -39,13 +37,13 @@ pub(crate) struct StepRetryPolicy {
     pub(crate) max_interval: Duration,
 }
 
-/// Mode of the engine lock file, as Go's `os.OpenFile` mode (`engine.go:72`).
+/// Mode of the engine lock file: read and write for the owner only.
 const ENGINE_LOCK_MODE: u32 = 0o600;
 
-/// Step that stores the combined review of a workflow (`review.go:18`).
+/// Step that stores the combined review of a workflow.
 pub(crate) const STEP_ARTIFACT: &str = "artifact";
 
-/// Step that stores the GitHub publication of a workflow (`review.go:23`).
+/// Step that stores the GitHub publication of a workflow.
 pub(crate) const STEP_PUBLICATION: &str = "publication";
 
 /// Time source of the engine: monotonic instants and waits between attempts.

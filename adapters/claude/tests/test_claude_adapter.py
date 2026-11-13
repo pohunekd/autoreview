@@ -217,7 +217,7 @@ class BaseCheckoutTests(unittest.TestCase):
         return self.git(cwd, "rev-parse", "HEAD")
 
     def prompt(self, checkout: str = "base") -> str:
-        """Returns the trusted context of the Rust engine's prompt; `go` gives the Go one."""
+        """Returns the trusted context of the prompt; `go` gives one without trusted lines."""
         context = (
             "Review the pull request.\n\nTrusted request context:\n"
             "Repository: acme/widget\nPull request: 9\n"
@@ -365,7 +365,7 @@ class BaseCheckoutTests(unittest.TestCase):
                 self.assertEqual(stderr, "")
 
     def test_prompt_without_a_checkout_line_needs_the_head_checked_out(self) -> None:
-        # The Go engine writes only `Head SHA:`; its prompt gets the strict head check.
+        # A prompt with only `Head SHA:` gets the strict head check.
         self.fetch_head()
         result, _ = self.run_adapter(self.prompt("go"))
         self.assert_refused(result, "checkout_invalid", "does not match the trusted pull request")

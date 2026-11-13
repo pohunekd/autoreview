@@ -1,6 +1,4 @@
 //! The discovery records that a review writes: its approval wait and its publication.
-//!
-//! Mirrors `cmd/autoreview/discovery.go:539-579`.
 
 // Rust guideline compliant 2026-06-26
 

@@ -1,6 +1,4 @@
 //! The verification step: the verifier checks the blocking claims of a review.
-//!
-//! Mirrors `cmd/autoreview/review.go:545-593`.
 
 // Rust guideline compliant 2026-06-26
 

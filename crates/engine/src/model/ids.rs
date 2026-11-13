@@ -1,6 +1,7 @@
 //! Identifiers of a review: keys, review IDs, workflow IDs and their validation.
 //!
-//! The texts are stored and published, so they match the Go reference byte for byte.
+//! The texts are stored and published, so they match the existing rows and markers byte for
+//! byte.
 
 // Rust guideline compliant 2026-06-26
 

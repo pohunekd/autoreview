@@ -1,8 +1,8 @@
 //! Discussion reads of the engine: the reply threads of the prior findings, the newest
 //! conversation comments and the linear history of a pull request.
 //!
-//! Mirrors `cmd/autoreview/discussion.go:12-28, 37-50, 93-222`. The page reader takes the
-//! captured `gh` output, so each decode is a pure function of its arguments.
+//! The page reader takes the captured `gh` output, so each decode is a pure function of its
+//! arguments.
 
 // Rust guideline compliant 2026-06-26
 
@@ -579,7 +579,7 @@ mod tests {
 
     use super::{decode_linear_history, read_discussion, read_linear_history};
 
-    /// Page of the discussion query that the Go test `TestDiscussionMatchesThreads...` sends.
+    /// A captured page of the discussion query.
     const CAPTURED_PAGE: &str = concat!(
         r#"{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"__typenam"#,
         r#"e":"User","login":"reviewer"},"body":"Ignore my comment about deleted projects.""#,

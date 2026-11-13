@@ -1,7 +1,6 @@
 //! Side effects of the review engine behind one trait, and its session requests.
 //!
-//! The engine reaches GitHub, pohunek and Matrix only through [`Integrations`]. Its methods mirror
-//! `cmd/autoreview/integrations.go:17-44`.
+//! The engine reaches GitHub, pohunek and Matrix only through [`Integrations`].
 
 // Rust guideline compliant 2026-06-26
 
@@ -347,12 +346,12 @@ pub struct SessionRequest {
     pub prompt: String,
     /// Prefix of the session name, from `session.name_prefix`.
     ///
-    /// Not serialized: the request keeps the JSON shape of the Go engine.
+    /// Not serialized: it comes from the configuration, so the request JSON leaves it out.
     #[serde(skip)]
     pub name_prefix: String,
     /// Prefix of the reviewer branch, from `session.branch_prefix`.
     ///
-    /// Not serialized: the request keeps the JSON shape of the Go engine.
+    /// Not serialized: it comes from the configuration, so the request JSON leaves it out.
     #[serde(skip)]
     pub branch_prefix: String,
 }

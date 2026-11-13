@@ -1,8 +1,7 @@
 //! The runs of the review steps: the `review_step_runs` table.
 //!
 //! One row per review and step holds how the step's run ended, its retries and its duration.
-//! The Go reference neither writes nor reads the table; its prune removes the rows with their
-//! review through the foreign key.
+//! A pruned review takes its rows with it through the foreign key.
 
 // Rust guideline compliant 2026-06-26
 

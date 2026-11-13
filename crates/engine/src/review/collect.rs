@@ -1,8 +1,6 @@
 //! Collecting the reviewer results.
 //!
 //! The sessions run in parallel until each slot has a result.
-//!
-//! Mirrors `cmd/autoreview/review.go:430-548`.
 
 // Rust guideline compliant 2026-06-26
 

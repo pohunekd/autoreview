@@ -1,6 +1,4 @@
 //! Discovery: the discovery lock, notifications and the rejected pull requests.
-//!
-//! Mirrors `cmd/autoreview/discovery.go:15-64, 197-202`.
 
 // Rust guideline compliant 2026-06-26
 

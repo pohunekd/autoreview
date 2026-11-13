@@ -1,8 +1,7 @@
 //! The pohunek calls that read reviewer session output and remove finished sessions.
 //!
-//! Mirrors `cmd/autoreview/pohunek.go:252-348`. The argument lists and the decoding are pure
-//! functions of their inputs; the calls take their runner as a parameter, so both are checked
-//! without a child process.
+//! The argument lists and the decoding are pure functions of their inputs; the calls take their
+//! runner as a parameter, so both are checked without a child process.
 
 // Rust guideline compliant 2026-06-26
 
@@ -160,7 +159,7 @@ pub(crate) fn output_arguments(
 
 /// Returns the arguments of `session rm` for `session`.
 ///
-/// The host follows the session identifier, in the order of `cmd/autoreview/pohunek.go:319`.
+/// The host follows the session identifier.
 pub(crate) fn remove_arguments(session: &SessionIdentity) -> Vec<String> {
     vec![
         "session".to_owned(),

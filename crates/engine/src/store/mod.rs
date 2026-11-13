@@ -1,7 +1,7 @@
 //! The SQLite store: open, schema, the discovery lock and backups.
 //!
-//! The database file is the one the Go reference writes. Its schema text, pragmas, lock
-//! file and error codes are the contract, so a Go-created file opens here unchanged.
+//! The schema text, pragmas, lock file and error codes are the contract of the database file,
+//! so every existing database file opens here unchanged.
 
 // Rust guideline compliant 2026-06-26
 
@@ -49,7 +49,7 @@ const LOCK_FILE_MODE: u32 = 0o600;
 /// Suffix appended to the database path to name the discovery lock file.
 const DISCOVERY_LOCK_SUFFIX: &str = ".discovery.lock";
 
-/// Suffix of the engine lock file after the discovery lock path (`engine.go:72`).
+/// Suffix of the engine lock file after the discovery lock path.
 const ENGINE_LOCK_SUFFIX: &str = ".engine";
 
 /// Message of the cause of a `discovery_busy` failure.
@@ -363,7 +363,7 @@ fn store_error(code: &str, permanent: bool, cause: impl Into<BoxError>) -> Error
 }
 
 /// Encodes `value` as Go's `encoding/json` does, which escapes `<`, `>`, `&` and the two line
-/// separators, so the stored text is byte-identical to the Go reference.
+/// separators, so the stored text is byte-identical to the existing rows.
 fn encode_go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let text = serde_json::to_string(value)?;
     Ok(text

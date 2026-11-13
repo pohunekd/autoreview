@@ -1,6 +1,5 @@
 //! Validation of reviewer output: bounded text, the findings of a result and the verdicts on
-//! prior findings. A refusal here sends the reviewer to a fresh run, so this module refuses
-//! everything that the Go reference refuses.
+//! prior findings. A refusal here sends the reviewer to a fresh run.
 
 // Rust guideline compliant 2026-06-26
 
@@ -96,7 +95,7 @@ fn clean_relative_path(path: &str) -> bool {
 
 /// Checks a reviewer result against the configured bounds.
 ///
-/// The checks run in the order of `cmd/autoreview/protocol.go:294-332`; the first failure wins.
+/// The checks run in a fixed order; the first failure wins.
 ///
 /// # Errors
 ///
@@ -397,7 +396,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// A verdict on `key` with `status`, the Go test note and no `relies_on`.
+    /// A verdict on `key` with `status`, the note `Checked.` and no `relies_on`.
     fn verdict(key: &str, status: &str) -> PriorVerdict {
         PriorVerdict {
             key: key.to_owned(),

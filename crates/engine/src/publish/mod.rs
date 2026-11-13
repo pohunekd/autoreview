@@ -54,7 +54,7 @@ pub(crate) fn review_marker(
 /// Marker of one publication: the legacy marker, then the marker of the base branch.
 ///
 /// A lookup by this marker never finds a review published for another base branch. A reader
-/// of the legacy marker, such as the Go engine or a merge gate, still finds it unchanged.
+/// of the legacy marker, such as a merge gate, still finds it unchanged.
 pub(crate) fn publication_marker(
     pr: &PullRequest,
     decision: &Decision,

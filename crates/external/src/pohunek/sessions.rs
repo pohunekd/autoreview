@@ -1,9 +1,8 @@
 //! The pohunek session calls of the engine: the session list, the session start and the session
 //! that one review ensures.
 //!
-//! Mirrors `cmd/autoreview/pohunek.go:128-250`. [`start_arguments`] and [`lookup_from_output`] are
-//! pure functions of their inputs, so the argument list and the decoding are tested without a
-//! child process.
+//! [`start_arguments`] and [`lookup_from_output`] are pure functions of their inputs, so the
+//! argument list and the decoding are tested without a child process.
 
 // Rust guideline compliant 2026-06-26
 

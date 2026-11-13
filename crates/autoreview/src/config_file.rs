@@ -2013,7 +2013,6 @@ pub(crate) mod tests {
 
     /// Returns `testdata/review-policy.yaml` with `trusted: any` on every rule.
     ///
-    /// The Go reference reads the same fixture and refuses the section.
     /// @TODO remove after #111 and write the sections into the fixture.
     fn deployed_policy_document() -> String {
         const FLOW_RULE_END: &str = "deleted_tests: [\"**/tests/**\"]}}";
@@ -3153,10 +3152,12 @@ pub(crate) mod tests {
         if let Ok(result) = receiver.recv_timeout(READ_BOUND) {
             return result;
         }
-        // A writer ends the wait of a blocked open, so the thread ends before the panic.
+        // A writer ends the wait of a blocked open; closing it before the join gives a read EOF,
+        // so the thread ends before the panic.
         let flags = rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::NONBLOCK;
         let writer = rustix::fs::open(path, flags, rustix::fs::Mode::empty());
-        if writer.is_ok() {
+        if let Ok(writer) = writer {
+            drop(writer);
             let _ = reader.join();
         }
         panic!("reading {} took longer than {READ_BOUND:?}", path.display());

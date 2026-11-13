@@ -1,6 +1,4 @@
 //! Discovery: the poll that plans every candidate and queues the reviews that are due.
-//!
-//! Mirrors `cmd/autoreview/discovery.go:204-505`.
 
 // Rust guideline compliant 2026-06-26
 
@@ -818,7 +816,7 @@ fn failed_before_run(previous: &Record, target: &Target) -> bool {
 
 /// Reports a pull request that changed between the search and its detail read.
 ///
-/// It is simply not a candidate in this poll (`github.go:507-515`).
+/// It is simply not a candidate in this poll.
 fn skippable_candidate_error(err: &Error) -> bool {
     SKIPPABLE_CANDIDATE_CODES.contains(&error_code(err))
 }

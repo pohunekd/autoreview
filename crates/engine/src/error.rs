@@ -1,7 +1,7 @@
 //! Engine errors and the stable codes they carry.
 //!
 //! A code is a string that is published in JSON command errors and stored in the
-//! `failure` column, so the strings are part of the contract with the Go reference.
+//! `failure` column, so the strings are part of the published and stored contract.
 
 // Rust guideline compliant 2026-06-26
 

@@ -1,8 +1,7 @@
 //! Changed files of a pull request: the paged file list, the commentable lines and the changed
 //! files with their line counts.
 //!
-//! Mirrors `cmd/autoreview/github.go:628-748`. Every file is visited once, in listing order, and
-//! the first error stops the read, as Go's visit callback does.
+//! Every file is visited once, in listing order, and the first error stops the read.
 
 // Rust guideline compliant 2026-06-26
 
@@ -152,8 +151,7 @@ fn go_path_clean(path: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Reports whether a changed file name passes the path checks of `listFiles`
-/// (`github.go:700-702`).
+/// Reports whether a changed file name passes the path checks.
 ///
 /// The name must be unchanged by `path.Clean`, must not be absolute and must not start with `../`.
 /// The names `.` and `..` pass, as they do in Go.
@@ -182,7 +180,7 @@ fn take_digits(text: &str) -> Option<(&str, &str)> {
     Some((head, rest))
 }
 
-/// Parses a hunk header the way `hunkPattern` (`github.go:42`) matches it.
+/// Parses a hunk header.
 ///
 /// The line must start with `@@ -<digits>[,<digits>] +<digits>[,<digits>] @@`; the text after
 /// the closing `@@` is not read. Returns the new-side start and count, where a missing count is 1.
@@ -210,8 +208,7 @@ fn parse_hunk_header(line: &str) -> Option<(i64, i64)> {
     Some((start, count))
 }
 
-/// Returns the RIGHT-side line numbers that accept a comment, in patch order
-/// (`github.go:628-683`).
+/// Returns the RIGHT-side line numbers that accept a comment, in patch order.
 ///
 /// Lines before the first hunk, empty lines and the no-newline marker are skipped. Every other
 /// line must start with `+`, ` `, `-` or `@@`, or the patch is refused. The line number wraps at
@@ -264,7 +261,7 @@ fn decode_files_page(output: &str) -> Result<Vec<ChangedFileRecord>, Error> {
     Ok(autoreview_go_compat::null_entries::zero_entries(entries))
 }
 
-/// Returns the argv of one page of the changed-files API (`github.go:685-700`).
+/// Returns the argv of one page of the changed-files API.
 fn files_args(repository: &str, number: i64, page: i64) -> Vec<String> {
     vec![
         "api".to_owned(),
@@ -306,7 +303,7 @@ fn listing_end(
 }
 
 impl GitHub {
-    /// Returns the commentable lines of every changed file, keyed by path (`github.go:715-728`).
+    /// Returns the commentable lines of every changed file, keyed by path.
     ///
     /// Reads past the file cap so that every changed file has commentable lines; only the page
     /// limit ends the read.
@@ -331,7 +328,7 @@ impl GitHub {
 
     /// Returns the changed files with their status and line counts, in listing order.
     ///
-    /// The listing is the one `github.go:685-712` reads; the counts come from the same records.
+    /// The files and their counts come from the same records of one listing.
     /// A listing that stops at a limit is returned with `truncated` set.
     pub(crate) async fn changed_files(
         &self,
@@ -365,8 +362,7 @@ impl GitHub {
         })
     }
 
-    /// Visits every changed file once, in listing order, with a validated path
-    /// (`github.go:685-712`).
+    /// Visits every changed file once, in listing order, with a validated path.
     ///
     /// The read ends at a short page, at the page limit, or at `cap` files when one is given. A
     /// file whose name is invalid or repeated fails the read before `visit` sees it.

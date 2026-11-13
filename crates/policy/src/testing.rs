@@ -10,7 +10,6 @@ const BLOCK_RULE_LINE: &str = "    on_clean: approve\n";
 
 /// Adds `authors` with `trusted: any` to every rule of `testdata/review-policy.yaml`.
 ///
-/// The Go reference reads the same fixture and refuses the section.
 /// @TODO remove after #111 and write the sections into the fixture.
 pub(crate) fn with_trusted_any(document: &str) -> String {
     assert!(
