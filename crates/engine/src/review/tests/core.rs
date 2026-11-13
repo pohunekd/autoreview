@@ -1,7 +1,4 @@
 //! Core scenarios of the engine: serve, discovery, reviews and their publication.
-//!
-//! Mirrors `cmd/autoreview/engine_test.go:67-75` and the core tests of
-//! `cmd/autoreview/review_integration_test.go`.
 
 // Rust guideline compliant 2026-06-26
 

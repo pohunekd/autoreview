@@ -2013,7 +2013,6 @@ pub(crate) mod tests {
 
     /// Returns `testdata/review-policy.yaml` with `trusted: any` on every rule.
     ///
-    /// The Go reference reads the same fixture and refuses the section.
     /// @TODO remove after #111 and write the sections into the fixture.
     fn deployed_policy_document() -> String {
         const FLOW_RULE_END: &str = "deleted_tests: [\"**/tests/**\"]}}";

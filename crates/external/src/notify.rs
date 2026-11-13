@@ -1,7 +1,7 @@
 //! Matrix notifications: messages of each level and the review queue digest.
 //!
-//! Mirrors `cmd/autoreview/notify.go:1-107`. Requests are built by pure functions, so their room,
-//! transaction path and body are checked without a homeserver. Sending is one PUT.
+//! Requests are built by pure functions, so their room, transaction path and body are checked
+//! without a homeserver. Sending is one PUT.
 
 // Rust guideline compliant 2026-06-26
 
@@ -217,7 +217,7 @@ pub(crate) fn queue_digest_request(
     build_request(&matrix.queue_room, transaction, &content)
 }
 
-/// Returns the room of `route`, or `None` for a route without a room (`notify.go:43-45`).
+/// Returns the room of `route`, or `None` for a route without a room.
 ///
 /// An event route without a configured room has none; it never falls back to a level room.
 fn room_of<'a>(matrix: &'a Matrix, route: &NotifyRoute) -> Option<&'a str> {

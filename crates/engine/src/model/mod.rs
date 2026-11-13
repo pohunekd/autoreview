@@ -1,6 +1,6 @@
 //! The engine's data model: pull requests, review inputs, results, records and their identifiers.
 //!
-//! The serde shapes are the JSON that the Go reference stores, so a Go row reads unchanged.
+//! The serde shapes are the stored JSON, so every existing row reads unchanged.
 
 // Rust guideline compliant 2026-06-26
 

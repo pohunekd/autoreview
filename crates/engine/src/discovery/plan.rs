@@ -1,6 +1,4 @@
 //! Review planning: the scope, the prior findings, the notes handoff and the review input.
-//!
-//! Mirrors `cmd/autoreview/discovery.go:66-195`.
 
 // Rust guideline compliant 2026-06-26
 

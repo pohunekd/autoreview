@@ -2,8 +2,8 @@
 //! coding agents ask to have marked ready, and the search of requested reviews in every
 //! repository.
 //!
-//! Mirrors `cmd/autoreview/github.go:328-626`. Each search is an argv list, and each decode
-//! function takes the captured `gh` output, so the selection is a pure function of its input.
+//! Each search is an argv list, and each decode function takes the captured `gh` output, so
+//! the selection is a pure function of its input.
 
 // Rust guideline compliant 2026-06-26
 

@@ -162,7 +162,7 @@ mod tests {
     use crate::testing::with_trusted_any;
     use crate::{load, parse};
 
-    /// Go-written policy digests, shared with the Go reference tests.
+    /// Stored policy digests that the digest of each fixture must reproduce.
     const GOLDEN: &str = include_str!("../../../testdata/stored-formats/digest.json");
 
     /// One golden case: a policy built from the fixture and its Go digest.

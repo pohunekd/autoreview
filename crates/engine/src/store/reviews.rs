@@ -924,7 +924,7 @@ mod tests {
         .expect("open store")
     }
 
-    /// The reviewer of the Go test helpers.
+    /// The reviewer of the store tests.
     fn test_reviewer() -> Reviewer {
         Reviewer {
             id: "opus".to_owned(),

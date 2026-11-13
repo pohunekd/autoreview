@@ -1,7 +1,7 @@
 //! The `gh` CLI calls of the engine and the decoding of their JSON output.
 //!
-//! Mirrors `cmd/autoreview/github.go:1-326`. Every call is an argv list, never a shell, and the
-//! child gets the [`GH_INHERITED`] variables of the engine and the GitHub token.
+//! Every call is an argv list, never a shell, and the child gets the [`GH_INHERITED`] variables
+//! of the engine and the GitHub token.
 
 // Rust guideline compliant 2026-06-26
 

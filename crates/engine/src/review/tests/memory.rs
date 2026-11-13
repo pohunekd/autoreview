@@ -1,7 +1,4 @@
 //! Notes, prior finding and human review scenarios of the engine against the fake integration.
-//!
-//! Mirrors the notes, prior finding and human review tests of
-//! `cmd/autoreview/review_integration_test.go`.
 
 // Rust guideline compliant 2026-06-26
 

@@ -13,7 +13,6 @@ const BLOCK_RULE_LINE: &str = "    on_clean: approve\n";
 
 /// Returns `testdata/review-policy.yaml` with `trusted: any` on every rule.
 ///
-/// The Go reference reads the same fixture and refuses the section.
 /// @TODO remove after #111 and write the sections into the fixture.
 pub(crate) fn deployed_policy_document() -> String {
     let document = include_str!("../../../../testdata/review-policy.yaml");

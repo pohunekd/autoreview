@@ -1,6 +1,4 @@
 //! The review workflow: it runs a review, plans its publication and publishes it.
-//!
-//! Mirrors `cmd/autoreview/review.go:595-776, 857-892`.
 
 // Rust guideline compliant 2026-06-26
 

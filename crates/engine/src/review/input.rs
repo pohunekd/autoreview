@@ -1,6 +1,4 @@
 //! The checks of a stored review input, the persisted step names and the slot state.
-//!
-//! Mirrors `cmd/autoreview/review.go:15-127, 143-151`.
 
 // Rust guideline compliant 2026-06-26
 

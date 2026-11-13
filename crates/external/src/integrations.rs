@@ -1,7 +1,6 @@
 //! The engine's side effects over the `gh` CLI, the pohunek CLI and Matrix.
 //!
-//! Mirrors `cmd/autoreview/integrations.go:109-130`. Each method of [`Integrations`] hands its
-//! arguments to one client method, as the Go methods of `External` do.
+//! Each method of [`Integrations`] hands its arguments to one client method.
 
 // Rust guideline compliant 2026-06-26
 
@@ -164,7 +163,8 @@ impl Integrations for External {
         cancel: &CancellationToken,
         request: &SessionRequest,
     ) -> Result<SessionIdentity, Error> {
-        // Go removes a rejected session with `context.WithoutCancel` (`pohunek.go:208`).
+        // A rejected session is removed even after `cancel` fires, so the removal gets its own
+        // token.
         let remove = |session: SessionIdentity| async move {
             output::remove_session_confirmed(&self.config, &CancellationToken::new(), &session)
                 .await
@@ -174,8 +174,7 @@ impl Integrations for External {
 
     /// Returns the session of the request's name, or `None` when there is none.
     ///
-    /// An owned session that is unhealthy is returned too: Go's only caller removes any session
-    /// it finds and drops the error of the lookup (`cmd/autoreview/review.go:366-369`).
+    /// An owned session that is unhealthy is returned too, so that the caller removes it.
     async fn find_session(
         &self,
         cancel: &CancellationToken,

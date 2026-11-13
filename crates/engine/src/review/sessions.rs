@@ -1,6 +1,4 @@
 //! A running review: its slots, stored steps, notifications and reviewer sessions.
-//!
-//! Mirrors `cmd/autoreview/review.go:34-36, 129-142, 153-428`.
 
 // Rust guideline compliant 2026-06-26
 

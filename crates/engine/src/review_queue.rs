@@ -1,6 +1,4 @@
 //! The review queue: the waiting requests and notes, posted as one digest.
-//!
-//! Mirrors `cmd/autoreview/review_queue.go`.
 
 // Rust guideline compliant 2026-06-26
 
@@ -24,10 +22,10 @@ use crate::publish::decision_text;
 /// Note that closes a digest whose list does not show every request.
 const TRUNCATED_TEXT: &str = "The list is truncated: more requests wait for you than are shown.";
 
-/// Prefix of the transaction ID of one queue run (`review_queue.go:135`).
+/// Prefix of the transaction ID of one queue run.
 const TRANSACTION_PREFIX: &str = "queue-";
 
-/// Random bytes of the transaction ID of one queue run (`review_queue.go:131`).
+/// Random bytes of the transaction ID of one queue run.
 const TRANSACTION_RANDOM_BYTES: usize = 16;
 
 /// Error code of a digest that has no room for a single entry.

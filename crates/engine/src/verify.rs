@@ -23,7 +23,7 @@ use crate::protocol::request::{
 };
 use crate::protocol::validate::bounded_text;
 
-/// JSON Schema of the verifier output, copied from the Go engine.
+/// JSON Schema of the verifier output.
 const VERIFY_SCHEMA: &[u8] = include_bytes!("../schemas/verify-schema.json");
 
 /// Verdict on a blocking finding: the defect exists and meets the blocking definition.
@@ -277,7 +277,7 @@ pub(crate) fn build_verifier_request(
 ///
 /// Returns `review_output_invalid` for output of another pull request or head, for a verdict
 /// that skips, invents or repeats a claim, for an unknown verdict or for an empty or too long
-/// note. The error is permanent, as the Go engine marks it.
+/// note. The error is permanent.
 pub(crate) fn parse_verifier_output(
     cfg: &Config,
     input: &ReviewInput,

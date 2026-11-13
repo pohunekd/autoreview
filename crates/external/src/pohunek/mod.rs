@@ -1,8 +1,8 @@
 //! The pohunek CLI calls of the engine: project routing, the session list and the session start.
 //!
-//! Mirrors `cmd/autoreview/pohunek.go:1-252`. Every call is an argv list, never a shell. The child
-//! gets the [`POHUNEK_INHERITED`] variables of the engine and its own state and runtime paths;
-//! a [`local_pohunek_json`] child keeps the caller's paths instead.
+//! Every call is an argv list, never a shell. The child gets the [`POHUNEK_INHERITED`] variables
+//! of the engine and its own state and runtime paths; a [`local_pohunek_json`] child keeps the
+//! caller's paths instead.
 
 // Rust guideline compliant 2026-06-26
 
@@ -495,8 +495,7 @@ fn daemon_command_code(stderr: &str) -> Option<String> {
 
 /// Returns the `owner/name` that a project origin URL names on `host`, or an empty string.
 ///
-/// Mirrors `canonicalRepository` (`cmd/autoreview/pohunek.go:62-79`). Every refusal is an empty
-/// string, as in Go.
+/// Every refusal is an empty string.
 pub(crate) fn canonical_repository(host: &str, raw: &str) -> String {
     let mut current = raw.to_owned();
     if current.contains('@') && !current.contains("://") {

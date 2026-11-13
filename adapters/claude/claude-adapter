@@ -46,7 +46,7 @@ DROPPED_ENVIRONMENT_PREFIX = "AUTOREVIEW_"
 TRUSTED_HEAD_PATTERN = re.compile(r"(?m)^- Trusted head SHA: ([0-9a-f]{40})$")
 TRUSTED_BASE_PATTERN = re.compile(r"(?m)^- Trusted base SHA: ([0-9a-f]{40})$")
 TRUSTED_CHECKOUT_PATTERN = re.compile(r"(?m)^- Trusted checkout: (.*)$")
-# The Go engine's prompt names the head only in this line and has no checkout line.
+# A prompt without the trusted lines names the head only in this line.
 GO_HEAD_PATTERN = re.compile(r"(?m)^Head SHA: ([0-9a-f]{40})$")
 CHECKOUT_BASE = "base"
 CHECKOUT_HEAD = "head"
@@ -283,7 +283,7 @@ def trusted_base_sha(prompt: str) -> str:
 def trusted_checkout(prompt: str) -> str:
     """Returns the checkout the engine started the worktree from, `base` or `head`."""
     matches = TRUSTED_CHECKOUT_PATTERN.findall(prompt)
-    # The Go engine writes no checkout line; its prompt gets the strict head check.
+    # A prompt without a checkout line gets the strict head check.
     if not matches:
         return CHECKOUT_HEAD
     if len(matches) != 1 or matches[0] not in (CHECKOUT_BASE, CHECKOUT_HEAD):

@@ -1,7 +1,6 @@
 //! The approval wait of a clean review: it is recorded, released and then decided.
 //!
-//! Mirrors `cmd/autoreview/review.go:777-856, 893-948`, except that the wait is
-//! stored before the approval request is sent (#143).
+//! The wait is stored before the approval request is sent (#143).
 
 // Rust guideline compliant 2026-06-26
 

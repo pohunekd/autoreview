@@ -1,7 +1,7 @@
 //! Pull request reads of the engine: the GraphQL pull request and the review request events.
 //!
-//! Mirrors `cmd/autoreview/github.go:88-322`. The decode functions take the `gh` output as it
-//! was captured, so each one is a pure function of its arguments.
+//! The decode functions take the `gh` output as it was captured, so each one is a pure function
+//! of its arguments.
 
 // Rust guideline compliant 2026-06-26
 
@@ -306,7 +306,7 @@ pub(super) fn ready_draft_id(
 
 /// Builds the argv of the GraphQL pull request query for `repository` and `number`.
 ///
-/// The identity is checked before any call, as Go checks it at `github.go:284-286`.
+/// The identity is checked before any call.
 pub(crate) fn pull_request_args(repository: &str, number: i64) -> Result<Vec<String>, Error> {
     let Some((owner, name)) = repository.split_once('/') else {
         return Err(Error::workflow("review_identity_invalid", true, None));

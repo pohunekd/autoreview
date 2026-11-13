@@ -1,6 +1,4 @@
 //! Discovery: the commands that retry, resolve and show the reviews of a pull request.
-//!
-//! Mirrors `cmd/autoreview/discovery.go:507-537, 581-650`.
 
 // Rust guideline compliant 2026-06-26
 

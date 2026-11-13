@@ -544,12 +544,12 @@ differential run against the Go reference, not by a golden case):
 
 - A `matrix_max_characters` below 1 is refused with `matrix_request_invalid`
   when a message is not blank. Go panics on that input
-  (`cmd/autoreview/notify.go:50-51`). Until #5 checks this bound at startup,
-  both engines accept such a limit.
+  (`cmd/autoreview/notify.go:50-51`). The config loader refuses such a limit
+  at startup (`notify.max_characters` must be positive).
 - A Matrix homeserver URL whose port is above 65535 is refused with
   `matrix_request_invalid` when a message is sent. Go dials the URL, the dial
-  fails, and Go drops a digest or log message as `matrix_unavailable`. Until #5
-  checks this bound at startup, both engines accept such a port.
+  fails, and Go drops a digest or log message as `matrix_unavailable`. The
+  config loader refuses such a port at startup.
 
 Invalid UTF-8 is not a divergence for the parsers, but the process runner's
 `String::from_utf8_lossy` does not give Go's count of replacement characters. It

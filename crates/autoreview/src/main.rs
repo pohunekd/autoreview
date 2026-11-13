@@ -1,6 +1,4 @@
 //! The `autoreview` command: its JSON on stdout, its logs on stderr.
-//!
-//! Mirrors `cmd/autoreview/main.go:1-224`.
 
 // Rust guideline compliant 2026-06-26
 
@@ -106,7 +104,7 @@ enum Invocation {
     Configured(Command),
 }
 
-/// The commands that load the configuration, as `cmd/autoreview/main.go:42-152` dispatches them.
+/// The commands that load the configuration.
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Validates the configuration and the policy and prints the policy digest.
@@ -278,7 +276,7 @@ fn report(error: &Error) {
     tracing::error!(error_code = error_code(error), error = %error, "command failed");
 }
 
-/// Loads the configuration and runs the command in the order of `main.go:31-152`.
+/// Loads the configuration and runs the command.
 ///
 /// The `--env-file` is read after the config path is chosen and before the config is loaded.
 async fn run(
@@ -310,7 +308,7 @@ struct Sections {
     metrics: Option<MetricsConfig>,
 }
 
-/// Opens the store, builds the engine and runs `command` on them (`main.go:53-152`).
+/// Opens the store, builds the engine and runs `command` on them.
 async fn run_engine(
     command: EngineCommand,
     config: Config,
@@ -481,7 +479,7 @@ fn cancel_on_signal(cancel: CancellationToken) -> Result<(), Error> {
     Ok(())
 }
 
-/// Reads `--repository OWNER/REPO NUMBER HEAD`, as `main.go:178-198` does.
+/// Reads `--repository OWNER/REPO NUMBER HEAD`.
 ///
 /// With `prefix`, HEAD may be an abbreviated head of at least 12 characters.
 ///
@@ -512,7 +510,7 @@ fn review_arguments(arguments: &[String], prefix: bool) -> Result<(String, i64, 
     Ok((repository, number, (*head).to_owned()))
 }
 
-/// Reads `--repository OWNER/REPO NUMBER`, as `main.go:200-213` does.
+/// Reads `--repository OWNER/REPO NUMBER`.
 ///
 /// # Errors
 ///
@@ -553,7 +551,7 @@ fn raw_argument(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
-/// Splits the value of the last `--repository` from the positional arguments (`main.go:215`).
+/// Splits the value of the last `--repository` from the positional arguments.
 ///
 /// A trailing `--repository` without a value stays a positional argument.
 fn split_repository(arguments: &[String]) -> (String, Vec<&str>) {

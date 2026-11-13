@@ -284,7 +284,7 @@ class WrapperTests(unittest.TestCase):
     def test_trusted_checkout_must_be_unambiguous(self) -> None:
         self.assertEqual(wrapper.trusted_checkout("- Trusted checkout: base"), "base")
         self.assertEqual(wrapper.trusted_checkout("- Trusted checkout: head"), "head")
-        # The Go engine's prompt has no checkout line; it gets the head check.
+        # A prompt without a checkout line gets the head check.
         self.assertEqual(wrapper.trusted_checkout("- Trusted head SHA: " + HEAD), "head")
         for prompt in (
             "- Trusted checkout: base\n- Trusted checkout: base",
