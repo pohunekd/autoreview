@@ -205,19 +205,23 @@ fn decode_viewer_login(output: &str) -> Result<String, Error> {
 /// Returns the code and the permanence of a failed `gh` call, read from its error message.
 ///
 /// A message that names `HTTP 422` is a request GitHub rejected, which a retry does not change.
+/// One that names `HTTP 401` is a token GitHub refuses: `credential_invalid`, retried by the
+/// step, which the scheduler does not retry.
 fn gh_failure(message: &str) -> (&'static str, bool) {
-    if names_http_422(message) {
+    if names_http(message, b"422") {
         ("github_request_rejected", true)
+    } else if names_http(message, b"401") {
+        ("credential_invalid", false)
     } else {
         ("github_request_failed", false)
     }
 }
 
-/// Reports whether `message` names `HTTP 422`, as Go's `(?i)\bHTTP\s+422\b` does.
+/// Reports whether `message` names `HTTP` and `status`, as Go's `(?i)\bHTTP\s+422\b` does.
 ///
 /// Word boundaries and `\s` are ASCII in RE2, so only `\t`, `\n`, `\f`, `\r` and space separate
 /// the words, and `HTTP` matches in any ASCII case.
-fn names_http_422(message: &str) -> bool {
+fn names_http(message: &str, status: &[u8]) -> bool {
     let bytes = message.as_bytes();
     let length = bytes.len();
     for start in 0..length {
@@ -257,10 +261,10 @@ fn names_http_422(message: &str) -> bool {
         if spaces == 0 {
             continue;
         }
-        let Some(after_422) = rest.strip_prefix(b"422") else {
+        let Some(after_status) = rest.strip_prefix(status) else {
             continue;
         };
-        if let Some(next) = after_422.first()
+        if let Some(next) = after_status.first()
             && is_word_byte(*next)
         {
             continue;
