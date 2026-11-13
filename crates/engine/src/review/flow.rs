@@ -20,7 +20,9 @@ use super::sessions::{Review, ReviewerSlot, StepFailure};
 use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
 use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code};
-use crate::integrations::{CommentableLines, GitHubReview, Integrations, SessionRequest};
+use crate::integrations::{
+    ChangedFiles, CommentableLines, GitHubReview, Integrations, SessionRequest,
+};
 use crate::messages::published_message;
 use crate::model::{
     Artifact, Discussion, Outcome, PublishResult, PublishedRecord, PullRequest, ReviewOutcome,
@@ -31,7 +33,9 @@ use crate::protocol::request::build_reviewer_request;
 use crate::publish::anchor::anchor_findings;
 use crate::publish::decision_text;
 use crate::publish::plan::{PublicationPlan, blocking_count, plan_publication, publication_event};
-use crate::publish::render::{RenderSettings, human_review_signals, render_review};
+use crate::publish::render::{
+    HumanReviewFacts, RenderSettings, human_review_signals, render_review,
+};
 use crate::store::{RESULT_SUCCESS, ReviewStep, StepOutcome, StoredReview};
 use crate::verify::{apply_verification, claims_of, verifier_reviewer};
 
@@ -362,15 +366,30 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if self.input.rule.on_clean != OnClean::Approve || blocking > 0 {
             return Ok(Vec::new());
         }
+        let author_class = &self.input.author_class;
+        let list_budget =
+            usize::try_from(self.engine.config.excerpt_characters).unwrap_or_default();
+        let notes = i64::try_from(self.input.split_findings(&artifact.findings).1.len())
+            .unwrap_or(i64::MAX);
         self.once::<Vec<String>, _>(STEP_HUMAN_REVIEW, || {
             let integration = &*self.engine.integration;
             let cancel = &self.cancel;
             async move {
-                let mut deleted = Vec::new();
-                if !signals.deleted_tests.is_empty() {
-                    deleted = integration.list_deleted_files(cancel, current).await?;
-                }
-                Ok(human_review_signals(signals, &current.labels, &deleted))
+                let listing = if signals.needs_changed_files() {
+                    integration.list_changed_files(cancel, current).await?
+                } else {
+                    ChangedFiles::default()
+                };
+                let facts = HumanReviewFacts {
+                    labels: &current.labels,
+                    author: &current.author,
+                    author_class,
+                    changed: &listing.files,
+                    truncated: listing.truncated,
+                    notes,
+                    list_budget,
+                };
+                Ok(human_review_signals(signals, &facts))
             }
         })
         .await

@@ -2,14 +2,13 @@
 
 // Rust guideline compliant 2026-11-12
 
-use autoreview_policy::{HumanReview, OnFindings, Reviewer, match_glob};
+use autoreview_policy::{AuthorClass, HumanReview, OnFindings, Reviewer, match_glob};
 
 use super::neutralize::{defuse_comment_delimiters, neutralize, neutralize_block};
 use super::plan::{PublicationPlan, blocking_count};
 use super::publication_marker;
 use crate::error::Error;
-use crate::integrations::{GitHubReview, InlineComment};
-use crate::messages::excerpt;
+use crate::integrations::{ChangedFile, GitHubReview, InlineComment};
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Artifact, Finding, PriorResult, ReviewInput};
 use crate::verify::{demoted, verification_line};
@@ -21,7 +20,7 @@ pub(crate) struct RenderSettings {
     pub(crate) ai_signature: String,
     /// Largest body and largest inline comment, in bytes, that GitHub accepts.
     pub(crate) github_body_max_bytes: i64,
-    /// Character limit of one excerpted human review signal.
+    /// Character limit of the human review signal text in the body and the notification.
     pub(crate) excerpt_characters: i64,
 }
 
@@ -78,10 +77,10 @@ pub(crate) fn render_review(
         sections.push(neutralize(&verification));
     }
     if !artifact.human_review.is_empty() {
-        sections.push(neutralize(&format!(
+        sections.push(format!(
             "This review waited for a human approval because the pull request matched: {}.",
             human_review_text(&artifact.human_review, settings.excerpt_characters)
-        )));
+        ));
     }
     let (comments, unanchored) = blocking_comments(settings, &blocking);
     sections.extend(blocking_sections(
@@ -291,6 +290,7 @@ fn location(finding: &Finding) -> String {
 /// The delimiter is one backtick longer than the longest run in the text. A text that starts
 /// or ends with a backtick is padded with a space on both sides, which CommonMark strips.
 fn code_span(text: &str) -> String {
+    let text = &single_line(text);
     let mut longest = 0;
     let mut run = 0;
     for character in text.chars() {
@@ -304,6 +304,51 @@ fn code_span(text: &str) -> String {
         ""
     };
     defuse_comment_delimiters(&format!("{delimiter}{pad}{text}{pad}{delimiter}"))
+}
+
+/// Replaces every run of line breaks and control characters with one space, so that a value stays
+/// on one line and cannot end a paragraph inside its code span.
+fn single_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_break = false;
+    for character in text.chars() {
+        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+            if !in_break {
+                out.push(' ');
+            }
+            in_break = true;
+        } else {
+            out.push(character);
+            in_break = false;
+        }
+    }
+    out
+}
+
+/// Writes values as code spans in order while they fit `budget` bytes; the rest are counted.
+fn listed_spans(values: &[&str], budget: usize) -> String {
+    let mut spans: Vec<String> = Vec::new();
+    let mut length = 0_usize;
+    let mut dropped = 0_usize;
+    for value in values {
+        let span = code_span(value);
+        let added = span.len() + if spans.is_empty() { 0 } else { ", ".len() };
+        if dropped > 0 || length + added > budget {
+            dropped += 1;
+        } else {
+            length += added;
+            spans.push(span);
+        }
+    }
+    let mut text = spans.join(", ");
+    if dropped > 0 {
+        if text.is_empty() {
+            text = format!("and {dropped} more");
+        } else {
+            text.push_str(&format!(", and {dropped} more"));
+        }
+    }
+    text
 }
 
 /// Returns the first twelve characters of a commit SHA, as Go's `%.12s` prints them.
@@ -320,46 +365,165 @@ pub(crate) fn reviewer_labels(reviewers: &[Reviewer]) -> String {
     labels.join(LABEL_SEPARATOR)
 }
 
-/// Lists the signals of a human review that the pull request matches: each configured label it
-/// carries, and the deleted files that match a test glob.
+/// The facts of a pull request and of its finished review that the human review signals read.
+pub(crate) struct HumanReviewFacts<'a> {
+    /// Labels the pull request carries when it was read.
+    pub(crate) labels: &'a [String],
+    /// Login of the pull request author.
+    pub(crate) author: &'a str,
+    /// Author class that the policy decided for the review.
+    pub(crate) author_class: &'a AuthorClass,
+    /// Files the pull request changes; empty when no signal reads them.
+    pub(crate) changed: &'a [ChangedFile],
+    /// Set when the changed-files listing stopped before its end.
+    pub(crate) truncated: bool,
+    /// Notes of the finished review.
+    pub(crate) notes: i64,
+    /// Most bytes of the listed values one signal shows; a longer list shows the values that fit.
+    pub(crate) list_budget: usize,
+}
+
+/// Reports whether a path matches one of the globs, ASCII case-insensitively on both sides.
+fn matches_any(globs: &[String], path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    globs
+        .iter()
+        .any(|glob| match_glob(&glob.to_ascii_lowercase(), &path))
+}
+
+/// Lists the signals of a human review that the pull request matches, in a fixed order: a
+/// truncated listing, labels, deleted test files, changed paths, changed lines, changed files,
+/// notes and author.
+///
+/// The first matching name in sorted order names a path signal, with the count of matching
+/// files. A renamed file matches on its old path too.
 pub(crate) fn human_review_signals(
     signals: &HumanReview,
-    labels: &[String],
-    deleted: &[String],
+    facts: &HumanReviewFacts<'_>,
 ) -> Vec<String> {
     let mut matched = Vec::new();
+    if facts.truncated {
+        matched.push(format!(
+            "changed files exceed the listing limit ({} listed)",
+            facts.changed.len()
+        ));
+    }
     for label in &signals.labels {
-        if labels
+        if facts
+            .labels
             .iter()
             .any(|carried| labels_equal_fold(carried, label))
         {
-            matched.push(format!("label {label}"));
+            matched.push(format!("label {}", code_span(label)));
         }
     }
-    let mut tests: Vec<String> = deleted
-        .iter()
-        .filter(|file| {
-            signals
-                .deleted_tests
-                .iter()
-                .any(|glob| match_glob(glob, file))
-        })
-        .cloned()
-        .collect();
-    if !tests.is_empty() {
-        tests.sort();
-        matched.push(format!("deleted test files {}", tests.join(", ")));
+    let mut tests: Vec<&str> = Vec::new();
+    for file in facts.changed {
+        if file.status == "removed" && matches_any(&signals.deleted_tests, &file.path) {
+            tests.push(&file.path);
+        }
+        // A rename out of the test globs hides a test, so its old path counts as deleted.
+        if let Some(previous) = file.previous_path.as_deref()
+            && matches_any(&signals.deleted_tests, previous)
+            && !matches_any(&signals.deleted_tests, &file.path)
+        {
+            tests.push(previous);
+        }
     }
+    if !tests.is_empty() {
+        tests.sort_unstable();
+        matched.push(format!(
+            "deleted test files {}",
+            listed_spans(&tests, facts.list_budget)
+        ));
+    }
+    let mut paths: Vec<&str> = Vec::new();
+    let mut matching_files = 0_usize;
+    for file in facts.changed {
+        let current = matches_any(&signals.paths, &file.path);
+        let previous = file
+            .previous_path
+            .as_deref()
+            .is_some_and(|path| matches_any(&signals.paths, path));
+        if current || previous {
+            matching_files += 1;
+        }
+        if current {
+            paths.push(&file.path);
+        }
+        if let Some(path) = file.previous_path.as_deref()
+            && previous
+        {
+            paths.push(path);
+        }
+    }
+    paths.sort_unstable();
+    if let Some(first) = paths.first() {
+        let shown = code_span(first);
+        let name = if shown.len() <= facts.list_budget {
+            format!("{shown} ")
+        } else {
+            String::new()
+        };
+        matched.push(format!(
+            "changed path {name}({matching_files} matching files)"
+        ));
+    }
+    if let Some(limit) = signals.max_changed_lines {
+        let total = facts.changed.iter().fold(0_i64, |sum, file| {
+            sum.saturating_add(file.additions)
+                .saturating_add(file.deletions)
+        });
+        if total > limit {
+            matched.push(format!("changed lines {total}, limit {limit}"));
+        }
+    }
+    if let Some(limit) = signals.max_changed_files {
+        let count = i64::try_from(facts.changed.len()).unwrap_or(i64::MAX);
+        if count > limit {
+            matched.push(format!("changed files {count}, limit {limit}"));
+        }
+    }
+    if let Some(limit) = signals.max_notes
+        && facts.notes > limit
+    {
+        matched.push(format!("notes {}, limit {limit}", facts.notes));
+    }
+    let author = signals.authors.iter().find_map(|entry| {
+        if entry == facts.author_class.as_str() {
+            Some(format!("author class {entry}"))
+        } else if entry.eq_ignore_ascii_case(facts.author) {
+            Some(format!("author {}", code_span(facts.author)))
+        } else {
+            None
+        }
+    });
+    matched.extend(author);
     matched
 }
 
-/// Joins the matched signals, each cut to the excerpt limit.
+/// Joins the matched signals in order, within the excerpt limit. A signal is never cut: a code span
+/// cut before its closing backticks would turn the rest of its value into live Markdown. Signals that
+/// do not fit are dropped and counted; the first signal is kept whole even when it alone is longer.
 pub(crate) fn human_review_text(signals: &[String], limit: i64) -> String {
-    let parts: Vec<String> = signals
-        .iter()
-        .map(|signal| excerpt(signal, limit))
-        .collect();
-    parts.join("; ")
+    let limit = usize::try_from(limit).unwrap_or_default();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut length = 0_usize;
+    for signal in signals {
+        let separator = if kept.is_empty() { 0 } else { "; ".len() };
+        let added = separator + signal.chars().count();
+        if !kept.is_empty() && length + added > limit {
+            break;
+        }
+        length += added;
+        kept.push(signal);
+    }
+    let mut text = kept.join("; ");
+    let dropped = signals.len() - kept.len();
+    if dropped > 0 {
+        text.push_str(&format!("; and {dropped} more"));
+    }
+    text
 }
 
 /// Compares a carried label with a configured label as Go's `strings.EqualFold` does.
@@ -388,13 +552,16 @@ fn fold_ascii(character: char) -> char {
 #[cfg(test)]
 mod tests {
     use autoreview_policy::{
-        Checkout, HumanReview, OnClean, OnFindings, OnNotes, Pipeline, Protocol, Reviewer, Rule,
-        Trigger, TriggerKind,
+        AuthorClass, Checkout, HumanReview, OnClean, OnFindings, OnNotes, Pipeline, Protocol,
+        Reviewer, Rule, Trigger, TriggerKind,
     };
     use serde::Deserialize;
 
-    use super::{RenderSettings, human_review_signals, render_review};
+    use super::{
+        HumanReviewFacts, RenderSettings, human_review_signals, human_review_text, render_review,
+    };
     use crate::error::error_code;
+    use crate::integrations::ChangedFile;
     use crate::integrations::GitHubReview;
     use crate::messages::{APPROVAL_REQUESTED_TITLE, approval_requested_message};
     use crate::model::ids::INPUT_VERSION;
@@ -1055,42 +1222,368 @@ mod tests {
     }
 
     #[test]
-    fn human_review_signals_name_matched_labels_and_deleted_test_files() {
+    fn human_review_signals_name_each_matched_signal() {
         let signals = HumanReview {
             labels: vec!["needs-human".to_owned(), "risky".to_owned()],
             deleted_tests: vec!["tests/**".to_owned(), "**/tests/**".to_owned()],
+            paths: vec!["db/**".to_owned(), "**/Dockerfile".to_owned()],
+            max_changed_lines: Some(100),
+            max_changed_files: Some(3),
+            max_notes: Some(1),
+            authors: vec!["trusted".to_owned(), "octocat".to_owned()],
         };
         let strings = |values: &[&str]| values.iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
-        let cases = [
+        let file = |path: &str, status: &str, additions: i64, deletions: i64| ChangedFile {
+            path: path.to_owned(),
+            status: status.to_owned(),
+            additions,
+            deletions,
+            previous_path: None,
+        };
+        let renamed = |path: &str, previous: &str, additions: i64, deletions: i64| ChangedFile {
+            path: path.to_owned(),
+            status: "renamed".to_owned(),
+            additions,
+            deletions,
+            previous_path: Some(previous.to_owned()),
+        };
+        // Each case: name, labels, changed files, notes, author login, author class, signals.
+        type Case = (
+            &'static str,
+            Vec<String>,
+            Vec<ChangedFile>,
+            i64,
+            &'static str,
+            AuthorClass,
+            bool,
+            Vec<String>,
+        );
+        let cases: Vec<Case> = vec![
             (
                 "nothing matches",
                 strings(&["bug"]),
-                strings(&["src/a.go", "testsuite/a.go"]),
+                vec![
+                    file("src/a.go", "modified", 5, 1),
+                    file("testsuite/a.go", "modified", 1, 1),
+                ],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
                 strings(&[]),
             ),
             (
                 "label case is ignored",
                 strings(&["NEEDS-HUMAN"]),
-                strings(&[]),
-                strings(&["label needs-human"]),
+                vec![],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["label `needs-human`"]),
             ),
             (
                 "deleted tests are sorted",
                 strings(&[]),
-                strings(&["pkg/tests/b.php", "tests/a.php", "src/c.go"]),
-                strings(&["deleted test files pkg/tests/b.php, tests/a.php"]),
+                vec![
+                    file("pkg/tests/b.php", "removed", 0, 40),
+                    file("tests/a.php", "removed", 0, 3),
+                    file("src/c.go", "removed", 0, 2),
+                ],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["deleted test files `pkg/tests/b.php`, `tests/a.php`"]),
             ),
             (
-                "both",
+                "paths name the first sorted match and the count",
+                strings(&[]),
+                vec![
+                    file("docker/Dockerfile", "modified", 1, 0),
+                    file("db/migrations/2.sql", "added", 4, 0),
+                    file("db/migrations/1.sql", "added", 2, 0),
+                ],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path `db/migrations/1.sql` (3 matching files)"]),
+            ),
+            (
+                "lines at the limit do not match",
+                strings(&[]),
+                vec![file("src/a.go", "modified", 60, 40)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&[]),
+            ),
+            (
+                "lines over the limit match",
+                strings(&[]),
+                vec![file("src/a.go", "modified", 60, 41)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed lines 101, limit 100"]),
+            ),
+            (
+                "files over the limit match",
+                strings(&[]),
+                vec![
+                    file("src/a.go", "modified", 1, 0),
+                    file("src/b.go", "modified", 1, 0),
+                    file("src/c.go", "modified", 1, 0),
+                    file("src/d.go", "modified", 1, 0),
+                ],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed files 4, limit 3"]),
+            ),
+            (
+                "notes over the limit match",
+                strings(&[]),
+                vec![],
+                2,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["notes 2, limit 1"]),
+            ),
+            (
+                "author login is case-insensitive",
+                strings(&[]),
+                vec![],
+                0,
+                "OctoCat",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["author `OctoCat`"]),
+            ),
+            (
+                "author `class`",
+                strings(&[]),
+                vec![],
+                0,
+                "someone",
+                AuthorClass::Trusted,
+                false,
+                strings(&["author class trusted"]),
+            ),
+            (
+                "listing truncated",
+                strings(&[]),
+                vec![file("src/a.go", "modified", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                true,
+                strings(&["changed files exceed the listing limit (1 listed)"]),
+            ),
+            (
+                "a rename out of a path glob matches its old path",
+                strings(&[]),
+                vec![renamed("archive/x.sql", "db/x.sql", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path `db/x.sql` (1 matching files)"]),
+            ),
+            (
+                "a rename out of a test glob counts as a deleted test",
+                strings(&[]),
+                vec![renamed("src/a.php", "tests/a.php", 2, 2)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["deleted test files `tests/a.php`"]),
+            ),
+            (
+                "a rename inside the test globs is not a deleted test",
+                strings(&[]),
+                vec![renamed("tests/b.php", "tests/a.php", 1, 1)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&[]),
+            ),
+            (
+                "paths ignore ASCII case",
+                strings(&[]),
+                vec![file("DB/X.SQL", "added", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path `DB/X.SQL` (1 matching files)"]),
+            ),
+            (
+                "deleted tests ignore ASCII case",
+                strings(&[]),
+                vec![file("Tests/A.php", "removed", 0, 1)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["deleted test files `Tests/A.php`"]),
+            ),
+            (
+                "a line break in a filename stays inside one code span",
+                strings(&[]),
+                vec![file("db/a\n\nb\r\u{2028}c.sql", "added", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path `db/a b c.sql` (1 matching files)"]),
+            ),
+            (
+                "a line break in a deleted test path stays inside one code span",
+                strings(&[]),
+                vec![file("tests/a\r\nb.php", "removed", 0, 1)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["deleted test files `tests/a b.php`"]),
+            ),
+            (
+                "a filename with Markdown, a backtick and a mention stays in its code span",
+                strings(&[]),
+                vec![file("db/[x](y)*a*`b`@octocat.sql", "added", 1, 0)],
+                0,
+                "someone",
+                AuthorClass::Untrusted,
+                false,
+                strings(&["changed path ``db/[x](y)*a*`b`@octocat.sql`` (1 matching files)"]),
+            ),
+            (
+                "every signal at once",
                 strings(&["risky"]),
-                strings(&["tests/a.php"]),
-                strings(&["label risky", "deleted test files tests/a.php"]),
+                vec![
+                    file("db/x.sql", "added", 3, 0),
+                    file("tests/a.php", "removed", 0, 1),
+                    file("src/big.go", "modified", 100, 1),
+                ],
+                2,
+                "octocat",
+                AuthorClass::Untrusted,
+                false,
+                strings(&[
+                    "label `risky`",
+                    "deleted test files `tests/a.php`",
+                    "changed path `db/x.sql` (1 matching files)",
+                    "changed lines 105, limit 100",
+                    "notes 2, limit 1",
+                    "author `octocat`",
+                ]),
             ),
         ];
-        for (name, labels, deleted, want) in cases {
-            let got = human_review_signals(&signals, &labels, &deleted);
+        for (name, labels, changed, notes, author, class, truncated, want) in cases {
+            let facts = HumanReviewFacts {
+                labels: &labels,
+                author,
+                author_class: &class,
+                changed: &changed,
+                truncated,
+                notes,
+                list_budget: 200,
+            };
+            let got = human_review_signals(&signals, &facts);
             assert_eq!(got, want, "{name}");
         }
+    }
+
+    #[test]
+    fn human_review_text_drops_whole_signals_and_never_cuts_a_code_span() {
+        let hostile = "changed path ``db/[x](y)*a*`b`@octocat.sql`` (1 matching files)".to_owned();
+        let label = "label `needs-human`".to_owned();
+        let cases = [
+            (
+                "the limit falls inside the hostile span",
+                vec![hostile.clone(), label.clone()],
+                40,
+                format!("{hostile}; and 1 more"),
+            ),
+            (
+                "a signal that fits is kept",
+                vec![label.clone(), hostile.clone()],
+                200,
+                format!("{label}; {hostile}"),
+            ),
+            (
+                "a first signal longer than the limit is kept whole",
+                vec![hostile.clone()],
+                10,
+                hostile.clone(),
+            ),
+        ];
+        for (name, signals, limit, want) in cases {
+            let got = human_review_text(&signals, limit);
+            assert_eq!(got, want, "{name}");
+            assert!(
+                got.matches('`').count().is_multiple_of(2),
+                "{name}: unclosed backtick in {got}"
+            );
+        }
+        // A thousand deleted tests cannot make one signal, or the sentence, grow with the list: the
+        // list shows the values that fit the budget and counts the rest.
+        let budget = 200;
+        let signals = HumanReview {
+            deleted_tests: vec!["tests/**".to_owned()],
+            ..HumanReview::default()
+        };
+        let long: Vec<ChangedFile> = (0..1000)
+            .map(|index| ChangedFile {
+                path: format!("tests/{index:04}/{}Test.php", "x".repeat(300)),
+                status: "removed".to_owned(),
+                additions: 0,
+                deletions: 1,
+                previous_path: None,
+            })
+            .collect();
+        let short: Vec<ChangedFile> = (0..1000)
+            .map(|index| ChangedFile {
+                path: format!("tests/{index}.php"),
+                status: "removed".to_owned(),
+                additions: 0,
+                deletions: 1,
+                previous_path: None,
+            })
+            .collect();
+        fn facts(changed: &[ChangedFile], list_budget: usize) -> HumanReviewFacts<'_> {
+            HumanReviewFacts {
+                labels: &[],
+                author: "someone",
+                author_class: &AuthorClass::Untrusted,
+                changed,
+                truncated: false,
+                notes: 0,
+                list_budget,
+            }
+        }
+        let found = human_review_signals(&signals, &facts(&long, budget));
+        assert_eq!(
+            human_review_text(&found, 1000),
+            "deleted test files and 1000 more",
+            "long paths are counted, not listed"
+        );
+        let found = human_review_signals(&signals, &facts(&short, budget));
+        let text = human_review_text(&found, 1000);
+        assert!(
+            text.starts_with("deleted test files `tests/0.php`, ")
+                && text.ends_with(" more")
+                && text.len() <= "deleted test files ".len() + budget + ", and 1000 more".len(),
+            "short paths are listed to the budget: {text}"
+        );
     }
 
     #[test]
@@ -1112,7 +1605,7 @@ mod tests {
             "a clean review without signals must approve without the user"
         );
         let signalled = Artifact {
-            human_review: vec!["label needs-human".to_owned()],
+            human_review: vec!["label `needs-human`".to_owned()],
             ..Artifact::default()
         };
         let plan = plan_publication(&input, &signalled, "reviewer");

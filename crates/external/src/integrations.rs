@@ -10,7 +10,7 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, NotifyRoute};
 use autoreview_engine::integrations::{
-    CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft,
+    ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft,
     ReviewRequestList, SessionRequest,
 };
 use autoreview_engine::model::{
@@ -214,12 +214,12 @@ impl Integrations for External {
         self.github.commentable_lines(cancel, pull_request).await
     }
 
-    async fn list_deleted_files(
+    async fn list_changed_files(
         &self,
         cancel: &CancellationToken,
         pull_request: &PullRequest,
-    ) -> Result<Vec<String>, Error> {
-        self.github.deleted_files(cancel, pull_request).await
+    ) -> Result<ChangedFiles, Error> {
+        self.github.changed_files(cancel, pull_request).await
     }
 
     async fn list_discussion(

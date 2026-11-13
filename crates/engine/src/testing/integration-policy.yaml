@@ -25,7 +25,7 @@ repositories:
     pipeline: dual
     on_findings: request_changes
     on_clean: approve
-    human_review: {labels: [needs-human], deleted_tests: ["tests/**", "**/tests/**"]}
+    human_review: {labels: [needs-human], deleted_tests: ["tests/**", "**/tests/**"], paths: ["db/**"]}
     authors: {trusted: any}
   - {match: solo/*, trigger: "label:ai:review", pipeline: solo, on_findings: comment, on_clean: comment, authors: {trusted: any}}
   - {match: codex/manual, trigger: review-requested, pipeline: solo, on_findings: request_changes, on_clean: await, authors: {trusted: any}}

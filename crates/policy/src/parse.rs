@@ -1262,6 +1262,27 @@ notifications:
             second.digest(),
             "a human_review change must change the policy digest"
         );
+        let every = with_human_review(
+            VALID_POLICY,
+            r#"{labels: [needs-human], deleted_tests: ["tests/**"], paths: ["db/**"], max_changed_lines: 400, max_changed_files: 20, max_notes: 3, authors: [trusted, octocat]}"#,
+        );
+        let third = parse(every.as_bytes(), prompts).expect("every human_review signal parses");
+        let human = third
+            .resolve("acme/other")
+            .and_then(|rule| rule.human_review.as_ref());
+        assert!(
+            human.is_some_and(|human| human.paths.join(",") == "db/**"
+                && human.max_changed_lines == Some(400)
+                && human.max_changed_files == Some(20)
+                && human.max_notes == Some(3)
+                && human.authors.join(",") == "trusted,octocat"),
+            "human_review = {human:?}"
+        );
+        assert_ne!(
+            second.digest(),
+            third.digest(),
+            "the new human_review signals must change the policy digest"
+        );
     }
 
     #[test]
@@ -1306,13 +1327,20 @@ notifications:
             ("notes_handoff without on_notes", valid.replacen("approval: {timeout_hours: 24}\n", "approval: {timeout_hours: 24}\nnotes_handoff: {reminder_hours: 24}\n", 1), "no rule sets on_notes"),
             ("notes_handoff reminder out of range", with_handoff(valid, "0"), "reminder_hours must be between"),
             ("human_review on an awaiting rule", valid.replacen("on_clean: await}", "on_clean: await, human_review: {labels: [needs-human]}}", 1), "human_review needs on_clean approve"),
-            ("empty human_review", with_human_review(valid, "{}"), "must set labels or deleted_tests"),
+            ("empty human_review", with_human_review(valid, "{}"), "must set at least one signal"),
             ("invalid human_review label", with_human_review(valid, "{labels: [\"needs human\"]}"), "human_review labels"),
             ("duplicate human_review label", with_human_review(valid, "{labels: [needs-human, Needs-Human]}"), "human_review labels"),
             ("absolute deleted_tests glob", with_human_review(valid, "{deleted_tests: [/tests/**]}"), "human_review deleted_tests"),
             ("partial double star", with_human_review(valid, "{deleted_tests: [tests/**.php]}"), "human_review deleted_tests"),
             ("parent segment", with_human_review(valid, "{deleted_tests: [../tests/*]}"), "human_review deleted_tests"),
             ("broken class", with_human_review(valid, "{deleted_tests: [\"tests/[a\"]}"), "human_review deleted_tests"),
+            ("absolute paths glob", with_human_review(valid, "{paths: [/db/**]}"), "human_review paths"),
+            ("duplicate paths glob", with_human_review(valid, "{paths: [db/**, db/**]}"), "human_review paths"),
+            ("zero max_changed_lines", with_human_review(valid, "{max_changed_lines: 0}"), "human_review max_changed_lines must be a positive integer"),
+            ("negative max_notes", with_human_review(valid, "{max_notes: -1}"), "human_review max_notes must be a positive integer"),
+            ("zero max_changed_files", with_human_review(valid, "{max_changed_files: 0}"), "human_review max_changed_files must be a positive integer"),
+            ("invalid author login", with_human_review(valid, "{authors: [\"not a login\"]}"), "human_review authors"),
+            ("duplicate author", with_human_review(valid, "{authors: [octocat, OctoCat]}"), "human_review authors"),
             ("bad on_notes", valid.replacen("on_clean: await}", "on_clean: await, on_notes: approve}", 1), "on_notes must be comment"),
             ("on_notes without a manual approval", valid.replacen("on_clean: approve}", "on_clean: approve, on_notes: comment}", 1), "on_notes comment needs on_clean await"),
             ("on_notes on a label trigger", valid.replacen("on_clean: comment}", "on_clean: await, on_notes: comment}", 1), "on_notes comment needs on_clean await"),

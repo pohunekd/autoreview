@@ -51,6 +51,30 @@ pub struct PullRequestState {
 /// RIGHT-side lines of each changed file that accept an inline comment, by path.
 pub type CommentableLines = BTreeMap<String, Vec<i64>>;
 
+/// One file that a pull request changes, as the changed-files listing reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChangedFile {
+    /// Path of the file, relative to the repository root.
+    pub path: String,
+    /// Change status, such as `added`, `modified`, `renamed` or `removed`.
+    pub status: String,
+    /// Lines the pull request adds to the file.
+    pub additions: i64,
+    /// Lines the pull request deletes from the file.
+    pub deletions: i64,
+    /// Path before a rename; set only for a renamed file.
+    pub previous_path: Option<String>,
+}
+
+/// The changed files of a pull request and whether the listing stopped before its end.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChangedFiles {
+    /// The files listed, in listing order.
+    pub files: Vec<ChangedFile>,
+    /// Set when the listing ended at a limit, so `files` may not be every changed file.
+    pub truncated: bool,
+}
+
 /// One inline comment of a review submission.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
@@ -212,12 +236,14 @@ pub trait Integrations {
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<CommentableLines, Error>> + Send;
 
-    /// Returns the paths of the files the pull request deletes.
-    fn list_deleted_files(
+    /// Returns the files the pull request changes, in listing order.
+    ///
+    /// A listing that stops at a limit returns what it listed with `truncated` set.
+    fn list_changed_files(
         &self,
         cancel: &CancellationToken,
         pull_request: &PullRequest,
-    ) -> impl Future<Output = Result<Vec<String>, Error>> + Send;
+    ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send;
 
     /// Reads the reply threads of the prior findings and the conversation, bounded in size.
     fn list_discussion(

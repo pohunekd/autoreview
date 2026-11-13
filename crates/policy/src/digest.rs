@@ -9,6 +9,11 @@ use sha2::{Digest, Sha256};
 use crate::authors::{Authors, Untrusted};
 use crate::types::{Event, Level, Pipeline, Policy, Reviewer, Rule};
 
+/// Renders an optional limit for the digest; an absent limit is the empty text.
+fn limit_text(limit: Option<i64>) -> String {
+    limit.map_or_else(String::new, |value| value.to_string())
+}
+
 impl Policy {
     /// Returns the hex SHA-256 digest that identifies the effective policy.
     ///
@@ -58,6 +63,16 @@ pub(crate) fn digest_of(
                 human.labels.join(","),
                 human.deleted_tests.join(",")
             ));
+            if human.has_extended_signals() {
+                hasher.update(format!(
+                    "human_review_signals\x00{}\x00{}\x00{}\x00{}\x00{}\x00",
+                    human.paths.join(","),
+                    limit_text(human.max_changed_lines),
+                    limit_text(human.max_changed_files),
+                    limit_text(human.max_notes),
+                    human.authors.join(",")
+                ));
+            }
         }
         if let Some(Authors::Restricted { trusted, untrusted }) = authors.get(index) {
             hasher.update(format!(

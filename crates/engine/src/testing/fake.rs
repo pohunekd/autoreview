@@ -25,8 +25,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::NotifyRoute;
 use crate::error::{Error, WORKFLOW_FAILED};
 use crate::integrations::{
-    CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft, ReviewRequest,
-    ReviewRequestList, SessionRequest,
+    ChangedFile, ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState,
+    ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest,
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
@@ -100,10 +100,12 @@ pub(crate) struct FakeState {
     pub(crate) removed: Vec<String>,
     /// Commentable lines that the fake returns.
     pub(crate) commentable: CommentableLines,
-    /// Deleted files that the fake returns.
-    pub(crate) deleted: Vec<String>,
-    /// Number of reads of the deleted files.
-    pub(crate) deleted_reads: usize,
+    /// Changed files that the fake returns.
+    pub(crate) changed: Vec<ChangedFile>,
+    /// Whether the fake's changed-files listing reports a truncation.
+    pub(crate) changed_truncated: bool,
+    /// Number of reads of the changed files.
+    pub(crate) changed_reads: usize,
     /// Discussion that the fake returns.
     pub(crate) discussion: Discussion,
     /// Prior findings of each discussion read, in order.
@@ -656,15 +658,18 @@ impl Integrations for FakeIntegration {
         ready(Ok(result))
     }
 
-    fn list_deleted_files(
+    fn list_changed_files(
         &self,
         _cancel: &CancellationToken,
         _pull_request: &PullRequest,
-    ) -> impl Future<Output = Result<Vec<String>, Error>> + Send {
+    ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send {
         let result = {
             let mut state = self.lock();
-            state.deleted_reads += 1;
-            state.deleted.clone()
+            state.changed_reads += 1;
+            ChangedFiles {
+                files: state.changed.clone(),
+                truncated: state.changed_truncated,
+            }
         };
         ready(Ok(result))
     }

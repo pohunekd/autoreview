@@ -33,15 +33,29 @@ pub enum Error {
     #[error("human_review needs on_clean approve")]
     HumanReviewNeedsApprove,
 
-    /// Human review must set labels or deleted tests.
-    #[error("human_review must set labels or deleted_tests")]
+    /// Human review must set at least one signal.
+    #[error("human_review must set at least one signal")]
     HumanReviewEmpty,
 
     /// Human review lists too many entries.
-    #[error("human_review lists at most {limit} labels and {limit} deleted_tests globs")]
+    #[error("human_review lists at most {limit} entries in each list")]
     HumanReviewTooManyEntries {
         /// Maximum entries allowed.
         limit: usize,
+    },
+
+    /// Human review limit is not a positive integer.
+    #[error("human_review {key} must be a positive integer")]
+    HumanReviewNumber {
+        /// Name of the limit key.
+        key: &'static str,
+    },
+
+    /// Human review author is neither a login nor an author class, or is listed twice.
+    #[error("human_review authors: {author:?} must be a login, trusted or untrusted, listed once")]
+    HumanReviewAuthor {
+        /// The rejected entry.
+        author: String,
     },
 
     /// Human review label is invalid or duplicated.
@@ -52,8 +66,10 @@ pub enum Error {
     },
 
     /// Human review glob is invalid or duplicated.
-    #[error("human_review deleted_tests: {glob:?} must be a valid relative glob listed once")]
+    #[error("human_review {key}: {glob:?} must be a valid relative glob listed once")]
     HumanReviewGlob {
+        /// Name of the list that holds the glob.
+        key: &'static str,
         /// The rejected glob.
         glob: String,
     },
