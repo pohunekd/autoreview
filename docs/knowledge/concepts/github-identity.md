@@ -44,6 +44,13 @@ stops with `credential_not_covered`; `autoreview retry` dispatches it again with
 the credential that serves it now. A review stored without a credential name
 takes the serving credential once, if it has the review's login, and keeps it.
 
+Notes handed to the author are read with the credential of that review too, for
+the reminder and for the review queue, so the check whether the author asked
+for a review again uses the login that handed them off. A hand-off whose
+credential no longer fits ends without a reminder. A hand-off whose review is
+no longer stored (`store.review_retention_seconds`) is read with the serving
+credential.
+
 ## Choosing the shape
 
 One credential lets one account review everything its token can reach. A list
