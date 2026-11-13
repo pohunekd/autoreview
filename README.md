@@ -118,7 +118,7 @@ keeps untrusted authors behind a maintainer label.
   and written out in full by `autoreview init`; secrets only in `AUTOREVIEW_*`
   variables, from the environment or the file given with `--env-file`.
 - GitHub tokens as a list of credentials: one token, fine-grained tokens per
-  owner or per repository, and a different account per owner if wanted
+  owner or per repository, and a different account per owner if wanted.
   Failing or expiring tokens are reported and stop only their
   repositories (planned in #19).
 - Claude Code and Codex reviewers share one result contract, with the blocking

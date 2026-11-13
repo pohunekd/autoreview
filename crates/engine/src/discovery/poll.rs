@@ -286,7 +286,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                             } else if failed_before_run(&previous, &target) {
                                 Approval::Dismissed
                             } else {
-                                self.approval_stands(cancel, pr, run).await?
+                                self.approval_stands(cancel, pr, run, failed).await?
                             };
                             match approval {
                                 Approval::Stands => (None, on_base),
@@ -488,6 +488,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// review, with the run's credential; GitHub's `DISMISSED` state does not match. A run that
     /// published no approval stands. A failed lookup is `Unknown`; a permanent failure, or a
     /// credential that no longer fits the run, keeps the approval standing.
+    /// A run whose credential's search failed in this pass is `Unknown` without a lookup.
     ///
     /// # Errors
     ///
@@ -497,6 +498,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         cancel: &CancellationToken,
         pr: &PullRequest,
         workflow_id: &str,
+        failed: &BTreeMap<String, String>,
     ) -> Result<Approval, Error> {
         live(cancel)?;
         let published = self
@@ -521,6 +523,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             );
             return Ok(Approval::Stands);
         };
+        if failed.contains_key(&credential.name) {
+            return Ok(Approval::Unknown);
+        }
         let found = retry_step(
             STEP_FIND_APPROVAL,
             self.step_policy(),
@@ -559,7 +564,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// A pull request missing from search is read directly first, because search lags behind.
     /// A wait of an unsearched repository stays; one that no credential serves ends unread.
     /// The read uses the credential of the waiting review; a wait whose credential no longer
-    /// fits stays unread.
+    /// fits, or whose credential's search failed in this pass, stays unread.
     ///
     /// # Errors
     ///
@@ -607,6 +612,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     );
                     continue;
                 };
+                // A narrower credential may serve the repository now; the read needs this one.
+                if failed.contains_key(&credential.name) {
+                    continue;
+                }
                 let read = retry_step(
                     STEP_READ_PULL_REQUEST,
                     self.step_policy(),
