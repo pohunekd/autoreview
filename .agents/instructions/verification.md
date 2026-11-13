@@ -12,11 +12,18 @@ Docs group:
    anchors, YAML code blocks, the status line of each page, forbidden words and
    emoji in `docs/` (never `docs/plan/`), and that every `examples/**/*.yaml`
    parses.
-2. `shellcheck` (`shellcheck scripts/setup`): skipped with a reason when
-   `shellcheck` is not on `PATH`, except in CI (`CI` set), where it fails.
+2. `shellcheck` (`shellcheck scripts/setup scripts/check-install
+   deploy/install.sh`): skipped with a reason when `shellcheck` is not on
+   `PATH`, except in CI (`CI` set), where it fails.
 3. `setup-self-test` (`scripts/setup --self-test`): the version comparison,
    the target choice, the running-binary check and the path trust rule of the
    setup script, over fixed tables; it reads nothing else.
+4. `install-rerun` (`scripts/check-install rerun`): `deploy/install.sh --root`
+   into a temporary directory twice; the first run places the expected files
+   and modes, the second changes nothing.
+5. `systemd-verify` (`scripts/check-install verify`): `systemd-analyze verify`
+   on the installed units must exit 0 and print nothing. Skipped like
+   `shellcheck` when `systemd-analyze` is not on `PATH`.
 
 Adapters group:
 
@@ -27,10 +34,10 @@ Adapters group:
 
 Rust group, on the toolchain pinned in `rust-toolchain.toml`:
 
-4. `rust-fmt`: `cargo fmt --all --check`
-5. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
-6. `rust-test`: `cargo test --workspace --locked`
-7. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
+6. `rust-fmt`: `cargo fmt --all --check`
+7. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
+8. `rust-test`: `cargo test --workspace --locked`
+9. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
 
 Planned, not a gate yet: validation of the example policies. It lands with M1,
 which also decides how `validate` can run in CI without tokens or a running

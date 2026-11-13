@@ -1,0 +1,11 @@
+# deploy/install.sh installs this file as /etc/systemd/system/autoreview-queue.timer.
+[Unit]
+Description=Hourly autoreview review queue, 08:00-20:00 local time
+Documentation=https://github.com/pohunekd/autoreview/blob/main/docs/install.md
+
+[Timer]
+OnCalendar=*-*-* 08..20:00:00
+Unit=autoreview-queue.service
+
+[Install]
+WantedBy=timers.target

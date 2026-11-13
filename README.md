@@ -61,14 +61,15 @@ GitHub (gh) --> discovery --> policy match --> review workflow (SQLite)
 The engine needs three parts to be useful: the engine itself (Rust), the
 reviewer adapters that turn a pohunek agent session into one structured,
 read-only review run, and an installer that creates the pohunek agent profiles
-(`autoreview profiles install`) and the service unit (planned in #39).
+(`autoreview profiles install`) and the service units with their installer
+(`deploy/install.sh`, after 0.3.0).
 
 ## Rough plan
 
 | Phase | Goal | Done when |
 |---|---|---|
 | 1. Extract and decouple | Fresh history, rename, move every personal or organisation-specific value into configuration, `Notifier` interface | Tests pass; `validate` accepts an example policy with no Matrix configured |
-| 2. Adapters and installer | Claude and Codex adapters with one result contract, pohunek profile generator, release binaries, container image, systemd unit, workflow plugin, `autoreview init` | A clean host goes from `init` to a published review by following the docs |
+| 2. Adapters and installer | Claude and Codex adapters with one result contract, pohunek profile generator, release binaries, container image, systemd unit, `autoreview init` | A clean host goes from `init` to a published review by following the docs |
 | 3. Safe defaults for public repositories | Author/fork-aware rules, `base` checkout for untrusted authors, threat model, pohunek version check | A fork pull request whose author is not listed in `logins` cannot be auto-approved and never runs head code with setup hooks |
 | 4. Migrate the original deployment | The private deployment consumes a release; legacy review markers and state still read | Incremental reviews continue on pull requests reviewed before the migration |
 | 5. Examples, docs, dogfooding | One small policy per scenario over the pohunek repositories, validated in CI; live on `pohunekd/*` | Every example passes `validate` in CI; the org's pull requests are reviewed by it |
@@ -99,10 +100,9 @@ scenarios are guides without a policy of their own:
 - `gh` CLI and one GitHub token (tokens per owner or repository are planned in #14 to #17)
 - Claude Code and/or Codex CLI on the review hosts
 - Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` (after 0.2.0)
-  writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the system units
-  of a server user are written by hand from the
-  install page (shipped units are planned in #39, the container image in #40
-  and the workflow plugin in #41)
+  writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the
+  installer of the install page writes the system units of a server user (after
+  0.3.0; the container image is planned in #40)
 
 ## Security model
 
@@ -128,7 +128,7 @@ keeps untrusted authors behind a maintainer label.
   App identity come after v1 (#46, #47).
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
-- Distributed as static Linux release archives from 0.1.0 on; systemd units
-  and an installer (planned in #39), a container image (planned in #40) and a
-  pohunek workflow plugin (planned in #41) follow.
+- Distributed as static Linux release archives from 0.1.0 on, with systemd
+  units and an installer after 0.3.0; a container image (planned in #40)
+  follows.
 - MIT license.
