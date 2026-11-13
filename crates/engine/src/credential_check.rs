@@ -127,9 +127,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Checks the token of `credential` with that token only and applies the answer.
     ///
-    /// An accepted token of the credential's login may warn of its expiry. A refused token,
-    /// or one of another login, and a failed call are logged. Returns `false` once `cancel`
-    /// is cancelled.
+    /// An accepted token of the credential's login is logged as `credential checked` and may
+    /// warn of its expiry. A refused token, or one of another login, and a failed call are
+    /// logged. Returns `false` once `cancel` is cancelled.
     async fn check_one(&self, cancel: &CancellationToken, credential: &Credential) -> bool {
         let answer = self.integration.check_token(cancel, credential).await;
         if cancel.is_cancelled() {
@@ -138,6 +138,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let name = &credential.name;
         match answer {
             Ok(TokenAnswer::Accepted { login, expires_at }) if login == credential.login => {
+                let checked = expires_at.map(format_rfc3339_seconds);
+                let expires = checked.as_deref();
+                tracing::info!(credential = %name, expires_at = expires, "credential checked");
                 if let Some(expires_at) = expires_at {
                     self.warn_expiry(cancel, credential, expires_at).await;
                 }

@@ -299,8 +299,9 @@ of another account with `credential_login_mismatch` naming
 [credentials](configuration.md#credentials). Each checked credential is logged
 as `credential checked` with its name, and with `expires_at` when GitHub sent one.
 While it runs, it checks every token again when the engine starts and every
-`github.credential_check_hours`, and raises `credential_expiring` for a token
-that expires within `github.expiry_warning_days`.
+`github.credential_check_hours`, logs each accepted check as `credential checked`
+with the same fields, and raises `credential_expiring` for a token that expires
+within `github.expiry_warning_days`.
 
 A second `serve` on the same database is refused. Reviews running at shutdown
 resume from their stored steps on the next start. A SIGINT or SIGTERM during

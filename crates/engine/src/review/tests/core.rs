@@ -213,21 +213,27 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
             state.published
         );
     }
-    // A token that expires within the window warns once a UTC day, not at every check (#19).
-    let accepted = TokenAnswer::Accepted {
-        login: "acme-bot".to_owned(),
-        expires_at: Some(OffsetDateTime::now_utc() + time::Duration::days(3)),
-    };
-    (h.fake.lock().token_answers).insert("acme-token".to_owned(), accepted);
+    // A token that expires within the window warns once a UTC day per credential, not at
+    // every check (#19).
+    let expires_at = Some(OffsetDateTime::now_utc() + time::Duration::days(3));
+    for (token, login) in [("acme-token", "acme-bot"), ("rest-token", "reviewer")] {
+        let accepted = TokenAnswer::Accepted {
+            login: login.to_owned(),
+            expires_at,
+        };
+        (h.fake.lock().token_answers).insert(token.to_owned(), accepted);
+    }
     for _ in 0..2 {
         h.engine.check_tokens(&CancellationToken::new()).await;
     }
-    let expiring = "The GitHub token of credential acme expires at";
-    assert_eq!(
-        count_notes(&h.fake.lock().notes, Level::Action, expiring),
-        1,
-        "an expiring token warned more than once a day"
-    );
+    for name in ["acme", "rest"] {
+        let expiring = format!("The GitHub token of credential {name} expires at");
+        assert_eq!(
+            count_notes(&h.fake.lock().notes, Level::Action, &expiring),
+            1,
+            "credential {name} was not warned exactly once a day"
+        );
+    }
     h.stop_engine().await;
 }
 
