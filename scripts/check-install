@@ -44,6 +44,15 @@ install_once first
 units=(autoreview.service autoreview-queue.service autoreview-queue.timer)
 
 if [ "$1" = verify ]; then
+    # The targets that the units name or get as default dependencies, as empty units in
+    # the temporary root. systemd 255 fails a unit whose Requires= target is not on disk;
+    # newer releases fall back to built-in targets. With the stubs, verify reads no unit
+    # of the host and gives the same result on every systemd release.
+    for target in sysinit.target basic.target shutdown.target timers.target time-set.target \
+        time-sync.target network-online.target multi-user.target; do
+        printf '[Unit]\nDescription=Stand-in for systemd-analyze verify\n' \
+            >"$root/etc/systemd/system/$target"
+    done
     output=$(systemd-analyze verify --root="$root" "${units[@]/#/$root/etc/systemd/system/}" 2>&1) \
         || { printf '%s\n' "$output"; fail "systemd-analyze verify failed"; }
     # verify exits 0 on an unknown key or a value it cannot parse; it only warns.

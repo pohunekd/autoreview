@@ -57,7 +57,9 @@ parse_arguments() {
     while [ "$#" -gt 0 ]; do
         case $1 in
             --binary | --root)
-                [ "$#" -ge 2 ] && [ -n "$2" ] || usage
+                if [ "$#" -lt 2 ] || [ -z "$2" ]; then
+                    usage
+                fi
                 if [ "$1" = --binary ]; then binary=$2; else root=$2; fi
                 shift 2
                 ;;
@@ -76,7 +78,9 @@ parse_arguments() {
 
 # Checks that $binary is an autoreview release binary and prints its version.
 check_binary() {
-    [ -f "$binary" ] && [ -x "$binary" ] || fail 2 "$binary is not an executable file"
+    if [ ! -f "$binary" ] || [ ! -x "$binary" ]; then
+        fail 2 "$binary is not an executable file"
+    fi
     local version
     version=$("$binary" --version 2>/dev/null) || fail 2 "$binary --version failed"
     [[ $version =~ $VERSION_PATTERN ]] || fail 2 "$binary is not an autoreview binary"
