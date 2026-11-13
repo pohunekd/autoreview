@@ -592,18 +592,17 @@ impl GitHub {
         Ok(pull_request)
     }
 
-    /// Reads a pull request without a trigger check (`ReadPullRequestState`).
+    /// Reads a pull request with `credential` without a trigger check (`ReadPullRequestState`).
     pub(crate) async fn read_pull_request_state(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
     ) -> Result<PullRequestState, Error> {
         let args = pull_request_args(repository, number)?;
-        let credential = self.credentials.serving(repository)?;
-        let login = &credential.login;
         let output = self.github::<()>(cancel, credential, &args, None).await?;
-        decode_pull_request_state(repository, number, &output, &self.host, login)
+        decode_pull_request_state(repository, number, &output, &self.host, &credential.login)
     }
 
     /// Reads the raw pull request data of one pull request with `credential`'s token.

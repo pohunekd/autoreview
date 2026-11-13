@@ -161,7 +161,6 @@ pub(crate) async fn start_harness(configure: impl Fn(&mut Config) + 'static) -> 
     let fake = Arc::new(FakeIntegration::new());
     fake.lock().output = Some(Arc::new(reviewer_output(Vec::new())));
     fake.lock().policy.clone_from(&cfg.policy);
-    fake.lock().credentials = Some(cfg.credentials.clone());
     let store = Arc::new(store);
     let engine = Arc::new(
         Engine::new(cfg, Arc::clone(&store), Arc::clone(&fake), SystemClock).with_metrics(),

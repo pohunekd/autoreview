@@ -19,7 +19,8 @@ use crate::integrations::Integrations;
 use crate::messages::{go_elapsed_nanos, handoff_reminder_message};
 use crate::model::review::APPROVAL_KIND_SUPERSEDED;
 use crate::model::{
-    Candidate, Decision, PollResult, PublishResult, PullRequest, RetryRequest, ReviewInput,
+    Candidate, Decision, PollResult, PublishResult, PublishedRecord, PullRequest, RetryRequest,
+    ReviewInput,
 };
 use crate::review::input::{RenderOutcome, STEP_RENDERED};
 use crate::store::discovery::save_discovery;
@@ -476,11 +477,44 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let Some(review) = self.store.get_review(workflow_id)? else {
             return Ok(None);
         };
-        let input = &review.input;
+        self.input_credential(workflow_id, &review.input)
+    }
+
+    /// Returns the credential of the review `workflow_id` stored with `input`.
+    ///
+    /// `None` when the credential no longer fits the review.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store.
+    fn input_credential(
+        &self,
+        workflow_id: &str,
+        input: &ReviewInput,
+    ) -> Result<Option<&Credential>, Error> {
         let name = self.review_credential(workflow_id, input, false)?;
         let repository = &input.pull_request.repository;
         let credentials = &self.config.credentials;
         Ok((credentials.reviewing(&name, repository, &input.publisher_login)).ok())
+    }
+
+    /// Returns the credential that reads the notes hand-off `record`.
+    ///
+    /// It is the credential of the hand-off's review, `None` when that no longer fits the
+    /// review. A review that is no longer stored, pruned after its retention, leaves the
+    /// serving credential.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store.
+    pub(crate) fn handoff_credential(
+        &self,
+        record: &PublishedRecord,
+    ) -> Result<Option<&Credential>, Error> {
+        match self.store.get_review(&record.workflow_id)? {
+            Some(review) => self.input_credential(&record.workflow_id, &review.input),
+            None => Ok(self.config.credentials.serving(&record.repository).ok()),
+        }
     }
 
     /// Reports whether the approval that `workflow_id` published on the head of `pr` stands.
@@ -652,6 +686,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// reminder time. The hand-off of a pull request that is no longer open ends. A failed read
     /// is retried on the next pass, so it holds up no review. The reminders go to `notices`.
     /// An unsearched repository is not read; the hand-off of one that no credential serves ends.
+    /// The read uses the credential of the hand-off's review; a hand-off whose credential no
+    /// longer fits ends, one whose credential's search failed in this pass stays unread.
     ///
     /// # Errors
     ///
@@ -699,6 +735,21 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 state.published.insert(key, record);
                 continue;
             }
+            live(cancel)?;
+            let Some(credential) = self.handoff_credential(&record)? else {
+                tracing::info!(
+                    repository = %record.repository,
+                    pull_request = record.number,
+                    "notes hand-off ended: its credential no longer fits the review"
+                );
+                record.awaits_author = false;
+                state.published.insert(key, record);
+                continue;
+            };
+            // A narrower credential may serve the repository now; the read needs this one.
+            if failed.contains_key(&credential.name) {
+                continue;
+            }
             let read = retry_step(
                 STEP_READ_PULL_REQUEST_STATE,
                 self.step_policy(),
@@ -707,6 +758,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 || {
                     self.integration.read_pull_request_state(
                         cancel,
+                        credential,
                         &record.repository,
                         record.number,
                     )

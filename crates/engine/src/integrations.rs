@@ -182,9 +182,12 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<PullRequest, Error>> + Send;
 
     /// Reads a pull request with no trigger check, for notes waiting on their author.
+    ///
+    /// It reads with `credential`'s token, and `requested` uses its login.
     fn read_pull_request_state(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
     ) -> impl Future<Output = Result<PullRequestState, Error>> + Send;

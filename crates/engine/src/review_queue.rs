@@ -44,6 +44,9 @@ const QUEUE_MAX_ITEMS_KEY: &str = "notify.review_queue.max_items";
 /// Step name of the review request search in the retry log.
 const STEP_LIST_REVIEW_REQUESTS: &str = "list_review_requests";
 
+/// Code of a hand-off whose stored credential no longer fits its review.
+const CREDENTIAL_NOT_COVERED: &str = "credential_not_covered";
+
 /// Position of a queue entry. The derived order puts the requests that need the owner's action
 /// first, and the notes that wait for their author after the requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -209,7 +212,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let waiting = self.waiting_on_author(cancel, &state, &list.requests, &failed);
         entries.extend(waiting.await);
         if self.config.credentials.single().is_none() {
-            for entry in &mut entries {
+            // A hand-off already names the account of its review.
+            for entry in entries.iter_mut().filter(|entry| entry.account.is_none()) {
                 let serving = self.config.credentials.serving(&entry.request.repository);
                 entry.account = serving.ok().map(account_label);
             }
@@ -237,7 +241,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// The author has not requested the review again. A pull request that cannot be read is
     /// left out of this digest with a warning, also after a cancel, as Go leaves it out. One
-    /// whose credential's search failed, or that no credential serves, is left out unread.
+    /// that no credential serves is left out unread. The read uses the credential of the
+    /// hand-off's review; one whose credential no longer fits or failed its search is left out.
     async fn waiting_on_author(
         &self,
         cancel: &CancellationToken,
@@ -255,19 +260,26 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             if !record.awaits_author || requested.contains(key) {
                 continue;
             }
-            let unread = match self.config.credentials.serving(&record.repository) {
-                Err(err) => Some(error_code(&err).to_owned()),
-                Ok(credential) => failed.get(&credential.name).cloned(),
+            let reader = (self.config.credentials.serving(&record.repository))
+                .and_then(|_| self.handoff_credential(record))
+                .map_err(|err| error_code(&err).to_owned())
+                .and_then(|found| found.ok_or_else(|| CREDENTIAL_NOT_COVERED.to_owned()))
+                .and_then(|credential| match failed.get(&credential.name) {
+                    Some(code) => Err(code.clone()),
+                    None => Ok(credential),
+                });
+            let credential = match reader {
+                Ok(credential) => credential,
+                Err(code) => {
+                    tracing::warn!(
+                        repository = %record.repository,
+                        pull_request = record.number,
+                        error_code = %code,
+                        "notes hand-off unreadable"
+                    );
+                    continue;
+                }
             };
-            if let Some(code) = unread {
-                tracing::warn!(
-                    repository = %record.repository,
-                    pull_request = record.number,
-                    error_code = %code,
-                    "notes hand-off unreadable"
-                );
-                continue;
-            }
             let read = retry_step(
                 STEP_READ_PULL_REQUEST_STATE,
                 self.step_policy(),
@@ -276,6 +288,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 || {
                     self.integration.read_pull_request_state(
                         cancel,
+                        credential,
                         &record.repository,
                         record.number,
                     )
@@ -314,7 +327,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 },
                 status,
                 priority: QueuePriority::WaitingAuthor,
-                account: None,
+                account: (self.config.credentials.single())
+                    .is_none()
+                    .then(|| account_label(credential)),
             });
         }
         entries
@@ -1416,7 +1431,6 @@ notifications:
         // No read is retried, so a read that must not happen shows in the counter.
         cfg.step_retry = Duration::ZERO;
         let fake = Arc::new(FakeIntegration::new());
-        fake.lock().credentials = Some(cfg.credentials.clone());
         let (engine, _dir) = new_queue_engine(cfg, &fake, at);
         let (mut team, mut foreign) = (waiting.clone(), waiting.clone());
         team.repository = "example-org/beta".to_owned();
@@ -1444,7 +1458,7 @@ notifications:
                 && result.truncated
                 && failed.starts_with("Reviews waiting for example-user (credential main) (1)")
                 && !failed.contains("team-bot")
-                && state.state_reads == ["example-org/beta#5"],
+                && state.state_reads == ["example-org/beta#5 team"],
             "plain={plain} failed={failed} reads={:?}",
             state.state_reads
         );

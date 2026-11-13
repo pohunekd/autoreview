@@ -126,11 +126,12 @@ impl Integrations for External {
     async fn read_pull_request_state(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
     ) -> Result<PullRequestState, Error> {
         self.github
-            .read_pull_request_state(cancel, repository, number)
+            .read_pull_request_state(cancel, credential, repository, number)
             .await
     }
 
