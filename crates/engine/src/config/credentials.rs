@@ -142,6 +142,47 @@ impl Credentials {
             })
     }
 
+    /// Returns the credential `name` that a stored review of `repository` uses.
+    ///
+    /// An empty name, of a review stored before names, takes the serving credential. The
+    /// credential must match the repository, also when a narrower one serves it first, and
+    /// must belong to `login`, the publisher of the review.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credential_not_covered` naming `github.credentials` when the credential is
+    /// missing, no longer matches the repository or belongs to another login.
+    pub fn reviewing(
+        &self,
+        name: &str,
+        repository: &str,
+        login: &str,
+    ) -> Result<&Credential, Error> {
+        let repository = repository.to_ascii_lowercase();
+        let credential = if name.is_empty() {
+            self.serving(&repository)?
+        } else {
+            let Some(credential) = self.list.iter().find(|credential| credential.name == name)
+            else {
+                let message = format!("credential {name} of the review is not configured");
+                return Err(error(NOT_COVERED, CREDENTIALS_KEY, message));
+            };
+            if !credential.matches.iter().any(|p| covers(p, &repository)) {
+                let message = format!("credential {name} no longer matches {repository}");
+                return Err(error(NOT_COVERED, CREDENTIALS_KEY, message));
+            }
+            credential
+        };
+        if !credential.login.eq_ignore_ascii_case(login) {
+            let message = format!(
+                "credential {} belongs to {}, the review to {login}",
+                credential.name, credential.login
+            );
+            return Err(error(NOT_COVERED, CREDENTIALS_KEY, message));
+        }
+        Ok(credential)
+    }
+
     /// Returns the parts of the policy patterns `scopes` that `credential` searches, in order.
     ///
     /// A part is a pattern of `credential` narrowed to a scope, left out when an earlier
@@ -225,4 +266,70 @@ fn narrower<'a>(left: &'a str, right: &'a str) -> Option<&'a str> {
 /// Builds the error `code` for the configuration key `key`.
 fn error(code: &str, key: &str, message: String) -> Error {
     Error::config(code, key, Some(BoxError::from(message)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Credential, Credentials};
+
+    /// A stored review keeps its credential while it still matches the repository and its
+    /// publisher, also behind a narrower credential added before it (#18).
+    #[test]
+    fn stored_review_keeps_its_credential_while_it_matches_and_its_login_holds() {
+        let credential = |name: &str, login: &str, pattern: &str| Credential {
+            name: name.to_owned(),
+            login: login.to_owned(),
+            token: format!("{name}-token"),
+            matches: vec![pattern.to_owned()],
+        };
+        let credentials = Credentials::new(vec![
+            credential("tool", "tool-bot", "acme/tool"),
+            credential("rest", "review-bot", "*"),
+        ])
+        .expect("the credentials are valid");
+        // (stored name, repository, publisher login, the credential or the error text)
+        let rows = [
+            ("rest", "acme/tool", "review-bot", Ok("rest")),
+            ("rest", "Acme/Tool", "Review-Bot", Ok("rest")),
+            ("tool", "acme/tool", "tool-bot", Ok("tool")),
+            ("", "acme/tool", "tool-bot", Ok("tool")),
+            ("", "acme/other", "review-bot", Ok("rest")),
+            (
+                "",
+                "acme/tool",
+                "review-bot",
+                Err("credential_not_covered: github.credentials: \
+                     credential tool belongs to tool-bot, the review to review-bot"),
+            ),
+            (
+                "gone",
+                "acme/tool",
+                "review-bot",
+                Err("credential_not_covered: github.credentials: \
+                     credential gone of the review is not configured"),
+            ),
+            (
+                "tool",
+                "acme/other",
+                "tool-bot",
+                Err("credential_not_covered: github.credentials: \
+                     credential tool no longer matches acme/other"),
+            ),
+            (
+                "rest",
+                "acme/tool",
+                "tool-bot",
+                Err("credential_not_covered: github.credentials: \
+                     credential rest belongs to review-bot, the review to tool-bot"),
+            ),
+        ];
+        for (name, repository, login, expected) in rows {
+            let resolved = credentials.reviewing(name, repository, login);
+            match (resolved, expected) {
+                (Ok(found), Ok(want)) => assert_eq!(found.name, want, "{name} {repository}"),
+                (Err(err), Err(want)) => assert_eq!(err.to_string(), want, "{name} {repository}"),
+                (resolved, _) => panic!("{name} {repository}: {resolved:?}"),
+            }
+        }
+    }
 }

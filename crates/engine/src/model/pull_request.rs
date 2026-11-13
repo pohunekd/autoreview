@@ -215,6 +215,11 @@ pub struct ReviewInput {
     pub policy_digest: String,
     /// GitHub login that publishes the review.
     pub publisher_login: String,
+    /// Name of the credential that served the repository at dispatch.
+    ///
+    /// Empty in a review stored before names; that review adopts the serving credential.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub credential: String,
     /// Loop limits of the review.
     pub limits: RunLimits,
     /// Blocking findings that earlier reviews left open. A full review carries them too.
