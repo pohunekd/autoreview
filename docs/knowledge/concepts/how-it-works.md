@@ -280,7 +280,9 @@ Model text is neutralized before it is rendered:
   block in a language that GitHub renders in a viewer (`mermaid`, `math`,
   `geojson`, `topojson`, `stl`) is shown as plain code. The path and line of a
   finding are a code span in a paragraph of their own, with each bidi control
-  or zero-width character shown as `<U+XXXX>`.
+  or zero-width character shown as `<U+XXXX>`. Model text, code included, and a
+  finding path in a notification show these characters the same way; only the
+  zero-width spaces that the engine inserts stay invisible.
 - Code fences are closed, so an unclosed fence cannot swallow the signature.
 
 ## 10. Notifications

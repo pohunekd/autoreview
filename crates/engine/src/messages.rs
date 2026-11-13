@@ -10,6 +10,7 @@ use crate::model::{
     Artifact, Decision, Finding, PublishResult, PublishedRecord, PullRequest, ReviewInput,
     SessionIdentity,
 };
+use crate::publish::neutralize::visible;
 use crate::publish::plan::{PublicationPlan, blocking_count};
 use crate::publish::render::{head_prefix, human_review_text, reviewer_labels};
 use crate::verify::{VERDICT_NOT_BLOCKING, VERDICT_REFUTED, demoted, escalates, verification_line};
@@ -99,7 +100,7 @@ fn finding_lines(input: &ReviewInput, findings: &[Finding], limit: i64) -> Strin
                 finding.id,
                 kind,
                 finding.confidence,
-                finding.path,
+                visible(&finding.path),
                 finding.line,
                 excerpt(&finding.title, limit)
             )
@@ -265,7 +266,7 @@ pub(crate) fn published_message(
                 format!(
                     "{} [STILL OPEN] {}:{} {}",
                     result.finding.key,
-                    result.finding.path,
+                    visible(&result.finding.path),
                     result.finding.line,
                     excerpt(&result.finding.title, excerpt_characters)
                 )
