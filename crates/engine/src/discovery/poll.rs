@@ -471,7 +471,6 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns the error of the store.
-    #[expect(dead_code, reason = "the reads of round A2b call it")]
     fn stored_credential(&self, workflow_id: &str) -> Result<Option<&Credential>, Error> {
         let Some(review) = self.store.get_review(workflow_id)? else {
             return Ok(None);
@@ -549,6 +548,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// A pull request missing from search is read directly first, because search lags behind.
     /// A wait of an unsearched repository stays; one that no credential serves ends unread.
+    /// The read uses the credential of the waiting review; a wait whose credential no longer
+    /// fits stays unread.
     ///
     /// # Errors
     ///
@@ -586,6 +587,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     "approval wait ended: no credential serves the repository"
                 );
             } else {
+                live(cancel)?;
+                let Some(credential) = self.stored_credential(&record.workflow_id)? else {
+                    // An approval stops the review with `credential_not_covered`.
+                    tracing::info!(
+                        repository = %record.repository,
+                        pull_request = record.number,
+                        "approval wait kept unread: its credential no longer fits the review"
+                    );
+                    continue;
+                };
                 let read = retry_step(
                     STEP_READ_PULL_REQUEST,
                     self.step_policy(),
@@ -594,6 +605,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     || {
                         self.integration.get_pull_request(
                             cancel,
+                            credential,
                             &record.repository,
                             record.number,
                             &record.trigger,

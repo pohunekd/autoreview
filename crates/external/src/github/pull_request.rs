@@ -5,6 +5,7 @@
 
 // Rust guideline compliant 2026-06-26
 
+use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::PullRequestState;
 use autoreview_engine::model::{PullRequest, repository_valid, sha_valid};
@@ -567,24 +568,26 @@ pub(crate) fn newest_review_request(events: &[ReviewRequestEvent]) -> Option<i64
 }
 
 impl GitHub {
-    /// Reads a pull request and checks it against the trigger of its rule (`GetPullRequest`).
+    /// Reads a pull request with `credential` and checks it against the trigger of its rule.
+    ///
+    /// The response must name the requested pull request before any read that uses it.
     pub(crate) async fn get_pull_request(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
-        let login = &self.credentials.serving(repository)?.login;
-        let raw = self.fetch_pull_request(cancel, repository, number).await?;
-        let mut pull_request = decode_pull_request(&raw, &self.host, login, trigger)?;
-        if trigger.kind == TriggerKind::ReviewRequested {
-            pull_request.review_request_id = self
-                .latest_review_request_id(cancel, &pull_request.repository, pull_request.number)
-                .await?;
-        }
+        let raw = (self.fetch_pull_request(cancel, credential, repository, number)).await?;
+        let mut pull_request = decode_pull_request(&raw, &self.host, &credential.login, trigger)?;
         if pull_request.repository != repository || pull_request.number != number {
             return Err(response_invalid(None));
+        }
+        if trigger.kind == TriggerKind::ReviewRequested {
+            pull_request.review_request_id = self
+                .latest_review_request_id(cancel, credential, repository, number)
+                .await?;
         }
         Ok(pull_request)
     }
@@ -603,15 +606,15 @@ impl GitHub {
         decode_pull_request_state(repository, number, &output, &self.host, login)
     }
 
-    /// Reads the raw pull request data of one pull request (`fetchPullRequest`).
+    /// Reads the raw pull request data of one pull request with `credential`'s token.
     pub(super) async fn fetch_pull_request(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
     ) -> Result<GitHubPullRequest, Error> {
         let args = pull_request_args(repository, number)?;
-        let credential = self.credentials.serving(repository)?;
         let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_pull_request_response(&output)
     }
@@ -623,10 +626,10 @@ impl GitHub {
     async fn latest_review_request_id(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
     ) -> Result<i64, Error> {
-        let credential = self.credentials.serving(repository)?;
         let login = &credential.login;
         let mut events = Vec::new();
         for page in 1..=self.search_page_limit {

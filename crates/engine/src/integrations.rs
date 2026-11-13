@@ -170,9 +170,12 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send;
 
     /// Reads a pull request and checks it against the trigger of its rule.
+    ///
+    /// It reads with `credential`'s token, and the trigger check uses its login.
     fn get_pull_request(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
         trigger: &Trigger,

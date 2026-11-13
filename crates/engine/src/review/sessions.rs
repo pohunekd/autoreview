@@ -198,7 +198,6 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Returns `credential_not_covered` when it is missing, no longer matches the repository
     /// or belongs to another login than the publisher. The error is permanent: no step retry
     /// can bring the credential back.
-    #[expect(dead_code, reason = "the reads of round A2b call it")]
     pub(crate) fn credential(&self) -> Result<&Credential, Error> {
         let (input, credentials) = (&self.input, &self.engine.config.credentials);
         let repository = &input.pull_request.repository;
@@ -794,12 +793,12 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let current = self
             .fresh(STEP_CURRENT_PULL_REQUEST, || {
                 let integration = &*self.engine.integration;
-                let cancel = &self.cancel;
+                let (cancel, credential) = (&self.cancel, self.credential());
                 let repository = repository.clone();
                 let trigger = trigger.clone();
                 async move {
                     integration
-                        .get_pull_request(cancel, &repository, number, &trigger)
+                        .get_pull_request(cancel, credential?, &repository, number, &trigger)
                         .await
                 }
             })

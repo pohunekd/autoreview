@@ -113,12 +113,13 @@ impl Integrations for External {
     async fn get_pull_request(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
         self.github
-            .get_pull_request(cancel, repository, number, trigger)
+            .get_pull_request(cancel, credential, repository, number, trigger)
             .await
     }
 

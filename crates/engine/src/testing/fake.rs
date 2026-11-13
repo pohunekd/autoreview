@@ -439,6 +439,7 @@ impl Integrations for FakeIntegration {
     fn get_pull_request(
         &self,
         _cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
         trigger: &Trigger,
@@ -446,10 +447,8 @@ impl Integrations for FakeIntegration {
         let key = format!("{repository}#{number}");
         let result = {
             let state = self.lock();
-            if state.transient() {
+            if state.transient() || state.failing_credentials.contains_key(&credential.name) {
                 Err(transient_error())
-            } else if let Some(err) = state.credential_error(repository) {
-                Err(err)
             } else if let Some(code) = state.lapsed.get(&key) {
                 Err(Error::workflow(code.clone(), true, None))
             } else if let Some(pr) = state.current.get(&key) {
