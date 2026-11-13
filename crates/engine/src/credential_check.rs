@@ -134,6 +134,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         self.health.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Reports whether the credential `name` is suspended in this process.
+    pub(crate) fn suspended(&self, name: &str) -> bool {
+        self.health().suspended.contains(name)
+    }
+
+    /// Marks the credential `name` for a token check after the current discovery pass.
+    pub(crate) fn search_refused(&self, name: &str) {
+        self.health().refused_searches.insert(name.to_owned());
+    }
+
     /// Checks the token of every credential, as at start and every `credential_check`.
     pub(crate) async fn check_tokens(&self, cancel: &CancellationToken) {
         for credential in self.config.credentials.iter() {

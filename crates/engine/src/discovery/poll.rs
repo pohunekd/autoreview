@@ -132,7 +132,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         cancel: &CancellationToken,
         force: Option<&RetryRequest>,
     ) -> Result<Pass, Error> {
-        for credential in self.config.credentials.iter() {
+        let searched = self.config.credentials.iter();
+        for credential in searched.filter(|credential| !self.suspended(&credential.name)) {
             // A failure leaves the drafts for the next pass and holds up no other review.
             if let Err(err) = self.integration.ready_drafts(cancel, credential).await
                 && !cancel.is_cancelled()

@@ -25,7 +25,7 @@ use crate::integrations::Integrations;
 use crate::metrics::Metrics;
 use crate::model::review::APPROVAL_KIND_EXPIRED;
 use crate::review::sessions::is_shutdown;
-use crate::store::{REVIEW_QUEUED, REVIEW_RUNNING, ReviewFilter, Store};
+use crate::store::{REVIEW_QUEUED, REVIEW_RUNNING, ReviewFilter, Store, StoredReview};
 
 /// Retry policy of one workflow step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,7 +281,8 @@ where
 
     /// Expires overdue approval waits and starts every review that can make progress.
     ///
-    /// Reviews start up to the concurrency limit; each runs in its own task in `tasks`.
+    /// Reviews start up to the concurrency limit; each runs in its own task in `tasks`. A review
+    /// of a suspended credential keeps its status and starts once the suspension is lifted.
     fn work(self: &Arc<Self>, cancel: &CancellationToken, tasks: &mut JoinSet<()>) {
         if cancel.is_cancelled() {
             return;
@@ -297,6 +298,9 @@ where
             }
         };
         for mut stored in ready {
+            if self.credential_suspended(&stored) {
+                continue;
+            }
             if !self.claim(&stored.workflow_id) {
                 continue;
             }
@@ -341,6 +345,22 @@ where
                 engine.release(&workflow_id);
             });
         }
+    }
+
+    /// Reports whether the credential of `stored` is suspended in this process.
+    ///
+    /// The credential is the one stored with the review, or for a review stored without one the
+    /// credential that serves its repository now.
+    fn credential_suspended(&self, stored: &StoredReview) -> bool {
+        let input = &stored.input;
+        if !input.credential.is_empty() {
+            return self.suspended(&input.credential);
+        }
+        let serving = self
+            .config
+            .credentials
+            .serving(&input.pull_request.repository);
+        serving.is_ok_and(|credential| self.suspended(&credential.name))
     }
 
     /// Records the expiry of every awaiting review whose approval deadline has passed.
