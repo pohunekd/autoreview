@@ -113,8 +113,7 @@ follow:
   zero time `0001-01-01T00:00:00Z`.
   Exception: `Artifact.reviewed_at`, written by `CombineResults`
   (`protocol.go:353`), is Go's `time.RFC3339` in UTC with whole seconds and no
-  fraction, written by `autoreview_go_compat::go_time::format_rfc3339_seconds`;
-  Both forms come from `format_rfc3339_nano` and `format_rfc3339_seconds`.
+  fraction, written by `autoreview_go_compat::go_time::format_rfc3339_seconds`.
 - **R10 Identifiers.** Byte-identical: `PullRequest::workflow_id` =
   `"prr-v2-" + hex(sha256("pr-review-v2\0{repo}\0{number}\0{head}\0{request_id}\0{attempt}"))`
   (`model.go:68-73`, prefix `model.go:18`), `review_id` (`model.go:62-64`), `key`
@@ -452,8 +451,7 @@ What is not compatible, by decision:
   `retarget_without_a_push_publishes_a_new_approval` and
   `dismissed_review_is_skipped_and_a_later_match_is_reused`.
 
-Intentional parsing divergences (stricter than Go; each has a test row with the expected
-Rust error code):
+Intentional parsing divergences (stricter than Go):
 
 - JSON object keys match exactly; Go's `encoding/json` matches
   case-insensitively. Rust ignores a case-variant key such as `"TITLE"` as
