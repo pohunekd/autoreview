@@ -292,6 +292,9 @@ pub enum Event {
     /// Commented event.
     #[serde(rename = "commented")]
     Commented,
+    /// A credential's token expires within the warning window.
+    #[serde(rename = "credential_expiring")]
+    CredentialExpiring,
     /// Findings on own PR event.
     #[serde(rename = "findings_on_own_pr")]
     FindingsOnOwnPr,
@@ -326,6 +329,7 @@ impl Event {
             Self::CleanupManual => "cleanup_manual",
             Self::CommandFailed => "command_failed",
             Self::Commented => "commented",
+            Self::CredentialExpiring => "credential_expiring",
             Self::FindingsOnOwnPr => "findings_on_own_pr",
             Self::HandoffReminder => "handoff_reminder",
             Self::RetryScheduled => "retry_scheduled",
@@ -366,6 +370,11 @@ pub const EVENTS: &[Event] = &[
     Event::ApprovalExpired,
     Event::HandoffReminder,
 ];
+
+/// Events a policy may leave out, each with the level it gets then.
+///
+/// An absent one is not part of the policy digest, so policies without it keep their digest.
+pub const OPTIONAL_EVENTS: &[(Event, Level)] = &[(Event::CredentialExpiring, Level::Action)];
 
 /// Events a review workflow sends itself, so its input carries their levels. Discovery sends the
 /// others with the current policy.
@@ -532,7 +541,7 @@ pub struct Policy {
     pub(crate) authors: Vec<Authors>,
     /// Sorted logins whose draft pull requests are marked ready for review.
     pub(crate) ready_draft_authors: Vec<String>,
-    /// The level of every notification event.
+    /// The level of every required event and of each optional event the file names.
     pub(crate) notifications: BTreeMap<Event, Level>,
     /// How long a review waits for the user's approval.
     pub(crate) approval_timeout: Duration,

@@ -18,6 +18,7 @@ use tokio::time::{Interval, MissedTickBehavior, interval_at};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
+use crate::credential_check::CredentialHealth;
 use crate::discovery::poll::live;
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
@@ -91,6 +92,8 @@ pub struct Engine<I, C> {
     active: Mutex<BTreeSet<String>>,
     /// Review counters of the metrics endpoint; `None` unless `with_metrics` set them.
     pub(crate) metrics: Option<Metrics>,
+    /// What the token checks of this process learned; it starts empty.
+    pub(crate) health: Mutex<CredentialHealth>,
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
@@ -103,6 +106,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             clock,
             active: Mutex::new(BTreeSet::new()),
             metrics: None,
+            health: Mutex::new(CredentialHealth::default()),
         }
     }
 
@@ -182,7 +186,10 @@ where
         result
     }
 
-    /// Runs the poll and worker tickers of [`Engine::serve`] while the engine lock is held.
+    /// Runs the poll, worker and token check tickers of [`Engine::serve`] while the engine
+    /// lock is held.
+    ///
+    /// The tokens are checked once before the first poll, then every `credential_check`.
     async fn serve_locked(
         self: &Arc<Self>,
         cancel: &CancellationToken,
@@ -191,12 +198,14 @@ where
     ) -> Result<(), Error> {
         let mut poll_ticker = ticker(self.config.poll_interval);
         let mut work_ticker = ticker(self.config.worker_tick);
+        let mut check_ticker = ticker(self.config.credential_check);
         let policy_digest = self.policy()?.digest();
         tracing::info!(
             policy_digest,
             max_concurrent_reviews = self.config.max_concurrent_reviews,
             "pull request review engine starting"
         );
+        self.check_tokens(cancel).await;
         self.poll_and_log(cancel).await;
         self.work(review_cancel, tasks);
         loop {
@@ -215,6 +224,7 @@ where
                     }
                     self.work(review_cancel, tasks);
                 }
+                _ = check_ticker.tick() => self.check_tokens(cancel).await,
             }
         }
     }

@@ -16,7 +16,7 @@ use crate::config::{
 };
 use crate::engine::{Engine, SystemClock};
 use crate::error::{Error, error_code};
-use crate::integrations::SessionRequest;
+use crate::integrations::{SessionRequest, TokenAnswer};
 use crate::model::review::Decision;
 use crate::model::{
     HostCapacity, HostCpu, HostGpu, HostMemory, HostModels, HostPolicy, HostWindow, PullRequest,
@@ -211,6 +211,27 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
                     .all(|review| review.body.ends_with(signature)),
             "own pull requests follow the wrong login: {:?}",
             state.published
+        );
+    }
+    // A token that expires within the window warns once a UTC day per credential, not at
+    // every check (#19).
+    let expires_at = Some(OffsetDateTime::now_utc() + time::Duration::days(3));
+    for (token, login) in [("acme-token", "acme-bot"), ("rest-token", "reviewer")] {
+        let accepted = TokenAnswer::Accepted {
+            login: login.to_owned(),
+            expires_at,
+        };
+        (h.fake.lock().token_answers).insert(token.to_owned(), accepted);
+    }
+    for _ in 0..2 {
+        h.engine.check_tokens(&CancellationToken::new()).await;
+    }
+    for name in ["acme", "rest"] {
+        let expiring = format!("The GitHub token of credential {name} expires at");
+        assert_eq!(
+            count_notes(&h.fake.lock().notes, Level::Action, &expiring),
+            1,
+            "credential {name} was not warned exactly once a day"
         );
     }
     h.stop_engine().await;

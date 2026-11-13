@@ -21,9 +21,9 @@ pub use authors::{
 pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};
 pub use types::{
-    Checkout, EVENTS, Event, Level, OnClean, OnFindings, OnNotes, Pipeline, Policy, Protocol,
-    REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind, VERIFIER_REVIEWER_ID, Verifier,
-    WORKFLOW_EVENTS,
+    Checkout, EVENTS, Event, Level, OPTIONAL_EVENTS, OnClean, OnFindings, OnNotes, Pipeline,
+    Policy, Protocol, REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind,
+    VERIFIER_REVIEWER_ID, Verifier, WORKFLOW_EVENTS,
 };
 
 /// Errors from policy parsing, policy types and human review validation.
