@@ -51,6 +51,9 @@ const CONFIG_FLAG: &str = "--config";
 /// Prefix of the global option written with its value, as `--config=PATH`.
 const CONFIG_FLAG_WITH_VALUE: &str = "--config=";
 
+/// Prefix of the secrets file option written with its value, as `--env-file=PATH`.
+const ENV_FILE_FLAG_WITH_VALUE: &str = "--env-file=";
+
 /// The end-of-options marker of clap, which Go's argument reading does not know.
 const ESCAPE: &str = "--";
 
@@ -529,16 +532,23 @@ fn pull_request_arguments(arguments: &[String]) -> Result<(String, i64), Error> 
     }
 }
 
-/// Refuses `--config` among the raw arguments, where clap reads it as an argument.
+/// Refuses `--config` and `--env-file` among the raw arguments, where clap reads them as
+/// arguments.
 ///
 /// # Errors
 ///
 /// Returns the reason that clap reports as a `command_invalid` parse error.
 fn raw_argument(value: &str) -> Result<String, String> {
-    if value == CONFIG_FLAG || value.starts_with(CONFIG_FLAG_WITH_VALUE) {
-        return Err(format!(
-            "{CONFIG_FLAG} must come before the arguments of the command"
-        ));
+    let global = [
+        (CONFIG_FLAG, CONFIG_FLAG_WITH_VALUE),
+        (ENV_FILE_FLAG, ENV_FILE_FLAG_WITH_VALUE),
+    ];
+    for (flag, with_value) in global {
+        if value == flag || value.starts_with(with_value) {
+            return Err(format!(
+                "{flag} must come before the arguments of the command"
+            ));
+        }
     }
     Ok(value.to_owned())
 }

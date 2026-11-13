@@ -23,7 +23,8 @@ stops the service at startup with an error that names it.
 recommended value and a comment, and it loads as it is; its `notify` block routes
 every level and the review queue to one `matrix` backend with placeholder values.
 CI loads it with every example policy. Secrets are never in
-the file; keys ending in `_env` name the environment variable that holds them.
+the file; keys ending in `_env` name the environment variable that holds them, or the
+line of the `--env-file` that does.
 
 The service finds the file through `--config <path>` or the
 `AUTOREVIEW_CONFIG` environment variable; with neither it refuses to start.
@@ -530,7 +531,7 @@ Besides each key's own range, `validate` enforces:
 | Variable | Meaning |
 |---|---|
 | `AUTOREVIEW_CONFIG` | Path of `config.yaml` when `--config` is not given |
-| Every name in an `*_env` key | A GitHub token or a backend secret. It must start with `AUTOREVIEW_` |
+| Every name in an `*_env` key | A GitHub token or a backend secret. It must start with `AUTOREVIEW_`; a line of the `--env-file` with the same name wins over it |
 
 autoreview reads no other variable; `GH_TOKEN` in its own environment is
 ignored and is set only for each `gh` child, to the token of its credential.

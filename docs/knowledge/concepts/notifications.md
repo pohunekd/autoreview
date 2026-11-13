@@ -228,8 +228,8 @@ engine.
    unavailable (retried or dropped, depending on level) or whether it rejected
    the message (never retried). The rules for `digest`, `log` and `action`
    above apply to every backend type.
-5. **Secrets come from the environment.** A backend that needs a token names the
-   variable in an `*_env` key, as the Matrix backend does.
+5. **Secrets come from the environment or the `--env-file`.** A backend that needs
+   a token names the variable in an `*_env` key, as the Matrix backend does.
 
 Phase 6 of the project plan lists further backends as later decisions, each made
 when a concrete need arrives.

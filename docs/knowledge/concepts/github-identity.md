@@ -18,7 +18,8 @@ repositories it serves. Every review, comment, approval and search for review
 requests is made with the credential that serves the repository concerned. The
 credentials are listed in `github.credentials` in
 [config.yaml](../../configuration.md#credentials). The token is never written to
-a file. It is read from the environment variable named by `token_env`, and each
+a file by autoreview. It is read from the variable named by `token_env`, in the
+`--env-file` or the environment, and each
 `gh` child gets only the token of its credential.
 
 ## What a credential is
