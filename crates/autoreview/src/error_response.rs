@@ -22,10 +22,10 @@ pub(crate) const HEAD_SHA_INVALID: &str = "head_sha_invalid";
 const DISCOVERY_BUSY: &str = "discovery_busy";
 
 /// Commands and arguments that the message of `command_invalid` lists.
-const USAGE: &str = "usage: autoreview [--config PATH] [--env-file PATH] serve | mcp | validate | \
-poll | retry|resolve|approve --repository OWNER/REPO NUMBER HEAD | review --repository OWNER/REPO \
-NUMBER | reviews [LIMIT] | stats [--since DATE [--until DATE]] [--json] | candidates | awaiting | \
-review-queue | backup-db PATH; \
+const USAGE: &str = "usage: autoreview [--config PATH] [--env-file PATH] serve | mcp | \
+validate [--check-credentials] | poll | retry|resolve|approve --repository OWNER/REPO NUMBER \
+HEAD | review --repository OWNER/REPO NUMBER | reviews [LIMIT] | stats [--since DATE \
+[--until DATE]] [--json] | candidates | awaiting | review-queue | backup-db PATH; \
 autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME [--store-path PATH] \
 [--gh-bin PATH] [--pohunek-bin PATH] [--pohunek-state-home PATH] [--pohunek-runtime-dir PATH] \
 [--matrix-homeserver-url URL] [--matrix-room ROOM] [--matrix-mention-user USER]; \

@@ -11,6 +11,7 @@ mod files;
 mod permission;
 mod pull_request;
 mod reviews;
+mod token;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -194,14 +195,6 @@ impl GitHub {
             return Err(response_invalid(None));
         }
         Ok(output)
-    }
-
-    /// Returns the login of the account behind the only credential's token, in lower case.
-    pub(crate) async fn viewer_login(&self, cancel: &CancellationToken) -> Result<String, Error> {
-        let credential = self.only_credential()?;
-        let args = ["api".to_owned(), "user".to_owned()];
-        let output = self.github::<()>(cancel, credential, &args, None).await?;
-        decode_viewer_login(&output)
     }
 }
 

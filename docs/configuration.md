@@ -213,12 +213,15 @@ How the credential applies:
 - **The token stays with `gh`.** Every `gh` call gets the token through
   `GH_TOKEN` in that child's environment. No other process that autoreview
   starts sees it.
-- **Startup checks the login.** `serve` asks GitHub for the token's login
-  before it starts and refuses with `configuration_invalid` naming
-  `github.credentials.login` when the token belongs to another account.
-  Checks while running and the suspension of a failing credential are planned
-  in #19.
-- **Expiry.** A warning before a token expires is planned in #19.
+- **Startup checks every token.** Before it starts, `serve` asks GitHub for
+  the login behind each credential's token. A token that GitHub refuses fails
+  with `credential_invalid`, a token of another account with
+  `credential_login_mismatch`; the message names the credential.
+  `validate --check-credentials` runs the same check. Checks while running and
+  the suspension of a failing credential are planned in #19.
+- **Expiry.** The check reads the token's expiry from GitHub;
+  `validate --check-credentials` prints it as `expires_at`, `null` for a token
+  without an expiry. A warning before a token expires is planned in #19.
 
 A fine-grained token covers one resource owner, and an organization may
 require an admin to approve it before it sees anything. See

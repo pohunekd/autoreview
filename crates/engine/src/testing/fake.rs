@@ -26,7 +26,7 @@ use crate::config::{Credential, Credentials, NotifyRoute};
 use crate::error::{Error, WORKFLOW_FAILED};
 use crate::integrations::{
     ChangedFile, ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState,
-    ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest,
+    ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
@@ -176,6 +176,10 @@ pub(crate) struct FakeState {
     ///
     /// Its reads fail transiently, as with a revoked token.
     pub(crate) failing_credentials: BTreeMap<String, String>,
+    /// GitHub's answer to each token, keyed by the token; a token without one fails.
+    pub(crate) token_answers: BTreeMap<String, TokenAnswer>,
+    /// Name of every credential whose token was checked, in order.
+    pub(crate) token_checks: Vec<String>,
 }
 
 impl FakeState {
@@ -501,6 +505,21 @@ impl Integrations for FakeIntegration {
             None => Ok(state.permissions.get(&key).copied()),
         };
         state.permission_reads.push(key);
+        ready(result)
+    }
+
+    fn check_token(
+        &self,
+        _cancel: &CancellationToken,
+        credential: &Credential,
+    ) -> impl Future<Output = Result<TokenAnswer, Error>> + Send {
+        let mut state = self.lock();
+        state.token_checks.push(credential.name.clone());
+        let result = state
+            .token_answers
+            .get(&credential.token)
+            .cloned()
+            .ok_or_else(|| Error::workflow("github_request_failed", false, None));
         ready(result)
     }
 

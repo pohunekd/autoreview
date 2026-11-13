@@ -124,7 +124,7 @@ test -n "$AUTOREVIEW_GH_TOKEN" && echo set
 autoreview gives this token only to the `gh` calls for its repositories. Before
 the first run, the token must belong to the `login` of that credential in
 `config.yaml`, the value you set in step 4. `serve` refuses to start otherwise,
-with `configuration_invalid` naming `github.credentials.login`.
+with `credential_login_mismatch`.
 
 The Matrix backend of step 5 reads its token from the variable named by its
 `access_token_env`, for example `AUTOREVIEW_MATRIX_TOKEN`. Export it the same
@@ -134,7 +134,8 @@ way and check it with `test -n "$AUTOREVIEW_MATRIX_TOKEN" && echo set`.
 
 Point autoreview at the configuration and check it. `validate` loads the
 config and the policy, reads every prompt and checks that the token variables
-are set. It makes no GitHub or pohunek call.
+are set. It makes no GitHub or pohunek call; `validate --check-credentials`
+also checks each token with GitHub and prints its login and expiry.
 
 ```sh
 export AUTOREVIEW_CONFIG="$AUTOREVIEW_HOME/config.yaml"

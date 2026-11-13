@@ -2,7 +2,7 @@
 type: Concept
 id: concept/github-identity
 title: GitHub identity
-description: What a GitHub credential is (token and login), which credential serves a repository (first match), how triggers, own pull requests and approvals follow its login, the startup login check, token kinds and organization approval, and the token permissions each GitHub call needs; serving several credentials, token checks and expiry warnings are planned.
+description: What a GitHub credential is (token and login), which credential serves a repository (first match), how triggers, own pull requests and approvals follow its login, the startup check of every token and its expiry, token kinds and organization approval, and the token permissions each GitHub call needs; serving several credentials, checks while running and expiry warnings are planned.
 source_kind: manual
 intents: [setup, help, debug]
 ---
@@ -61,17 +61,24 @@ approval does not count toward branch protection. See
 
 ## Startup check and runtime suspension
 
-`autoreview serve` asks GitHub for the token's login before it starts. A token
-of another account stops it with `configuration_invalid` naming
-`github.credentials.login`, and a token that GitHub refuses stops it with the
-error of that call. `validate` makes no GitHub call. A startup check of every
-token is planned in #15, and checks while running with the suspension of a
-failing credential in #19.
+`autoreview serve` asks GitHub (`GET /user`) for the login behind every
+credential's token before it starts, each call with that credential's token
+only. A token that GitHub refuses (revoked, expired or never valid) stops it
+with `credential_invalid`, and a token of another account with
+`credential_login_mismatch`; the message names the credential. `validate`
+makes no GitHub call unless it runs with `--check-credentials`, which runs the
+same check. Checks while running with the suspension of a failing credential
+are planned in #19.
 
 ### Expiry
 
-Reporting a token's expiry date is planned in #15, and a warning before the
-expiry in #19.
+GitHub sends a personal access token's expiry in the
+`GitHub-Authentication-Token-Expiration` header. autoreview reads it as
+`2026-12-31 23:59:59 UTC`, or with a numeric offset such as `-0800`; another
+form fails the check with `github_response_invalid`. The startup check logs the
+expiry, and `validate --check-credentials` prints it as `expires_at`. A token
+without an expiry gets no header, and `expires_at` is `null`. A warning before
+the expiry is planned in #19.
 
 ## Token kinds and organization approval
 

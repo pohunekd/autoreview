@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use autoreview_policy::{Checkout, Level, Permission, Protocol, Reviewer, Trigger};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{Credential, NotifyRoute};
@@ -107,6 +108,20 @@ pub struct GitHubReview {
 
 autoreview_go_compat::object_only_serde!(GitHubReview);
 
+/// What GitHub answered to `GET /user` with the token of one credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TokenAnswer {
+    /// GitHub accepted the token.
+    Accepted {
+        /// Login of the account the token belongs to, in lower case.
+        login: String,
+        /// When the token expires; `None` when GitHub sent no expiry.
+        expires_at: Option<OffsetDateTime>,
+    },
+    /// GitHub refused the token with HTTP 401: revoked, expired or never valid.
+    Rejected,
+}
+
 /// An open, non-draft pull request that asks the configured login for a review.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReviewRequest {
@@ -181,6 +196,15 @@ pub trait Integrations {
         repository: &str,
         login: &str,
     ) -> impl Future<Output = Result<Option<Permission>, Error>> + Send;
+
+    /// Asks GitHub whom the token of `credential` belongs to and when it expires.
+    ///
+    /// The call uses that credential's token only.
+    fn check_token(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+    ) -> impl Future<Output = Result<TokenAnswer, Error>> + Send;
 
     /// Returns the routes of one pohunek host's projects that serve a repository.
     ///
