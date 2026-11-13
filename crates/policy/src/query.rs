@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::authors::Authors;
 use crate::parse::{cut, matches};
-use crate::types::{Event, Level, Policy, Rule, TriggerKind};
+use crate::types::{Event, Level, OPTIONAL_EVENTS, Policy, Rule, TriggerKind};
 
 impl Policy {
     /// Returns the first rule that matches the lowercase repository.
@@ -128,13 +128,15 @@ impl Policy {
 
     /// Returns the level of a notification event.
     ///
-    /// Parsing sets every event, so a parsed policy never returns `None`.
+    /// An optional event that the policy leaves out gets its level from [`OPTIONAL_EVENTS`].
+    /// Parsing sets every required event, so a parsed policy never returns `None`.
     #[must_use]
     pub fn level(&self, event: Event) -> Option<Level> {
-        self.notifications.get(&event).cloned()
+        let default = || OPTIONAL_EVENTS.iter().find(|(known, _)| *known == event);
+        (self.notifications.get(&event).cloned()).or_else(|| default().map(|(_, l)| l.clone()))
     }
 
-    /// Returns the level of every notification event.
+    /// Returns the level of every required event and of each optional event the policy names.
     #[must_use]
     pub fn notifications(&self) -> &BTreeMap<Event, Level> {
         &self.notifications

@@ -19,9 +19,10 @@ use crate::digest::digest_of;
 use crate::human_review::{FileHumanReview, parse_human_review};
 use crate::types::{
     Checkout, EVENTS, Event, Level, MAX_APPROVAL_HOURS, MAX_POLICY_BYTES, MAX_PROMPT_BYTES,
-    MAX_REVIEWERS_PER_PR, MAX_RULES, OnClean, OnFindings, OnNotes, Pipeline, Policy, Protocol,
-    REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind, VERIFIER_REVIEWER_ID, Verifier,
-    is_finding_prefix, is_identifier, is_label, is_owner, is_profile, is_repo_name, is_source,
+    MAX_REVIEWERS_PER_PR, MAX_RULES, OPTIONAL_EVENTS, OnClean, OnFindings, OnNotes, Pipeline,
+    Policy, Protocol, REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind,
+    VERIFIER_REVIEWER_ID, Verifier, is_finding_prefix, is_identifier, is_label, is_owner,
+    is_profile, is_repo_name, is_source,
 };
 
 /// Most characters a reviewer label may have.
@@ -956,18 +957,27 @@ fn parse_notes_handoff(raw: Option<&FileNotesHandoff>, rules: &[Rule]) -> Result
 
 /// Validates the notification level of every known event.
 ///
-/// No other event may appear.
+/// Every required event needs a level; an optional event is kept only when it is named. No
+/// other event may appear.
 fn parse_notifications(
     raw: &BTreeMap<String, Option<String>>,
 ) -> Result<BTreeMap<Event, Level>, Error> {
+    let optional = OPTIONAL_EVENTS.iter().map(|(event, _)| event);
     for key in raw.keys() {
-        if !EVENTS.iter().any(|event| event.as_str() == key) {
+        if !EVENTS
+            .iter()
+            .chain(optional.clone())
+            .any(|event| event.as_str() == key)
+        {
             return Err(Error::UnknownEvent { event: key.clone() });
         }
     }
     let mut notifications = BTreeMap::new();
-    for event in EVENTS {
+    for event in EVENTS.iter().chain(optional) {
         let Some(value) = raw.get(event.as_str()) else {
+            if OPTIONAL_EVENTS.iter().any(|(known, _)| known == event) {
+                continue;
+            }
             return Err(Error::EventLevelMissing {
                 event: event.as_str(),
             });
@@ -1065,7 +1075,7 @@ mod tests {
     use super::{load, parse};
     use crate::Error;
     use crate::authors::{Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview};
-    use crate::types::{MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy};
+    use crate::types::{Event, Level, MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy};
 
     /// The authors section of the acme/special rule in the valid policy.
     const SPECIAL_AUTHORS: &str = "{match: acme/special, authors: {trusted: any},";
@@ -1183,6 +1193,24 @@ notifications:
         assert!(
             parsed.digest() == again.digest() && parsed.digest().len() == 64,
             "the policy digest must be stable for identical input"
+        );
+        // The optional events (#19): absent, they take their default level and stay out of the
+        // digest; named, their level is used and changes the digest.
+        let named = VALID_POLICY.replacen(
+            "  superseded: log\n",
+            "  superseded: log\n  credential_expiring: digest\n",
+            1,
+        );
+        let named = parse(named.as_bytes(), prompts).expect("a named optional event parses");
+        let level = |policy: &Policy, event| policy.level(event);
+        assert!(
+            level(&parsed, Event::CredentialExpiring) == Some(Level::Action)
+                && !parsed
+                    .notifications()
+                    .contains_key(&Event::CredentialExpiring)
+                && level(&named, Event::CredentialExpiring) == Some(Level::Digest)
+                && named.digest() != parsed.digest(),
+            "optional events: the default levels or the named one"
         );
     }
 
@@ -1356,6 +1384,7 @@ notifications:
             ("missing event", valid.replacen("  superseded: log\n", "", 1), "event superseded needs a level"),
             ("unknown event", valid.replacen("  superseded: log\n", "  superseded: log\n  merged: log\n", 1), "unknown event"),
             ("bad level", valid.replacen("superseded: log", "superseded: telegram", 1), "level must be"),
+            ("bad optional level", valid.replacen("  superseded: log\n", "  superseded: log\n  credential_expiring: loud\n", 1), "event credential_expiring level must be"),
             ("approval timeout", valid.replacen("timeout_hours: 24", "timeout_hours: 0", 1), "timeout_hours"),
             ("no source", valid.replacen("project_sources: [manual]}", "project_sources: []}", 1), "project_sources"),
             ("second document", format!("{valid}---\nversion: 1\n"), "exactly one YAML document"),
