@@ -422,7 +422,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 |---|---|
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it |
 | `credential_not_covered`, `credential_unused` | A policy rule has a repository that no credential matches, a credential serves no repository of the policy, or a review's credential no longer fits it, see [credentials](configuration.md#credentials) |
-| `credential_invalid`, `credential_login_mismatch` | GitHub refuses a credential's token, or the token belongs to another account than its `login`; the message names the credential, see [`serve`](#autoreview-serve). At startup, `github_response_invalid` names the credential whose token expiry is not a time |
+| `credential_invalid`, `credential_login_mismatch` | GitHub refuses a credential's token, or the token belongs to another account than its `login`; the message names the credential, see [`serve`](#autoreview-serve). A review step or a discovery search that GitHub answers with HTTP 401 also fails with `credential_invalid`; such a review is not retried automatically, see [suspension](knowledge/concepts/github-identity.md#suspension). At startup, `github_response_invalid` names the credential whose token expiry is not a time |
 | `command_invalid` | Wrong arguments |
 | `init_file_exists` | `init` found a file in the way; the `configuration` field names it |
 | `init_write_failed` | `init` could not check, create or write a path; the `configuration` field names it |
@@ -457,7 +457,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `review_head_unavailable` | A reviewer on a base checkout stopped because the pull request head commit is not in the review host's repository; fetch it there, then `retry` |
 | `review_adapter_outdated` | A Codex report has no `prior_findings` or a finding without `blocking`, or a Claude result names no checked checkout or another one; the profile runs an older adapter than `adapters/codex/` or `adapters/claude/`; run `profiles install` for it |
 | `github_search_limit_exceeded` | A search returned more than `schedule.poll_limit`; narrow the rules or raise the limit |
-| `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request |
+| `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request (`github_request_failed`, retried), or rejected it as invalid with HTTP 422 (`github_request_rejected`, not retried); HTTP 401 is `credential_invalid` |
 | `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message |
 | `mcp_listen_failed` | `autoreview mcp` could not listen on `mcp.listen` |
 | `metrics_listen_failed` | `autoreview serve` could not listen on `metrics.listen` |

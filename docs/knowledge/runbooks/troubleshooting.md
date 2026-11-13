@@ -40,7 +40,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried | [Reviewer output](#reviewer-output) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
-| `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
+| `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request, or rejected it as invalid (HTTP 422); HTTP 401 is `credential_invalid` | Check the token's permissions and the `github` section |
 | `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
 | `credential_invalid` | GitHub refuses the token: revoked, expired or never valid; at start, while running, or in a review's GitHub step | [Token refused while running](#token-refused-while-running) |
 | `configuration_invalid` naming `github.credentials` or `github.credentials.match` | A `match` entry that an earlier one covers | [Credential errors](#credential-errors) |
@@ -482,9 +482,10 @@ credential's `token_env`.
 repositories wait and the others keep reviewing. Replace the token in the
 variable that `token_env` names and restart `serve`; the startup check refuses
 a token that GitHub still refuses. When GitHub accepts the same token again, the
-check after the next discovery pass lifts the suspension without a restart. A
-review that stopped with `credential_invalid` is not retried automatically; run
-`autoreview retry` for it once the credential works.
+check after the next discovery pass lifts the suspension without a restart and
+raises `credential_restored`. A review that stopped with `credential_invalid`
+is not retried automatically; run `autoreview retry` for it once the credential
+works.
 
 ### Token expires soon
 
