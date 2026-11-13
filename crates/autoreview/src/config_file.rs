@@ -23,6 +23,8 @@ use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
+use crate::env_file::{self, EnvFile};
+
 /// Error code of a key that is absent or blank.
 const CONFIGURATION_MISSING: &str = "configuration_missing";
 /// Error code of a key that is present but invalid.
@@ -544,6 +546,8 @@ pub(crate) fn resolve_path(
 
 /// Reads the config file at `path` and maps it, see [`parse`].
 ///
+/// A secret comes from `env_file` when the file names its variable, else from the environment.
+///
 /// # Errors
 ///
 /// Returns the errors of [`parse`], and `configuration_invalid` naming `config` when the file
@@ -551,11 +555,13 @@ pub(crate) fn resolve_path(
 /// be read.
 pub(crate) fn load(
     path: &Path,
+    env_file: Option<&EnvFile>,
 ) -> Result<(Config, Option<McpConfig>, Option<MetricsConfig>), Error> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         Error::config(CONFIGURATION_INVALID, DOCUMENT_NAME, Some(Box::new(error)))
     })?;
-    let config = parse(&text, environment_secret, |policy_path| {
+    let lookup = |name: &str| env_file::secret(env_file, name, environment_secret);
+    let config = parse(&text, lookup, |policy_path| {
         autoreview_policy::load(policy_path).map_err(|error| Box::new(error) as _)
     })?;
     let file = parse_file(&text)?;
@@ -1963,6 +1969,7 @@ fn signature_valid(signature: &str, pattern: &str) -> bool {
 pub(crate) mod tests {
     use super::*;
     use autoreview_engine::config::NotifyRoute;
+    use autoreview_engine::go_json;
     use autoreview_policy::Level;
 
     /// The example config, read by the loader tests so that they cover the shipped file.
@@ -3121,5 +3128,182 @@ pub(crate) mod tests {
             parse(&unknown, secret, example_policy).is_err(),
             "the section refuses a key it does not know"
         );
+    }
+
+    /// A synthetic secret value that no error text or debug output may contain.
+    const MARKER: &str = "synthetic-marker-6d1e";
+
+    /// What the env file test puts at the path of the file.
+    enum EnvSetup {
+        /// A regular file with this mode.
+        Mode(u32),
+        /// A regular file of mode 0600, read as another user.
+        Foreign,
+        /// A symlink to a regular file with this mode.
+        Link(u32),
+        /// A directory.
+        Directory,
+        /// Nothing.
+        Missing,
+    }
+
+    /// D1-D3 of #6: the env file checks, the precedence of its values and that no error, log
+    /// text or debug output shows a value (`{m}` is the marker, `{path}` the file's path).
+    #[test]
+    fn env_file_values_win_and_never_appear_in_errors() {
+        use EnvSetup::{Directory, Foreign, Link, Missing, Mode};
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        const GH: &str = "AUTOREVIEW_GH_TOKEN={m}\n";
+        const TOKEN_ENV: &str = "      token_env: AUTOREVIEW_GH_TOKEN\n";
+        const MATRIX_ENV: &str = "      access_token_env: AUTOREVIEW_MATRIX_TOKEN\n";
+        // Setup, file text, config line replaced ("" for none), the environment's GitHub token,
+        // and the token expected (Ok) or a text of the error (Err).
+        let row = |setup, text, config, environment, expected| {
+            (setup, text, config, environment, expected)
+        };
+        // A row on the example config without a GitHub token in the environment.
+        let file = |setup, text, expected| row(setup, text, ("", ""), None, expected);
+        let cases = [
+            row(Mode(0o600), GH, ("", ""), Some("environment"), Ok("{m}")),
+            file(
+                Mode(0o400),
+                "# c\n\nAUTOREVIEW_GH_TOKEN={m}=x\r\n",
+                Ok("{m}=x"),
+            ),
+            row(
+                Mode(0o600),
+                "AUTOREVIEW_A=x\n",
+                ("", ""),
+                Some("{m}"),
+                Ok("{m}"),
+            ),
+            file(Link(0o600), GH, Ok("{m}")),
+            row(
+                Mode(0o600),
+                "AUTOREVIEW_GH_TOKEN=\n",
+                ("", ""),
+                Some("{m}"),
+                Err("configuration_missing: github.credentials.token_env"),
+            ),
+            file(Mode(0o640), GH, Err("{path} has mode 0640;")),
+            file(Mode(0o604), GH, Err("{path} has mode 0604;")),
+            file(Link(0o610), GH, Err("{path} has mode 0610;")),
+            file(Foreign, GH, Err("{path} is owned by uid")),
+            file(Directory, "", Err("{path} is not a regular file")),
+            file(Missing, "", Err("{path} cannot be read")),
+            file(Mode(0o600), "{m}\n", Err("{path} line 1 has no '='")),
+            file(Mode(0o600), "\n{m}=x\n", Err("{path} line 2 names no")),
+            file(
+                Mode(0o600),
+                "export AUTOREVIEW_A={m}\n",
+                Err("{path} line 1 names"),
+            ),
+            file(Mode(0o600), "{GH}{GH}", Err("{path} line 2 repeats")),
+            file(
+                Mode(0o600),
+                "AUTOREVIEW_GH_TOKEN=a {m}\n",
+                Err("configuration_invalid: config: invalid GitHub configuration"),
+            ),
+            row(
+                Mode(0o600),
+                GH,
+                ("version: 1", "version: 2"),
+                None,
+                Err("configuration_invalid: version: must be 1"),
+            ),
+            row(
+                Mode(0o600),
+                GH,
+                (TOKEN_ENV, "      token_env: {m}\n"),
+                None,
+                Err("github.credentials.token_env: must start with AUTOREVIEW_"),
+            ),
+            row(
+                Mode(0o600),
+                GH,
+                (MATRIX_ENV, "      access_token_env: GITHUB_TOKEN\n"),
+                None,
+                Err("notify.backends.access_token_env: must start with AUTOREVIEW_"),
+            ),
+        ];
+        let euid = rustix::process::geteuid().as_raw();
+        for (index, (setup, text, (old, new), environment, expected)) in
+            cases.into_iter().enumerate()
+        {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let path = directory.path().join("secrets.env");
+            let target = directory.path().join("target.env");
+            let text = text.replace("{GH}", GH).replace("{m}", MARKER);
+            let mut reader = euid;
+            match setup {
+                Mode(mode) | Link(mode) => {
+                    let file = if matches!(setup, Link(_)) {
+                        &target
+                    } else {
+                        &path
+                    };
+                    std::fs::write(file, &text).expect("env file written");
+                    let permissions = std::fs::Permissions::from_mode(mode);
+                    std::fs::set_permissions(file, permissions).expect("mode set");
+                    if matches!(setup, Link(_)) {
+                        symlink(&target, &path).expect("symlink created");
+                    }
+                }
+                Foreign => {
+                    std::fs::write(&path, &text).expect("env file written");
+                    let permissions = std::fs::Permissions::from_mode(0o600);
+                    std::fs::set_permissions(&path, permissions).expect("mode set");
+                    reader = euid.wrapping_add(1);
+                }
+                Directory => std::fs::create_dir(&path).expect("directory created"),
+                Missing => {}
+            }
+            let config = if old.is_empty() {
+                EXAMPLE.to_owned()
+            } else {
+                mutated(old, &new.replace("{m}", MARKER))
+            };
+            let environment = environment.map(|value| value.replace("{m}", MARKER));
+            let lookup = |name: &str| match name {
+                "AUTOREVIEW_GH_TOKEN" => environment.clone(),
+                other => secret(other),
+            };
+            let result = crate::env_file::read_as(&path, reader).and_then(|file| {
+                let found = |name: &str| crate::env_file::secret(Some(&file), name, lookup);
+                let config = parse(&config, found, example_policy)?;
+                Ok((format!("{file:?}"), config))
+            });
+            let shown = path.display().to_string();
+            match (result, expected) {
+                (Ok((file, config)), Ok(token)) => {
+                    assert_eq!(
+                        config.github_token,
+                        token.replace("{m}", MARKER),
+                        "row {index}"
+                    );
+                    for output in [file, format!("{config:?}")] {
+                        assert!(!output.contains(MARKER), "row {index}: {output}");
+                    }
+                }
+                (Err(error), Err(part)) => {
+                    let part = part.replace("{path}", &shown);
+                    let json = go_json(&crate::error_response::error_response(&error))
+                        .expect("error response encodes");
+                    let display = error.to_string();
+                    assert!(
+                        display.contains(&part),
+                        "row {index}: {display} lacks {part}"
+                    );
+                    if part.contains(&shown) {
+                        assert!(json.contains(&part), "row {index}: {json} lacks {part}");
+                    }
+                    for output in [display, format!("{error:?}"), json] {
+                        assert!(!output.contains(MARKER), "row {index}: {output}");
+                    }
+                }
+                (Ok(_), Err(part)) => panic!("row {index} loads; expected {part}"),
+                (Err(error), Ok(_)) => panic!("row {index} fails: {error}"),
+            }
+        }
     }
 }

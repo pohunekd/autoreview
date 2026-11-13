@@ -13,10 +13,15 @@ intents: [setup, debug, help]
 > marked planned or "not in v0.1" are not in 0.2.0.
 
 ```
-autoreview [--config <path>] <command> [arguments]
+autoreview [--config <path>] [--env-file <path>] <command> [arguments]
 ```
 
 Secrets come only from the variables named by the `*_env` keys of the configuration.
+With `--env-file <path>`, a variable that the file names is read from the file, and every
+other one from the environment. The file holds `NAME=value` lines; see
+[secrets](knowledge/safety/secrets.md#the---env-file) for its format and checks. A file
+that fails a check is `configuration_invalid`; the message names the path, and the mode or
+the line number.
 
 Every command except `init` and `profiles install` reads the configuration from `--config` or
 `AUTOREVIEW_CONFIG` and validates it together with the policy before doing
@@ -38,8 +43,8 @@ autoreview init --dir <DIR> --login <LOGIN> --pohunek-host <HOST> --example <NAM
 ```
 
 Writes a new configuration directory from one of the [examples](../examples/README.md).
-It asks nothing and reads no configuration; `--config` is refused. These flags are
-required:
+It asks nothing and reads no configuration; `--config` and `--env-file` are refused.
+These flags are required:
 
 | Flag | Meaning |
 |---|---|
@@ -84,7 +89,7 @@ it did not create.
 
 | Failure | Code | `configuration` field |
 |---|---|---|
-| `--config` given, a flag missing, an unknown example | `command_invalid` | none |
+| `--config` or `--env-file` given, a flag missing, an unknown example | `command_invalid` | none |
 | `--dir` relative or unclean, or its parent missing or not a directory; `--login`, `--pohunek-host` or a layout flag malformed | `configuration_invalid` | the flag |
 | A path of the set is in the way | `init_file_exists` | the path |
 | A path cannot be checked, created or written (permissions, disk full) | `init_write_failed` | the path |
@@ -113,7 +118,7 @@ autoreview profiles install --host <HOST> --agent claude|codex --name <NAME> \
 Writes the pohunek agent profile `<NAME>` of a reviewer, and the reviewer
 adapter it starts, on the machine it runs on. Run it on each review host, as
 the user of its pohunek daemon, once per profile that `validate` lists. It
-reads no configuration; `--config` is refused. Every value is a flag without a
+reads no configuration; `--config` and `--env-file` are refused. Every value is a flag without a
 default:
 
 - `--host`: the pohunek host name of this machine, as `pohunek.hosts` lists it.
@@ -221,7 +226,7 @@ when every file was kept, so a second run with the same flags prints
 
 | Failure | Code | `configuration` field |
 |---|---|---|
-| `--config` given, a flag missing, an unknown agent or effort, a Codex flag that does not fit `--agent` | `command_invalid` | none |
+| `--config` or `--env-file` given, a flag missing, an unknown agent or effort, a Codex flag that does not fit `--agent` | `command_invalid` | none |
 | `--host`, `--name`, `--model`, `--effort` or `--agent-binary` refused; `XDG_CONFIG_HOME` or `XDG_DATA_HOME` set but empty; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `HOME` relative, with an empty, `.` or `..` part or a trailing `/`, or neither set | `configuration_invalid` | the flag or the variable |
 | A pohunek call fails or prints unexpected JSON | `pohunek_command_failed` | the pohunek command |
 | `--host` names another machine or cannot be inspected | `profile_host_not_local` | `--host` |

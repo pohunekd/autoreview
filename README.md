@@ -116,7 +116,7 @@ keeps untrusted authors behind a maintainer label.
 
 - Binary `autoreview`; one YAML configuration file with every key required
   and written out in full by `autoreview init`; secrets only in `AUTOREVIEW_*`
-  environment variables.
+  variables, from the environment or the file given with `--env-file`.
 - GitHub tokens as a list of credentials: one token, fine-grained tokens per
   owner or per repository, and a different account per owner if wanted
   (planned in #13). Failing or expiring tokens are reported and stop only their

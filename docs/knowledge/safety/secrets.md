@@ -15,9 +15,9 @@ intents: [setup, help]
 
 autoreview has two kinds of secrets: the GitHub token of the
 [credential](../concepts/github-identity.md) and the Matrix token of the
-notifier. Both come from environment variables. The
-configuration files never contain a secret value, only the names of the variables
-that hold them.
+notifier. Both come from environment variables, or from the file given with
+`--env-file`. The configuration files never contain a secret value, only the names
+of the variables that hold them.
 
 ## Where each secret goes
 
@@ -84,6 +84,30 @@ outside the mounted config directory, which is read-only and holds no secrets.
 
 Write the values into the file with an editor. Do not put them on a command
 line, in a shell history or in a script that prints them.
+
+## The `--env-file`
+
+A process that starts autoreview with an empty environment, such as a pohunek
+workflow plugin, passes the secrets in a file instead: `autoreview --env-file <path>
+<command>`. Every command that reads the configuration takes the flag; `init` and
+`profiles install` refuse it.
+
+- The file must be a regular file owned by the user that runs autoreview, with no
+  access for the group or others (mode `0600` or `0400`). A symlink is followed and
+  the checks apply to the file it points to. A root-owned file that only systemd
+  reads, such as `/etc/autoreview/autoreview.env`, fails the owner check.
+- Each line is `NAME=value`, where the name is `AUTOREVIEW_` followed by `A-Z`,
+  `0-9` or `_`. The value is the rest of the line as written: quotes, `export` and
+  escapes are not read. Blank lines and lines that start with `#` are skipped. A
+  name may appear once.
+- A name in the file wins over the same variable in the environment, also when its
+  value is empty, which is refused as a missing secret. A name that the file lacks
+  is read from the environment.
+- The values only feed the `*_env` keys. They are never added to the environment of
+  autoreview, so no child inherits them; `gh` gets its token as `GH_TOKEN` as
+  described above.
+- A refused file is `configuration_invalid`. The message names the path, and the
+  mode, the owner or the line number; it never shows a line or a value.
 
 ## Never in config, policy or prompts
 
