@@ -210,6 +210,12 @@ head. See [CLI: resolve](../../cli.md#autoreview-resolve).
 The message length is bounded by `notify.max_characters`. A longer message is cut
 with an ellipsis. Excerpts inside it are bounded by `limits.excerpt_characters`.
 
+A value from the pull request or a model (title, summary, finding path and title,
+note, login) stays on its line: line breaks and control characters become a space,
+and each bidi control or zero-width character is shown as `<U+XXXX>`, such as
+`<U+202E>`. An excerpt counts the shown text and never cuts a `<U+XXXX>` in half.
+The review queue shows titles and authors the same way.
+
 ## Adding a backend (design)
 
 Not in v0.1. The design below keeps any later channel out of the rest of the

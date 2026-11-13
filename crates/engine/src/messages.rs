@@ -10,7 +10,7 @@ use crate::model::{
     Artifact, Decision, Finding, PublishResult, PublishedRecord, PullRequest, ReviewInput,
     SessionIdentity,
 };
-use crate::publish::neutralize::visible;
+use crate::publish::neutralize::{single_line, visible_excerpt};
 use crate::publish::plan::{PublicationPlan, blocking_count};
 use crate::publish::render::{head_prefix, human_review_text, reviewer_labels};
 use crate::verify::{VERDICT_NOT_BLOCKING, VERDICT_REFUTED, demoted, escalates, verification_line};
@@ -29,22 +29,11 @@ const NANOS_PER_SECOND: u64 = 1_000_000_000;
 /// Nanoseconds in one hour, the unit of the handoff age.
 const NANOS_PER_HOUR: i64 = 3_600_000_000_000;
 
-/// Cuts a value to `limit` characters after joining its words.
+/// Writes a value as one line of at most `limit` characters (see `visible_excerpt`).
 ///
 /// The last kept character is an ellipsis. Config keeps the limit positive.
 pub(crate) fn excerpt(value: &str, limit: i64) -> String {
-    let words: Vec<&str> = value.split_whitespace().collect();
-    let normalized = words.join(" ");
-    let limit_usize = usize::try_from(limit).unwrap_or_default();
-    if normalized.chars().count() > limit_usize {
-        let kept: String = normalized
-            .chars()
-            .take(limit_usize.saturating_sub(1))
-            .collect();
-        format!("{}…", kept.trim())
-    } else {
-        normalized
-    }
+    visible_excerpt(value, usize::try_from(limit).unwrap_or_default())
 }
 
 /// The first lines of a review message: its title, the Review ID, the pull request, the reviewers
@@ -100,7 +89,7 @@ fn finding_lines(input: &ReviewInput, findings: &[Finding], limit: i64) -> Strin
                 finding.id,
                 kind,
                 finding.confidence,
-                visible(&finding.path),
+                single_line(&finding.path),
                 finding.line,
                 excerpt(&finding.title, limit)
             )
@@ -190,7 +179,7 @@ fn answered_lines(artifact: &Artifact, limit: i64) -> String {
             let basis = if result.verdict.relies_on.is_empty() {
                 "the code".to_owned()
             } else {
-                format!("a comment by {}", result.verdict.relies_on)
+                format!("a comment by {}", single_line(&result.verdict.relies_on))
             };
             format!(
                 "{} {} (relies on {}): {}",
@@ -266,7 +255,7 @@ pub(crate) fn published_message(
                 format!(
                     "{} [STILL OPEN] {}:{} {}",
                     result.finding.key,
-                    visible(&result.finding.path),
+                    single_line(&result.finding.path),
                     result.finding.line,
                     excerpt(&result.finding.title, excerpt_characters)
                 )
