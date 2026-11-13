@@ -59,9 +59,6 @@ const ESCAPE: &str = "--";
 /// Configuration key named when the configuration holds no policy.
 const POLICY_KEY: &str = "policy_file";
 
-/// Configuration key named when a command that calls GitHub finds several credentials.
-const CREDENTIALS_KEY: &str = "github.credentials";
-
 /// Error code of malformed repository names.
 const REPOSITORY_NOT_ALLOWED: &str = "repository_not_allowed";
 
@@ -307,16 +304,6 @@ async fn run(
             validate(&config, arguments.check_credentials, &cancel).await
         }
         Command::Engine(command) => {
-            // A stored review publishes with the credential that serves its repository at that
-            // moment. After a config change that can be another account, so several credentials
-            // wait until #18 stores the credential of each review.
-            if config.credentials.single().is_none() {
-                return Err(Error::config(
-                    CONFIGURATION_INVALID,
-                    CREDENTIALS_KEY,
-                    Some("several credentials pass validate only, until #18".into()),
-                ));
-            }
             let external = Arc::new(External::new(config.clone())?);
             let sections = Sections { mcp, metrics };
             run_engine(command, config, sections, external, &cancel).await
