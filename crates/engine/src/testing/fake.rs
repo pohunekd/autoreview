@@ -182,6 +182,8 @@ pub(crate) struct FakeState {
     ///
     /// Its reads fail transiently, as with a revoked token.
     pub(crate) failing_credentials: BTreeMap<String, String>,
+    /// Names of the credentials whose candidate searches fail transiently.
+    pub(crate) transient_credentials: BTreeSet<String>,
     /// GitHub's answer to each token, keyed by the token; a token without one fails.
     pub(crate) token_answers: BTreeMap<String, TokenAnswer>,
     /// Name of every credential whose token was checked, in order.
@@ -421,7 +423,7 @@ impl Integrations for FakeIntegration {
         let result = {
             let mut state = self.lock();
             state.listings += 1;
-            if state.transient() {
+            if state.transient() || state.transient_credentials.contains(&credential.name) {
                 Err(transient_error())
             } else if let Some(err) = state.search_error(credential) {
                 Err(err)

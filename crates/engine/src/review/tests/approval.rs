@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use autoreview_policy::{EVENTS, Event, Level, Rule};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{Credential, Credentials};
 use crate::integrations::SessionRequest;
@@ -327,6 +328,19 @@ async fn waiting_approval_publishes_with_the_credential_that_reviewed_it() {
     assert!(
         !readers.is_empty() && readers.iter().all(|credential| credential == "rest"),
         "the waiting pull request was read with another credential: {readers:?}"
+    );
+    // When the review's credential fails its search, the wait stays unread and the pass goes on.
+    h.fake.lock().candidates.remove(&pr.key());
+    h.fake.lock().failing_credentials =
+        BTreeMap::from([("rest".to_owned(), "github_request_failed".to_owned())]);
+    let reads = h.fake.lock().pull_request_reads.len();
+    let passed = h.engine.poll(&CancellationToken::new()).await;
+    h.fake.lock().failing_credentials.clear();
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    let unread = h.fake.lock().pull_request_reads.len() == reads;
+    assert!(
+        passed.is_ok() && unread && h.resolve(&pr).is_ok(),
+        "a failing credential's wait was read or failed the pass: {passed:?}"
     );
     h.approve_when_awaiting(&pr)
         .await

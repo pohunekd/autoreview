@@ -172,6 +172,19 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
         h.fake.lock().published_heads == [sha("a"), sha("b"), sha("c")] && refusals == 1,
         "a head was reviewed again, or a known refusal was announced again"
     );
+    // A transient failure costs its credential one search per pass, so it delays no other.
+    h.fake
+        .lock()
+        .transient_credentials
+        .insert("acme".to_owned());
+    let before = h.fake.lock().listings;
+    h.poll().await;
+    h.fake.lock().transient_credentials.clear();
+    assert_eq!(
+        h.fake.lock().listings,
+        before + 2,
+        "a transiently failing credential was searched again in the pass"
+    );
     // `acme-bot` wrote both pull requests; only the one its own credential serves is its own.
     for (repository, head) in [("acme/own", sha("d")), ("risky/own", sha("e"))] {
         let mut own = integration_pull_request(repository, &head);

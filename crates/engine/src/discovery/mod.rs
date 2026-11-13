@@ -71,10 +71,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             .await
     }
 
-    /// Runs `search` once per credential; with `retried`, each with the step retries of `step`.
+    /// Runs `search` once per credential; with `retried`, the only credential gets the step
+    /// retries of `step`.
     ///
-    /// A credential whose search fails is logged with its name and error code and left out, so
-    /// the others go on; the returned map holds its code by its name.
+    /// With several credentials each gets one attempt per pass, so a failing one never delays
+    /// the others. A credential whose search fails is logged with its name and error code and
+    /// left out, so the others go on; the returned map holds its code by its name.
     ///
     /// # Errors
     ///
@@ -92,6 +94,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let mut found = Vec::new();
         let mut failed = BTreeMap::new();
         let mut first = None;
+        let retried = retried && self.config.credentials.single().is_some();
         for credential in self.config.credentials.iter() {
             let searched = if retried {
                 let policy = self.step_policy();

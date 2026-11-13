@@ -97,7 +97,7 @@ scenarios are guides without a policy of their own:
 ## Requirements
 
 - pohunek daemon on one or more review hosts with the repositories registered
-- `gh` CLI and one GitHub token (tokens per owner or repository are planned in #14 to #18)
+- `gh` CLI and one GitHub token, or one per owner or repository
 - Claude Code and/or Codex CLI on the review hosts
 - Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` (after 0.2.0)
   writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the
@@ -118,8 +118,8 @@ keeps untrusted authors behind a maintainer label.
   and written out in full by `autoreview init`; secrets only in `AUTOREVIEW_*`
   variables, from the environment or the file given with `--env-file`.
 - GitHub tokens as a list of credentials: one token, fine-grained tokens per
-  owner or per repository, and a different account per owner if wanted
-  (planned in #14 to #18). Failing or expiring tokens are reported and stop only their
+  owner or per repository, and a different account per owner if wanted.
+  Failing or expiring tokens are reported and stop only their
   repositories (planned in #19).
 - Claude Code and Codex reviewers share one result contract, with the blocking
   flag of each finding and the verdicts on prior findings.
