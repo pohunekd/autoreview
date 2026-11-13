@@ -54,6 +54,9 @@ struct ChangedFileRecord {
     additions: i64,
     /// Lines the pull request deletes from the file.
     deletions: i64,
+    /// Path before a rename. GitHub sends it for a renamed file and only then.
+    #[serde(default)]
+    previous_filename: Option<String>,
 }
 
 autoreview_go_compat::object_only_serde!(ChangedFileRecord);
@@ -305,7 +308,8 @@ fn listing_end(
 impl GitHub {
     /// Returns the commentable lines of every changed file, keyed by path (`github.go:715-728`).
     ///
-    /// Reads on past the file cap, as before the cap existed; only the page limit ends it early.
+    /// Reads past the file cap so that every changed file has commentable lines; only the page
+    /// limit ends the read.
     pub(crate) async fn commentable_lines(
         &self,
         cancel: &CancellationToken,
@@ -337,11 +341,20 @@ impl GitHub {
         let mut files: Vec<ChangedFile> = Vec::new();
         let end = self
             .visit_changed_files(cancel, pr, Some(LISTED_FILES_CAP), |file| {
+                let previous_path = match (file.status.as_str(), file.previous_filename.as_deref())
+                {
+                    ("renamed", Some(previous)) if valid_changed_path(previous) => {
+                        Some(previous.to_owned())
+                    }
+                    ("renamed", _) | (_, Some(_)) => return Err(response_invalid(None)),
+                    (_, None) => None,
+                };
                 files.push(ChangedFile {
                     path: file.filename.clone(),
                     status: file.status.clone(),
                     additions: file.additions,
                     deletions: file.deletions,
+                    previous_path,
                 });
                 Ok(())
             })
@@ -355,8 +368,8 @@ impl GitHub {
     /// Visits every changed file once, in listing order, with a validated path
     /// (`github.go:685-712`).
     ///
-    /// The read ends at a short page, at the page limit, or at `cap` files when one is given. A file
-    /// whose name is invalid or repeated fails the read before `visit` sees it.
+    /// The read ends at a short page, at the page limit, or at `cap` files when one is given. A
+    /// file whose name is invalid or repeated fails the read before `visit` sees it.
     async fn visit_changed_files(
         &self,
         cancel: &CancellationToken,

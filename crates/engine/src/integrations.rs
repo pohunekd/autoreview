@@ -62,6 +62,8 @@ pub struct ChangedFile {
     pub additions: i64,
     /// Lines the pull request deletes from the file.
     pub deletions: i64,
+    /// Path before a rename; set only for a renamed file.
+    pub previous_path: Option<String>,
 }
 
 /// The changed files of a pull request and whether the listing stopped before its end.

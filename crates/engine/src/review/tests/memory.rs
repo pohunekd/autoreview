@@ -1017,18 +1017,28 @@ async fn human_review_signal_holds_a_clean_automatic_approval_for_the_user() {
             status: "modified".to_owned(),
             additions: 2,
             deletions: 1,
+            previous_path: None,
         },
         ChangedFile {
             path: "pkg/tests/OwnerTest.php".to_owned(),
             status: "removed".to_owned(),
             additions: 0,
             deletions: 40,
+            previous_path: None,
         },
         ChangedFile {
             path: "db/migrations/0002.sql".to_owned(),
             status: "added".to_owned(),
             additions: 12,
             deletions: 0,
+            previous_path: None,
+        },
+        ChangedFile {
+            path: "db/@octocat.sql".to_owned(),
+            status: "added".to_owned(),
+            additions: 1,
+            deletions: 0,
+            previous_path: None,
         },
     ];
     let mut pr = integration_pull_request("risky/widget", &sha("a"));
@@ -1041,8 +1051,8 @@ async fn human_review_signal_holds_a_clean_automatic_approval_for_the_user() {
     assert!(
         h.fake.has_note(
             Level::Action,
-            "human review signals: label needs-human; deleted test files \
-             pkg/tests/OwnerTest.php; changed path db/migrations/0002.sql (1 matching files)."
+            "human review signals: label `needs-human`; deleted test files \
+             `pkg/tests/OwnerTest.php`; changed path `db/@octocat.sql` (2 matching files)."
         ) && h.publications() == 0,
         "the approval request must name the matched signals and nothing may be posted yet"
     );
@@ -1054,7 +1064,7 @@ async fn human_review_signal_holds_a_clean_automatic_approval_for_the_user() {
     assert!(
         published[0].decision == Decision::Approve
             && published[0].body.contains(
-                "waited for a human approval because the pull request matched: label needs-human"
+                "waited for a human approval because the pull request matched: label `needs-human`"
             ),
         "decision={:?} body={}",
         published[0].decision,
@@ -1071,6 +1081,7 @@ async fn human_review_without_a_match_approves_without_the_user() {
         status: "removed".to_owned(),
         additions: 0,
         deletions: 3,
+        previous_path: None,
     }];
     let mut pr = integration_pull_request("risky/widget", &sha("a"));
     pr.labels = vec!["enhancement".to_owned()];

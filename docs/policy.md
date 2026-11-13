@@ -239,6 +239,12 @@ Rules:
   match within one path segment, and `**` as a whole segment matches any number
   of segments: `**/tests/**` matches `tests/a.php` and `pkg/tests/unit/a.php`, but
   not `src/testsuite/a.php`.
+- Globs match ASCII letters case-insensitively, on the pattern and on the path:
+  `db/**` matches `DB/X.SQL`.
+- A renamed file matches `paths` on its new path and on its old path, so moving a
+  migration out of `db/` still holds the review. A rename out of a `deleted_tests`
+  glob counts as a deleted test (the old path is listed), unless the new path still
+  matches one of the globs, so moving a test out of the test tree is never silent.
 - Logins are lowercase. The names `trusted` and `untrusted` are read as author
   classes, so a login with either name cannot be listed. A class entry matches
   the author class that the policy decided for the review.
