@@ -15,7 +15,7 @@ clap = { workspace = true }
 hex = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
-rustix = { workspace = true }
+rustix = { workspace = true, features = ["process"] }
 serde = { workspace = true }
 serde-saphyr = { workspace = true }
 serde_json = { workspace = true }

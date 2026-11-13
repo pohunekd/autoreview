@@ -5,6 +5,7 @@
 // Rust guideline compliant 2026-06-26
 
 mod config_file;
+mod env_file;
 mod error_response;
 mod init;
 mod logging;
@@ -36,6 +37,7 @@ use time::OffsetDateTime;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
+use crate::env_file::{ENV_FILE_FLAG, EnvFile};
 use crate::error_response::{
     COMMAND_INVALID, HEAD_PREFIX_INVALID, HEAD_SHA_INVALID, error_response,
 };
@@ -80,6 +82,9 @@ struct Cli {
     /// Path of `config.yaml`; `AUTOREVIEW_CONFIG` is read when it is absent.
     #[arg(long, global = true, value_name = "PATH")]
     config: Option<PathBuf>,
+    /// Path of a file of `NAME=value` secret lines; its values win over the environment.
+    #[arg(long, global = true, value_name = "PATH")]
+    env_file: Option<PathBuf>,
     /// The command to run.
     #[command(subcommand)]
     command: Invocation,
@@ -193,17 +198,20 @@ async fn main() -> ExitCode {
             Ok(Cli {
                 config,
                 command: Invocation::Init(arguments),
+                ..
             }) => init::run(config.as_deref(), &arguments).and_then(|result| print_json(&result)),
             Ok(Cli {
                 config,
                 command: Invocation::Profiles(command),
+                ..
             }) => profiles::run(config.as_deref(), &command)
                 .await
                 .and_then(|done| print_json(&done)),
             Ok(Cli {
                 config,
+                env_file,
                 command: Invocation::Configured(command),
-            }) => run(config, command).await,
+            }) => run(config, env_file, command).await,
             Err(error) if is_display(error.kind()) => print_display(&error),
             Err(error) => Err(command_invalid(Some(Box::new(error)))),
         },
@@ -222,7 +230,8 @@ async fn main() -> ExitCode {
 ///
 /// # Errors
 ///
-/// Returns the clap error; a `--` argument is an `UnknownArgument` error.
+/// Returns the clap error; a `--` argument is an `UnknownArgument` error, and `--env-file`
+/// with `init` or `profiles`, which read no secret, an `ArgumentConflict` error.
 fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
     if arguments.iter().skip(1).any(|argument| argument == ESCAPE) {
         return Err(Cli::command().error(
@@ -230,7 +239,14 @@ fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
             format!("{ESCAPE} is not an argument of any command"),
         ));
     }
-    Cli::try_parse_from(arguments)
+    let cli = Cli::try_parse_from(arguments)?;
+    if cli.env_file.is_some() && !matches!(cli.command, Invocation::Configured(_)) {
+        return Err(Cli::command().error(
+            ErrorKind::ArgumentConflict,
+            format!("{ENV_FILE_FLAG} is not an option of init and profiles"),
+        ));
+    }
+    Ok(cli)
 }
 
 /// Reports whether clap stopped for the help or the version text.
@@ -260,10 +276,17 @@ fn report(error: &Error) {
 }
 
 /// Loads the configuration and runs the command in the order of `main.go:31-152`.
-async fn run(config_path: Option<PathBuf>, command: Command) -> Result<(), Error> {
+///
+/// The `--env-file` is read after the config path is chosen and before the config is loaded.
+async fn run(
+    config_path: Option<PathBuf>,
+    env_file_path: Option<PathBuf>,
+    command: Command,
+) -> Result<(), Error> {
     let environment = std::env::var_os(CONFIG_ENV);
     let path = config_file::resolve_path(config_path.as_deref(), environment.as_deref())?;
-    let (config, mcp, metrics) = config_file::load(&path)?;
+    let env_file = env_file_path.as_deref().map(EnvFile::read).transpose()?;
+    let (config, mcp, metrics) = config_file::load(&path, env_file.as_ref())?;
     let external = Arc::new(External::new(config.clone())?);
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;

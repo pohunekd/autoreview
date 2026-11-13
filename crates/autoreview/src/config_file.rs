@@ -23,6 +23,8 @@ use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
+use crate::env_file::{self, EnvFile};
+
 /// Error code of a key that is absent or blank.
 const CONFIGURATION_MISSING: &str = "configuration_missing";
 /// Error code of a key that is present but invalid.
@@ -544,6 +546,8 @@ pub(crate) fn resolve_path(
 
 /// Reads the config file at `path` and maps it, see [`parse`].
 ///
+/// A secret comes from `env_file` when the file names its variable, else from the environment.
+///
 /// # Errors
 ///
 /// Returns the errors of [`parse`], and `configuration_invalid` naming `config` when the file
@@ -551,11 +555,13 @@ pub(crate) fn resolve_path(
 /// be read.
 pub(crate) fn load(
     path: &Path,
+    env_file: Option<&EnvFile>,
 ) -> Result<(Config, Option<McpConfig>, Option<MetricsConfig>), Error> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         Error::config(CONFIGURATION_INVALID, DOCUMENT_NAME, Some(Box::new(error)))
     })?;
-    let config = parse(&text, environment_secret, |policy_path| {
+    let lookup = |name: &str| env_file::secret(env_file, name, environment_secret);
+    let config = parse(&text, lookup, |policy_path| {
         autoreview_policy::load(policy_path).map_err(|error| Box::new(error) as _)
     })?;
     let file = parse_file(&text)?;
