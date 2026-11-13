@@ -451,10 +451,10 @@ the protocol named in `policy.yaml`.
 
 A discovery search returned more than `schedule.poll_limit` results. The
 engine stops rather than drop pull requests. A credential's search leaves out
-the repositories of the credentials before it, so only its own repositories
-count. Narrow the work: use a more specific `match` or a label trigger, or
-split a large organization into rules. Raise `schedule.poll_limit` only when
-the narrowing is not enough.
+the repositories of the credentials before it with negative qualifiers, so they
+do not count toward its limit. Narrow the work: use a more specific `match` or
+a label trigger, or split a large organization into rules. Raise
+`schedule.poll_limit` only when the narrowing is not enough.
 
 ## Credential errors
 

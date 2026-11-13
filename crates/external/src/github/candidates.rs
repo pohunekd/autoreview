@@ -732,7 +732,8 @@ impl GitHub {
 
     /// Reports whether `credential` serves `repository`; another credential's result is dropped.
     ///
-    /// The negative qualifiers keep most of them out of the search; this check keeps the rest.
+    /// The negative qualifiers leave the earlier credentials' repositories out of the search,
+    /// so they do not count toward its limits; this check drops any other credential's result.
     fn owns(&self, credential: &Credential, repository: &str) -> bool {
         (self.credentials.serving(repository)).is_ok_and(|serving| serving.name == credential.name)
     }
@@ -749,7 +750,8 @@ mod tests {
     };
     use super::{
         classify, covering, decode_label_search_page, decode_mark_ready_response,
-        decode_review_request_search, list_review_requests_args, search_requested_args,
+        decode_review_request_search, label_search_query, list_review_requests_args,
+        search_requested_args,
     };
 
     /// Login of the reviewing account in the captured responses.
@@ -1047,6 +1049,31 @@ notifications:
             "-repo:acme/tool",
         ];
         assert_eq!(args, [all.as_slice(), scopes.as_slice()].concat());
+        // Discovery's review request and label searches leave out the same patterns, last.
+        let acme = ["acme/*".to_owned()];
+        let draft = ["--draft=false".to_owned()];
+        let args = search_requested_args(100, &acme, &draft, &exclusions);
+        let requested = [
+            "search",
+            "prs",
+            "--review-requested=@me",
+            "--state=open",
+            "--limit",
+            "100",
+            "--json",
+            "number,repository",
+            "--draft=false",
+            "--owner",
+            "acme",
+            "--",
+            "-repo:acme/tool",
+        ];
+        assert_eq!(args, requested);
+        assert_eq!(
+            label_search_query("ai:review", &acme, &exclusions),
+            "is:pr is:open draft:false label:\"ai:review\" user:acme -repo:acme/tool \
+             sort:created-asc"
+        );
 
         let result =
             decode_review_request_search(SEARCH_RESPONSE, 50, HOST).expect("search decodes");

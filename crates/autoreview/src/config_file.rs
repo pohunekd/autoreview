@@ -2376,7 +2376,7 @@ pub(crate) mod tests {
         /// Credentials as (name, match), the searching credential, and its negative
         /// qualifiers in the review request, label and queue searches.
         type ExclusionRow<'a> = (&'a [(&'a str, &'a str)], &'a str, [&'a [&'a str]; 3]);
-        let exclusion_rows: [ExclusionRow<'_>; 4] = [
+        let exclusion_rows: [ExclusionRow<'_>; 5] = [
             (&[("default", "[\"*\"]")], "default", [&[], &[], &[]]),
             (
                 &[("org", "[example-org/*]"), ("rest", "[\"*\"]")],
@@ -2403,6 +2403,15 @@ pub(crate) mod tests {
                     &["-repo:example-org/example-repo"],
                     &[],
                     &["-repo:example-org/example-repo"],
+                ],
+            ),
+            (
+                &[("tool", "[example-owner/tool]"), ("rest", "[\"*\"]")],
+                "rest",
+                [
+                    &[],
+                    &["-repo:example-owner/tool"],
+                    &["-repo:example-owner/tool"],
                 ],
             ),
         ];
