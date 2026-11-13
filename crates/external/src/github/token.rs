@@ -6,7 +6,7 @@ use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::TokenAnswer;
 use time::macros::format_description;
-use time::{OffsetDateTime, PrimitiveDateTime};
+use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
 use super::{GitHub, decode_viewer_login, gh_failure, response_invalid};
@@ -93,7 +93,8 @@ fn decode_token_answer(name: &str, output: &str) -> Result<TokenAnswer, Error> {
 
 /// Parses the expiry header `value` of the credential `name`.
 ///
-/// The time is `2026-12-31 23:59:59 UTC`, or with a numeric offset such as `-0800`.
+/// The time is `2026-12-31 23:59:59 UTC`, or with a numeric offset such as `-0800`; the
+/// result is in UTC.
 ///
 /// # Errors
 ///
@@ -104,10 +105,13 @@ fn expiration(name: &str, value: &str) -> Result<OffsetDateTime, Error> {
     let offset = format_description!(
         "[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour sign:mandatory][offset_minute]"
     );
+    // An offset can move the instant past the years `time` holds in UTC; such a value is refused.
     PrimitiveDateTime::parse(value, utc)
         .map(PrimitiveDateTime::assume_utc)
         .or_else(|_| OffsetDateTime::parse(value, offset))
-        .map_err(|_| {
+        .ok()
+        .and_then(|at| at.checked_to_offset(UtcOffset::UTC))
+        .ok_or_else(|| {
             let message = format!("the token expiry {value:?} of credential {name} is not a time");
             Error::config_with_message("github_response_invalid", CREDENTIALS_KEY, message, None)
         })
@@ -177,6 +181,16 @@ mod tests {
                 "no date",
                 expiry("2026-02-30 23:59:59 UTC"),
                 not_a_time("2026-02-30 23:59:59 UTC"),
+            ),
+            (
+                "after the last UTC year",
+                expiry("9999-12-31 23:59:59 -2359"),
+                not_a_time("9999-12-31 23:59:59 -2359"),
+            ),
+            (
+                "before the first UTC year",
+                expiry("-9999-01-01 00:00:00 +0001"),
+                not_a_time("-9999-01-01 00:00:00 +0001"),
             ),
             ("empty", expiry(""), not_a_time("")),
             (
