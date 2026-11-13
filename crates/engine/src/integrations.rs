@@ -12,7 +12,7 @@ use autoreview_policy::{Checkout, Level, Permission, Protocol, Reviewer, Trigger
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::NotifyRoute;
+use crate::config::{Credential, NotifyRoute};
 use crate::error::Error;
 use crate::model::{
     CandidateList, Decision, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
@@ -137,15 +137,21 @@ pub struct ReviewRequestList {
 /// caller's cancellation token, as each Go method takes the caller's context.
 pub trait Integrations {
     /// Returns the pull requests the policy covers and the ones whose data was refused.
+    ///
+    /// It searches with `credential`'s token, only where `credential` serves repositories.
     fn list_candidates(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
     ) -> impl Future<Output = Result<CandidateList, Error>> + Send;
 
     /// Marks the requesting coding agents' drafts ready for review and returns them.
+    ///
+    /// It searches with `credential`'s token, only where `credential` serves repositories.
     fn ready_drafts(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
     ) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send;
 
     /// Reads a pull request and checks it against the trigger of its rule.
