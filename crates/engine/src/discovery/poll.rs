@@ -485,8 +485,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Reports whether the approval that `workflow_id` published on the head of `pr` stands.
     ///
     /// The lookup is the one of the publication, by the marker of the run's stored rendered
-    /// review; GitHub's `DISMISSED` state does not match. A run that published no approval
-    /// stands. A failed lookup is `Unknown`; a permanent failure keeps the approval standing.
+    /// review, with the run's credential; GitHub's `DISMISSED` state does not match. A run that
+    /// published no approval stands. A failed lookup is `Unknown`; a permanent failure, or a
+    /// credential that no longer fits the run, keeps the approval standing.
     ///
     /// # Errors
     ///
@@ -511,6 +512,15 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let Some(rendered) = rendered.filter(|rendered| rendered.error_code.is_empty()) else {
             return Ok(Approval::Stands);
         };
+        live(cancel)?;
+        let Some(credential) = self.stored_credential(workflow_id)? else {
+            tracing::warn!(
+                review_id = %pr.review_id(),
+                workflow_id,
+                "published approval not looked up: its credential no longer fits the review"
+            );
+            return Ok(Approval::Stands);
+        };
         let found = retry_step(
             STEP_FIND_APPROVAL,
             self.step_policy(),
@@ -518,7 +528,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             cancel,
             || {
                 self.integration
-                    .find_published_review(cancel, pr, &rendered.review)
+                    .find_published_review(cancel, credential, pr, &rendered.review)
             },
         )
         .await;

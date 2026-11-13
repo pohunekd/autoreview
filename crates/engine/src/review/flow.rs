@@ -484,9 +484,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             .fresh(STEP_PUBLISHED_REVIEW, || {
                 let integration = &*self.engine.integration;
                 let (cancel, reviewed, review) = (&self.cancel, &reviewed, &review);
+                let credential = self.credential();
                 async move {
                     integration
-                        .find_published_review(cancel, reviewed, review)
+                        .find_published_review(cancel, credential?, reviewed, review)
                         .await
                 }
             })
@@ -559,9 +560,13 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let result = self
             .once_recorded::<PublishResult, _>(ReviewStep::Publication, STEP_PUBLICATION, || {
                 let integration = &*self.engine.integration;
-                let cancel = &self.cancel;
+                let (cancel, credential) = (&self.cancel, self.credential());
                 let review = &rendered.review;
-                async move { integration.publish_review(cancel, current, review).await }
+                async move {
+                    integration
+                        .publish_review(cancel, credential?, current, review)
+                        .await
+                }
             })
             .await;
         let result = match result {

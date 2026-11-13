@@ -303,9 +303,12 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<bool, Error>> + Send;
 
     /// Publishes one review of the pull request and returns what GitHub recorded.
+    ///
+    /// It posts with `credential`'s token and looks for an earlier review of its login.
     fn publish_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<PublishResult, Error>> + Send;
@@ -313,9 +316,11 @@ pub trait Integrations {
     /// Returns the review with the marker of `review` already on the head, without posting.
     ///
     /// It is the lookup that [`Integrations::publish_review`] makes before it posts.
+    /// It reads with `credential`'s token and matches only reviews of its login.
     fn find_published_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<Option<PublishResult>, Error>> + Send;

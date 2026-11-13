@@ -274,22 +274,24 @@ impl Integrations for External {
     async fn publish_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> Result<PublishResult, Error> {
         self.github
-            .publish_review(cancel, pull_request, review)
+            .publish_review(cancel, credential, pull_request, review)
             .await
     }
 
     async fn find_published_review(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> Result<Option<PublishResult>, Error> {
         self.github
-            .published_review(cancel, pull_request, review)
+            .published_review(cancel, credential, pull_request, review)
             .await
     }
 
