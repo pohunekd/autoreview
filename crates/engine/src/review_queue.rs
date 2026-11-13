@@ -10,6 +10,7 @@ use autoreview_schedule::scheduler::Record;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::Credential;
 use crate::discovery::SHUTDOWN;
 use crate::discovery::poll::{STEP_READ_PULL_REQUEST_STATE, live};
 use crate::engine::{Clock, Engine, retry_step};
@@ -81,6 +82,8 @@ pub(crate) struct QueueEntry {
     pub(crate) status: String,
     /// The position of the entry in the digest order.
     pub(crate) priority: QueuePriority,
+    /// The account of the serving credential, `login (credential name)`, with several.
+    pub(crate) account: Option<String>,
 }
 
 /// The engine state the queue reads, each map keyed by `repository#number`.
@@ -203,7 +206,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             skipped: discovery.skipped,
         };
         let mut entries = queue_entries(self.policy()?, &state, &list.requests);
-        entries.extend(self.waiting_on_author(cancel, &state, &list.requests).await);
+        let waiting = self.waiting_on_author(cancel, &state, &list.requests, &failed);
+        entries.extend(waiting.await);
+        if self.config.credentials.single().is_none() {
+            for entry in &mut entries {
+                let serving = self.config.credentials.serving(&entry.request.repository);
+                entry.account = serving.ok().map(account_label);
+            }
+        }
         if entries.is_empty() {
             return Ok((entries, list.truncated));
         }
@@ -226,12 +236,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the open pull requests whose notes wait for their author.
     ///
     /// The author has not requested the review again. A pull request that cannot be read is
-    /// left out of this digest with a warning, also after a cancel, as Go leaves it out.
+    /// left out of this digest with a warning, also after a cancel, as Go leaves it out. One
+    /// whose credential's search failed, or that no credential serves, is left out unread.
     async fn waiting_on_author(
         &self,
         cancel: &CancellationToken,
         state: &QueueState,
         requests: &[ReviewRequest],
+        failed: &BTreeMap<String, String>,
     ) -> Vec<QueueEntry> {
         let requested: BTreeSet<String> = requests
             .iter()
@@ -241,6 +253,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let mut entries = Vec::new();
         for (key, record) in &state.published {
             if !record.awaits_author || requested.contains(key) {
+                continue;
+            }
+            let unread = match self.config.credentials.serving(&record.repository) {
+                Err(err) => Some(error_code(&err).to_owned()),
+                Ok(credential) => failed.get(&credential.name).cloned(),
+            };
+            if let Some(code) = unread {
+                tracing::warn!(
+                    repository = %record.repository,
+                    pull_request = record.number,
+                    error_code = %code,
+                    "notes hand-off unreadable"
+                );
                 continue;
             }
             let read = retry_step(
@@ -289,6 +314,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 },
                 status,
                 priority: QueuePriority::WaitingAuthor,
+                account: None,
             });
         }
         entries
@@ -322,6 +348,7 @@ pub(crate) fn queue_entries(
             request: request.clone(),
             status,
             priority,
+            account: None,
         });
     }
     entries.sort_by(|a, b| {
@@ -450,36 +477,35 @@ pub(crate) fn render_queue(
 }
 
 /// Renders the first `count` entries as the plain-text and the HTML body.
+///
+/// The entries are grouped by account, in the order of the account labels, and keep their
+/// order within an account. Each account has its requests first, then its notes.
 fn build_digest(
     entries: &[QueueEntry],
     count: usize,
     truncated: bool,
     title_limit: i64,
 ) -> (String, String) {
-    let waiting = entries[..count]
-        .iter()
-        .filter(|entry| entry.priority == QueuePriority::WaitingAuthor)
-        .count();
+    let mut shown: Vec<&QueueEntry> = entries[..count].iter().collect();
+    shown.sort_by(|a, b| a.account.cmp(&b.account));
+    let section = |entry: &QueueEntry| {
+        let waiting = entry.priority == QueuePriority::WaitingAuthor;
+        (entry.account.clone(), waiting)
+    };
     let mut plain = String::new();
     let mut formatted = String::new();
-    if count > waiting {
-        push_section(
-            &mut plain,
-            &mut formatted,
-            &format!("Reviews waiting for you ({})", count - waiting),
-        );
-    }
-    for (index, entry) in entries[..count].iter().enumerate() {
-        let previous_waiting = index
+    for (index, entry) in shown.iter().enumerate() {
+        let current = section(entry);
+        let previous = index
             .checked_sub(1)
-            .and_then(|previous| entries.get(previous))
-            .is_some_and(|previous| previous.priority == QueuePriority::WaitingAuthor);
-        if entry.priority == QueuePriority::WaitingAuthor && !previous_waiting {
-            push_section(
-                &mut plain,
-                &mut formatted,
-                &format!("Waiting on author ({waiting})"),
-            );
+            .and_then(|previous| shown.get(previous));
+        if previous.is_none_or(|previous| section(previous) != current) {
+            let size = shown
+                .iter()
+                .filter(|other| section(other) == current)
+                .count();
+            let header = section_header(current.0.as_deref(), current.1, size);
+            push_section(&mut plain, &mut formatted, &header);
         }
         let title = clean_text(&entry.request.title, title_limit);
         let mut author = clean_text(&entry.request.author, title_limit);
@@ -510,6 +536,23 @@ fn build_digest(
     }
     let plain = plain.trim_end_matches('\n').to_owned();
     (plain, formatted)
+}
+
+/// Returns the account label of `credential` in the digest: `login (credential name)`.
+fn account_label(credential: &Credential) -> String {
+    format!("{} (credential {})", credential.login, credential.name)
+}
+
+/// Returns the header of a section of `size` entries: requests, or notes when `waiting`.
+///
+/// With one credential the account is `None` and the header names no account.
+fn section_header(account: Option<&str>, waiting: bool, size: usize) -> String {
+    match (account, waiting) {
+        (None, false) => format!("Reviews waiting for you ({size})"),
+        (None, true) => format!("Waiting on author ({size})"),
+        (Some(account), false) => format!("Reviews waiting for {account} ({size})"),
+        (Some(account), true) => format!("Waiting on author for {account} ({size})"),
+    }
 }
 
 /// Starts a section of both bodies. The HTML list of the previous section is closed first.
@@ -572,7 +615,7 @@ mod tests {
         QueuePriority, QueueResult, QueueState, clean_text, queue_entries, queue_status,
         render_queue,
     };
-    use crate::config::Config;
+    use crate::config::{Config, Credential, Credentials};
     use crate::engine::{Clock, Engine};
     use crate::error::error_code;
     use crate::integrations::ReviewRequest;
@@ -937,6 +980,7 @@ notifications:
             request,
             status: "AI review running".to_owned(),
             priority: QueuePriority::Other,
+            account: None,
         }];
         let rendered = render_queue(&entries, false, 8000, 512);
         assert!(
@@ -985,6 +1029,7 @@ notifications:
                 request: queue_request("example-org/example-repo", number, &"t".repeat(40)),
                 status: "AI review running".to_owned(),
                 priority: QueuePriority::AwaitingApproval,
+                account: None,
             })
             .collect();
         let rendered = render_queue(&entries, false, 600, 512);
@@ -1353,6 +1398,55 @@ notifications:
                 && formatted.matches("<ul>").count() == 2
                 && formatted.matches("</ul>").count() == 2,
             "plain={plain} formatted={formatted}"
+        );
+        // Several credentials: each account has its own sections. The hand-off of a failed
+        // credential or of a repository that no credential serves is left out unread.
+        let account = |name: &str, login: &str, pattern: &str| Credential {
+            name: name.to_owned(),
+            login: login.to_owned(),
+            token: format!("{name}-token"),
+            matches: vec![pattern.to_owned()],
+        };
+        let mut cfg = queue_config();
+        cfg.credentials = Credentials::new(vec![
+            account("team", "team-bot", "example-org/beta"),
+            account("main", "example-user", "example-org/*"),
+        ])
+        .expect("the credentials load");
+        // No read is retried, so a read that must not happen shows in the counter.
+        cfg.step_retry = Duration::ZERO;
+        let fake = Arc::new(FakeIntegration::new());
+        fake.lock().credentials = Some(cfg.credentials.clone());
+        let (engine, _dir) = new_queue_engine(cfg, &fake, at);
+        let (mut team, mut foreign) = (waiting.clone(), waiting.clone());
+        team.repository = "example-org/beta".to_owned();
+        foreign.repository = "other-org/tool".to_owned();
+        for pr in [&team, &foreign] {
+            hand_off(&engine, &fake, pr, at - time::Duration::hours(30), false).await;
+        }
+        fake.lock().requests = vec![
+            queue_request("example-org/example-repo", 1, "first"),
+            queue_request("example-org/beta", 2, "second"),
+        ];
+        let cancel = CancellationToken::new();
+        engine.review_queue(&cancel).await.expect("the queue runs");
+        fake.lock().failing_credentials = [("team".into(), "github_request_failed".into())].into();
+        let result = engine.review_queue(&cancel).await.expect("the queue runs");
+        let state = fake.lock();
+        let (plain, failed) = (&state.queued[0].plain, &state.queued[1].plain);
+        let main = plain.find("Reviews waiting for example-user (credential main) (1)\n- first");
+        let team = plain.find("Reviews waiting for team-bot (credential team) (1)\n- second");
+        let notes = plain.find("Waiting on author for team-bot (credential team) (1)\n");
+        assert!(
+            main.is_some()
+                && main < team
+                && team < notes
+                && result.truncated
+                && failed.starts_with("Reviews waiting for example-user (credential main) (1)")
+                && !failed.contains("team-bot")
+                && state.state_reads == ["example-org/beta#5"],
+            "plain={plain} failed={failed} reads={:?}",
+            state.state_reads
         );
     }
 

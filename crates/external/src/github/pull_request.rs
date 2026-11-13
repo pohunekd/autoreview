@@ -575,7 +575,7 @@ impl GitHub {
         number: i64,
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
-        let login = &self.only_credential()?.login;
+        let login = &self.credentials.serving(repository)?.login;
         let raw = self.fetch_pull_request(cancel, repository, number).await?;
         let mut pull_request = decode_pull_request(&raw, &self.host, login, trigger)?;
         if trigger.kind == TriggerKind::ReviewRequested {
@@ -598,7 +598,7 @@ impl GitHub {
     ) -> Result<PullRequestState, Error> {
         let args = pull_request_args(repository, number)?;
         let credential = self.credentials.serving(repository)?;
-        let login = &self.only_credential()?.login;
+        let login = &credential.login;
         let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_pull_request_state(repository, number, &output, &self.host, login)
     }
@@ -627,7 +627,7 @@ impl GitHub {
         number: i64,
     ) -> Result<i64, Error> {
         let credential = self.credentials.serving(repository)?;
-        let login = &self.only_credential()?.login;
+        let login = &credential.login;
         let mut events = Vec::new();
         for page in 1..=self.search_page_limit {
             let query = format!("per_page={EVENTS_PER_PAGE}&page={page}");

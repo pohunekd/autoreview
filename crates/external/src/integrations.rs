@@ -50,8 +50,8 @@ pub struct External {
 impl External {
     /// Creates the integrations from the engine configuration.
     ///
-    /// Each `gh` call that acts on a repository gets the token of the credential that serves
-    /// it; a call that names no repository needs exactly one credential.
+    /// Each `gh` call that acts on a repository gets the token and the login of the credential
+    /// that serves it; a search or a token check gets those of the credential it runs for.
     ///
     /// # Errors
     ///

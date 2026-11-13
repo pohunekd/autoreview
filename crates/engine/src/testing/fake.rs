@@ -180,6 +180,8 @@ pub(crate) struct FakeState {
     pub(crate) token_answers: BTreeMap<String, TokenAnswer>,
     /// Name of every credential whose token was checked, in order.
     pub(crate) token_checks: Vec<String>,
+    /// Every pull request state read, as `repository#number`, in order.
+    pub(crate) state_reads: Vec<String>,
 }
 
 impl FakeState {
@@ -472,7 +474,8 @@ impl Integrations for FakeIntegration {
     ) -> impl Future<Output = Result<PullRequestState, Error>> + Send {
         let key = format!("{repository}#{number}");
         let result = {
-            let state = self.lock();
+            let mut state = self.lock();
+            state.state_reads.push(key.clone());
             if let Some(err) = state.credential_error(repository) {
                 return ready(Err(err));
             }

@@ -646,6 +646,22 @@ mod tests {
                 "{name}"
             );
         }
+        // The own pull request follows the login of the credential that serves it.
+        let mut pull_request = test_pull_request(1);
+        pull_request.author = "team-bot".to_owned();
+        let rule = test_rule(opus(), OnFindings::RequestChanges, OnClean::Approve);
+        let input = test_input(rule, pull_request);
+        for (login, own, decision) in [
+            ("team-bot", true, Decision::Comment),
+            ("reviewer", false, Decision::Approve),
+        ] {
+            let plan = plan_publication(&input, &Artifact::default(), login);
+            assert_eq!(
+                (plan.own_pull_request, plan.decision),
+                (own, decision),
+                "{login}"
+            );
+        }
         let own_comment = PublicationPlan {
             decision: Decision::Comment,
             own_pull_request: true,

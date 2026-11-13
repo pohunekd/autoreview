@@ -43,9 +43,6 @@ const GH_CHILD_ENVIRONMENT: [(&str, &str); 2] = [("GH_PAGER", "cat"), ("GH_PROMP
 /// Variable that carries the token of the call's credential to the `gh` child.
 const TOKEN_VARIABLE: &str = "GH_TOKEN";
 
-/// Configuration key named when a call that names no repository finds several credentials.
-const CREDENTIALS_KEY: &str = "github.credentials";
-
 /// Returns the GraphQL search that discovers pull requests (`graphQLSearch`).
 pub(crate) fn graphql_search() -> String {
     format!(
@@ -121,22 +118,6 @@ impl GitHub {
             search_page_limit: config.search_page_limit,
             secret_variables: config.secret_variables.clone(),
         }
-    }
-
-    /// Returns the only credential, which the calls that name no repository use.
-    ///
-    /// # Errors
-    ///
-    /// Returns `configuration_invalid` naming `github.credentials` when there are several.
-    fn only_credential(&self) -> Result<&Credential, Error> {
-        self.credentials.single().ok_or_else(|| {
-            let message = "a gh call without a repository needs exactly one credential";
-            Error::config(
-                "configuration_invalid",
-                CREDENTIALS_KEY,
-                Some(message.into()),
-            )
-        })
     }
 
     /// Returns the environment of a `gh` child that acts with `credential`.
@@ -386,11 +367,6 @@ mod tests {
                 (built, _) => panic!("{repository}: {built:?}"),
             }
         }
-        // A call that names no repository never picks one of several credentials.
-        let unscoped = github
-            .only_credential()
-            .map_err(|error| error_code(&error).to_owned());
-        assert_eq!(unscoped.err().as_deref(), Some("configuration_invalid"));
         assert_eq!(
             local_environment(parent),
             pairs(&[("PATH", "/usr/bin"), ("PAGER", "cat")])

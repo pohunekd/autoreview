@@ -544,7 +544,7 @@ impl GitHub {
             pull_request,
             prior,
             max_characters,
-            &self.only_credential()?.login,
+            &credential.login,
             self.search_page_limit,
         )
         .await

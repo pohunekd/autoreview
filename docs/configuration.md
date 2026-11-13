@@ -183,7 +183,7 @@ repository credentials above their owner's. The loader refuses:
 
 `validate` accepts several credentials. The other commands use one token for
 every `gh` call and refuse several credentials with `configuration_invalid`
-naming `github.credentials`; serving several is planned in #14 to #17.
+naming `github.credentials`; serving several is planned in #14 to #18.
 
 ```yaml
 credentials:
