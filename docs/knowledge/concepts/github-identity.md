@@ -2,7 +2,7 @@
 type: Concept
 id: concept/github-identity
 title: GitHub identity
-description: What a GitHub credential is (token and login), the one credential the loader accepts, how triggers, own pull requests and approvals follow its login, the startup login check, token kinds and organization approval, and the token permissions each GitHub call needs; several credentials, token checks and expiry warnings are planned.
+description: What a GitHub credential is (token and login), which credential serves a repository (first match), how triggers, own pull requests and approvals follow its login, the startup login check, token kinds and organization approval, and the token permissions each GitHub call needs; serving several credentials, token checks and expiry warnings are planned.
 source_kind: manual
 intents: [setup, help, debug]
 ---
@@ -26,19 +26,22 @@ a file by autoreview. It is read from the variable named by `token_env`, in the
 
 | Field | Meaning |
 |---|---|
-| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; not used yet |
+| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; error messages name the credential by it |
 | `login` | The account the token belongs to. `serve` checks it at startup |
 | `token_env` | The environment variable that holds the token |
-| `match` | `["*"]`: the credential serves every repository |
+| `match` | The repositories the credential serves: `owner/repository`, `owner/*` or `*` |
 
-The loader accepts exactly one credential, with `match: ["*"]`, so it serves
-every repository of the [policy rules](../../policy.md#repository-rules).
+Each repository is served by the first credential whose `match` covers it.
+Every repository of the [policy rules](../../policy.md#repository-rules) must
+have a credential (`credential_not_covered` otherwise), and every credential
+must serve one of them (`credential_unused` otherwise).
 
 ## Choosing the shape
 
-The only shape the loader accepts is one credential with `match: ["*"]`: one
-account reviews everything its token can reach. A token per owner, a token per
-repository and an account per owner are planned in #13.
+The commands that call GitHub accept one credential: one account reviews
+everything its token can reach. `validate` already checks a list of several.
+Serving a token per owner, a token per repository and an account per owner is
+planned in #14 to #17.
 
 ## What the login decides
 
@@ -126,7 +129,7 @@ verified: the GraphQL reference page fetched did not include it.
   organization. The [managing personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
   page states: "Each token is limited to access resources owned by a single user or
   organization." A fine-grained token therefore covers one owner; several
-  credentials for several owners are planned in #13.
+  credentials for several owners are planned in #14 to #17.
 
 ### Classic token
 
@@ -147,7 +150,8 @@ host that runs its reviews, in addition to the token of its credential.
 
 ## Repositories of several owners
 
-Planned in #13.
+Planned in #14 to #17; `validate` already checks such a list, see
+[credentials](../../configuration.md#credentials).
 
 ## Approvals and branch protection
 

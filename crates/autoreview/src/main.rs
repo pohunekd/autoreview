@@ -61,6 +61,9 @@ const POLICY_KEY: &str = "policy_file";
 /// Configuration key named when the token belongs to another login than the credential.
 const LOGIN_KEY: &str = "github.credentials.login";
 
+/// Configuration key named when a command that calls GitHub finds several credentials.
+const CREDENTIALS_KEY: &str = "github.credentials";
+
 /// Error code of malformed repository names.
 const REPOSITORY_NOT_ALLOWED: &str = "repository_not_allowed";
 
@@ -288,14 +291,23 @@ async fn run(
     let path = config_file::resolve_path(config_path.as_deref(), environment.as_deref())?;
     let env_file = env_file_path.as_deref().map(EnvFile::read).transpose()?;
     let (config, mcp, metrics) = config_file::load(&path, env_file.as_ref())?;
-    let external = Arc::new(External::new(config.clone())?);
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;
     match command {
         Command::Validate => validate(&config),
         Command::Engine(command) => {
+            // Every `gh` call and the startup check use one token until #14 to #17 land.
+            let Some(credential) = config.credentials.single() else {
+                return Err(Error::config(
+                    CONFIGURATION_INVALID,
+                    CREDENTIALS_KEY,
+                    Some("several credentials pass validate only, until #14 to #17".into()),
+                ));
+            };
+            let github_login = credential.login.clone();
+            let external = Arc::new(External::new(config.clone(), credential)?);
             let sections = Sections { mcp, metrics };
-            run_engine(command, config, sections, external, &cancel).await
+            run_engine(command, config, &github_login, sections, external, &cancel).await
         }
     }
 }
@@ -309,15 +321,17 @@ struct Sections {
 }
 
 /// Opens the store, builds the engine and runs `command` on them.
+///
+/// `github_login` is the login that `serve` expects behind the token.
 async fn run_engine(
     command: EngineCommand,
     config: Config,
+    github_login: &str,
     sections: Sections,
     external: Arc<External>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
     let review_list_limit = config.review_list_limit;
-    let github_login = config.github_login.clone();
     let store = Arc::new(Store::open(
         Path::new(&config.state_db_path),
         Box::new(OffsetDateTime::now_utc),
@@ -337,7 +351,7 @@ async fn run_engine(
     });
     match command {
         EngineCommand::Serve => {
-            serve(&engine, &external, &github_login, sections.metrics, cancel).await
+            serve(&engine, &external, github_login, sections.metrics, cancel).await
         }
         EngineCommand::Mcp => {
             let Some(mcp) = sections.mcp else {

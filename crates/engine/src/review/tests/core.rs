@@ -426,7 +426,11 @@ async fn own_pull_request_gets_a_comment_and_findings_ping_the_author() {
         "title": "Fix me", "body": "Details.",
     })]));
     let mut pr = integration_pull_request("acme/widget", &sha("a"));
-    pr.author = h.engine.config.github_login.clone();
+    let served = h.engine.config.credentials.resolve("acme/widget");
+    pr.author = served
+        .expect("a credential serves acme/widget")
+        .login
+        .clone();
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the comment", || h.publications() == 1).await;
     let (published, _, _, _) = h.fake.snapshot();

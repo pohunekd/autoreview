@@ -17,7 +17,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::time::Duration;
 
-use autoreview_engine::config::Config;
+use autoreview_engine::config::{Config, Credential};
 use autoreview_engine::error::{BoxError, Error};
 use serde::Deserialize;
 use serde::Serialize;
@@ -105,13 +105,13 @@ impl fmt::Debug for GitHub {
 }
 
 impl GitHub {
-    /// Creates the client from the `gh` settings of the configuration.
-    pub(crate) fn new(config: &Config) -> Self {
+    /// Creates the client from the `gh` settings of the configuration and one credential.
+    pub(crate) fn new(config: &Config, credential: &Credential) -> Self {
         Self {
             binary: config.gh_bin.clone(),
-            token: config.github_token.clone(),
+            token: credential.token.clone(),
             host: config.github_host.clone(),
-            login: config.github_login.clone(),
+            login: credential.login.clone(),
             timeout: config.gh_timeout,
             poll_limit: config.poll_limit,
             search_page_limit: config.search_page_limit,

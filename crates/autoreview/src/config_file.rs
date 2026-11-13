@@ -13,7 +13,8 @@ use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{
-    Config, HostOrder, HostStateChoice, HostStateRules, MatrixRooms, RouteOverride,
+    Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules, MatrixRooms,
+    RouteOverride,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
@@ -764,8 +765,8 @@ fn map_file(
         "github.credential_check_hours",
     )?;
     let _ = positive(&github.expiry_warning_days, "github.expiry_warning_days")?;
-    let credentials = github_credentials(&github.credentials, &recorded)?;
-    let (github_login, github_token) = single_credential(&credentials)?;
+    let credentials = Credentials::new(github_credentials(&github.credentials, &recorded)?)?;
+    credentials.check_coverage(&policy.rule_matches())?;
     let pohunek = section(&file.pohunek, "pohunek")?;
     let pohunek_bin = text(&pohunek.bin, "pohunek.bin")?;
     let pohunek_state = text(&pohunek.state_home, "pohunek.state_home")?;
@@ -911,8 +912,7 @@ fn map_file(
         policy: Some(policy),
         schedule,
         github_host,
-        github_login,
-        github_token,
+        credentials,
         gh_bin,
         pohunek_bin,
         pohunek_state,
@@ -984,16 +984,6 @@ fn map_file(
     })
 }
 
-/// A validated entry of `github.credentials`.
-struct Credential {
-    /// The account the token belongs to.
-    login: String,
-    /// Repository patterns the credential serves.
-    matches: Vec<String>,
-    /// The token, read from the environment variable named by `token_env`.
-    token: String,
-}
-
 /// Validates every entry of `github.credentials` and reads its token.
 ///
 /// # Errors
@@ -1008,12 +998,6 @@ fn github_credentials(
         Some(entries) => entries,
         None => return Err(missing("github.credentials")),
     };
-    if entries.is_empty() {
-        return Err(invalid(
-            "github.credentials",
-            "must list at least one credential",
-        ));
-    }
     let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for entry in entries {
@@ -1042,30 +1026,13 @@ fn github_credentials(
             ));
         }
         out.push(Credential {
+            name,
             login,
-            matches,
             token,
+            matches,
         });
     }
     Ok(out)
-}
-
-/// Returns the login and token of the one credential that serves every repository.
-///
-/// # Errors
-///
-/// Returns `configuration_invalid` for any other shape, which stays refused until M2.
-fn single_credential(credentials: &[Credential]) -> Result<(String, String), Error> {
-    if credentials.len() == 1
-        && let Some(only) = credentials.first()
-        && only.matches == ["*"]
-    {
-        return Ok((only.login.clone(), only.token.clone()));
-    }
-    Err(invalid(
-        "github.credentials",
-        "only one credential with match [\"*\"] is supported until M2",
-    ))
 }
 
 /// Reports whether a credential name matches `[a-z0-9][a-z0-9_-]{0,31}`.
@@ -2106,8 +2073,12 @@ pub(crate) mod tests {
         assert_eq!(config.session_group, "autoreview");
         assert_eq!(config.session_name_prefix, "github-review-");
         assert_eq!(config.session_branch_prefix, "autoreview/review/");
-        assert_eq!(config.github_login, "review-bot");
-        assert_eq!(config.github_token, "synthetic-token");
+        let only = config
+            .credentials
+            .single()
+            .expect("the example has one credential");
+        assert_eq!(only.login, "review-bot");
+        assert_eq!(only.token, "synthetic-token");
         assert_eq!(config.state_db_path, "/var/lib/autoreview/autoreview.db");
     }
 
@@ -2137,7 +2108,180 @@ pub(crate) mod tests {
             );
             let config = parse(&text, secret, example_policy)
                 .unwrap_or_else(|error| panic!("{login}: {error}"));
-            assert_eq!(config.github_login, login);
+            let served = config.credentials.single().map(|only| only.login.as_str());
+            assert_eq!(served, Some(login));
+        }
+    }
+
+    /// Credential resolution against the test policy, whose rules match
+    /// `example-org/example-repo`, `example-org/*` and `example-owner/*` in that order.
+    ///
+    /// Each row lists credentials as (name, match) and either the credential that serves each
+    /// repository or the load error.
+    #[test]
+    fn credentials_resolve_by_first_match_and_cover_the_policy() {
+        /// Credentials as (name, match), then each repository's credential or the load error.
+        type Row<'a> = (
+            &'a [(&'a str, &'a str)],
+            Result<&'a [(&'a str, Option<&'a str>)], &'a str>,
+        );
+        const EXAMPLE_ENTRY: &str = concat!(
+            "    - name: default\n",
+            "      login: review-bot\n",
+            "      token_env: AUTOREVIEW_GH_TOKEN\n",
+            "      match: [\"*\"]\n",
+        );
+        let rows: [Row<'_>; 14] = [
+            (
+                &[("default", "[\"*\"]")],
+                Ok(&[
+                    ("example-org/example-repo", Some("default")),
+                    ("example-owner/tool", Some("default")),
+                    ("other-owner/tool", Some("default")),
+                ]),
+            ),
+            (
+                &[
+                    ("repo", "[example-org/example-repo]"),
+                    ("org", "[example-org/*]"),
+                    ("owner", "[example-owner/*]"),
+                ],
+                Ok(&[
+                    ("example-org/example-repo", Some("repo")),
+                    ("example-org/other", Some("org")),
+                    ("example-owner/tool", Some("owner")),
+                    ("other-owner/tool", None),
+                ]),
+            ),
+            (
+                &[("org", "[example-org/*]"), ("rest", "[\"*\"]")],
+                Ok(&[
+                    ("example-org/example-repo", Some("org")),
+                    ("example-owner/tool", Some("rest")),
+                ]),
+            ),
+            (
+                &[("tool", "[example-owner/tool]"), ("rest", "[\"*\"]")],
+                Ok(&[
+                    ("example-owner/tool", Some("tool")),
+                    ("example-owner/other", Some("rest")),
+                ]),
+            ),
+            (
+                &[("both", "[example-org/*, example-owner/*]")],
+                Ok(&[
+                    ("example-org/example-repo", Some("both")),
+                    ("example-owner/tool", Some("both")),
+                ]),
+            ),
+            (
+                &[("all", "[\"*\"]"), ("org", "[example-org/*]")],
+                Err(concat!(
+                    "configuration_invalid: github.credentials.match: ",
+                    "example-org/* of org is unreachable, * of all matches first"
+                )),
+            ),
+            (
+                &[
+                    ("org", "[example-org/*]"),
+                    ("repo", "[example-org/example-repo]"),
+                    ("owner", "[example-owner/*]"),
+                ],
+                Err(concat!(
+                    "configuration_invalid: github.credentials.match: example-org/example-repo ",
+                    "of repo is unreachable, example-org/* of org matches first"
+                )),
+            ),
+            (
+                &[
+                    ("org", "[example-org/*]"),
+                    ("mixed", "[example-org/example-repo, example-owner/*]"),
+                ],
+                Err(concat!(
+                    "configuration_invalid: github.credentials.match: example-org/example-repo ",
+                    "of mixed is unreachable, example-org/* of org matches first"
+                )),
+            ),
+            (
+                &[("all", "[example-org/*, example-org/*]")],
+                Err(concat!(
+                    "configuration_invalid: github.credentials.match: ",
+                    "example-org/* of all is unreachable, example-org/* of all matches first"
+                )),
+            ),
+            (
+                &[
+                    ("repo", "[example-org/example-repo]"),
+                    ("owner", "[example-owner/*]"),
+                ],
+                Err(concat!(
+                    "credential_not_covered: github.credentials: ",
+                    "no credential matches example-org/* of the policy"
+                )),
+            ),
+            (
+                &[("org", "[example-org/*]")],
+                Err(concat!(
+                    "credential_not_covered: github.credentials: ",
+                    "no credential matches example-owner/* of the policy"
+                )),
+            ),
+            (
+                &[
+                    ("org", "[example-org/*]"),
+                    ("owner", "[example-owner/*]"),
+                    ("spare", "[other-owner/*]"),
+                ],
+                Err(concat!(
+                    "credential_unused: github.credentials: ",
+                    "spare matches no repository of the policy"
+                )),
+            ),
+            (
+                &[
+                    ("owner", "[example-owner/*]"),
+                    ("org", "[example-org/*]"),
+                    ("rest", "[\"*\"]"),
+                ],
+                Err(concat!(
+                    "credential_unused: github.credentials: ",
+                    "rest matches no repository of the policy"
+                )),
+            ),
+            (
+                &[
+                    ("repo", "[example-org/example-repo]"),
+                    ("org", "[example-org/*]"),
+                    ("spare", "[example-owner/*, other-owner/*]"),
+                ],
+                Ok(&[
+                    ("example-org/example-repo", Some("repo")),
+                    ("other-owner/tool", Some("spare")),
+                    ("example-owner/tool", Some("spare")),
+                ]),
+            ),
+        ];
+        for (index, (credentials, expected)) in rows.into_iter().enumerate() {
+            let entries: String = credentials
+                .iter()
+                .map(|(name, matches)| {
+                    EXAMPLE_ENTRY
+                        .replace("default", name)
+                        .replace("[\"*\"]", matches)
+                })
+                .collect();
+            let result = parse(&mutated(EXAMPLE_ENTRY, &entries), secret, example_policy);
+            match (result, expected) {
+                (Ok(config), Ok(served)) => {
+                    for (repository, name) in served {
+                        let resolved = config.credentials.resolve(repository);
+                        let resolved = resolved.map(|credential| credential.name.as_str());
+                        assert_eq!(resolved, *name, "row {index}: {repository}");
+                    }
+                }
+                (Err(error), Err(text)) => assert_eq!(error.to_string(), text, "row {index}"),
+                (result, _) => panic!("row {index}: unexpected {:?}", result.map(|_| ())),
+            }
         }
     }
 
@@ -3336,8 +3480,8 @@ pub(crate) mod tests {
             match (result, expected) {
                 (Ok((file, config)), Ok(token)) => {
                     assert_eq!(
-                        config.github_token,
-                        token.replace("{m}", MARKER),
+                        config.credentials.single().map(|only| only.token.clone()),
+                        Some(token.replace("{m}", MARKER)),
                         "row {index}"
                     );
                     for output in [file, format!("{config:?}")] {

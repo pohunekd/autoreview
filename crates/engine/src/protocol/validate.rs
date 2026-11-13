@@ -293,8 +293,7 @@ pub(crate) mod tests {
                 retry_delays: vec![time::Duration::seconds(60)],
             },
             github_host: "github.com".to_owned(),
-            github_login: "example-user".to_owned(),
-            github_token: "placeholder-token".to_owned(),
+            credentials: crate::config::Credentials::single_for_tests("example-user"),
             gh_bin: "/usr/bin/gh".to_owned(),
             pohunek_bin: "/usr/bin/pohunek".to_owned(),
             pohunek_state: "/var/lib/pohunek".to_owned(),
@@ -369,7 +368,7 @@ pub(crate) mod tests {
     pub(crate) fn test_config() -> Config {
         let mut cfg = valid_config();
         cfg.github_host = "github.com".to_owned();
-        cfg.github_login = "reviewer".to_owned();
+        cfg.credentials = crate::config::Credentials::single_for_tests("reviewer");
         cfg.github_body_max_bytes = 60_000;
         cfg.ai_signature = "🤖 Written by AI: test reviewer".to_owned();
         cfg.max_findings = 50;

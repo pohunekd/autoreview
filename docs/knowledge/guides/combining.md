@@ -217,7 +217,8 @@ its next retry. Install the profiles on both hosts ([multihost guide](multihost.
 
 ## Recipe h: different accounts per owner
 
-Planned in #13.
+Planned in #14 to #17; `validate` already checks such a list, see
+[credentials](../../configuration.md#credentials).
 
 ## Rules that interact
 

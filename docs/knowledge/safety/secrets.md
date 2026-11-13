@@ -67,7 +67,7 @@ The one token reaches what its own scope allows on GitHub; a leaked token
 exposes every repository that scope covers (see
 [GitHub identity](../concepts/github-identity.md#token-kinds-and-organization-approval)).
 A token per owner or repository, which limits a leak to its repositories, is
-planned in #13.
+planned in #14 to #17.
 
 ## The environment file
 
