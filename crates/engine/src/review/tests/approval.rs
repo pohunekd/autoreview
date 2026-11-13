@@ -14,8 +14,11 @@ use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::ids::INPUT_VERSION;
 use crate::model::pull_request::SCOPE_FULL;
 use crate::model::review::Decision;
-use crate::model::{ProjectRoute, PullRequest, ReviewInput, ReviewScope, RunLimits};
+use crate::model::{
+    ProjectRoute, PublishedRecord, PullRequest, ReviewInput, ReviewScope, RunLimits,
+};
 use crate::protocol::fixtures::sha;
+use crate::store::discovery::save_discovery;
 use crate::testing::fake::{count_notes, reviewer_output};
 use crate::testing::harness::{HEAD_PREFIX_CHARS, integration_pull_request, start_harness};
 
@@ -208,6 +211,7 @@ async fn missing_from_search_is_confirmed_before_a_wait_ends() {
                 credential("risky", "risky/*"),
             ];
             config.credentials = Credentials::new(list).expect("the credentials load");
+            config.published_retention = std::time::Duration::from_secs(72 * 60 * 60);
         }
     })
     .await;
@@ -242,6 +246,20 @@ async fn missing_from_search_is_confirmed_before_a_wait_ends() {
     .await;
     h.stop_engine().await;
     narrow.store(true, Ordering::SeqCst);
+    // A due notes hand-off whose repository no credential serves ends without a read.
+    let mut state = h.store.load_discovery().expect("the discovery state loads");
+    let handoff = PublishedRecord {
+        repository: notes.repository.clone(),
+        number: notes.number,
+        head_sha: notes.head_sha.clone(),
+        published_at: time::OffsetDateTime::now_utc() - time::Duration::hours(25),
+        awaits_author: true,
+        ..PublishedRecord::default()
+    };
+    state.published.insert(notes.key(), handoff);
+    (h.store
+        .in_tx(|transaction| save_discovery(transaction, &state)))
+    .expect("the discovery state saves");
     h.fake.lock().credentials = Some(h.config().credentials);
     h.fake.lock().failing_credentials =
         BTreeMap::from([("manual".to_owned(), "github_request_failed".to_owned())]);
@@ -250,6 +268,12 @@ async fn missing_from_search_is_confirmed_before_a_wait_ends() {
     assert!(
         h.resolve(&notes).is_err() && h.resolve(&held).is_ok(),
         "a stale wait outlived its credential, or a failing credential's wait ended"
+    );
+    let state = h.store.load_discovery().expect("the discovery state loads");
+    let ended = state.published.get(&notes.key());
+    assert!(
+        ended.is_some_and(|record| !record.awaits_author),
+        "a stale hand-off outlived its credential: {ended:?}"
     );
     h.stop_engine().await;
 }

@@ -57,7 +57,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Lists the candidates of every credential and resolves the author class of each one.
     ///
     /// A pull request counts only from the search of the credential that serves its
-    /// repository. A credential whose search fails is skipped and named in the result.
+    /// repository. A credential whose search fails is skipped and named in the result. Each
+    /// search runs once, without the step retries.
     ///
     /// The permission is read only when it can change the class, once per author and
     /// repository in a pass. A candidate whose rule skips untrusted authors is listed as skipped,
@@ -74,8 +75,23 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         &self,
         cancel: &CancellationToken,
     ) -> Result<ClassifiedCandidates, Error> {
+        self.classify_listed(cancel, false).await
+    }
+
+    /// Lists and classifies as [`Engine::list_classified`]; `retried` adds the step retries.
+    ///
+    /// A discovery pass retries each credential's search; the `candidates` command does not.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`Engine::list_classified`].
+    pub(crate) async fn classify_listed(
+        &self,
+        cancel: &CancellationToken,
+        retried: bool,
+    ) -> Result<ClassifiedCandidates, Error> {
         let (searches, failed_credentials) = self
-            .search_each(STEP_LIST_CANDIDATES, cancel, |credential| {
+            .search_each(STEP_LIST_CANDIDATES, retried, cancel, |credential| {
                 self.integration.list_candidates(cancel, credential)
             })
             .await?;

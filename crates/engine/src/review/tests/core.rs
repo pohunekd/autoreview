@@ -24,6 +24,7 @@ use crate::model::{
 };
 use crate::protocol::fixtures::sha;
 use crate::review::input::NOTIFY_STEP_PREFIX;
+use crate::store::discovery::save_discovery;
 use crate::testing::fake::{INTEGRATION_POLICY, count_notes, reviewer_output};
 use crate::testing::harness::{FakeClock, Harness, integration_pull_request, start_harness};
 
@@ -117,7 +118,23 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
         "a published head was reviewed again"
     );
     // `rest`'s search also finds `acme`'s pull requests; only `acme` may review them.
+    // A refusal of `acme`'s search is announced once, also across a failed search.
+    let refused = RejectedCandidate {
+        repository: "acme/broken".to_owned(),
+        number: 7,
+        code: "github_response_invalid".to_owned(),
+        permission_login: None,
+    };
+    h.fake.lock().rejected.push(refused);
+    h.poll().await;
     fail_credential(&h, Some(("acme", "github_request_failed")));
+    let mut state = h.store.load_discovery().expect("the discovery state loads");
+    state
+        .skipped
+        .insert("acme/hidden#8".to_owned(), "untrusted_author".to_owned());
+    (h.store
+        .in_tx(|transaction| save_discovery(transaction, &state)))
+    .expect("the discovery state saves");
     let next = integration_pull_request("acme/gadget", &sha("c"));
     h.fake.open(next.clone(), h.rule(&next.repository));
     h.poll_until("the review of rest's pull request", || {
@@ -137,6 +154,7 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
     assert!(
         h.fake.lock().published_heads == [sha("a"), sha("b")]
             && state.schedule.contains_key(&pr.key())
+            && state.skipped.contains_key("acme/hidden#8")
             && !state.schedule.contains_key(&next.key()),
         "an unsearched credential's pull request was reviewed or its record dropped"
     );
@@ -146,9 +164,10 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
     })
     .await;
     h.settle().await;
+    let refusals = count_notes(&h.fake.lock().notes, Level::Action, "acme/broken#7");
     assert!(
-        h.fake.lock().published_heads == [sha("a"), sha("b"), sha("c")],
-        "a head was reviewed again"
+        h.fake.lock().published_heads == [sha("a"), sha("b"), sha("c")] && refusals == 1,
+        "a head was reviewed again, or a known refusal was announced again"
     );
     h.stop_engine().await;
 }
@@ -1012,6 +1031,20 @@ async fn outage_longer_than_the_step_retry_window_is_retried_later() {
         Ok(result) => panic!("the pass succeeded without a search: {result:?}"),
     }
     h.fake.lock().failing_credentials.clear();
+    // `candidates` searches once, as a read-only command; a pass retries a transient failure.
+    let before = h.fake.lock().listings;
+    h.fake.lock().transient_until = Some(Instant::now() + Duration::from_millis(300));
+    let listed = h.engine.list_classified(&CancellationToken::new()).await;
+    assert!(
+        listed.is_err_and(|err| error_code(&err) == "github_request_failed")
+            && h.fake.lock().listings == before + 1,
+        "the candidates command retried its search"
+    );
+    h.poll().await;
+    assert!(
+        h.fake.lock().listings > before + 2,
+        "the pass did not retry"
+    );
     h.fake.lock().transient_until = Some(Instant::now() + Duration::from_secs(6));
     h.wait_for_polling("the retry notice", || {
         h.fake.has_note(Level::Log, "Next automatic attempt")

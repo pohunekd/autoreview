@@ -71,7 +71,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             .await
     }
 
-    /// Runs `search` once per credential, each with the step retries of `step`.
+    /// Runs `search` once per credential; with `retried`, each with the step retries of `step`.
     ///
     /// A credential whose search fails is logged with its name and error code and left out, so
     /// the others go on; the returned map holds its code by its name.
@@ -82,6 +82,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     pub(crate) async fn search_each<'a, T, Fut>(
         &'a self,
         step: &str,
+        retried: bool,
         cancel: &CancellationToken,
         mut search: impl FnMut(&'a Credential) -> Fut,
     ) -> Result<(Vec<(&'a Credential, T)>, BTreeMap<String, String>), Error>
@@ -92,9 +93,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let mut failed = BTreeMap::new();
         let mut first = None;
         for credential in self.config.credentials.iter() {
-            let policy = self.step_policy();
-            let searched = retry_step(step, policy, &self.clock, cancel, || search(credential));
-            match searched.await {
+            let searched = if retried {
+                let policy = self.step_policy();
+                retry_step(step, policy, &self.clock, cancel, || search(credential)).await
+            } else {
+                search(credential).await
+            };
+            match searched {
                 Ok(value) => found.push((credential, value)),
                 Err(err) if cancel.is_cancelled() => return Err(err),
                 Err(err) => {

@@ -143,7 +143,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 );
             }
         }
-        let listed = self.list_classified(cancel).await?;
+        let listed = self.classify_listed(cancel, true).await?;
         live(cancel)?;
         let history = self.store.run_history(self.config.state_entry_limit)?;
         let now = self.clock.wall_now().to_offset(UtcOffset::UTC);
