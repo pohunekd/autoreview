@@ -3,7 +3,7 @@
 
 // Rust guideline compliant 2026-11-13
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -90,6 +90,24 @@ pub async fn check_credentials<I: Integrations>(
 pub(crate) struct CredentialHealth {
     /// The UTC day of the last expiry warning, by credential name.
     warned: BTreeMap<String, Date>,
+    /// Names of the credentials whose token GitHub refused at their last check.
+    suspended: BTreeSet<String>,
+    /// Names of the credentials whose search GitHub refused since their last check.
+    refused_searches: BTreeSet<String>,
+}
+
+impl CredentialHealth {
+    /// Records an accepted token of `name`; reports whether that lifts its suspension.
+    fn accept(&mut self, name: &str) -> bool {
+        self.refused_searches.remove(name);
+        self.suspended.remove(name)
+    }
+
+    /// Records a refused token of `name`; reports whether that starts its suspension.
+    fn refuse(&mut self, name: &str) -> bool {
+        self.refused_searches.remove(name);
+        self.suspended.insert(name.to_owned())
+    }
 }
 
 /// Reports whether the expiry warning of a token that expires at `expires_at` is due at `now`.
@@ -125,11 +143,29 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
     }
 
+    /// Checks the token of every suspended credential and of every one whose search GitHub
+    /// refused since its last check.
+    pub(crate) async fn recheck_tokens(&self, cancel: &CancellationToken) {
+        let doubtful: BTreeSet<String> = {
+            let health = self.health();
+            (health.suspended.iter().chain(&health.refused_searches))
+                .cloned()
+                .collect()
+        };
+        let credentials = self.config.credentials.iter();
+        for credential in credentials.filter(|credential| doubtful.contains(&credential.name)) {
+            if !self.check_one(cancel, credential).await {
+                return;
+            }
+        }
+    }
+
     /// Checks the token of `credential` with that token only and applies the answer.
     ///
-    /// An accepted token of the credential's login is logged as `credential checked` and may
-    /// warn of its expiry. A refused token, or one of another login, and a failed call are
-    /// logged. Returns `false` once `cancel` is cancelled.
+    /// An accepted token of the credential's login is logged as `credential checked`, lifts a
+    /// suspension and may warn of its expiry. A refused token, or one of another login,
+    /// suspends the credential and raises `credential_invalid` once. A failed call is logged
+    /// and changes nothing. Returns `false` once `cancel` is cancelled.
     async fn check_one(&self, cancel: &CancellationToken, credential: &Credential) -> bool {
         let answer = self.integration.check_token(cancel, credential).await;
         if cancel.is_cancelled() {
@@ -141,16 +177,33 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 let checked = expires_at.map(format_rfc3339_seconds);
                 let expires = checked.as_deref();
                 tracing::info!(credential = %name, expires_at = expires, "credential checked");
+                if self.health().accept(name) {
+                    tracing::info!(credential = %name, "credential suspension lifted");
+                }
                 if let Some(expires_at) = expires_at {
                     self.warn_expiry(cancel, credential, expires_at).await;
                 }
             }
             Ok(answer) => {
-                let reason = match answer {
-                    TokenAnswer::Rejected => "token_refused",
-                    TokenAnswer::Accepted { .. } => "login_mismatch",
+                let (reason, cause) = match answer {
+                    TokenAnswer::Rejected => (
+                        "token_refused",
+                        format!("GitHub refuses the token of credential {name}"),
+                    ),
+                    TokenAnswer::Accepted { .. } => (
+                        "login_mismatch",
+                        format!("The token of credential {name} belongs to another account"),
+                    ),
                 };
-                tracing::error!(credential = %name, reason, "credential check refused the token");
+                if self.health().refuse(name) {
+                    tracing::error!(credential = %name, reason, "credential suspended");
+                    let message = format!(
+                        "{cause}. The repositories of {name} are not reviewed until a check \
+                         accepts the token: replace it and restart autoreview."
+                    );
+                    self.notify_credential(cancel, Event::CredentialInvalid, name, &message)
+                        .await;
+                }
             }
             Err(err) => tracing::warn!(
                 credential = %name,

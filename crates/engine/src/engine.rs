@@ -189,7 +189,9 @@ where
     /// Runs the poll, worker and token check tickers of [`Engine::serve`] while the engine
     /// lock is held.
     ///
-    /// The tokens are checked once before the first poll, then every `credential_check`.
+    /// The tokens are checked once before the first poll, then every `credential_check`. After
+    /// each poll, the tokens of the suspended credentials and of those whose search GitHub
+    /// refused are checked again.
     async fn serve_locked(
         self: &Arc<Self>,
         cancel: &CancellationToken,
@@ -207,6 +209,7 @@ where
         );
         self.check_tokens(cancel).await;
         self.poll_and_log(cancel).await;
+        self.recheck_tokens(cancel).await;
         self.work(review_cancel, tasks);
         loop {
             tokio::select! {
@@ -216,6 +219,7 @@ where
                 }
                 _ = poll_ticker.tick() => {
                     self.poll_and_log(cancel).await;
+                    self.recheck_tokens(cancel).await;
                     self.prune(cancel);
                 }
                 _ = work_ticker.tick() => {
