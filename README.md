@@ -119,8 +119,8 @@ keeps untrusted authors behind a maintainer label.
   variables, from the environment or the file given with `--env-file`.
 - GitHub tokens as a list of credentials: one token, fine-grained tokens per
   owner or per repository, and a different account per owner if wanted.
-  Failing or expiring tokens are reported and stop only their
-  repositories (planned in #19).
+  Failing or expiring tokens are reported, and a failing one stops only its
+  repositories.
 - Claude Code and Codex reviewers share one result contract, with the blocking
   flag of each finding and the verdicts on prior findings.
 - Clean reviews that wait for a human are approved through the CLI, with an

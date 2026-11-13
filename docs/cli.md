@@ -301,7 +301,9 @@ as `credential checked` with its name, and with `expires_at` when GitHub sent on
 While it runs, it checks every token again when the engine starts and every
 `github.credential_check_hours`, logs each accepted check as `credential checked`
 with the same fields, and raises `credential_expiring` for a token that expires
-within `github.expiry_warning_days`.
+within `github.expiry_warning_days`. A token that GitHub refuses
+while it runs suspends only its credential and raises `credential_invalid`, see
+[suspension](knowledge/concepts/github-identity.md#suspension).
 
 A second `serve` on the same database is refused. Reviews running at shutdown
 resume from their stored steps on the next start. A SIGINT or SIGTERM during

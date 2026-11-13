@@ -74,8 +74,33 @@ with `credential_invalid`, and a token of another account with
 `credential_login_mismatch`; the message names the credential. `validate`
 makes no GitHub call unless it runs with `--check-credentials`, which runs the
 same check. While it runs, `serve` checks every token again: once when the
-engine starts and then every `github.credential_check_hours`. The suspension
-of a failing credential is planned in #19.
+engine starts and then every `github.credential_check_hours`.
+
+### Suspension
+
+A discovery search that GitHub refuses (HTTP 401) also checks that credential's
+token right after the pass; another search failure checks nothing. When a check
+finds the token refused, or of another account, `serve`
+suspends the credential: it logs `credential suspended` with the credential and
+a `reason` (`token_refused` or `login_mismatch`) and raises `credential_invalid`
+once. The message names the credential, never the token. While suspended:
+
+- its repositories are not searched, so no review of them is dispatched, and
+  their discovery records stay as they are, as after a failed search;
+- a queued or waiting review stored with it does not start;
+- a running review whose GitHub call GitHub refuses (HTTP 401) retries the step
+  within `schedule.step_retry_seconds`, then stops with `credential_invalid`,
+  which is not retried automatically; its `review_stopped` notice follows once
+  the repository is searched again.
+
+The other credentials keep reviewing; with a single credential every discovery
+pass fails with `credential_invalid` until the suspension is lifted. After each
+discovery pass `serve` checks the token of every suspended credential again; a
+token it accepts lifts the suspension (`credential suspension lifted`) and the
+next pass searches the repositories again. Tokens are read at start, so a new
+token needs a restart. The suspension lives in memory, which is enough because a
+restart begins with the startup check: while GitHub still refuses a token, that
+check stops the start with `credential_invalid`, for every credential.
 
 ### Expiry
 

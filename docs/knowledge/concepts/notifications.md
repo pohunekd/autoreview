@@ -62,7 +62,8 @@ Routes reach `matrix` backends; `none` and `webhook` backends are planned in
 
 ## Events
 
-The policy must list a level for every event below except `credential_expiring`.
+The policy must list a level for every event below except `credential_invalid`
+and `credential_expiring`.
 A policy that leaves another one out fails validation with
 `notifications: event X needs a level`.
 
@@ -78,12 +79,11 @@ A policy that leaves another one out fails validation with
 | `changes_requested` | A request for changes was published | `digest` |
 | `commented` | A comment review was published | `digest` |
 | `approval_expired` | A wait for approval passed `approval.timeout_hours` | `digest` |
+| `credential_invalid` | GitHub refuses a credential's token while the service runs; once per suspension | `action`, also when the policy leaves it out |
 | `credential_expiring` | A credential's token expires within `github.expiry_warning_days`, at most once a UTC day per credential while `serve` runs | `action`, also when the policy leaves it out |
 | `started` | A review started | `log` |
 | `retry_scheduled` | A failed review is retried later | `log` |
 | `superseded` | A newer head, a retarget or a changed trigger replaced a review | `log` |
-
-An event for a token that GitHub refuses while the service runs is planned in #19.
 
 The example levels come from the example policy. Each deployment chooses its own.
 
