@@ -634,7 +634,7 @@ mod tests {
     use crate::engine::{Clock, Engine};
     use crate::error::error_code;
     use crate::integrations::ReviewRequest;
-    use crate::model::{AwaitRecord, Decision, PublishedRecord, PullRequest};
+    use crate::model::{AwaitRecord, Decision, PublishedRecord, PullRequest, ReviewInput};
     use crate::protocol::fixtures::sha;
     use crate::protocol::validate::tests::test_config;
     use crate::store::Store;
@@ -1415,7 +1415,9 @@ notifications:
             "plain={plain} formatted={formatted}"
         );
         // Several credentials: each account has its own sections. The hand-off of a failed
-        // credential or of a repository that no credential serves is left out unread.
+        // credential or of a repository that no credential serves is left out unread. A
+        // hand-off of a review stored with `main` is read with it and listed under its account
+        // after `team` was put before it (#373).
         let account = |name: &str, login: &str, pattern: &str| Credential {
             name: name.to_owned(),
             login: login.to_owned(),
@@ -1435,7 +1437,20 @@ notifications:
         let (mut team, mut foreign) = (waiting.clone(), waiting.clone());
         team.repository = "example-org/beta".to_owned();
         foreign.repository = "other-org/tool".to_owned();
-        for pr in [&team, &foreign] {
+        let mut stored = team.clone();
+        stored.number = 6;
+        let input = ReviewInput {
+            pull_request: stored.clone(),
+            publisher_login: "example-user".to_owned(),
+            credential: "main".to_owned(),
+            ..ReviewInput::default()
+        };
+        (engine.store)
+            .in_tx(|transaction| {
+                (engine.store).enqueue_review(transaction, &stored.workflow_id(0), &input)
+            })
+            .expect("the review of the hand-off is stored");
+        for pr in [&team, &foreign, &stored] {
             hand_off(&engine, &fake, pr, at - time::Duration::hours(30), false).await;
         }
         fake.lock().requests = vec![
@@ -1451,6 +1466,13 @@ notifications:
         let main = plain.find("Reviews waiting for example-user (credential main) (1)\n- first");
         let team = plain.find("Reviews waiting for team-bot (credential team) (1)\n- second");
         let notes = plain.find("Waiting on author for team-bot (credential team) (1)\n");
+        let own = "Waiting on author for example-user (credential main) (1)\n- Optional polish \
+                   (example-org/beta#6,";
+        let reads = [
+            "example-org/beta#5 team",
+            "example-org/beta#6 main",
+            "example-org/beta#6 main",
+        ];
         assert!(
             main.is_some()
                 && main < team
@@ -1458,7 +1480,9 @@ notifications:
                 && result.truncated
                 && failed.starts_with("Reviews waiting for example-user (credential main) (1)")
                 && !failed.contains("team-bot")
-                && state.state_reads == ["example-org/beta#5 team"],
+                && plain.contains(own)
+                && failed.contains(own)
+                && state.state_reads == reads,
             "plain={plain} failed={failed} reads={:?}",
             state.state_reads
         );

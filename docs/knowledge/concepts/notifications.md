@@ -168,9 +168,11 @@ Rules for the queue:
 - With several credentials, the message is grouped by account: each account has
   its own sections, headed by its login and credential name. Handed-off notes
   are listed under the account of the review that handed them off and read with
-  its credential. Notes whose credential failed its search or no longer fits
-  the review, or of a repository that no credential serves, are left out
-  without a read.
+  its credential, or with the serving credential once that review is pruned
+  (`store.review_retention_seconds`, see
+  [GitHub identity](github-identity.md#what-a-credential-is)). Notes whose
+  credential failed its search or no longer fits the review, or of a repository
+  that no credential serves, are left out without a read.
 - At most `notify.review_queue.max_items` pull requests are listed. The message
   says when it was truncated.
 - Nothing is sent when nothing waits. The command still prints an empty list.
