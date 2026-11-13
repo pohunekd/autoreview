@@ -11,7 +11,7 @@ intents: [setup, help]
 
 > **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
 > marked planned or "not in v0.1" are not in 0.2.0. The container image this page
-> mentions is not in 0.2.0 and is planned in #40.
+> mentions comes after 0.3.0.
 
 This guide takes one repository from nothing to a review comment posted by
 autoreview. It uses one reviewer and comments only, so nothing is approved
@@ -227,7 +227,7 @@ Once one review works, run autoreview as a long-running service so it reviews
 without manual polls. [`scripts/setup`](getting-started.md) (after 0.2.0) writes and
 starts user units on one machine. On a server, install the systemd units of install path b with
 its installer, or use the
-container image that is planned in #40, as described in
+container image (after 0.3.0), as described in
 [install](../../install.md), and let `autoreview serve` run until you stop it.
 Reviews that are running at shutdown resume after the next start.
 

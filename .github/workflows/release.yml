@@ -1,9 +1,10 @@
 name: Release
 
-# A pushed tag v<version> builds the static musl archives, attests them and
-# creates a draft release; the owner reviews and publishes the draft. A manual
-# run is a dry run: it builds the archives of the selected ref and uploads them
-# as workflow artifacts, and attests and publishes nothing. The workflow never
+# A pushed tag v<version> builds the static musl archives and the linux/amd64
+# image, pushes the image to GHCR, attests both and creates a draft release; the
+# owner reviews and publishes the draft. A manual run is a dry run: it builds
+# the archives of the selected ref and uploads them as workflow artifacts,
+# builds and checks the image, and pushes, attests and publishes nothing. The workflow never
 # creates, moves or deletes a tag.
 on:
   push:
@@ -136,8 +137,132 @@ jobs:
             dist/autoreview-${{ needs.meta.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
 
-  # The only job that can mint an OIDC token. It runs no repository code and
-  # no build script; it signs exactly the files the build jobs uploaded.
+  # Builds the linux/amd64 image from the x86_64 archive of this run and checks
+  # that `init` and `validate` run in it. It has no write permission; on a tag
+  # push, image-push pushes the saved image.
+  image:
+    name: image
+    needs: [meta, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      ARCHIVE: autoreview-${{ needs.meta.outputs.version }}-x86_64-unknown-linux-musl
+      DOCKER_BUILDKIT: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: archive-x86_64-unknown-linux-musl
+          path: ${{ runner.temp }}/dist
+      - name: Unpack the archive
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/dist"
+          sha256sum -c -- "$ARCHIVE.tar.gz.sha256"
+          mkdir "$RUNNER_TEMP/context"
+          tar -xzf "$ARCHIVE.tar.gz" -C "$RUNNER_TEMP/context"
+      - name: Build
+        run: |
+          set -euo pipefail
+          docker build -f deploy/image/Dockerfile --build-arg "VERSION=$VERSION" \
+            --tag "autoreview:$VERSION" "$RUNNER_TEMP/context"
+      # The example configuration, written by init in the image, must pass
+      # validate in a read-only container without network; the token values
+      # are placeholders, which validate never sends.
+      - name: Validate the example configuration
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/config"
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            -v "$RUNNER_TEMP/config:/etc/autoreview" "autoreview:$VERSION" \
+            init --dir /etc/autoreview --login review-bot --pohunek-host review-host \
+            --example single-repo-comment
+          docker run --rm --network none --read-only \
+            -v "$RUNNER_TEMP/config:/etc/autoreview:ro" \
+            -e AUTOREVIEW_GH_TOKEN=placeholder -e AUTOREVIEW_MATRIX_TOKEN=placeholder \
+            "autoreview:$VERSION" validate
+      - name: Save
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/image"
+          docker save -o "$RUNNER_TEMP/image/image.tar" "autoreview:$VERSION"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: github.event_name == 'push'
+        with:
+          name: image
+          path: ${{ runner.temp }}/image/image.tar
+          if-no-files-found: error
+
+  # The only job with `packages: write`. It runs no repository code: it pushes
+  # the image that `image` checked as ghcr.io/<repository>:<version>, refuses a
+  # tag that exists, and outputs the digest of the pushed manifest.
+  image-push:
+    name: image-push
+    needs: [meta, image]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: image
+          path: ${{ runner.temp }}/image
+      - name: Push
+        id: push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+          if docker manifest inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "::error::$IMAGE:$VERSION exists; delete that package version and run again"
+            exit 1
+          fi
+          docker load -i "$RUNNER_TEMP/image/image.tar"
+          docker tag "autoreview:$VERSION" "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION"
+          # The digest that the registry serves for the tag is what a pull resolves.
+          digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "$IMAGE:$VERSION")"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no digest for the pushed image: $digest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          docker logout ghcr.io
+
+  # Attests the pushed image by digest. Like attest, it runs no repository code.
+  attest-image:
+    name: attest-image
+    needs: image-push
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ needs.image-push.outputs.digest }}
+
+  # With attest-image, the only jobs that can mint an OIDC token. It runs no
+  # repository code and no build script; it signs exactly the files the build
+  # jobs uploaded.
   attest:
     name: attest
     needs: build
@@ -171,7 +296,7 @@ jobs:
   # cancelled.
   release:
     name: release
-    needs: [meta, attest]
+    needs: [meta, attest, attest-image]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

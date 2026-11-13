@@ -1,0 +1,25 @@
+# Runs the autoreview image as docs/install.md, path c, describes it. Next to
+# this file: ./config with config.yaml, policy.yaml and prompts/, and the
+# secrets file ./autoreview.env (mode 0600, outside ./config). Set
+# AUTOREVIEW_VERSION to the release, for example in the shell.
+services:
+  autoreview:
+    image: "ghcr.io/pohunekd/autoreview:${AUTOREVIEW_VERSION:?set the release to run}"
+    command: ["serve"]
+    # Holds the AUTOREVIEW_* secrets of the *_env keys of config.yaml.
+    env_file: ./autoreview.env
+    volumes:
+      - ./config:/etc/autoreview:ro
+      - autoreview-state:/var/lib/autoreview
+    tmpfs:
+      - /run/autoreview:uid=65532,gid=65532,mode=0700
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # Shares the host's route to the review hosts, such as its tunnel.
+    network_mode: host
+    restart: unless-stopped
+
+volumes:
+  autoreview-state:

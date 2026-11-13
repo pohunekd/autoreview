@@ -102,7 +102,7 @@ scenarios are guides without a policy of their own:
 - Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` (after 0.2.0)
   writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the
   installer of the install page writes the system units of a server user (after
-  0.3.0; the container image is planned in #40)
+  0.3.0, as is the container image)
 
 ## Security model
 
@@ -129,6 +129,5 @@ keeps untrusted authors behind a maintainer label.
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
 - Distributed as static Linux release archives from 0.1.0 on, with systemd
-  units and an installer after 0.3.0; a container image (planned in #40)
-  follows.
+  units, an installer and a container image after 0.3.0.
 - MIT license.

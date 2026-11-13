@@ -2,7 +2,7 @@
 type: Reference
 id: reference/install
 title: Install autoreview
-description: Prerequisites, the three install paths (release archive with checksum and attestation, systemd units with their installer, container image planned in #40), building from source, first configuration, the first review and where to go for upgrades.
+description: Prerequisites, the three install paths (release archive with checksum and attestation, systemd units with their installer, container image), building from source, first configuration, the first review and where to go for upgrades.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -13,8 +13,8 @@ intents: [setup, help]
 > marked planned or "not in v0.1" are not in 0.2.0. The release archives are
 > published from `v0.1.0` on; the release workflow builds and attests them.
 > The systemd units and their installer of path b come in the archive after
-> 0.3.0. The container image `ghcr.io/pohunekd/autoreview`
-> is not in 0.2.0 and is planned in #40.
+> 0.3.0, and so does the container image `ghcr.io/pohunekd/autoreview` of
+> path c.
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
 agents run as reviewers in pohunek sessions on the **review hosts**, where a
@@ -29,7 +29,7 @@ pohunek daemon runs and the repositories are registered.
 - **Repositories registered** with `pohunek project add` on a review host. The first
   host of `pohunek.hosts` that has the repository runs its reviews, unless
   `pohunek.route_overrides` pins it ([multiple hosts](knowledge/guides/multihost.md)).
-- **GitHub CLI (`gh`)** on the autoreview host (the planned container image bundles it).
+- **GitHub CLI (`gh`)** on the autoreview host (the container image bundles it).
 - **GitHub token** of the account autoreview acts as, held in the variable named
   by the `token_env` of the one credential (`AUTOREVIEW_GH_TOKEN` in the
   example). It belongs to the credential's `login`; several credentials are
@@ -53,7 +53,7 @@ a dedicated server user.
 |---|---|---|
 | a. Release binary (default) | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
 | b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `deploy/install.sh`, which installs `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
-| c. Container | You run containers | `ghcr.io/pohunekd/autoreview:<version>`, planned in #40 |
+| c. Container | You run containers on `linux/amd64` | `ghcr.io/pohunekd/autoreview:<version>` and `deploy/compose/compose.yml` |
 
 Paths a and b need the `autoreview` system user that path b creates.
 
@@ -173,29 +173,46 @@ the pohunek client access the CLI needs. That setup is not in the reference page
 
 ## c. Container
 
-The container image is not in 0.2.0 and is planned in #40; this section
-describes its design.
+After 0.3.0, each release pushes `ghcr.io/pohunekd/autoreview:<version>` for
+`linux/amd64`, built from the x86_64 release archive and attested by the
+release workflow. There is no `arm64` image: autoreview cannot review without
+the `pohunek` CLI, and pohunek publishes its Linux CLI for x86_64 only. Check
+the attestation of the image before you run it:
 
-The image bundles `gh` and the `pohunek` CLI at pinned versions. The config is
-mounted read-only, state goes to a volume, and the container must reach the review
-hosts. This example uses host networking to share the host's tunnel.
+```sh
+gh attestation verify "oci://ghcr.io/pohunekd/autoreview:$version" --repo pohunekd/autoreview \
+  --signer-workflow pohunekd/autoreview/.github/workflows/release.yml \
+  --source-ref "refs/tags/v$version" --deny-self-hosted-runners
+```
 
-`compose.yml`:
+The image holds autoreview as `/usr/local/bin/autoreview`, `gh` as
+`/usr/bin/gh` and the `pohunek` CLI as `/usr/local/bin/pohunek`, at the versions
+pinned in [`deploy/image/Dockerfile`](../deploy/image/Dockerfile). These are the
+paths of the complete configuration file, so a configuration written by `init`
+runs unchanged. It runs as the user `65532` with `HOME=/var/lib/autoreview` and
+`AUTOREVIEW_CONFIG=/etc/autoreview/config.yaml`; the config is mounted
+read-only, state goes to a volume, and the container must reach the review
+hosts. The example uses host networking to share the host's tunnel.
+
+[`deploy/compose/compose.yml`](../deploy/compose/compose.yml):
 
 ```yaml
 services:
   autoreview:
-    image: ghcr.io/pohunekd/autoreview:<version>   # planned, not published yet
-    command: ["--config", "/etc/autoreview/config.yaml", "serve"]
-    env_file: ./autoreview.env                     # mode 0600, holds the AUTOREVIEW_GH_TOKEN* variables and other AUTOREVIEW_* secrets
+    image: "ghcr.io/pohunekd/autoreview:${AUTOREVIEW_VERSION:?set the release to run}"
+    command: ["serve"]
+    # Holds the AUTOREVIEW_* secrets of the *_env keys of config.yaml.
+    env_file: ./autoreview.env
     volumes:
       - ./config:/etc/autoreview:ro
       - autoreview-state:/var/lib/autoreview
     tmpfs:
-      - /run/autoreview
+      - /run/autoreview:uid=65532,gid=65532,mode=0700
     read_only: true
+    cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+    # Shares the host's route to the review hosts, such as its tunnel.
     network_mode: host
     restart: unless-stopped
 
@@ -203,8 +220,20 @@ volumes:
   autoreview-state:
 ```
 
-Set `github.gh_bin` and `pohunek.bin` to the paths of the bundled tools inside
-the image. The image layout is not documented yet.
+The secrets come from `./autoreview.env` (mode `0600`, outside `./config`) as
+environment variables; see [secrets](knowledge/safety/secrets.md). Write the
+configuration into `./config` with `init` from the image, then check it, as the
+user that owns `./config`:
+
+```sh
+export AUTOREVIEW_VERSION=$version
+mkdir -m 0755 config
+docker run --rm --network none --user "$(id -u):$(id -g)" -v "$PWD/config:/etc/autoreview" \
+  "ghcr.io/pohunekd/autoreview:$version" init --dir /etc/autoreview --login <login> \
+  --pohunek-host <host> --example single-repo-comment
+docker compose run --rm autoreview validate
+docker compose up -d
+```
 
 ## First configuration
 
