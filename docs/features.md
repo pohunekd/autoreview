@@ -76,9 +76,10 @@ webhook backends are planned in #29. An hourly queue
 lists every pull request waiting on you or on its author.
 [Notifications](knowledge/concepts/notifications.md)
 
-**Acts as one GitHub account.** One token and its login serve every
-repository, and only `gh` sees the token. A token or account per owner or
-repository is planned in #14 to #18. [Configuration: credentials](configuration.md#credentials)
+**Acts as the GitHub accounts you configure.** One token and its login can serve
+every repository, and only `gh` sees a token. A token or account per owner or
+repository is a list of credentials; a review keeps the account it started with.
+[Configuration: credentials](configuration.md#credentials)
 
 **Survives failure.** All state is in one SQLite file. Reviews resume after a
 restart, transient failures are retried with backoff, and sessions it cannot
@@ -96,8 +97,8 @@ one versioned JSON document for a dashboard of your own.
 - A pohunek daemon on one or more review hosts, with the repositories
   registered as pohunek projects and the official Claude Code and/or Codex
   runtime packages installed.
-- The GitHub CLI and one token, of your own account or a machine user; several
-  tokens are planned in #14 to #18. [GitHub identity](knowledge/concepts/github-identity.md)
+- The GitHub CLI and one token, of your own account or a machine user, or one
+  token per owner or repository. [GitHub identity](knowledge/concepts/github-identity.md)
 - Linux with systemd, or a container runtime for the container image that comes
   planned in #40.
 

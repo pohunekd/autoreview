@@ -32,8 +32,8 @@ pohunek daemon runs and the repositories are registered.
 - **GitHub CLI (`gh`)** on the autoreview host (the planned container image bundles it).
 - **GitHub token** of the account autoreview acts as, held in the variable named
   by the `token_env` of the one credential (`AUTOREVIEW_GH_TOKEN` in the
-  example). It belongs to the credential's `login`; several credentials are
-  planned in #14 to #18.
+  example). It belongs to the credential's `login`; a token per owner or
+  repository is one more credential with its own `token_env`.
   A personal token or a machine user works; see [credentials](configuration.md#credentials)
   and [GitHub identity](knowledge/concepts/github-identity.md).
 - **Git access on each review host.** The review hosts fetch the code with their own

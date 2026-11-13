@@ -66,8 +66,8 @@ out of the daemon's environment and out of the pohunek profile.
 The one token reaches what its own scope allows on GitHub; a leaked token
 exposes every repository that scope covers (see
 [GitHub identity](../concepts/github-identity.md#token-kinds-and-organization-approval)).
-A token per owner or repository, which limits a leak to its repositories, is
-planned in #14 to #18.
+A token per owner or repository limits a leak to its repositories, see
+[credentials](../../configuration.md#credentials).
 
 ## The environment file
 

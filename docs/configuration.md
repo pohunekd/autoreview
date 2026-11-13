@@ -181,9 +181,9 @@ repository credentials above their owner's. The loader refuses:
   reviews none of its repositories or earlier credentials take them all, with
   `credential_unused`.
 
-`validate` accepts several credentials. The other commands use one token for
-every `gh` call and refuse several credentials with `configuration_invalid`
-naming `github.credentials`; serving several is planned in #14 to #18.
+Every command accepts several credentials. Each `gh` call gets only the token of
+the credential that serves its repository, and a review keeps the credential it
+was dispatched with ([GitHub identity](knowledge/concepts/github-identity.md)).
 
 ```yaml
 credentials:
@@ -195,8 +195,8 @@ credentials:
 
 | Key | Meaning |
 |---|---|
-| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; error messages name the credential by it |
-| `login` | The account the token belongs to. Reviews are requested from, published by, and approved as this account |
+| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; error messages name the credential by it. A dispatched review keeps the name it was dispatched with, so a rename stops it with `credential_not_covered` until `autoreview retry` |
+| `login` | The account the token belongs to. Reviews are requested from, published by, and approved as this account. A dispatched review keeps the login it was dispatched with, so a login change stops it with `credential_not_covered` until `autoreview retry` |
 | `token_env` | Environment variable that holds the token; its name must match `AUTOREVIEW_[A-Z0-9_]+` |
 | `match` | The repositories the credential serves: lowercase `owner/repository`, `owner/*` or `*` |
 

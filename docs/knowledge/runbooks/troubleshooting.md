@@ -43,7 +43,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
 | `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
 | `credential_invalid` | GitHub refuses the token: revoked, expired or never valid | Replace the token in the variable that `token_env` names |
-| `configuration_invalid` naming `github.credentials` or `github.credentials.match` | Several credentials outside `validate`, or a `match` entry that an earlier one covers | [Credential errors](#credential-errors) |
+| `configuration_invalid` naming `github.credentials` or `github.credentials.match` | A `match` entry that an earlier one covers | [Credential errors](#credential-errors) |
 | `credential_not_covered`, `credential_unused` | A policy rule has a repository that no credential matches, a credential serves no repository of the policy, or a review's credential no longer fits it | [Credential errors](#credential-errors) |
 | A fine-grained token sees nothing | Organization approval pending, wrong resource owner, or repository not selected | [A fine-grained token sees nothing](#a-fine-grained-token-sees-nothing) |
 | `engine_already_running` | Another `serve` uses the same database | Stop the other process |
@@ -462,9 +462,7 @@ entry that an earlier entry covers (`configuration_invalid` naming
 `github.credentials.match`; move the narrower credential up or drop the entry),
 a policy rule with a repository that no credential matches
 (`credential_not_covered`; add a credential for its owner), and a credential
-that serves no repository of the policy (`credential_unused`; remove it). Only
-`validate` accepts several credentials; the other commands refuse them with
-`configuration_invalid` naming `github.credentials` until #14 to #18. An empty
+that serves no repository of the policy (`credential_unused`; remove it). An empty
 or unset token variable is refused at load with `configuration_missing` naming
 `github.credentials.token_env`.
 

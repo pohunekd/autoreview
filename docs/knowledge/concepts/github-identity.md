@@ -2,7 +2,7 @@
 type: Concept
 id: concept/github-identity
 title: GitHub identity
-description: What a GitHub credential is (token and login), which credential serves a repository (first match), how triggers, own pull requests and approvals follow its login, the startup check of every token and its expiry, token kinds and organization approval, and the token permissions each GitHub call needs; serving several credentials, checks while running and expiry warnings are planned.
+description: What a GitHub credential is (token and login), which credential serves a repository (first match), how triggers, own pull requests and approvals follow its login, the startup check of every token and its expiry, token kinds and organization approval, and the token permissions each GitHub call needs; a review keeps the credential it was dispatched with; checks while running and expiry warnings are planned.
 source_kind: manual
 intents: [setup, help, debug]
 ---
@@ -46,10 +46,8 @@ takes the serving credential once, if it has the review's login, and keeps it.
 
 ## Choosing the shape
 
-The commands that call GitHub accept one credential: one account reviews
-everything its token can reach. `validate` already checks a list of several.
-Serving a token per owner, a token per repository and an account per owner is
-planned in #14 to #18.
+One credential lets one account review everything its token can reach. A list
+serves a token per owner, a token per repository or an account per owner.
 
 ## What the login decides
 
@@ -143,8 +141,8 @@ verified: the GraphQL reference page fetched did not include it.
 - **Single resource owner.** A fine-grained token is limited to one user or
   organization. The [managing personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
   page states: "Each token is limited to access resources owned by a single user or
-  organization." A fine-grained token therefore covers one owner; several
-  credentials for several owners are planned in #14 to #18.
+  organization." A fine-grained token therefore covers one owner; use one
+  credential per owner.
 
 ### Classic token
 
@@ -165,8 +163,8 @@ host that runs its reviews, in addition to the token of its credential.
 
 ## Repositories of several owners
 
-Planned in #14 to #18; `validate` already checks such a list, see
-[credentials](../../configuration.md#credentials).
+List one credential per owner, narrower `match` entries first, see
+[recipe h](../guides/combining.md#recipe-h-different-accounts-per-owner).
 
 ## Approvals and branch protection
 

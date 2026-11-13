@@ -217,8 +217,24 @@ its next retry. Install the profiles on both hosts ([multihost guide](multihost.
 
 ## Recipe h: different accounts per owner
 
-Planned in #14 to #18; `validate` already checks such a list, see
-[credentials](../../configuration.md#credentials).
+One credential per owner, each with its own token and login; a narrower `match`
+comes first:
+
+```yaml
+credentials:
+  - name: team
+    login: team-review-bot
+    token_env: AUTOREVIEW_TEAM_TOKEN
+    match: ["example-team/*"]
+  - name: default
+    login: review-bot
+    token_env: AUTOREVIEW_GH_TOKEN
+    match: ["*"]
+```
+
+Each repository is reviewed by the account of its first matching credential,
+and a review keeps that account until it ends. A failing token stops only the
+searches of its own repositories. See [credentials](../../configuration.md#credentials).
 
 ## Rules that interact
 
