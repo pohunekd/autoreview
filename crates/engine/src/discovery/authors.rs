@@ -12,6 +12,9 @@ use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::model::{Candidate, ClassifiedCandidates, RejectedCandidate, SkippedCandidate};
 
+/// Step name of the candidate search in the retry log.
+const STEP_LIST_CANDIDATES: &str = "list_candidates";
+
 /// Reason of a pull request whose rule skips its untrusted author (`untrusted: skip`).
 pub(crate) const SKIPPED_UNTRUSTED_AUTHOR: &str = "untrusted_author";
 
@@ -51,7 +54,10 @@ pub(crate) fn classify_candidate(
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
-    /// Lists the candidates and resolves the author class of each one.
+    /// Lists the candidates of every credential and resolves the author class of each one.
+    ///
+    /// A pull request counts only from the search of the credential that serves its
+    /// repository. A credential whose search fails is skipped and named in the result.
     ///
     /// The permission is read only when it can change the class, once per author and
     /// repository in a pass. A candidate whose rule skips untrusted authors is listed as skipped,
@@ -62,19 +68,38 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns the error of the search and the error of a permission read after a cancel.
+    /// Returns the search error when every credential fails, and the error of a search or a
+    /// permission read after a cancel.
     pub async fn list_classified(
         &self,
         cancel: &CancellationToken,
     ) -> Result<ClassifiedCandidates, Error> {
-        let listed = self.integration.list_candidates(cancel).await?;
+        let (searches, failed_credentials) = self
+            .search_each(STEP_LIST_CANDIDATES, cancel, |credential| {
+                self.integration.list_candidates(cancel, credential)
+            })
+            .await?;
+        let mut listed = Vec::new();
+        let mut rejected = Vec::new();
+        for (credential, list) in searches {
+            let owned = |repository: &str| {
+                (self.config.credentials.serving(repository))
+                    .is_ok_and(|serving| serving.name == credential.name)
+            };
+            let found = list.candidates.into_iter();
+            listed.extend(found.filter(|item| owned(&item.pull_request.repository)));
+            rejected.extend(
+                list.rejected
+                    .into_iter()
+                    .filter(|item| owned(&item.repository)),
+            );
+        }
         let mut candidates = Vec::new();
-        let mut rejected = listed.rejected;
         let mut skipped = Vec::new();
         // A failed read is kept as its code, so a failing author costs one read per pass.
         let mut reads: BTreeMap<(String, String), Result<Option<Permission>, String>> =
             BTreeMap::new();
-        for candidate in listed.candidates {
+        for candidate in listed {
             let pr = &candidate.pull_request;
             let review_id = pr.review_id();
             let Some(authors) = candidate.authors.clone() else {
@@ -147,6 +172,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             candidates,
             rejected,
             skipped,
+            failed_credentials,
         })
     }
 }

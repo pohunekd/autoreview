@@ -51,9 +51,6 @@ const STORE_UNAVAILABLE: &str = "store_unavailable";
 /// Cause text of a Go store call on a cancelled context, Go's `context.Canceled`.
 const CONTEXT_CANCELED: &str = "context canceled";
 
-/// Step name of the candidate search in the retry log.
-const STEP_LIST_CANDIDATES: &str = "list_candidates";
-
 /// Step name of the read of a pull request that left the search, in the retry log.
 const STEP_READ_PULL_REQUEST: &str = "read_pull_request";
 
@@ -127,29 +124,26 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns the error of the candidate search, of the store, of the review planning or of
-    /// `force`, and `state_entry_limit_exceeded` when the schedule is full.
+    /// `force`, and `state_entry_limit_exceeded` when the schedule is full. A `force` of a pull
+    /// request whose credential could not search gets that search's code, not permanent.
     pub(crate) async fn poll_pass(
         &self,
         cancel: &CancellationToken,
         force: Option<&RetryRequest>,
     ) -> Result<Pass, Error> {
-        // A failure here leaves the drafts for the next pass and holds up no other review.
-        if let Err(err) = self.integration.ready_drafts(cancel).await
-            && !cancel.is_cancelled()
-        {
-            tracing::warn!(
-                error_code = error_code(&err),
-                "marking drafts ready for review failed"
-            );
+        for credential in self.config.credentials.iter() {
+            // A failure leaves the drafts for the next pass and holds up no other review.
+            if let Err(err) = self.integration.ready_drafts(cancel, credential).await
+                && !cancel.is_cancelled()
+            {
+                tracing::warn!(
+                    credential = %credential.name,
+                    error_code = error_code(&err),
+                    "marking drafts ready for review failed"
+                );
+            }
         }
-        let listed = retry_step(
-            STEP_LIST_CANDIDATES,
-            self.step_policy(),
-            &self.clock,
-            cancel,
-            || self.list_classified(cancel),
-        )
-        .await?;
+        let listed = self.list_classified(cancel).await?;
         live(cancel)?;
         let history = self.store.run_history(self.config.state_entry_limit)?;
         let now = self.clock.wall_now().to_offset(UtcOffset::UTC);
@@ -160,25 +154,39 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         for candidate in listed.candidates {
             present.insert(candidate.pull_request.key(), candidate);
         }
+        let failed = &listed.failed_credentials;
+        // The records of an unsearched repository stay as they are until its search succeeds.
+        let held = |key: &str| self.unsearched(failed, key_repository(key));
         let mut notices = Vec::new();
-        self.report_rejected(&mut state, &listed.rejected, &mut notices)?;
-        // The review queue and `review` read the skips of the last pass; a skip sends no notice.
-        state.skipped = listed
-            .skipped
-            .iter()
-            .map(|item| (item.key(), item.reason.clone()))
+        let kept: Vec<_> = (state.rejected.iter().filter(|(key, _)| held(key)))
+            .map(|(key, code)| (key.clone(), code.clone()))
             .collect();
+        self.report_rejected(&mut state, &listed.rejected, &mut notices)?;
+        state.rejected.extend(kept);
+        // The review queue and `review` read the skips of the last pass; a skip sends no notice.
+        state.skipped.retain(|key, _| held(key));
+        let skips = listed.skipped.iter();
+        state
+            .skipped
+            .extend(skips.map(|item| (item.key(), item.reason.clone())));
         let mut result = PollResult {
             open,
             ..PollResult::default()
         };
         let supersede = self
-            .supersede_awaiting(cancel, &mut state, &present, &history)
+            .supersede_awaiting(cancel, &mut state, &present, &history, failed)
             .await?;
         result.superseded = i64::try_from(supersede.len()).unwrap_or(i64::MAX);
-        self.remind_handoffs(cancel, &mut state, &present, now, &mut notices)
+        self.remind_handoffs(cancel, &mut state, &present, failed, now, &mut notices)
             .await?;
         if let Some(force) = force {
+            // The search that would find it failed, so the pull request is unknown, not gone.
+            if let Ok(credential) = self.config.credentials.serving(&force.repository)
+                && let Some(code) = failed.get(&credential.name)
+            {
+                let cause = format!("the search of credential {} failed", credential.name);
+                return Err(Error::workflow(code.clone(), false, Some(cause.into())));
+            }
             self.apply_force(cancel, &mut state, &present, &history, force, now)?;
         }
         let mut dispatches = Vec::new();
@@ -406,7 +414,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             self.config.pohunek_hosts.contains(host)
                 && (host_pass.failures.contains_key(host) || !host_pass.answers.contains(host))
         });
-        self.prune_discovery(&mut state, &present, now);
+        self.prune_discovery(&mut state, &present, failed, now);
         live(cancel)?;
         self.store.in_tx(|transaction| {
             for item in &dispatches {
@@ -520,6 +528,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the waits that no longer match their pull request and drops ended waits.
     ///
     /// A pull request missing from search is read directly first, because search lags behind.
+    /// A wait of an unsearched repository stays; one that no credential serves ends unread.
     ///
     /// # Errors
     ///
@@ -530,6 +539,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         state: &mut DiscoveryState,
         present: &BTreeMap<String, Candidate>,
         own: &[Run],
+        failed: &BTreeMap<String, String>,
     ) -> Result<Vec<String>, Error> {
         let finished: BTreeSet<&str> = own
             .iter()
@@ -547,6 +557,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 if record.matches(&candidate.pull_request) {
                     continue;
                 }
+            } else if self.unsearched(failed, &record.repository) {
+                continue;
+            } else if self.config.credentials.serving(&record.repository).is_err() {
+                tracing::info!(
+                    repository = %record.repository,
+                    pull_request = record.number,
+                    "approval wait ended: no credential serves the repository"
+                );
             } else {
                 let read = retry_step(
                     STEP_READ_PULL_REQUEST,
@@ -581,6 +599,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// The reminder is due when the author did not request the review again within the policy's
     /// reminder time. The hand-off of a pull request that is no longer open ends. A failed read
     /// is retried on the next pass, so it holds up no review. The reminders go to `notices`.
+    /// An unsearched repository is not read; the hand-off of one that no credential serves ends.
     ///
     /// # Errors
     ///
@@ -591,6 +610,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         cancel: &CancellationToken,
         state: &mut DiscoveryState,
         present: &BTreeMap<String, Candidate>,
+        failed: &BTreeMap<String, String>,
         now: OffsetDateTime,
         notices: &mut Vec<Notice>,
     ) -> Result<(), Error> {
@@ -600,7 +620,11 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
         let mut due = Vec::new();
         for (key, record) in &state.published {
-            if !record.awaits_author || record.reminded || present.contains_key(key) {
+            if !record.awaits_author
+                || record.reminded
+                || present.contains_key(key)
+                || self.unsearched(failed, &record.repository)
+            {
                 continue;
             }
             let is_due = u128::try_from(go_elapsed_nanos(now, record.published_at))
@@ -613,6 +637,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             let Some(mut record) = state.published.get(&key).cloned() else {
                 continue;
             };
+            if self.config.credentials.serving(&record.repository).is_err() {
+                tracing::info!(
+                    repository = %record.repository,
+                    pull_request = record.number,
+                    "notes hand-off ended: no credential serves the repository"
+                );
+                record.awaits_author = false;
+                state.published.insert(key, record);
+                continue;
+            }
             let read = retry_step(
                 STEP_READ_PULL_REQUEST_STATE,
                 self.step_policy(),
@@ -766,15 +800,17 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Keeps the discovery state bounded.
     ///
     /// Records of pull requests that left every trigger are withdrawn, and dropped once they
-    /// ended and block nothing. Published decisions older than the retention are dropped.
+    /// ended and block nothing; those of an unsearched repository stay. Published decisions
+    /// older than the retention are dropped.
     fn prune_discovery(
         &self,
         state: &mut DiscoveryState,
         present: &BTreeMap<String, Candidate>,
+        failed: &BTreeMap<String, String>,
         now: OffsetDateTime,
     ) {
         state.schedule.retain(|key, record| {
-            if present.contains_key(key) {
+            if present.contains_key(key) || self.unsearched(failed, key_repository(key)) {
                 return true;
             }
             match record.phase.as_str() {
@@ -812,6 +848,12 @@ fn failed_before_run(previous: &Record, target: &Target) -> bool {
     previous.identity == target.identity()
         && previous.phase == phase::FAILED
         && previous.workflow_id.is_empty()
+}
+
+/// Returns the repository of a `repository#number` key.
+fn key_repository(key: &str) -> &str {
+    key.rsplit_once('#')
+        .map_or(key, |(repository, _)| repository)
 }
 
 /// Reports a pull request that changed between the search and its detail read.

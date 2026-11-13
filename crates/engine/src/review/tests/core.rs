@@ -11,7 +11,9 @@ use serde_json::json;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{HostOrder, HostStateChoice, HostStateRules, NotifyRoute};
+use crate::config::{
+    Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules, NotifyRoute,
+};
 use crate::engine::{Engine, SystemClock};
 use crate::error::{Error, error_code};
 use crate::integrations::SessionRequest;
@@ -23,7 +25,7 @@ use crate::model::{
 use crate::protocol::fixtures::sha;
 use crate::review::input::NOTIFY_STEP_PREFIX;
 use crate::testing::fake::{INTEGRATION_POLICY, count_notes, reviewer_output};
-use crate::testing::harness::{FakeClock, integration_pull_request, start_harness};
+use crate::testing::harness::{FakeClock, Harness, integration_pull_request, start_harness};
 
 /// Output of a reviewer session that has not finished: Go's nil output.
 fn unfinished(_: &SessionRequest) -> String {
@@ -52,11 +54,38 @@ async fn second_engine_on_the_same_store_is_refused() {
     h.stop_engine().await;
 }
 
+/// Serves `acme/*` with the credential `acme` and every other repository with `rest`.
+fn two_credentials(config: &mut Config) {
+    let credential = |name: &str, pattern: &str| Credential {
+        name: name.to_owned(),
+        login: "reviewer".to_owned(),
+        token: format!("{name}-token"),
+        matches: vec![pattern.to_owned()],
+    };
+    let list = vec![credential("acme", "acme/*"), credential("rest", "*")];
+    config.credentials = Credentials::new(list).expect("the credentials load");
+}
+
+/// Makes the searches of `name` fail with `code` and its reads fail; `None` fails none.
+fn fail_credential(h: &Harness, failing: Option<(&str, &str)>) {
+    let mut state = h.fake.lock();
+    state.failing_credentials.clear();
+    if let Some((name, code)) = failing {
+        state
+            .failing_credentials
+            .insert(name.to_owned(), code.to_owned());
+    }
+}
+
 #[tokio::test]
 async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
-    let mut h = start_harness(|_| {}).await;
+    let mut h = start_harness(two_credentials).await;
+    // A truncated search fails only its credential; the other's pull request is reviewed.
+    fail_credential(&h, Some(("rest", "github_search_limit_exceeded")));
     let pr = integration_pull_request("acme/widget", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
+    let other = integration_pull_request("risky/tool", &sha("b"));
+    h.fake.open(other.clone(), h.rule(&other.repository));
     h.poll_until("an automatic approval", || h.publications() == 1)
         .await;
     h.wait_for("the approval notification", || {
@@ -86,6 +115,40 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
     assert!(
         h.started_count() == 2 && h.publications() == 1,
         "a published head was reviewed again"
+    );
+    // `rest`'s search also finds `acme`'s pull requests; only `acme` may review them.
+    fail_credential(&h, Some(("acme", "github_request_failed")));
+    let next = integration_pull_request("acme/gadget", &sha("c"));
+    h.fake.open(next.clone(), h.rule(&next.repository));
+    h.poll_until("the review of rest's pull request", || {
+        h.publications() == 2
+    })
+    .await;
+    // A retry names the failed search, not a withdrawn review request.
+    match h.retry(&next).await {
+        Err(err) => assert_eq!(
+            err.to_string(),
+            "github_request_failed: the search of credential acme failed"
+        ),
+        Ok(result) => panic!("a retry of an unsearched pull request ran: {result:?}"),
+    }
+    h.settle().await;
+    let state = h.store.load_discovery().expect("the discovery state loads");
+    assert!(
+        h.fake.lock().published_heads == [sha("a"), sha("b")]
+            && state.schedule.contains_key(&pr.key())
+            && !state.schedule.contains_key(&next.key()),
+        "an unsearched credential's pull request was reviewed or its record dropped"
+    );
+    fail_credential(&h, None);
+    h.poll_until("the review once acme's search works", || {
+        h.publications() == 3
+    })
+    .await;
+    h.settle().await;
+    assert!(
+        h.fake.lock().published_heads == [sha("a"), sha("b"), sha("c")],
+        "a head was reviewed again"
     );
     h.stop_engine().await;
 }
@@ -938,6 +1001,17 @@ async fn outage_longer_than_the_step_retry_window_is_retried_later() {
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the reviewer sessions", || h.started_count() == 2)
         .await;
+    // The only credential's failed search fails the pass with that search's own error.
+    let code = "github_search_limit_exceeded";
+    h.fake
+        .lock()
+        .failing_credentials
+        .insert("default".to_owned(), code.to_owned());
+    match h.engine.poll(&CancellationToken::new()).await {
+        Err(err) => assert!(error_code(&err) == code && err.to_string() == code, "{err}"),
+        Ok(result) => panic!("the pass succeeded without a search: {result:?}"),
+    }
+    h.fake.lock().failing_credentials.clear();
     h.fake.lock().transient_until = Some(Instant::now() + Duration::from_secs(6));
     h.wait_for_polling("the retry notice", || {
         h.fake.has_note(Level::Log, "Next automatic attempt")

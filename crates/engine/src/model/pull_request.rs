@@ -137,6 +137,11 @@ pub struct ClassifiedCandidates {
     pub rejected: Vec<RejectedCandidate>,
     /// Pull requests whose rule skips their untrusted author.
     pub skipped: Vec<SkippedCandidate>,
+    /// Error code of each credential whose search failed, by credential name.
+    ///
+    /// The repositories that such a credential serves were not searched.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub failed_credentials: BTreeMap<String, String>,
 }
 
 /// Whether a review reads the whole pull request or only its newest commits.

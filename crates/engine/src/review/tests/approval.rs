@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use autoreview_policy::{EVENTS, Event, Level, Rule};
 
+use crate::config::{Credential, Credentials};
 use crate::integrations::SessionRequest;
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::ids::INPUT_VERSION;
@@ -192,7 +193,24 @@ async fn newer_head_supersedes_a_waiting_approval() {
 
 #[tokio::test]
 async fn missing_from_search_is_confirmed_before_a_wait_ends() {
-    let mut h = start_harness(|_| {}).await;
+    let narrow = Arc::new(AtomicBool::new(false));
+    let switch = Arc::clone(&narrow);
+    let mut h = start_harness(move |config| {
+        if switch.load(Ordering::SeqCst) {
+            let credential = |name: &str, pattern: &str| Credential {
+                name: name.to_owned(),
+                login: "reviewer".to_owned(),
+                token: format!("{name}-token"),
+                matches: vec![pattern.to_owned()],
+            };
+            let list = vec![
+                credential("manual", "acme/manual"),
+                credential("risky", "risky/*"),
+            ];
+            config.credentials = Credentials::new(list).expect("the credentials load");
+        }
+    })
+    .await;
     let pr = integration_pull_request("acme/manual", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the approval request", || {
@@ -211,6 +229,28 @@ async fn missing_from_search_is_confirmed_before_a_wait_ends() {
         h.resolve(&pr).is_err()
     })
     .await;
+    // A wait whose repository no credential serves any more ends without failing the pass;
+    // one whose credential fails stays until its search works again.
+    let notes = integration_pull_request("acme/notes", &sha("b"));
+    h.fake.open(notes.clone(), h.rule(&notes.repository));
+    let held = integration_pull_request("acme/manual", &sha("c"));
+    h.fake.open(held.clone(), h.rule(&held.repository));
+    h.poll_until("two more approval requests", || {
+        let notes = &h.fake.lock().notes;
+        count_notes(notes, Level::Action, APPROVAL_REQUESTED_TITLE) == 3
+    })
+    .await;
+    h.stop_engine().await;
+    narrow.store(true, Ordering::SeqCst);
+    h.fake.lock().credentials = Some(h.config().credentials);
+    h.fake.lock().failing_credentials =
+        BTreeMap::from([("manual".to_owned(), "github_request_failed".to_owned())]);
+    h.start();
+    h.poll().await;
+    assert!(
+        h.resolve(&notes).is_err() && h.resolve(&held).is_ok(),
+        "a stale wait outlived its credential, or a failing credential's wait ended"
+    );
     h.stop_engine().await;
 }
 

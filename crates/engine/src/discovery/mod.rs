@@ -10,8 +10,8 @@ use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::Record;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::NotifyRoute;
-use crate::engine::{Clock, Engine};
+use crate::config::{Credential, NotifyRoute};
+use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::model::RejectedCandidate;
@@ -69,6 +69,57 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 run,
             )
             .await
+    }
+
+    /// Runs `search` once per credential, each with the step retries of `step`.
+    ///
+    /// A credential whose search fails is logged with its name and error code and left out, so
+    /// the others go on; the returned map holds its code by its name.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error when every credential fails, or the error after a cancel.
+    pub(crate) async fn search_each<'a, T, Fut>(
+        &'a self,
+        step: &str,
+        cancel: &CancellationToken,
+        mut search: impl FnMut(&'a Credential) -> Fut,
+    ) -> Result<(Vec<(&'a Credential, T)>, BTreeMap<String, String>), Error>
+    where
+        Fut: Future<Output = Result<T, Error>>,
+    {
+        let mut found = Vec::new();
+        let mut failed = BTreeMap::new();
+        let mut first = None;
+        for credential in self.config.credentials.iter() {
+            let policy = self.step_policy();
+            let searched = retry_step(step, policy, &self.clock, cancel, || search(credential));
+            match searched.await {
+                Ok(value) => found.push((credential, value)),
+                Err(err) if cancel.is_cancelled() => return Err(err),
+                Err(err) => {
+                    tracing::error!(
+                        credential = %credential.name,
+                        error_code = error_code(&err),
+                        step,
+                        "search of a credential failed, its repositories wait for the next pass"
+                    );
+                    failed.insert(credential.name.clone(), error_code(&err).to_owned());
+                    first.get_or_insert(err);
+                }
+            }
+        }
+        match first {
+            Some(err) if found.is_empty() => Err(err),
+            _ => Ok((found, failed)),
+        }
+    }
+
+    /// Reports whether a credential whose search failed in this pass serves `repository`.
+    pub(crate) fn unsearched(&self, failed: &BTreeMap<String, String>, repository: &str) -> bool {
+        !failed.is_empty()
+            && (self.config.credentials.serving(repository))
+                .is_ok_and(|credential| failed.contains_key(&credential.name))
     }
 
     /// Sends each notice once, after the discovery lock is released.

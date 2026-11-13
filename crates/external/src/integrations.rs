@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use autoreview_engine::Error;
-use autoreview_engine::config::{Config, NotifyRoute};
+use autoreview_engine::config::{Config, Credential, NotifyRoute};
 use autoreview_engine::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft,
     ReviewRequestList, SessionRequest,
@@ -100,11 +100,19 @@ impl External {
 }
 
 impl Integrations for External {
-    async fn list_candidates(&self, cancel: &CancellationToken) -> Result<CandidateList, Error> {
+    async fn list_candidates(
+        &self,
+        cancel: &CancellationToken,
+        _credential: &Credential,
+    ) -> Result<CandidateList, Error> {
         self.github.list_candidates(cancel, &self.policy).await
     }
 
-    async fn ready_drafts(&self, cancel: &CancellationToken) -> Result<Vec<ReadiedDraft>, Error> {
+    async fn ready_drafts(
+        &self,
+        cancel: &CancellationToken,
+        _credential: &Credential,
+    ) -> Result<Vec<ReadiedDraft>, Error> {
         self.github.ready_drafts(cancel, &self.policy).await
     }
 
