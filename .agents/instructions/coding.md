@@ -114,7 +114,7 @@ follow:
   Exception: `Artifact.reviewed_at`, written by `CombineResults`
   (`protocol.go:353`), is Go's `time.RFC3339` in UTC with whole seconds and no
   fraction, written by `autoreview_go_compat::go_time::format_rfc3339_seconds`;
-  `go_time_matches_go_golden` records both forms per instant.
+  Both forms come from `format_rfc3339_nano` and `format_rfc3339_seconds`.
 - **R10 Identifiers.** Byte-identical: `PullRequest::workflow_id` =
   `"prr-v2-" + hex(sha256("pr-review-v2\0{repo}\0{number}\0{head}\0{request_id}\0{attempt}"))`
   (`model.go:68-73`, prefix `model.go:18`), `review_id` (`model.go:62-64`), `key`
@@ -138,7 +138,8 @@ follow:
   reader that matches the marker as a substring is unaffected (#297, see "What
   is not compatible, by decision").
 - **R13 Policy digest.** `digestOf` (`policy.go:657-686`) is reproduced byte for
-  byte, including Go's `%s` of `Trigger` (`policy.go:60-65`); checked by golden.
+  byte, including Go's `%s` of `Trigger` (`policy.go:60-65`); checked by
+  `digest_matches_go_golden`.
 - **R14 Go semantics.** `fmt` `%.12s` truncates by runes (all its inputs are
   ASCII SHAs); `strings` functions work on bytes and `for range` on runes; Go
   RE2 `\b`, `\s`, `\w`, `\d` are ASCII, so ported patterns use `(?-u:...)` or
@@ -422,8 +423,7 @@ What is not compatible, by decision:
   `pohunek.route_overrides` key stops the start (`config.go:304`), and a stored
   review of such a repository fails `reviewIdentityValid` (`model.go:539`,
   called from `review.go:40` and `discovery.go:540`). No stored row changes
-  shape. `ids_match_go_golden` gets no case: its values were written by the Go
-  engine and compare byte for byte. The regression tests are
+  shape. The regression tests are
   `repository_owner_follows_the_github_login_grammar` and
   `rule_match_owner_follows_the_github_login_grammar`.
 - **Step runs table (#270):** the store holds the additive table
@@ -432,9 +432,7 @@ What is not compatible, by decision:
   schema, and `user_version` stays 1, so the Go store still opens the file. Go
   neither writes nor reads the table; its prune deletes the rows with their
   review through `ON DELETE CASCADE`, and reviews that Go runs after a rollback
-  count in no step. `go_store_golden_opens` leaves the table out of the Go golden
-  comparison and checks its SQL on its own; the golden is not regenerated. The
-  regression tests are `go_store_golden_opens`,
+  count in no step. The regression tests are
   `review_records_its_steps_with_their_retries`,
   `shutdown_after_the_last_reviewer_result_still_records_the_reviewers_step` and
   `verifier_failure_before_its_verification_is_stored_records_the_resumed_run`.
@@ -454,8 +452,8 @@ What is not compatible, by decision:
   `retarget_without_a_push_publishes_a_new_approval` and
   `dismissed_review_is_skipped_and_a_later_match_is_reused`.
 
-Intentional parsing divergences (stricter than Go; each gets a golden case in G1
-with the expected Rust error code):
+Intentional parsing divergences (stricter than Go; each has a test row with the expected
+Rust error code):
 
 - JSON object keys match exactly; Go's `encoding/json` matches
   case-insensitively. Rust ignores a case-variant key such as `"TITLE"` as
