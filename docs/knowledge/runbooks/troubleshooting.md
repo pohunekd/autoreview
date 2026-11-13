@@ -464,7 +464,7 @@ a policy rule with a repository that no credential matches
 (`credential_not_covered`; add a credential for its owner), and a credential
 that serves no repository of the policy (`credential_unused`; remove it). Only
 `validate` accepts several credentials; the other commands refuse them with
-`configuration_invalid` naming `github.credentials` until #14 to #17. An empty
+`configuration_invalid` naming `github.credentials` until #14 to #18. An empty
 or unset token variable is refused at load with `configuration_missing` naming
 `github.credentials.token_env`.
 

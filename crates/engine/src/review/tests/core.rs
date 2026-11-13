@@ -57,13 +57,16 @@ async fn second_engine_on_the_same_store_is_refused() {
 
 /// Serves `acme/*` with the credential `acme` and every other repository with `rest`.
 fn two_credentials(config: &mut Config) {
-    let credential = |name: &str, pattern: &str| Credential {
+    let credential = |name: &str, login: &str, pattern: &str| Credential {
         name: name.to_owned(),
-        login: "reviewer".to_owned(),
+        login: login.to_owned(),
         token: format!("{name}-token"),
         matches: vec![pattern.to_owned()],
     };
-    let list = vec![credential("acme", "acme/*"), credential("rest", "*")];
+    let list = vec![
+        credential("acme", "acme-bot", "acme/*"),
+        credential("rest", "reviewer", "*"),
+    ];
     config.credentials = Credentials::new(list).expect("the credentials load");
 }
 
@@ -169,6 +172,34 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
         h.fake.lock().published_heads == [sha("a"), sha("b"), sha("c")] && refusals == 1,
         "a head was reviewed again, or a known refusal was announced again"
     );
+    // `acme-bot` wrote both pull requests; only the one its own credential serves is its own.
+    for (repository, head) in [("acme/own", sha("d")), ("risky/own", sha("e"))] {
+        let mut own = integration_pull_request(repository, &head);
+        own.author = "acme-bot".to_owned();
+        h.fake.open(own.clone(), h.rule(&own.repository));
+    }
+    h.poll_until("the reviews of acme-bot's pull requests", || {
+        h.publications() == 5
+    })
+    .await;
+    {
+        let state = h.fake.lock();
+        let decision = |head: &str| {
+            let index = state.published_heads.iter().position(|seen| seen == head);
+            index.map(|index| state.published[index].decision.clone())
+        };
+        let signature = &h.engine.config.ai_signature;
+        assert!(
+            decision(&sha("d")) == Some(Decision::Comment)
+                && decision(&sha("e")) == Some(Decision::Approve)
+                && state
+                    .published
+                    .iter()
+                    .all(|review| review.body.ends_with(signature)),
+            "own pull requests follow the wrong login: {:?}",
+            state.published
+        );
+    }
     h.stop_engine().await;
 }
 

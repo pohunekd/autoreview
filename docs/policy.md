@@ -111,7 +111,7 @@ notifications:
 
 The rules above span two owners, `zajca` and `pohunekd`; both are served by the
 one [credential](configuration.md#credentials) in `config.yaml`. A credential
-per owner passes `validate`; serving several is planned in #14 to #17.
+per owner passes `validate`; serving several is planned in #14 to #18.
 
 ## Top-level keys
 

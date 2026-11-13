@@ -307,13 +307,14 @@ async fn run(
             validate(&config, arguments.check_credentials, &cancel).await
         }
         Command::Engine(command) => {
-            // The `gh` calls without a repository and the logins of the `gh` client need one
-            // credential until #16 and #17 land.
+            // A stored review publishes with the credential that serves its repository at that
+            // moment. After a config change that can be another account, so several credentials
+            // wait until #18 stores the credential of each review.
             if config.credentials.single().is_none() {
                 return Err(Error::config(
                     CONFIGURATION_INVALID,
                     CREDENTIALS_KEY,
-                    Some("several credentials pass validate only, until #14 to #17".into()),
+                    Some("several credentials pass validate only, until #18".into()),
                 ));
             }
             let external = Arc::new(External::new(config.clone())?);

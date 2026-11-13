@@ -268,7 +268,7 @@ impl GitHub {
         review: &GitHubReview,
     ) -> Result<Option<PublishResult>, Error> {
         let credential = self.credentials.serving(&pr.repository)?;
-        let login = &self.only_credential()?.login;
+        let login = &credential.login;
         for page in 1..=self.search_page_limit {
             let arguments = reviews_list_args(&pr.repository, pr.number, page);
             let output = self

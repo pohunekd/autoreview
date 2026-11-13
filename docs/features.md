@@ -78,7 +78,7 @@ lists every pull request waiting on you or on its author.
 
 **Acts as one GitHub account.** One token and its login serve every
 repository, and only `gh` sees the token. A token or account per owner or
-repository is planned in #14 to #17. [Configuration: credentials](configuration.md#credentials)
+repository is planned in #14 to #18. [Configuration: credentials](configuration.md#credentials)
 
 **Survives failure.** All state is in one SQLite file. Reviews resume after a
 restart, transient failures are retried with backoff, and sessions it cannot
@@ -97,7 +97,7 @@ one versioned JSON document for a dashboard of your own.
   registered as pohunek projects and the official Claude Code and/or Codex
   runtime packages installed.
 - The GitHub CLI and one token, of your own account or a machine user; several
-  tokens are planned in #14 to #17. [GitHub identity](knowledge/concepts/github-identity.md)
+  tokens are planned in #14 to #18. [GitHub identity](knowledge/concepts/github-identity.md)
 - Linux with systemd, or a container runtime for the container image that comes
   planned in #40.
 

@@ -41,7 +41,7 @@ must serve one of them (`credential_unused` otherwise).
 The commands that call GitHub accept one credential: one account reviews
 everything its token can reach. `validate` already checks a list of several.
 Serving a token per owner, a token per repository and an account per owner is
-planned in #14 to #17.
+planned in #14 to #18.
 
 ## What the login decides
 
@@ -136,7 +136,7 @@ verified: the GraphQL reference page fetched did not include it.
   organization. The [managing personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
   page states: "Each token is limited to access resources owned by a single user or
   organization." A fine-grained token therefore covers one owner; several
-  credentials for several owners are planned in #14 to #17.
+  credentials for several owners are planned in #14 to #18.
 
 ### Classic token
 
@@ -157,7 +157,7 @@ host that runs its reviews, in addition to the token of its credential.
 
 ## Repositories of several owners
 
-Planned in #14 to #17; `validate` already checks such a list, see
+Planned in #14 to #18; `validate` already checks such a list, see
 [credentials](../../configuration.md#credentials).
 
 ## Approvals and branch protection
