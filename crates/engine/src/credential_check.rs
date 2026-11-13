@@ -1,13 +1,21 @@
-//! The check of every GitHub credential's token: its login and its expiry.
+//! The check of every GitHub credential's token: its login and its expiry, at start and while
+//! the service runs.
 
 // Rust guideline compliant 2026-11-13
 
+use std::collections::BTreeMap;
+use std::sync::{MutexGuard, PoisonError};
+use std::time::Duration;
+
 use autoreview_go_compat::go_time::format_rfc3339_seconds;
+use autoreview_policy::Event;
 use serde::Serialize;
+use time::{Date, OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::Credentials;
-use crate::error::Error;
+use crate::config::{Credential, Credentials};
+use crate::engine::{Clock, Engine};
+use crate::error::{Error, error_code};
 use crate::integrations::{Integrations, TokenAnswer};
 
 /// Code of a token that GitHub refuses.
@@ -75,6 +83,143 @@ pub async fn check_credentials<I: Integrations>(
         });
     }
     Ok(statuses)
+}
+
+/// What the running service learned about the credentials' tokens; it never holds a token.
+#[derive(Debug, Default)]
+pub(crate) struct CredentialHealth {
+    /// The UTC day of the last expiry warning, by credential name.
+    warned: BTreeMap<String, Date>,
+}
+
+/// Reports whether the expiry warning of a token that expires at `expires_at` is due at `now`.
+///
+/// It is due when the expiry is at most `window` after `now`, also when it has passed, and
+/// `last_warned` is not the UTC day of `now`.
+pub(crate) fn expiry_warning_due(
+    expires_at: OffsetDateTime,
+    window: Duration,
+    now: OffsetDateTime,
+    last_warned: Option<Date>,
+) -> bool {
+    // A window beyond the range of `time::Duration` covers every expiry.
+    let window = time::Duration::try_from(window).unwrap_or(time::Duration::MAX);
+    if now.saturating_add(window) < expires_at {
+        return false;
+    }
+    last_warned != Some(now.to_offset(UtcOffset::UTC).date())
+}
+
+impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Returns the token state of this process, also after a panic of another holder.
+    fn health(&self) -> MutexGuard<'_, CredentialHealth> {
+        self.health.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Checks the token of every credential, as at start and every `credential_check`.
+    pub(crate) async fn check_tokens(&self, cancel: &CancellationToken) {
+        for credential in self.config.credentials.iter() {
+            if !self.check_one(cancel, credential).await {
+                return;
+            }
+        }
+    }
+
+    /// Checks the token of `credential` with that token only and applies the answer.
+    ///
+    /// An accepted token of the credential's login may warn of its expiry. A refused token,
+    /// or one of another login, and a failed call are logged. Returns `false` once `cancel`
+    /// is cancelled.
+    async fn check_one(&self, cancel: &CancellationToken, credential: &Credential) -> bool {
+        let answer = self.integration.check_token(cancel, credential).await;
+        if cancel.is_cancelled() {
+            return false;
+        }
+        let name = &credential.name;
+        match answer {
+            Ok(TokenAnswer::Accepted { login, expires_at }) if login == credential.login => {
+                if let Some(expires_at) = expires_at {
+                    self.warn_expiry(cancel, credential, expires_at).await;
+                }
+            }
+            Ok(answer) => {
+                let reason = match answer {
+                    TokenAnswer::Rejected => "token_refused",
+                    TokenAnswer::Accepted { .. } => "login_mismatch",
+                };
+                tracing::error!(credential = %name, reason, "credential check refused the token");
+            }
+            Err(err) => tracing::warn!(
+                credential = %name,
+                error_code = error_code(&err),
+                "credential check failed"
+            ),
+        }
+        true
+    }
+
+    /// Sends `credential_expiring` when the warning of a token that expires at `expires_at`
+    /// is due, and records its day.
+    async fn warn_expiry(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        expires_at: OffsetDateTime,
+    ) {
+        let now = self.clock.wall_now();
+        let name = &credential.name;
+        {
+            let mut health = self.health();
+            let last_warned = health.warned.get(name).copied();
+            if !expiry_warning_due(expires_at, self.config.expiry_warning, now, last_warned) {
+                return;
+            }
+            let today = now.to_offset(UtcOffset::UTC).date();
+            health.warned.insert(name.clone(), today);
+        }
+        let expires_at = format_rfc3339_seconds(expires_at);
+        tracing::warn!(credential = %name, expires_at, "credential token expires soon");
+        let message = format!(
+            "The GitHub token of credential {name} expires at {expires_at}. Replace it before \
+             then: once GitHub refuses it, the repositories of {name} are not reviewed."
+        );
+        self.notify_credential(cancel, Event::CredentialExpiring, name, &message)
+            .await;
+    }
+
+    /// Sends one notification of `event` about the credential `name` at the policy's level.
+    ///
+    /// A failure is logged, never returned, so a notifier outage stops no check.
+    async fn notify_credential(
+        &self,
+        cancel: &CancellationToken,
+        event: Event,
+        name: &str,
+        message: &str,
+    ) {
+        let level = match self.level(event.clone()) {
+            Ok(level) => level,
+            Err(err) => {
+                tracing::error!(credential = %name, error_code = error_code(&err), "no level");
+                return;
+            }
+        };
+        let route = self.config.notify_route(&event, level.clone());
+        let sent = (self.integration)
+            .notify_unmuted(cancel, route, level.clone(), message)
+            .await;
+        if let Err(err) = sent
+            && !cancel.is_cancelled()
+        {
+            tracing::warn!(
+                event = event.as_str(),
+                credential = %name,
+                level = level.as_str(),
+                error_code = error_code(&err),
+                "credential notification dropped"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
