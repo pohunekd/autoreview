@@ -402,7 +402,7 @@ mod tests {
     }
 
     // One row per adapter stdout. The prose object rows reach the object branch of
-    // `check_prose_agreement`; the duplicate key row keeps the last value of the key.
+    // `check_prose_agreement`; the repeated key row is refused.
     #[test]
     fn prose_and_stdout_rows_follow_the_protocol() {
         let pr = test_pull_request(5);

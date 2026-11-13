@@ -332,7 +332,7 @@ mod tests {
 
     use super::parse_codex_output;
 
-    // A repeated key of the Codex report is refused, as the golden case records.
+    // A repeated key of the Codex report is refused.
     #[test]
     fn repeated_status_key_is_refused() {
         let pr = test_pull_request(3);
@@ -349,7 +349,8 @@ mod tests {
         assert_eq!(error_code(&err), "review_result_invalid");
     }
 
-    // A refusal envelope of the adapter names its reason.    // holds the merge back (#23).
+    // A Codex note does not block: a finding blocks only when it says so at a severity that
+    // holds the merge back (#23).
     #[test]
     fn codex_finding_blocks_only_when_it_says_so() {
         let pr = test_pull_request(3);

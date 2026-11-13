@@ -60,7 +60,7 @@ The Rust engine opens the Go engine's database unchanged and continues its
 history. Supported cutover: from a drained queue (no row with status `queued`,
 `running` or `awaiting`). Resuming a Go review mid-workflow is not supported and
 not tested. A rollback goes to an earlier autoreview release (Rust) under the same
-drained rule. The mirror comments in this file cite the removed Go reference; #346 tracks them.
+drained rule. Line references to Go code in this file are to the Go reference as merged in #61.
 
 What is compatible, as rules every slice that defines a persisted type must
 follow:
