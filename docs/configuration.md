@@ -24,7 +24,9 @@ recommended value and a comment, and it loads as it is; its `notify` block route
 every level and the review queue to one `matrix` backend with placeholder values.
 CI loads it with every example policy. Secrets are never in
 the file; keys ending in `_env` name the environment variable that holds them, or the
-line of the `--env-file` that does.
+line of the `--env-file` that does. Such a name must match `AUTOREVIEW_[A-Z0-9_]+`, as a
+name in the `--env-file` must: `AUTOREVIEW_` and at least one of `A-Z`, `0-9` and `_`. Any
+other name is `configuration_invalid` naming the key.
 
 The service finds the file through `--config <path>` or the
 `AUTOREVIEW_CONFIG` environment variable; with neither it refuses to start.
@@ -183,7 +185,7 @@ credentials:
 |---|---|
 | `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; not used yet |
 | `login` | The account the token belongs to. Reviews are requested from, published by, and approved as this account |
-| `token_env` | Environment variable that holds the token; it must start with `AUTOREVIEW_` |
+| `token_env` | Environment variable that holds the token; its name must match `AUTOREVIEW_[A-Z0-9_]+` |
 | `match` | `["*"]` |
 
 How the credential applies:
@@ -531,7 +533,7 @@ Besides each key's own range, `validate` enforces:
 | Variable | Meaning |
 |---|---|
 | `AUTOREVIEW_CONFIG` | Path of `config.yaml` when `--config` is not given |
-| Every name in an `*_env` key | A GitHub token or a backend secret. It must start with `AUTOREVIEW_`; a line of the `--env-file` with the same name wins over it |
+| Every name in an `*_env` key | A GitHub token or a backend secret. It must match `AUTOREVIEW_[A-Z0-9_]+`; a line of the `--env-file` with the same name wins over it |
 
 autoreview reads no other variable; `GH_TOKEN` in its own environment is
 ignored and is set only for each `gh` child, to the token of its credential.

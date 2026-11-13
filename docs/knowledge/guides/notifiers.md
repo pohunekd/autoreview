@@ -106,7 +106,7 @@ notify:
 - Messages are `m.text`. The review queue is an `m.notice` with empty
   mentions, so it never notifies anyone, even in the action room.
 - The token is read from the variable named in `access_token_env`. The name
-  must start with `AUTOREVIEW_`; the value never goes into the file.
+  must match `AUTOREVIEW_[A-Z0-9_]+`; the value never goes into the file.
 
 Create a bot user for autoreview, invite it to the rooms and give it the
 token. Do not reuse a personal access token for it.
