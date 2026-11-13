@@ -1052,7 +1052,7 @@ notifications:
         .expect("the deployed policy parses");
         let mut cfg = test_config();
         cfg.policy = Some(policy);
-        cfg.github_login = "example-user".to_owned();
+        cfg.credentials = crate::config::Credentials::single_for_tests("example-user");
         cfg.queue_matrix_room = "!queue:example.org".to_owned();
         cfg.queue_max_items = 50;
         cfg.published_retention = Duration::from_secs(1_209_600);

@@ -15,7 +15,10 @@ use time::Duration as SignedDuration;
 use crate::error::{BoxError, Error};
 use crate::model::{RunLimits, repository_valid};
 
+mod credentials;
 mod symbols;
+
+pub use credentials::{Credential, Credentials};
 
 /// Code of a configuration that fails validation.
 const CONFIGURATION_INVALID: &str = "configuration_invalid";
@@ -193,10 +196,8 @@ pub struct Config {
     pub schedule: scheduler::Policy,
     /// The GitHub host; only `github.com` is accepted.
     pub github_host: String,
-    /// The GitHub login that publishes the reviews.
-    pub github_login: String,
-    /// The GitHub token of the engine; it never appears in debug output.
-    pub github_token: String,
+    /// The GitHub credentials; each repository is served by the first that matches it.
+    pub credentials: Credentials,
     /// Absolute path of the GitHub CLI binary.
     pub gh_bin: String,
     /// Absolute path of the pohunek CLI binary.
@@ -333,7 +334,7 @@ impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Config")
             .field("github_host", &self.github_host)
-            .field("github_login", &self.github_login)
+            .field("credentials", &self.credentials)
             .field("pohunek_hosts", &self.pohunek_hosts)
             .field("state_db_path", &self.state_db_path)
             .field("session_group", &self.session_group)
@@ -362,10 +363,10 @@ impl Config {
     /// Returns a configuration error when a field is invalid.
     pub fn validate(&self) -> Result<(), Error> {
         if self.github_host != GITHUB_HOST
-            || !user_login_valid(&self.github_login)
-            || self.github_token.contains('\r')
-            || self.github_token.contains('\n')
-            || self.github_token.contains(' ')
+            || self.credentials.iter().any(|credential| {
+                let token = &credential.token;
+                !user_login_valid(&credential.login) || token.contains(['\r', '\n', ' '])
+            })
         {
             return Err(invalid("invalid GitHub configuration"));
         }
@@ -1076,8 +1077,7 @@ mod tests {
                 retry_delays: vec![time::Duration::seconds(60)],
             },
             github_host: "github.com".to_owned(),
-            github_login: "example-user".to_owned(),
-            github_token: "placeholder-token".to_owned(),
+            credentials: super::Credentials::single_for_tests("example-user"),
             gh_bin: "/usr/bin/gh".to_owned(),
             pohunek_bin: "/usr/bin/pohunek".to_owned(),
             pohunek_state: "/var/lib/pohunek".to_owned(),
@@ -1184,7 +1184,7 @@ mod tests {
             longest.as_str(),
         ] {
             let mut config = valid_config();
-            config.github_login = login.to_owned();
+            config.credentials = super::Credentials::single_for_tests(login);
             if let Err(error) = config.validate() {
                 panic!("{login}: {error}");
             }
@@ -1202,7 +1202,7 @@ mod tests {
         ];
         for login in refused {
             let mut config = valid_config();
-            config.github_login = login.to_owned();
+            config.credentials = super::Credentials::single_for_tests(login);
             let error = config.validate().expect_err("the login is refused");
             assert_eq!(
                 error.to_string(),

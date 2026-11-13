@@ -30,6 +30,15 @@ impl Policy {
             .find(|(rule, _)| matches(&rule.match_glob, repository))
     }
 
+    /// Returns the match patterns of the repository rules, in file order.
+    #[must_use]
+    pub fn rule_matches(&self) -> Vec<&str> {
+        self.rules
+            .iter()
+            .map(|rule| rule.match_glob.as_str())
+            .collect()
+    }
+
     /// Returns the distinct labels used by label triggers, sorted.
     #[must_use]
     pub fn labels(&self) -> Vec<String> {

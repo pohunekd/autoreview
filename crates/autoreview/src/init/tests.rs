@@ -149,7 +149,8 @@ fn init_then_validate_loads_every_example() {
         let policy = loaded.policy.as_ref().expect("the config names a policy");
         assert_eq!(policy.agent_profiles(), profiles, "{}", name(example));
         assert!(!profiles.is_empty(), "{}", name(example));
-        assert_eq!(loaded.github_login, LOGIN);
+        let served = loaded.credentials.single().map(|only| only.login.as_str());
+        assert_eq!(served, Some(LOGIN));
         assert_eq!(loaded.pohunek_hosts, [HOST]);
     }
 }
@@ -169,7 +170,8 @@ fn init_login_follows_the_user_login_grammar() {
         autoreview_policy::load(path).map_err(|error| Box::new(error) as _)
     })
     .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(loaded.github_login, "mona-cat_octo");
+    let served = loaded.credentials.single().map(|only| only.login.as_str());
+    assert_eq!(served, Some("mona-cat_octo"));
     for login in [
         "",
         "review-bot[bot]",

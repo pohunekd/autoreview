@@ -45,7 +45,7 @@ github:
   timeout_seconds: 30
   credential_check_hours: 24
   expiry_warning_days: 14
-  # Exactly one credential with match ["*"] is accepted until #13. Its token
+  # The first credential whose match covers a repository serves it. Its token
   # must belong to its login.
   credentials:
     - name: default
@@ -164,14 +164,26 @@ notify:
 | `timeout_seconds` | Timeout of one `gh` call |
 | `credential_check_hours` | Interval of the token check while the service runs, which is planned in #19 |
 | `expiry_warning_days` | Days before a token's expiry for the expiry warning, which is planned in #19 |
-| `credentials` | Exactly one credential with `match: ["*"]`, see below |
+| `credentials` | One or more credentials; the first whose `match` covers a repository serves it, see below |
 
 ### Credentials
 
-A credential is one GitHub token and the account it belongs to. The loader
-accepts exactly one credential, with `match: ["*"]`; any other list is refused
-with `configuration_invalid` naming `github.credentials`. Several credentials,
-per owner or per repository, are planned in #13.
+A credential is one GitHub token and the account it belongs to. Each
+repository is served by the first credential whose `match` covers it, so put
+repository credentials above their owner's. The loader refuses:
+
+- a `match` entry that an earlier entry covers, such as `acme/*` after `*` or
+  `acme/api` after `acme/*`, with `configuration_invalid` naming
+  `github.credentials.match`;
+- a policy rule with a repository that no credential matches, with
+  `credential_not_covered`;
+- a credential that serves no repository of the policy, because the policy
+  reviews none of its repositories or earlier credentials take them all, with
+  `credential_unused`.
+
+`validate` accepts several credentials. The other commands use one token for
+every `gh` call and refuse several credentials with `configuration_invalid`
+naming `github.credentials`; serving several is planned in #14 to #17.
 
 ```yaml
 credentials:
@@ -183,10 +195,10 @@ credentials:
 
 | Key | Meaning |
 |---|---|
-| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; not used yet |
+| `name` | Checked against `[a-z0-9][a-z0-9_-]{0,31}`; error messages name the credential by it |
 | `login` | The account the token belongs to. Reviews are requested from, published by, and approved as this account |
 | `token_env` | Environment variable that holds the token; its name must match `AUTOREVIEW_[A-Z0-9_]+` |
-| `match` | `["*"]` |
+| `match` | The repositories the credential serves: lowercase `owner/repository`, `owner/*` or `*` |
 
 How the credential applies:
 

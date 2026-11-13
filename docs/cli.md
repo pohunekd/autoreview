@@ -393,6 +393,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | Code | Meaning |
 |---|---|
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it |
+| `credential_not_covered`, `credential_unused` | A policy rule has a repository that no credential matches, or a credential serves no repository of the policy, see [credentials](configuration.md#credentials) |
 | `command_invalid` | Wrong arguments |
 | `init_file_exists` | `init` found a file in the way; the `configuration` field names it |
 | `init_write_failed` | `init` could not check, create or write a path; the `configuration` field names it |

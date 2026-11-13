@@ -57,6 +57,22 @@ fn full_scope() -> ReviewScope {
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Returns the login of the credential that serves `repository`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credential_not_covered` when no credential matches the repository.
+    fn served_login(&self, repository: &str) -> Result<&str, Error> {
+        match self.config.credentials.resolve(repository) {
+            Some(credential) => Ok(credential.login.as_str()),
+            None => Err(Error::config(
+                "credential_not_covered",
+                "github.credentials",
+                Some(format!("no credential matches {repository}").into()),
+            )),
+        }
+    }
+
     /// Decides the scope and the prior findings of the review of `candidate`.
     ///
     /// The prior findings are the blocking findings of the last published review and those it
@@ -66,7 +82,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns a store error, or the history error when `cancel` is cancelled.
+    /// Returns `credential_not_covered` when no credential serves the repository, a store
+    /// error, or the history error when `cancel` is cancelled.
     pub(crate) async fn plan_review(
         &self,
         cancel: &CancellationToken,
@@ -74,7 +91,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         published: Option<&PublishedRecord>,
     ) -> Result<(ReviewScope, Vec<PriorFinding>), Error> {
         let pr = &candidate.pull_request;
-        let own = pr.author == self.config.github_login;
+        let own = pr.author == self.served_login(&pr.repository)?;
         let scope = review_scope(&candidate.rule, published, &pr.head_sha, own);
         let Some(published) = published else {
             return Ok((scope, Vec::new()));
@@ -252,8 +269,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns `configuration_invalid` when the configuration has no policy, and the permanent
-    /// `review_input_invalid` for a candidate whose author class is not resolved.
+    /// Returns `configuration_invalid` when the configuration has no policy, the permanent
+    /// `review_input_invalid` for a candidate whose author class is not resolved, and
+    /// `credential_not_covered` when no credential serves the repository.
     pub(crate) fn build_input(
         &self,
         candidate: &Candidate,
@@ -286,7 +304,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             approval_timeout_seconds: i64::try_from(policy.approval_timeout().as_secs())
                 .unwrap_or(i64::MAX),
             policy_digest: policy.digest().to_owned(),
-            publisher_login: self.config.github_login.clone(),
+            publisher_login: self
+                .served_login(&candidate.pull_request.repository)?
+                .to_owned(),
             limits: self.config.run_limits(),
             prior,
             handoff,
