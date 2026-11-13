@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use autoreview_engine::Error;
-use autoreview_engine::config::{Config, Credential, NotifyRoute};
+use autoreview_engine::config::{Config, NotifyRoute};
 use autoreview_engine::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft,
     ReviewRequestList, SessionRequest,
@@ -39,7 +39,7 @@ pub struct External {
     config: Config,
     /// The review policy that discovery searches with.
     policy: Policy,
-    /// The `gh` client and the GitHub identity of its calls.
+    /// The `gh` client and the credentials of its calls.
     github: GitHub,
     /// The Matrix settings of the notifications.
     matrix: Matrix,
@@ -48,14 +48,16 @@ pub struct External {
 }
 
 impl External {
-    /// Creates the integrations from the engine configuration and the credential of every `gh`
-    /// call.
+    /// Creates the integrations from the engine configuration.
+    ///
+    /// Each `gh` call that acts on a repository gets the token of the credential that serves
+    /// it; a call that names no repository needs exactly one credential.
     ///
     /// # Errors
     ///
     /// Returns `configuration_invalid` for `policy_file` when the configuration holds no
     /// policy, and `matrix_unavailable` when the HTTP client cannot be built.
-    pub fn new(mut config: Config, credential: &Credential) -> Result<Self, Error> {
+    pub fn new(mut config: Config) -> Result<Self, Error> {
         let policy = config.policy.take().ok_or_else(|| {
             Error::config(
                 "configuration_invalid",
@@ -67,7 +69,7 @@ impl External {
             .timeout(config.matrix_timeout)
             .build()
             .map_err(|error| Error::workflow("matrix_unavailable", false, Some(Box::new(error))))?;
-        let github = GitHub::new(&config, credential);
+        let github = GitHub::new(&config);
         let matrix = Matrix::new(
             config.matrix_homeserver_url.clone(),
             config.matrix_access_token.clone(),

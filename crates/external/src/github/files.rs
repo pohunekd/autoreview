@@ -373,10 +373,13 @@ impl GitHub {
         cap: Option<usize>,
         mut visit: impl FnMut(&ChangedFileRecord) -> Result<(), Error>,
     ) -> Result<ListingEnd, Error> {
+        let credential = self.credentials.serving(&pr.repository)?;
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for page in 1..=self.search_page_limit {
             let arguments = files_args(&pr.repository, pr.number, page);
-            let output = self.github::<()>(cancel, &arguments, None).await?;
+            let output = self
+                .github::<()>(cancel, credential, &arguments, None)
+                .await?;
             let files = decode_files_page(&output)?;
             for file in &files {
                 if !valid_changed_path(&file.filename) || seen.contains(&file.filename) {

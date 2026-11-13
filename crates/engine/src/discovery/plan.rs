@@ -63,14 +63,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// Returns `credential_not_covered` when no credential matches the repository.
     fn served_login(&self, repository: &str) -> Result<&str, Error> {
-        match self.config.credentials.resolve(repository) {
-            Some(credential) => Ok(credential.login.as_str()),
-            None => Err(Error::config(
-                "credential_not_covered",
-                "github.credentials",
-                Some(format!("no credential matches {repository}").into()),
-            )),
-        }
+        let credential = self.config.credentials.serving(repository)?;
+        Ok(credential.login.as_str())
     }
 
     /// Decides the scope and the prior findings of the review of `candidate`.

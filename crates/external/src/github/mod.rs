@@ -1,7 +1,7 @@
 //! The `gh` CLI calls of the engine and the decoding of their JSON output.
 //!
 //! Every call is an argv list, never a shell, and the child gets the [`GH_INHERITED`] variables
-//! of the engine and the GitHub token.
+//! of the engine and the token of one credential.
 
 // Rust guideline compliant 2026-06-26
 
@@ -17,7 +17,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::time::Duration;
 
-use autoreview_engine::config::{Config, Credential};
+use autoreview_engine::config::{Config, Credential, Credentials};
 use autoreview_engine::error::{BoxError, Error};
 use serde::Deserialize;
 use serde::Serialize;
@@ -38,6 +38,12 @@ const PULL_REQUEST_FIELDS: &str = concat!(
 
 /// Variables the `gh` child sets besides its token: plain output and no prompts.
 const GH_CHILD_ENVIRONMENT: [(&str, &str); 2] = [("GH_PAGER", "cat"), ("GH_PROMPT_DISABLED", "1")];
+
+/// Variable that carries the token of the call's credential to the `gh` child.
+const TOKEN_VARIABLE: &str = "GH_TOKEN";
+
+/// Configuration key named when a call that names no repository finds several credentials.
+const CREDENTIALS_KEY: &str = "github.credentials";
 
 /// Returns the GraphQL search that discovers pull requests (`graphQLSearch`).
 pub(crate) fn graphql_search() -> String {
@@ -68,18 +74,16 @@ fn graphql_pull_request() -> String {
     )
 }
 
-/// The `gh` CLI of the engine and the GitHub identity that its calls use.
+/// The `gh` CLI of the engine and the GitHub credentials that its calls use.
 ///
-/// The token is left out of the `Debug` output.
+/// The tokens are left out of the `Debug` output.
 pub(crate) struct GitHub {
     /// Path of the `gh` binary.
     binary: String,
-    /// Token of the engine's GitHub account; only the `gh` child receives it.
-    token: String,
+    /// The credentials; a call that acts on a repository uses the one that serves it.
+    credentials: Credentials,
     /// GitHub host that pull request URLs name, for example `example.org`.
     host: String,
-    /// Login of the account that the engine reviews for.
-    login: String,
     /// Timeout of one `gh` call.
     timeout: Duration,
     /// Number of results a review request search may return before it fails as truncated.
@@ -95,8 +99,8 @@ impl fmt::Debug for GitHub {
         formatter
             .debug_struct("GitHub")
             .field("binary", &self.binary)
+            .field("credentials", &self.credentials)
             .field("host", &self.host)
-            .field("login", &self.login)
             .field("timeout", &self.timeout)
             .field("poll_limit", &self.poll_limit)
             .field("search_page_limit", &self.search_page_limit)
@@ -105,13 +109,12 @@ impl fmt::Debug for GitHub {
 }
 
 impl GitHub {
-    /// Creates the client from the `gh` settings of the configuration and one credential.
-    pub(crate) fn new(config: &Config, credential: &Credential) -> Self {
+    /// Creates the client from the `gh` settings and the credentials of the configuration.
+    pub(crate) fn new(config: &Config) -> Self {
         Self {
             binary: config.gh_bin.clone(),
-            token: credential.token.clone(),
+            credentials: config.credentials.clone(),
             host: config.github_host.clone(),
-            login: credential.login.clone(),
             timeout: config.gh_timeout,
             poll_limit: config.poll_limit,
             search_page_limit: config.search_page_limit,
@@ -119,12 +122,50 @@ impl GitHub {
         }
     }
 
-    /// Runs `gh` with `args` and returns its stdout, which is valid JSON.
+    /// Returns the only credential, which the calls that name no repository use.
     ///
-    /// `input` is serialized to the child's stdin; `None` gives an empty stdin.
+    /// # Errors
+    ///
+    /// Returns `configuration_invalid` naming `github.credentials` when there are several.
+    fn only_credential(&self) -> Result<&Credential, Error> {
+        self.credentials.single().ok_or_else(|| {
+            let message = "a gh call without a repository needs exactly one credential";
+            Error::config(
+                "configuration_invalid",
+                CREDENTIALS_KEY,
+                Some(message.into()),
+            )
+        })
+    }
+
+    /// Returns the environment of a `gh` child that acts with `credential`.
+    ///
+    /// It is the [`GH_INHERITED`] variables of `parent` without the secrets, then the token of
+    /// `credential` as `GH_TOKEN` and the [`GH_CHILD_ENVIRONMENT`] settings.
+    fn environment(
+        &self,
+        parent: impl IntoIterator<Item = (OsString, OsString)>,
+        credential: &Credential,
+    ) -> Vec<(OsString, OsString)> {
+        let token = (
+            OsString::from(TOKEN_VARIABLE),
+            OsString::from(&credential.token),
+        );
+        let settings = GH_CHILD_ENVIRONMENT
+            .iter()
+            .map(|(name, value)| (OsString::from(*name), OsString::from(*value)));
+        let extra = std::iter::once(token).chain(settings);
+        child_environment(parent, &GH_INHERITED, &self.secret_variables, extra)
+    }
+
+    /// Runs `gh` with `args` and the token of `credential` and returns its stdout.
+    ///
+    /// The stdout is valid JSON. `input` is serialized to the child's stdin; `None` gives an
+    /// empty stdin.
     pub(crate) async fn github<T: Serialize + ?Sized>(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         args: &[String],
         input: Option<&T>,
     ) -> Result<String, Error> {
@@ -135,21 +176,7 @@ impl GitHub {
         } else {
             Vec::new()
         };
-        let extra = std::iter::once((
-            OsString::from("GH_TOKEN"),
-            OsString::from(self.token.clone()),
-        ))
-        .chain(
-            GH_CHILD_ENVIRONMENT
-                .iter()
-                .map(|(name, value)| (OsString::from(*name), OsString::from(*value))),
-        );
-        let environment = child_environment(
-            std::env::vars_os(),
-            &GH_INHERITED,
-            &self.secret_variables,
-            extra,
-        );
+        let environment = self.environment(std::env::vars_os(), credential);
         let output = run(
             cancel,
             &self.binary,
@@ -169,11 +196,11 @@ impl GitHub {
         Ok(output)
     }
 
-    /// Returns the login of the account behind the GitHub token, in lower case.
+    /// Returns the login of the account behind the only credential's token, in lower case.
     pub(crate) async fn viewer_login(&self, cancel: &CancellationToken) -> Result<String, Error> {
-        let output = self
-            .github::<()>(cancel, &["api".to_owned(), "user".to_owned()], None)
-            .await?;
+        let credential = self.only_credential()?;
+        let args = ["api".to_owned(), "user".to_owned()];
+        let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_viewer_login(&output)
     }
 }
@@ -284,4 +311,96 @@ fn is_space_byte(byte: u8) -> bool {
 /// It is permanent: a response that does not decode does not change on a retry.
 fn response_invalid(cause: Option<BoxError>) -> Error {
     Error::workflow("github_response_invalid", true, cause)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::ffi::OsString;
+    use std::time::Duration;
+
+    use autoreview_engine::config::{Credential, Credentials};
+    use autoreview_engine::error_code;
+
+    use super::GitHub;
+    use crate::pohunek::local_environment;
+
+    fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        items
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect()
+    }
+
+    fn credential(name: &str, token: &str, pattern: &str) -> Credential {
+        Credential {
+            name: name.to_owned(),
+            login: format!("{name}-bot"),
+            token: token.to_owned(),
+            matches: vec![pattern.to_owned()],
+        }
+    }
+
+    /// With two credentials, each `gh` child holds only the token of its repository's
+    /// credential, and a pohunek child holds none (#14).
+    #[test]
+    fn each_child_gets_only_the_token_of_its_credential() {
+        let credentials = Credentials::new(vec![
+            credential("first", "synthetic-first", "example-one/*"),
+            credential("second", "synthetic-second", "example-two/*"),
+        ])
+        .expect("the credentials are valid");
+        let github = GitHub {
+            binary: "/usr/bin/gh".to_owned(),
+            credentials,
+            host: "github.com".to_owned(),
+            timeout: Duration::from_secs(30),
+            poll_limit: 100,
+            search_page_limit: 10,
+            secret_variables: BTreeSet::from(["EXAMPLE_SECOND_TOKEN".to_owned()]),
+        };
+        let parent = pairs(&[
+            ("PATH", "/usr/bin"),
+            ("GH_TOKEN", "synthetic-parent"),
+            ("GITHUB_TOKEN", "synthetic-parent"),
+            ("AUTOREVIEW_FIRST_TOKEN", "synthetic-first"),
+            ("EXAMPLE_SECOND_TOKEN", "synthetic-second"),
+        ]);
+        // (repository, the token of its `gh` child or the error code)
+        let rows = [
+            ("example-one/app", Ok("synthetic-first")),
+            ("example-two/app", Ok("synthetic-second")),
+            ("Example-One/App", Ok("synthetic-first")),
+            ("example-three/app", Err("credential_not_covered")),
+        ];
+        for (repository, expected) in rows {
+            let built = github
+                .credentials
+                .serving(repository)
+                .map(|credential| github.environment(parent.clone(), credential));
+            match (built, expected) {
+                (Ok(environment), Ok(token)) => assert_eq!(
+                    environment,
+                    pairs(&[
+                        ("PATH", "/usr/bin"),
+                        ("GH_TOKEN", token),
+                        ("GH_PAGER", "cat"),
+                        ("GH_PROMPT_DISABLED", "1"),
+                    ]),
+                    "{repository}"
+                ),
+                (Err(error), Err(code)) => assert_eq!(error_code(&error), code, "{repository}"),
+                (built, _) => panic!("{repository}: {built:?}"),
+            }
+        }
+        // A call that names no repository never picks one of several credentials.
+        let unscoped = github
+            .only_credential()
+            .map_err(|error| error_code(&error).to_owned());
+        assert_eq!(unscoped.err().as_deref(), Some("configuration_invalid"));
+        assert_eq!(
+            local_environment(parent),
+            pairs(&[("PATH", "/usr/bin"), ("PAGER", "cat")])
+        );
+    }
 }

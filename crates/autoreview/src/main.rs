@@ -296,7 +296,8 @@ async fn run(
     match command {
         Command::Validate => validate(&config),
         Command::Engine(command) => {
-            // Every `gh` call and the startup check use one token until #14 to #17 land.
+            // The startup check, the `gh` calls without a repository and the logins of the `gh`
+            // client need one credential until #15 to #17 land.
             let Some(credential) = config.credentials.single() else {
                 return Err(Error::config(
                     CONFIGURATION_INVALID,
@@ -305,7 +306,7 @@ async fn run(
                 ));
             };
             let github_login = credential.login.clone();
-            let external = Arc::new(External::new(config.clone(), credential)?);
+            let external = Arc::new(External::new(config.clone())?);
             let sections = Sections { mcp, metrics };
             run_engine(command, config, &github_login, sections, external, &cancel).await
         }

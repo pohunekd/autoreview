@@ -575,8 +575,9 @@ impl GitHub {
         number: i64,
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
+        let login = &self.only_credential()?.login;
         let raw = self.fetch_pull_request(cancel, repository, number).await?;
-        let mut pull_request = decode_pull_request(&raw, &self.host, &self.login, trigger)?;
+        let mut pull_request = decode_pull_request(&raw, &self.host, login, trigger)?;
         if trigger.kind == TriggerKind::ReviewRequested {
             pull_request.review_request_id = self
                 .latest_review_request_id(cancel, &pull_request.repository, pull_request.number)
@@ -596,8 +597,10 @@ impl GitHub {
         number: i64,
     ) -> Result<PullRequestState, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.github::<()>(cancel, &args, None).await?;
-        decode_pull_request_state(repository, number, &output, &self.host, &self.login)
+        let credential = self.credentials.serving(repository)?;
+        let login = &self.only_credential()?.login;
+        let output = self.github::<()>(cancel, credential, &args, None).await?;
+        decode_pull_request_state(repository, number, &output, &self.host, login)
     }
 
     /// Reads the raw pull request data of one pull request (`fetchPullRequest`).
@@ -608,7 +611,8 @@ impl GitHub {
         number: i64,
     ) -> Result<GitHubPullRequest, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.github::<()>(cancel, &args, None).await?;
+        let credential = self.credentials.serving(repository)?;
+        let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_pull_request_response(&output)
     }
 
@@ -622,13 +626,15 @@ impl GitHub {
         repository: &str,
         number: i64,
     ) -> Result<i64, Error> {
+        let credential = self.credentials.serving(repository)?;
+        let login = &self.only_credential()?.login;
         let mut events = Vec::new();
         for page in 1..=self.search_page_limit {
             let query = format!("per_page={EVENTS_PER_PAGE}&page={page}");
             let path = format!("repos/{repository}/issues/{number}/events?{query}");
             let args = vec!["api".to_owned(), path];
-            let output = self.github::<()>(cancel, &args, None).await?;
-            let decoded = decode_review_request_page(&output, &self.login)?;
+            let output = self.github::<()>(cancel, credential, &args, None).await?;
+            let decoded = decode_review_request_page(&output, login)?;
             events.extend(decoded.events);
             if decoded.count < EVENTS_PER_PAGE {
                 break;

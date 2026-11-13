@@ -536,12 +536,15 @@ impl GitHub {
         prior: &[PriorFinding],
         max_characters: i64,
     ) -> Result<Discussion, Error> {
+        let credential = self.credentials.serving(&pull_request.repository)?;
         read_discussion(
-            |args: Vec<String>| async move { self.github::<()>(cancel, &args, None).await },
+            |args: Vec<String>| async move {
+                self.github::<()>(cancel, credential, &args, None).await
+            },
             pull_request,
             prior,
             max_characters,
-            &self.login,
+            &self.only_credential()?.login,
             self.search_page_limit,
         )
         .await
@@ -558,8 +561,11 @@ impl GitHub {
         previous: &str,
         head: &str,
     ) -> Result<bool, Error> {
+        let credential = self.credentials.serving(repository)?;
         read_linear_history(
-            |args: Vec<String>| async move { self.github::<()>(cancel, &args, None).await },
+            |args: Vec<String>| async move {
+                self.github::<()>(cancel, credential, &args, None).await
+            },
             repository,
             previous,
             head,

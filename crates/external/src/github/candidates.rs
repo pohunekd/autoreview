@@ -539,13 +539,13 @@ impl GitHub {
                     continue;
                 }
                 let raw = self.fetch_pull_request(cancel, &repository, number).await?;
-                let Some(id) = ready_draft_id(&raw, author, &repository, number, &self.login)
-                else {
+                let login = &self.only_credential()?.login;
+                let Some(id) = ready_draft_id(&raw, author, &repository, number, login) else {
                     continue;
                 };
-                let output = self
-                    .github::<()>(cancel, &mark_ready_args(&id), None)
-                    .await?;
+                let credential = self.credentials.serving(&repository)?;
+                let args = mark_ready_args(&id);
+                let output = self.github::<()>(cancel, credential, &args, None).await?;
                 decode_mark_ready_response(&output)?;
                 tracing::info!(
                     repository = %repository,
@@ -570,7 +570,8 @@ impl GitHub {
         max: i64,
     ) -> Result<ReviewRequestList, Error> {
         let args = list_review_requests_args(max);
-        let output = self.github::<()>(cancel, &args, None).await?;
+        let credential = self.only_credential()?;
+        let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_review_request_search(&output, max, &self.host)
     }
 
@@ -582,7 +583,8 @@ impl GitHub {
         extra: &[String],
     ) -> Result<Vec<SearchIdentity>, Error> {
         let args = search_requested_args(self.poll_limit, scopes, extra);
-        let output = self.github::<()>(cancel, &args, None).await?;
+        let credential = self.only_credential()?;
+        let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_search_identities(&output, self.poll_limit)
     }
 
@@ -644,16 +646,17 @@ impl GitHub {
             kind: TriggerKind::Label,
             label: name.to_owned(),
         };
+        let credential = self.only_credential()?;
         for _ in 0..self.search_page_limit {
             let args = label_search_args(&query, &after);
-            let output = self.github::<()>(cancel, &args, None).await?;
+            let output = self.github::<()>(cancel, credential, &args, None).await?;
             let page = decode_label_search_page(&output)?;
             for node in &page.nodes {
                 let (repository, number) = node.repository_and_number();
                 let Some(covered) = covering(policy, &repository, &trigger) else {
                     continue;
                 };
-                let outcome = decode_pull_request(node, &self.host, &self.login, &trigger);
+                let outcome = decode_pull_request(node, &self.host, &credential.login, &trigger);
                 classify(&mut list, &repository, number, covered, outcome)?;
             }
             if !page.has_next_page {
