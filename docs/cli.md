@@ -20,8 +20,8 @@ Secrets come only from the variables named by the `*_env` keys of the configurat
 With `--env-file <path>`, a variable that the file names is read from the file, and every
 other one from the environment. The file holds `NAME=value` lines; see
 [secrets](knowledge/safety/secrets.md#the---env-file) for its format and checks. A file
-that fails a check is `configuration_invalid`; the message names the path, and the mode or
-the line number.
+that fails a check is `configuration_invalid`; the message names the path, and the mode,
+the owner or the line number.
 
 Every command except `init` and `profiles install` reads the configuration from `--config` or
 `AUTOREVIEW_CONFIG` and validates it together with the policy before doing

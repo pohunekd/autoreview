@@ -14,7 +14,6 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::{
     Config, HostOrder, HostStateChoice, HostStateRules, MatrixRooms, RouteOverride,
-    SECRET_ENV_PREFIX,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
@@ -1030,16 +1029,7 @@ fn github_credentials(
             return Err(invalid("github.credentials.login", "is not a GitHub login"));
         }
         let token_env = text(&entry.token_env, "github.credentials.token_env")?;
-        if !token_env.starts_with(SECRET_ENV_PREFIX) {
-            return Err(invalid(
-                "github.credentials.token_env",
-                "must start with AUTOREVIEW_",
-            ));
-        }
-        let token = match secret(token_env.as_str()) {
-            Some(value) if !value.trim().is_empty() => value,
-            _ => return Err(missing("github.credentials.token_env")),
-        };
+        let token = secret_value(token_env.as_str(), secret, "github.credentials.token_env")?;
         let matches = text_list(&entry.matches, "github.credentials.match")?;
         if matches.is_empty()
             || matches
@@ -1415,19 +1405,19 @@ fn homeserver_url(value: &Option<Value>) -> Result<String, Error> {
     Ok(url)
 }
 
-/// Reads the secret named by `variable`, which must start with `AUTOREVIEW_`.
+/// Reads the secret named by `variable`, which must match `AUTOREVIEW_[A-Z0-9_]+`.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` for a name without the prefix and
+/// Returns `configuration_invalid` naming `key` for any other name and
 /// `configuration_missing` for an unset or blank variable. The value never appears in an error.
 fn secret_value(
     variable: &str,
     secret: &impl Fn(&str) -> Option<String>,
     key: &str,
 ) -> Result<String, Error> {
-    if !variable.starts_with(SECRET_ENV_PREFIX) {
-        return Err(invalid(key, "must start with AUTOREVIEW_"));
+    if !env_file::name_valid(variable) {
+        return Err(invalid(key, "must match AUTOREVIEW_[A-Z0-9_]+"));
     }
     match secret(variable) {
         Some(value) if !value.trim().is_empty() => Ok(value),
@@ -3143,19 +3133,54 @@ pub(crate) mod tests {
         Link(u32),
         /// A directory.
         Directory,
+        /// A FIFO of mode 0600 without a writer.
+        Fifo,
         /// Nothing.
         Missing,
     }
 
+    /// How long the env file test waits for one read of the file.
+    const READ_BOUND: Duration = Duration::from_secs(10);
+
+    /// Reads the env file at `path` as `euid` on a thread; panics after [`READ_BOUND`].
+    ///
+    /// An open of a FIFO without `O_NONBLOCK` waits for a writer; the test then fails, not hangs.
+    fn read_bounded(path: &Path, euid: u32) -> Result<EnvFile, Error> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let opened = path.to_owned();
+        let reader =
+            std::thread::spawn(move || sender.send(crate::env_file::read_as(&opened, euid)));
+        if let Ok(result) = receiver.recv_timeout(READ_BOUND) {
+            return result;
+        }
+        // A writer ends the wait of a blocked open, so the thread ends before the panic.
+        let flags = rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::NONBLOCK;
+        let writer = rustix::fs::open(path, flags, rustix::fs::Mode::empty());
+        if writer.is_ok() {
+            let _ = reader.join();
+        }
+        panic!("reading {} took longer than {READ_BOUND:?}", path.display());
+    }
+
     /// D1-D3 of #6: the env file checks, the precedence of its values and that no error, log
     /// text or debug output shows a value (`{m}` is the marker, `{path}` the file's path).
+    /// #351 and #353: the `*_env` name rule and a FIFO, which must fail and never block.
     #[test]
     fn env_file_values_win_and_never_appear_in_errors() {
-        use EnvSetup::{Directory, Foreign, Link, Missing, Mode};
+        use EnvSetup::{Directory, Fifo, Foreign, Link, Missing, Mode};
         use std::os::unix::fs::{PermissionsExt, symlink};
         const GH: &str = "AUTOREVIEW_GH_TOKEN={m}\n";
         const TOKEN_ENV: &str = "      token_env: AUTOREVIEW_GH_TOKEN\n";
         const MATRIX_ENV: &str = "      access_token_env: AUTOREVIEW_MATRIX_TOKEN\n";
+        const MENTION: &str = "      mention_user: \"@you:example.org\"\n";
+        // A webhook backend after the Matrix backend, with a name that breaks the rule.
+        const WEBHOOK: &str = concat!(
+            "      mention_user: \"@you:example.org\"\n",
+            "    - name: hook\n",
+            "      type: webhook\n",
+            "      url_env: AUTOREVIEW_{m}\n",
+            "      format: json\n",
+        );
         // Setup, file text, config line replaced ("" for none), the environment's GitHub token,
         // and the token expected (Ok) or a text of the error (Err).
         let row = |setup, text, config, environment, expected| {
@@ -3163,6 +3188,8 @@ pub(crate) mod tests {
         };
         // A row on the example config without a GitHub token in the environment.
         let file = |setup, text, expected| row(setup, text, ("", ""), None, expected);
+        // A row of the GitHub token file on a changed config, without the environment's token.
+        let named = |config, expected| row(Mode(0o600), GH, config, None, expected);
         let cases = [
             row(Mode(0o600), GH, ("", ""), Some("environment"), Ok("{m}")),
             file(
@@ -3211,19 +3238,44 @@ pub(crate) mod tests {
                 None,
                 Err("configuration_invalid: version: must be 1"),
             ),
-            row(
-                Mode(0o600),
-                GH,
+            file(Fifo, "", Err("{path} is not a regular file")),
+            named(
                 (TOKEN_ENV, "      token_env: {m}\n"),
-                None,
-                Err("github.credentials.token_env: must start with AUTOREVIEW_"),
+                Err("github.credentials.token_env: must match AUTOREVIEW_[A-Z0-9_]+"),
+            ),
+            named(
+                (TOKEN_ENV, "      token_env: AUTOREVIEW_\n"),
+                Err("github.credentials.token_env: must match AUTOREVIEW_[A-Z0-9_]+"),
+            ),
+            named(
+                (TOKEN_ENV, "      token_env: AUTOREVIEW_{m}\n"),
+                Err("github.credentials.token_env: must match AUTOREVIEW_[A-Z0-9_]+"),
+            ),
+            named(
+                (TOKEN_ENV, "      token_env: \"AUTOREVIEW_GH_TOKEN \"\n"),
+                Err("github.credentials.token_env: must match AUTOREVIEW_[A-Z0-9_]+"),
             ),
             row(
                 Mode(0o600),
-                GH,
-                (MATRIX_ENV, "      access_token_env: GITHUB_TOKEN\n"),
+                "AUTOREVIEW_GH_2={m}\n",
+                (TOKEN_ENV, "      token_env: AUTOREVIEW_GH_2\n"),
                 None,
-                Err("notify.backends.access_token_env: must start with AUTOREVIEW_"),
+                Ok("{m}"),
+            ),
+            named(
+                (MATRIX_ENV, "      access_token_env: GITHUB_TOKEN\n"),
+                Err("notify.backends.access_token_env: must match AUTOREVIEW_[A-Z0-9_]+"),
+            ),
+            named(
+                (
+                    MATRIX_ENV,
+                    "      access_token_env: AUTOREVIEW_MATRIX_TOKÉN\n",
+                ),
+                Err("notify.backends.access_token_env: must match AUTOREVIEW_[A-Z0-9_]+"),
+            ),
+            named(
+                (MENTION, WEBHOOK),
+                Err("notify.backends.url_env: must match AUTOREVIEW_[A-Z0-9_]+"),
             ),
         ];
         let euid = rustix::process::geteuid().as_raw();
@@ -3256,6 +3308,12 @@ pub(crate) mod tests {
                     reader = euid.wrapping_add(1);
                 }
                 Directory => std::fs::create_dir(&path).expect("directory created"),
+                Fifo => {
+                    let mode = rustix::fs::Mode::from_raw_mode(0o600);
+                    let fifo = rustix::fs::FileType::Fifo;
+                    rustix::fs::mknodat(rustix::fs::CWD, &path, fifo, mode, 0)
+                        .expect("FIFO created");
+                }
                 Missing => {}
             }
             let config = if old.is_empty() {
@@ -3268,7 +3326,7 @@ pub(crate) mod tests {
                 "AUTOREVIEW_GH_TOKEN" => environment.clone(),
                 other => secret(other),
             };
-            let result = crate::env_file::read_as(&path, reader).and_then(|file| {
+            let result = read_bounded(&path, reader).and_then(|file| {
                 let found = |name: &str| crate::env_file::secret(Some(&file), name, lookup);
                 let config = parse(&config, found, example_policy)?;
                 Ok((format!("{file:?}"), config))

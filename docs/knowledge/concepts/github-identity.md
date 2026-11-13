@@ -197,7 +197,7 @@ keeps tokens.
 ## Handling the tokens
 
 - Put the token in the environment under the name given by its `token_env`. The
-  name must start with `AUTOREVIEW_`. The install of the service sets the
+  name must match `AUTOREVIEW_[A-Z0-9_]+`. The install of the service sets the
   environment, see [install](../../install.md).
 - Check that a token is set without printing it, using the name from
   `config.yaml`: `test -n "$AUTOREVIEW_GH_TOKEN" && echo set`.

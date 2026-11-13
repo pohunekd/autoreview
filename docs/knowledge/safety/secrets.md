@@ -29,7 +29,8 @@ of the variables that hold them.
 Each `gh` child gets the token as `GH_TOKEN` in its own
 environment, and no other process that autoreview starts receives a GitHub token.
 
-Every name in an `*_env` key, including `token_env`, must start with `AUTOREVIEW_`.
+Every name in an `*_env` key, including `token_env`, must match `AUTOREVIEW_[A-Z0-9_]+`,
+the rule of a name in the `--env-file`; any other name is `configuration_invalid`.
 
 ## What child processes receive
 

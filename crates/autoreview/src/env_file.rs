@@ -131,7 +131,9 @@ fn parse(path: &Path, text: &str) -> Result<BTreeMap<String, String>, Error> {
 }
 
 /// Reports whether `name` is `AUTOREVIEW_` followed by at least one of A-Z, 0-9 and `_`.
-fn name_valid(name: &str) -> bool {
+///
+/// The one rule for a name in the file and for the name in every `*_env` key.
+pub(crate) fn name_valid(name: &str) -> bool {
     name.strip_prefix(SECRET_ENV_PREFIX).is_some_and(|rest| {
         !rest.is_empty()
             && rest
