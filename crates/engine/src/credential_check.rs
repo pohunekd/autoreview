@@ -173,9 +173,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Checks the token of `credential` with that token only and applies the answer.
     ///
     /// An accepted token of the credential's login is logged as `credential checked`, lifts a
-    /// suspension and may warn of its expiry. A refused token, or one of another login,
-    /// suspends the credential and raises `credential_invalid` once. A failed call is logged
-    /// and changes nothing. Returns `false` once `cancel` is cancelled.
+    /// suspension with `credential_restored` and may warn of its expiry. A refused token, or one
+    /// of another login, suspends the credential and raises `credential_invalid` once. A failed
+    /// call is logged and changes nothing. Returns `false` once `cancel` is cancelled.
     async fn check_one(&self, cancel: &CancellationToken, credential: &Credential) -> bool {
         let answer = self.integration.check_token(cancel, credential).await;
         if cancel.is_cancelled() {
@@ -189,6 +189,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 tracing::info!(credential = %name, expires_at = expires, "credential checked");
                 if self.health().accept(name) {
                     tracing::info!(credential = %name, "credential suspension lifted");
+                    let message = format!(
+                        "GitHub accepts the token of credential {name} again. Its repositories \
+                         are reviewed again from the next discovery pass."
+                    );
+                    self.notify_credential(cancel, Event::CredentialRestored, name, &message)
+                        .await;
                 }
                 if let Some(expires_at) = expires_at {
                     self.warn_expiry(cancel, credential, expires_at).await;

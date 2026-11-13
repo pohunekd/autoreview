@@ -217,10 +217,10 @@ fn gh_failure(message: &str) -> (&'static str, bool) {
     }
 }
 
-/// Reports whether `message` names `HTTP` and `status`, as Go's `(?i)\bHTTP\s+422\b` does.
+/// Reports whether `message` names `HTTP` and `status`, as `(?i)\bHTTP\s+<status>\b` does.
 ///
-/// Word boundaries and `\s` are ASCII in RE2, so only `\t`, `\n`, `\f`, `\r` and space separate
-/// the words, and `HTTP` matches in any ASCII case.
+/// `HTTP` matches in any ASCII case and must start a word. One or more of `\t`, `\n`, `\f`,
+/// `\r` and space separate it from `status`, which must end a word (ASCII word characters).
 fn names_http(message: &str, status: &[u8]) -> bool {
     let bytes = message.as_bytes();
     let length = bytes.len();

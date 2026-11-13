@@ -298,6 +298,9 @@ pub enum Event {
     /// GitHub refuses a credential's token while the service runs.
     #[serde(rename = "credential_invalid")]
     CredentialInvalid,
+    /// GitHub accepts the token of a suspended credential again.
+    #[serde(rename = "credential_restored")]
+    CredentialRestored,
     /// Findings on own PR event.
     #[serde(rename = "findings_on_own_pr")]
     FindingsOnOwnPr,
@@ -334,6 +337,7 @@ impl Event {
             Self::Commented => "commented",
             Self::CredentialExpiring => "credential_expiring",
             Self::CredentialInvalid => "credential_invalid",
+            Self::CredentialRestored => "credential_restored",
             Self::FindingsOnOwnPr => "findings_on_own_pr",
             Self::HandoffReminder => "handoff_reminder",
             Self::RetryScheduled => "retry_scheduled",
@@ -380,6 +384,7 @@ pub const EVENTS: &[Event] = &[
 /// An absent one is not part of the policy digest, so policies without it keep their digest.
 pub const OPTIONAL_EVENTS: &[(Event, Level)] = &[
     (Event::CredentialInvalid, Level::Action),
+    (Event::CredentialRestored, Level::Action),
     (Event::CredentialExpiring, Level::Action),
 ];
 

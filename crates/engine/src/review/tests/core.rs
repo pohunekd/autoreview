@@ -271,7 +271,8 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
             && !h.fake.lock().published_heads.contains(&sha("f")),
         "a suspended credential was searched or reviewed, or announced more than once"
     );
-    // The check after the next poll accepts the token and lifts the suspension.
+    // The check after the next poll accepts the token and lifts the suspension, which raises
+    // `credential_restored` once (#378).
     fail_credential(&h, None);
     let accepted = TokenAnswer::Accepted {
         login: "acme-bot".to_owned(),
@@ -281,6 +282,10 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
     h.engine.recheck_tokens(&cancel).await;
     h.poll_until("acme's review after the lift", || h.publications() == 7)
         .await;
+    let restored = "GitHub accepts the token of credential acme again";
+    let fake = Arc::clone(&h.fake);
+    let lifts = move || count_notes(&fake.lock().notes, Level::Action, restored);
+    assert_eq!(lifts(), 1, "a lift was not announced exactly once");
     // A review queued before a start that refuses its token waits until the lift.
     h.stop_engine().await;
     let queued = integration_pull_request("acme/queued", &sha("8"));
@@ -305,6 +310,7 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
     h.engine.recheck_tokens(&cancel).await;
     h.wait_for("the queued review after the lift", || h.publications() == 8)
         .await;
+    assert_eq!(lifts(), 2, "the lift after the restart was not announced");
     h.stop_engine().await;
 }
 
