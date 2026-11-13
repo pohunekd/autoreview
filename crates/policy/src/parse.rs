@@ -1205,10 +1205,12 @@ notifications:
         let level = |policy: &Policy, event| policy.level(event);
         assert!(
             level(&parsed, Event::CredentialExpiring) == Some(Level::Action)
+                && level(&parsed, Event::CredentialInvalid) == Some(Level::Action)
                 && !parsed
                     .notifications()
                     .contains_key(&Event::CredentialExpiring)
                 && level(&named, Event::CredentialExpiring) == Some(Level::Digest)
+                && level(&named, Event::CredentialInvalid) == Some(Level::Action)
                 && named.digest() != parsed.digest(),
             "optional events: the default levels or the named one"
         );

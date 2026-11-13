@@ -34,6 +34,9 @@ const POLICY_KEY: &str = "policy_file";
 /// Error code logged for a notification that a shutdown left unsent.
 pub(crate) const SHUTDOWN: &str = "shutdown";
 
+/// Code of a token that GitHub refuses; a suspended credential fails its search with it.
+const CREDENTIAL_INVALID: &str = "credential_invalid";
+
 /// A notification of a discovery pass, sent once the pass has saved its state.
 #[derive(Debug)]
 pub(crate) struct Notice {
@@ -76,7 +79,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// With several credentials each gets one attempt per pass, so a failing one never delays
     /// the others. A credential whose search fails is logged with its name and error code and
-    /// left out, so the others go on; the returned map holds its code by its name.
+    /// left out, so the others go on; the returned map holds its code by its name. A refused
+    /// token marks its credential for a token check. A suspended credential is not searched
+    /// and fails as `credential_invalid`.
     ///
     /// # Errors
     ///
@@ -96,6 +101,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let mut first = None;
         let retried = retried && self.config.credentials.single().is_some();
         for credential in self.config.credentials.iter() {
+            if self.suspended(&credential.name) {
+                let cause = format!("credential {} is suspended", credential.name);
+                let err = Error::workflow(CREDENTIAL_INVALID, false, Some(cause.into()));
+                failed.insert(credential.name.clone(), CREDENTIAL_INVALID.to_owned());
+                first.get_or_insert(err);
+                continue;
+            }
             let searched = if retried {
                 let policy = self.step_policy();
                 retry_step(step, policy, &self.clock, cancel, || search(credential)).await
@@ -106,6 +118,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 Ok(value) => found.push((credential, value)),
                 Err(err) if cancel.is_cancelled() => return Err(err),
                 Err(err) => {
+                    if error_code(&err) == CREDENTIAL_INVALID {
+                        self.search_refused(&credential.name);
+                    }
                     tracing::error!(
                         credential = %credential.name,
                         error_code = error_code(&err),

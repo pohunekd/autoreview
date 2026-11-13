@@ -180,7 +180,7 @@ pub(crate) struct FakeState {
     pub(crate) credentials: Option<Credentials>,
     /// Error code of each failing credential's searches, keyed by credential name.
     ///
-    /// Its reads fail transiently, as with a revoked token.
+    /// Its reads fail transiently as `github_request_failed`.
     pub(crate) failing_credentials: BTreeMap<String, String>,
     /// Names of the credentials whose candidate searches fail transiently.
     pub(crate) transient_credentials: BTreeSet<String>,

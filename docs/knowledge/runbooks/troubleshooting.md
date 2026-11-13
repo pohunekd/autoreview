@@ -42,7 +42,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or refused the request | Check the token's permissions and the `github` section |
 | `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
-| `credential_invalid` | GitHub refuses the token: revoked, expired or never valid | Replace the token in the variable that `token_env` names |
+| `credential_invalid` | GitHub refuses the token: revoked, expired or never valid; at start, while running, or in a review's GitHub step | [Token refused while running](#token-refused-while-running) |
 | `configuration_invalid` naming `github.credentials` or `github.credentials.match` | A `match` entry that an earlier one covers | [Credential errors](#credential-errors) |
 | `credential_not_covered`, `credential_unused` | A policy rule has a repository that no credential matches, a credential serves no repository of the policy, or a review's credential no longer fits it | [Credential errors](#credential-errors) |
 | A fine-grained token sees nothing | Organization approval pending, wrong resource owner, or repository not selected | [A fine-grained token sees nothing](#a-fine-grained-token-sees-nothing) |
@@ -475,6 +475,16 @@ waiting approval of such a review stays until it is approved or expires. Run
 Check that a variable is set without printing its value:
 `test -n "$AUTOREVIEW_GH_TOKEN" && echo set`. Use the variable name from the
 credential's `token_env`.
+
+### Token refused while running
+
+`credential_invalid` while `serve` runs suspends the credential it names: its
+repositories wait and the others keep reviewing. Replace the token in the
+variable that `token_env` names and restart `serve`; the startup check refuses
+a token that GitHub still refuses. When GitHub accepts the same token again, the
+check after the next discovery pass lifts the suspension without a restart. A
+review that stopped with `credential_invalid` is not retried automatically; run
+`autoreview retry` for it once the credential works.
 
 ### Token expires soon
 

@@ -295,6 +295,9 @@ pub enum Event {
     /// A credential's token expires within the warning window.
     #[serde(rename = "credential_expiring")]
     CredentialExpiring,
+    /// GitHub refuses a credential's token while the service runs.
+    #[serde(rename = "credential_invalid")]
+    CredentialInvalid,
     /// Findings on own PR event.
     #[serde(rename = "findings_on_own_pr")]
     FindingsOnOwnPr,
@@ -330,6 +333,7 @@ impl Event {
             Self::CommandFailed => "command_failed",
             Self::Commented => "commented",
             Self::CredentialExpiring => "credential_expiring",
+            Self::CredentialInvalid => "credential_invalid",
             Self::FindingsOnOwnPr => "findings_on_own_pr",
             Self::HandoffReminder => "handoff_reminder",
             Self::RetryScheduled => "retry_scheduled",
@@ -374,7 +378,10 @@ pub const EVENTS: &[Event] = &[
 /// Events a policy may leave out, each with the level it gets then.
 ///
 /// An absent one is not part of the policy digest, so policies without it keep their digest.
-pub const OPTIONAL_EVENTS: &[(Event, Level)] = &[(Event::CredentialExpiring, Level::Action)];
+pub const OPTIONAL_EVENTS: &[(Event, Level)] = &[
+    (Event::CredentialInvalid, Level::Action),
+    (Event::CredentialExpiring, Level::Action),
+];
 
 /// Events a review workflow sends itself, so its input carries their levels. Discovery sends the
 /// others with the current policy.

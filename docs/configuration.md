@@ -218,8 +218,9 @@ How the credential applies:
   with `credential_invalid`, a token of another account with
   `credential_login_mismatch`; the message names the credential.
   `validate --check-credentials` runs the same check. While it runs, `serve`
-  checks every token again every `credential_check_hours`. The suspension of a
-  failing credential is planned in #19.
+  checks every token again every `credential_check_hours`, and a refused token
+  suspends only its credential's repositories, see
+  [suspension](knowledge/concepts/github-identity.md#suspension).
 - **Expiry.** The check reads the token's expiry from GitHub;
   `validate --check-credentials` prints it as `expires_at`, `null` for a token
   without an expiry. A token that expires within `expiry_warning_days` raises

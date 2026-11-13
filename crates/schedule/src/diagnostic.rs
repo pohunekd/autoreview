@@ -201,6 +201,9 @@ pub fn failure_explanation(code: &str) -> &'static str {
         "github_request_failed" => {
             "A GitHub API request failed. Check GitHub availability, authentication, and rate limits."
         }
+        "credential_invalid" => {
+            "GitHub refused the token of the review's credential: revoked, expired or never valid. Replace the token in the variable that its `token_env` names and restart autoreview, then retry this PR; it is not retried automatically."
+        }
         _ => {
             "The review could not complete. Inspect the review service logs using the diagnostic code below."
         }
