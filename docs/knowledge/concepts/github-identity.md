@@ -96,11 +96,12 @@ once. The message names the credential, never the token. While suspended:
 The other credentials keep reviewing; with a single credential every discovery
 pass fails with `credential_invalid` until the suspension is lifted. After each
 discovery pass `serve` checks the token of every suspended credential again; a
-token it accepts lifts the suspension (`credential suspension lifted`) and the
-next pass searches the repositories again. Tokens are read at start, so a new
-token needs a restart. The suspension lives in memory, which is enough because a
-restart begins with the startup check: while GitHub still refuses a token, that
-check stops the start with `credential_invalid`, for every credential.
+token it accepts lifts the suspension (`credential suspension lifted`), raises
+`credential_restored` once, and the next pass searches the repositories again.
+Tokens are read at start, so a new token needs a restart. The suspension lives
+in memory, which is enough because a restart begins with the startup check:
+while GitHub still refuses a token, that check stops the start with
+`credential_invalid`, for every credential.
 
 ### Expiry
 
