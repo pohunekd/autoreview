@@ -232,6 +232,10 @@ pub struct Config {
     pub state_db_path: String,
     /// Timeout of GitHub requests.
     pub gh_timeout: Duration,
+    /// How often the service checks the token of every credential.
+    pub credential_check: Duration,
+    /// How long before a token's expiry the expiry warning starts.
+    pub expiry_warning: Duration,
     /// Timeout of pohunek requests.
     pub pohunek_timeout: Duration,
     /// Timeout of Matrix requests.
@@ -1099,6 +1103,8 @@ mod tests {
             queue_max_items: 10,
             state_db_path: "/var/lib/autoreview/state.db".to_owned(),
             gh_timeout: Duration::from_secs(30),
+            credential_check: Duration::from_secs(24 * 60 * 60),
+            expiry_warning: Duration::from_secs(14 * 24 * 60 * 60),
             pohunek_timeout: Duration::from_secs(60),
             matrix_timeout: Duration::from_secs(30),
             session_timeout: Duration::from_secs(30 * 60),

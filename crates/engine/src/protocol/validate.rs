@@ -315,6 +315,8 @@ pub(crate) mod tests {
             queue_max_items: 10,
             state_db_path: "/var/lib/autoreview/state.db".to_owned(),
             gh_timeout: Duration::from_secs(30),
+            credential_check: Duration::from_secs(24 * 60 * 60),
+            expiry_warning: Duration::from_secs(14 * 24 * 60 * 60),
             pohunek_timeout: Duration::from_secs(60),
             matrix_timeout: Duration::from_secs(30),
             session_timeout: Duration::from_secs(30 * 60),

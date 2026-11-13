@@ -18,7 +18,7 @@ use autoreview_engine::config::{
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
-use autoreview_policy::{EVENTS, Event, Policy, user_login_valid};
+use autoreview_policy::{EVENTS, Event, OPTIONAL_EVENTS, Policy, user_login_valid};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -49,6 +49,12 @@ const CREDENTIAL_NAME_MAX: usize = 32;
 const SECONDS_PER_DAY: u64 = 86_400;
 /// Longest discovery lock timeout, in seconds.
 const DISCOVERY_LOCK_TIMEOUT_MAX_SECONDS: u64 = 3600;
+/// Largest `github.credential_check_hours`: one year, which keeps the check's timer in range.
+const CREDENTIAL_CHECK_HOURS_MAX: u32 = 8760;
+/// Largest `github.expiry_warning_days`: one year, the longest lifetime of a token.
+const EXPIRY_WARNING_DAYS_MAX: u32 = 366;
+/// Seconds of one hour.
+const SECONDS_PER_HOUR: u64 = 3600;
 /// Largest session output buffer, in bytes (16 MiB).
 const OUTPUT_MAX_BYTES_LIMIT: i64 = 16 << 20;
 /// Longest output wait, in milliseconds.
@@ -243,9 +249,9 @@ struct GithubFile {
     gh_bin: Option<Value>,
     /// Timeout of one `gh` call, in seconds.
     timeout_seconds: Option<Value>,
-    /// How often every token is checked, in hours. Parsed, not mapped.
+    /// How often every token is checked, in hours.
     credential_check_hours: Option<Value>,
-    /// Days before a token expires at which a warning is raised. Parsed, not mapped.
+    /// Days before a token expires at which a warning is raised.
     expiry_warning_days: Option<Value>,
     /// One or more credentials, first match wins.
     credentials: Option<Vec<CredentialFile>>,
@@ -760,11 +766,20 @@ fn map_file(
     let github_host = text(&github.host, "github.host")?;
     let gh_bin = text(&github.gh_bin, "github.gh_bin")?;
     let gh_timeout = seconds(&github.timeout_seconds, "github.timeout_seconds")?;
-    let _ = positive(
+    let credential_check = bounded_units(
         &github.credential_check_hours,
         "github.credential_check_hours",
+        CREDENTIAL_CHECK_HOURS_MAX,
+        "must be at most 8760",
+        SECONDS_PER_HOUR,
     )?;
-    let _ = positive(&github.expiry_warning_days, "github.expiry_warning_days")?;
+    let expiry_warning = bounded_units(
+        &github.expiry_warning_days,
+        "github.expiry_warning_days",
+        EXPIRY_WARNING_DAYS_MAX,
+        "must be at most 366",
+        SECONDS_PER_DAY,
+    )?;
     let credentials = Credentials::new(github_credentials(&github.credentials, &recorded)?)?;
     credentials.check_coverage(&policy.rule_matches())?;
     let pohunek = section(&file.pohunek, "pohunek")?;
@@ -929,6 +944,8 @@ fn map_file(
         queue_max_items,
         state_db_path,
         gh_timeout,
+        credential_check,
+        expiry_warning,
         pohunek_timeout,
         matrix_timeout,
         session_timeout,
@@ -1488,7 +1505,9 @@ fn event_rooms<'a>(
             continue;
         }
         let key = format!("notify.routes.{name}");
-        let Some(event) = EVENTS.iter().find(|event| event.as_str() == name) else {
+        let optional = OPTIONAL_EVENTS.iter().map(|(event, _)| event);
+        let Some(event) = (EVENTS.iter().chain(optional)).find(|event| event.as_str() == name)
+        else {
             return Err(invalid(&key, "names no notification event"));
         };
         let room = level_room(backends, names, &key, matrix)?;
@@ -1769,6 +1788,24 @@ fn seconds(value: &Option<Value>, key: &str) -> Result<Duration, Error> {
     let number = positive(value, key)?;
     let unsigned = u64::try_from(number).map_err(|_| invalid(key, "must be a positive integer"))?;
     Ok(Duration::from_secs(unsigned))
+}
+
+/// Reads a positive count of at most `max` units of `unit_seconds` each, as a duration.
+///
+/// A larger count fails with `too_large`.
+fn bounded_units(
+    value: &Option<Value>,
+    key: &str,
+    max: u32,
+    too_large: &'static str,
+    unit_seconds: u64,
+) -> Result<Duration, Error> {
+    let number = positive(value, key)?;
+    let count = u32::try_from(number)
+        .ok()
+        .filter(|count| *count <= max)
+        .ok_or_else(|| invalid(key, too_large))?;
+    Ok(Duration::from_secs(u64::from(count) * unit_seconds))
 }
 
 /// Reads a positive number of milliseconds.
@@ -2080,6 +2117,11 @@ pub(crate) mod tests {
         assert_eq!(only.login, "review-bot");
         assert_eq!(only.token, "synthetic-token");
         assert_eq!(config.state_db_path, "/var/lib/autoreview/autoreview.db");
+        assert_eq!(config.credential_check, Duration::from_secs(24 * 60 * 60));
+        assert_eq!(
+            config.expiry_warning,
+            Duration::from_secs(14 * 24 * 60 * 60)
+        );
     }
 
     #[test]
@@ -2762,9 +2804,19 @@ pub(crate) mod tests {
                 "configuration_invalid: github.credential_check_hours: must be a positive integer",
             ),
             (
+                "  credential_check_hours: 24",
+                "  credential_check_hours: 8761",
+                "configuration_invalid: github.credential_check_hours: must be at most 8760",
+            ),
+            (
                 "  expiry_warning_days: 14",
                 "  expiry_warning_days: \"14\"",
                 "configuration_invalid: github.expiry_warning_days: must be an integer",
+            ),
+            (
+                "  expiry_warning_days: 14",
+                "  expiry_warning_days: 367",
+                "configuration_invalid: github.expiry_warning_days: must be at most 366",
             ),
             (
                 "  timeout_seconds: 45",
