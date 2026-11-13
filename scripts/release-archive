@@ -5,7 +5,8 @@
 #        with SOURCE_DATE_EPOCH set to a Unix time
 #
 # The archive holds one directory autoreview-<version>-<target>/ with the binary
-# `autoreview`, LICENSE and README.md. Its bytes depend only on the inputs and on
+# `autoreview`, LICENSE, README.md, and deploy/ with the installer and systemd
+# units of install path b. Its bytes depend only on the inputs and on
 # the tar and gzip versions: members are sorted, owned by root, stamped with
 # SOURCE_DATE_EPOCH (the release workflow uses the commit time) and compressed
 # without a name or time. The .sha256 line names the archive without a
@@ -46,9 +47,14 @@ trap 'rm -rf -- "$staging"' EXIT
 mkdir -- "$staging/$name"
 cp -- "$binary" "$staging/$name/autoreview"
 cp -- "$root/LICENSE" "$root/README.md" "$staging/$name/"
+mkdir -p -- "$staging/$name/deploy/systemd"
+cp -- "$root/deploy/install.sh" "$staging/$name/deploy/"
+cp -- "$root/deploy/systemd/autoreview.service" "$root/deploy/systemd/autoreview-queue.service" \
+    "$root/deploy/systemd/autoreview-queue.timer" "$staging/$name/deploy/systemd/"
 # Explicit modes, so the umask of the build host never reaches the archive.
-chmod 0755 "$staging/$name" "$staging/$name/autoreview"
-chmod 0644 "$staging/$name/LICENSE" "$staging/$name/README.md"
+chmod 0755 "$staging/$name" "$staging/$name/autoreview" "$staging/$name/deploy" \
+    "$staging/$name/deploy/systemd" "$staging/$name/deploy/install.sh"
+chmod 0644 "$staging/$name/LICENSE" "$staging/$name/README.md" "$staging/$name/deploy/systemd/"*
 
 # No pipe: a failing tar must fail the script, and sh has no pipefail.
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \

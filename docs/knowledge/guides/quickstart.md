@@ -225,7 +225,8 @@ answered. See [incremental reviews](../concepts/incremental-reviews.md).
 
 Once one review works, run autoreview as a long-running service so it reviews
 without manual polls. [`scripts/setup`](getting-started.md) (after 0.2.0) writes and
-starts user units on one machine. On a server, write the systemd units of install path b, or use the
+starts user units on one machine. On a server, install the systemd units of install path b with
+its installer, or use the
 container image that is planned in #40, as described in
 [install](../../install.md), and let `autoreview serve` run until you stop it.
 Reviews that are running at shutdown resume after the next start.

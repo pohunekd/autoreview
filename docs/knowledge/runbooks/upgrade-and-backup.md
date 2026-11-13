@@ -22,7 +22,9 @@ All state is in one SQLite file, `store.path` in `config.yaml`. Copy it with the
 built-in command, which is consistent while the service runs:
 
 ```sh
-sudo -u autoreview autoreview --config /etc/autoreview/config.yaml backup-db /var/backups/autoreview/autoreview-$(date +%F).db
+sudo -u autoreview autoreview --config /etc/autoreview/config.yaml \
+  --env-file /etc/autoreview/autoreview.env \
+  backup-db /var/backups/autoreview/autoreview-$(date +%F).db
 ```
 
 The backup holds review data, not secrets, but it names repositories and
@@ -42,7 +44,8 @@ retention settings (`store.review_retention_seconds`,
 
    ```sh
    sudo install -m 0755 "autoreview-$version-$target/autoreview" /usr/local/bin/autoreview
-   sudo -u autoreview autoreview --config /etc/autoreview/config.yaml validate
+   sudo -u autoreview autoreview --config /etc/autoreview/config.yaml \
+     --env-file /etc/autoreview/autoreview.env validate
    ```
 
    `validate` loads `config.yaml`, the policy and every prompt. A new key or a changed

@@ -71,11 +71,13 @@ planned in #13.
 
 ## The environment file
 
-With the systemd units, the secrets sit in `/etc/autoreview/autoreview.env`:
+With the systemd units of install path b, the secrets sit in
+`/etc/autoreview/autoreview.env`, which the units pass with `--env-file`:
 
-- Owner `root`, mode `0600`. systemd reads the file as root before it drops
-  privileges for the service.
-- Contains only `KEY=value` lines for the `AUTOREVIEW_*` names.
+- Owner `autoreview`, mode `0600`. The service reads the file itself, so the
+  values never enter its environment. The installer creates the file empty and
+  stops on another owner or mode.
+- Contains only `NAME=value` lines for the `AUTOREVIEW_*` names.
 - Stays out of repositories, shared dotfiles and any backup that leaves the host
   unencrypted.
 
@@ -88,15 +90,15 @@ line, in a shell history or in a script that prints them.
 
 ## The `--env-file`
 
-A process that starts autoreview with an empty environment, such as a pohunek
-workflow plugin, passes the secrets in a file instead: `autoreview --env-file <path>
+The systemd units of install path b, or any process that starts autoreview with
+an empty environment, pass the secrets in a file: `autoreview --env-file <path>
 <command>`. Every command that reads the configuration takes the flag; `init` and
 `profiles install` refuse it.
 
 - The file must be a regular file owned by the user that runs autoreview, with no
   access for the group or others (mode `0600` or `0400`). A symlink is followed and
-  the checks apply to the file it points to. A root-owned file that only systemd
-  reads, such as `/etc/autoreview/autoreview.env`, fails the owner check.
+  the checks apply to the file it points to. A root-owned file fails the owner
+  check of a service that runs as another user.
 - Each line is `NAME=value`, where the name is `AUTOREVIEW_` followed by `A-Z`,
   `0-9` or `_`. The value is the rest of the line as written: quotes, `export` and
   escapes are not read. Blank lines and lines that start with `#` are skipped. A

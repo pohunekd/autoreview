@@ -2,7 +2,7 @@
 type: Reference
 id: reference/install
 title: Install autoreview
-description: Prerequisites, the four install paths (release archive with checksum and attestation, systemd units, container image planned in #40, pohunek workflow plugin planned in #41), building from source, first configuration, the first review and where to go for upgrades.
+description: Prerequisites, the four install paths (release archive with checksum and attestation, systemd units with their installer, container image planned in #40, pohunek workflow plugin planned in #41), building from source, first configuration, the first review and where to go for upgrades.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -11,9 +11,9 @@ intents: [setup, help]
 
 > **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
 > marked planned or "not in v0.1" are not in 0.2.0. The release archives are
-> published from `v0.1.0` on; the release workflow builds and attests them. The
-> release ships no systemd unit files: path b writes them by hand, and shipped
-> units are planned in #39. The container image `ghcr.io/pohunekd/autoreview`
+> published from `v0.1.0` on; the release workflow builds and attests them.
+> The systemd units and their installer of path b come in the archive after
+> 0.3.0. The container image `ghcr.io/pohunekd/autoreview`
 > is not in 0.2.0 and is planned in #40.
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
@@ -52,7 +52,7 @@ a dedicated server user.
 | Path | Use it when | You get |
 |---|---|---|
 | a. Release binary (default) | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
-| b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
+| b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `deploy/install.sh`, which installs `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
 | c. Container | You run containers | `ghcr.io/pohunekd/autoreview:<version>`, planned in #40 |
 | d. pohunek workflow plugin | Not available yet | Planned in #41 |
 
@@ -119,97 +119,55 @@ TARGET_CC=musl-gcc cargo build --release --locked --target x86_64-unknown-linux-
 
 ## b. systemd units
 
+After 0.3.0, the release archive of path a also holds `deploy/install.sh` and
+the units it installs:
+[`autoreview.service`](../deploy/systemd/autoreview.service),
+[`autoreview-queue.service`](../deploy/systemd/autoreview-queue.service) and
+[`autoreview-queue.timer`](../deploy/systemd/autoreview-queue.timer), which
+sends the review queue hourly from 08:00 to 20:00 host local time. Download,
+check and unpack the archive as in path a, then run the installer as root:
+
 ```sh
-sudo useradd --system --home-dir /var/lib/autoreview --shell /usr/sbin/nologin autoreview
-sudo install -d -o root -g root -m 0755 /etc/autoreview /etc/autoreview/prompts
+sudo "autoreview-$version-$target/deploy/install.sh" \
+  --binary "autoreview-$version-$target/autoreview"
 ```
 
-Create the environment file (the variable of the credential's `token_env` and the
-backend secrets), write the values in an editor, and never on a command line. See [secrets](knowledge/safety/secrets.md).
+It creates the system user `autoreview`, installs the binary as
+`/usr/local/bin/autoreview`, creates `/etc/autoreview` (mode `0755`), the state
+directory `/var/lib/autoreview` (mode `0700`, owned by `autoreview`) and the
+empty secrets file `/etc/autoreview/autoreview.env`, and writes the units to
+`/etc/systemd/system/`. A file that is in place is not written again, so a
+second run changes nothing.
 
-```sh
-sudo install -m 0600 -o root -g root /dev/null /etc/autoreview/autoreview.env
-```
+Until `/etc/autoreview/config.yaml` exists, it enables and starts nothing.
+Write the configuration as in [first configuration](#first-configuration) and
+the secrets as below, then run the installer again. From then on, each run
+checks the configuration with `validate`, as the `autoreview` user and with the
+new binary, before it replaces the binary or a unit; when `validate` fails, it
+stops and the running service stays as it was. Then it enables `autoreview.service` and
+`autoreview-queue.timer`, and restarts the service when the binary or a unit
+changed or when it is not running. Its exit codes: 1 usage, 2 not root or not
+an autoreview binary, 3 the secrets file, 4 `validate`, 5 a failed install
+step.
+
+The secrets file holds the variable of the credential's `token_env` and the
+backend secrets as `NAME=value` lines. Write the values with an editor, never
+on a command line, for example with `sudoedit /etc/autoreview/autoreview.env`.
+See [secrets](knowledge/safety/secrets.md). The units pass the file with
+`--env-file`, so it must be owned by `autoreview` with mode `0600`; the
+installer checks the owner and the mode, prints the command that fixes them,
+and never reads the values.
 
 The `gh` and `pohunek` processes that autoreview starts inherit only the
 variables listed in [secrets](knowledge/safety/secrets.md#what-child-processes-receive);
 any other variable of the unit, such as a token of another tool, stays with
 autoreview.
 
-Both units set `RuntimeDirectoryPreserve=yes`, so the hourly oneshot cannot remove `/run/autoreview` while `serve` runs.
-
-`/etc/systemd/system/autoreview.service`:
-
-```ini
-[Unit]
-Description=autoreview pull request review service
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=simple
-User=autoreview
-Group=autoreview
-ExecStart=/usr/local/bin/autoreview --config /etc/autoreview/config.yaml serve
-EnvironmentFile=/etc/autoreview/autoreview.env
-StateDirectory=autoreview
-RuntimeDirectory=autoreview
-RuntimeDirectoryPreserve=yes
-Restart=on-failure
-RestartSec=10
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/lib/autoreview /run/autoreview
-PrivateTmp=yes
-CapabilityBoundingSet=
-
-[Install]
-WantedBy=multi-user.target
-```
-
-`/etc/systemd/system/autoreview-queue.service`, started by the timer:
-
-```ini
-[Unit]
-Description=autoreview review queue notice
-
-[Service]
-Type=oneshot
-User=autoreview
-Group=autoreview
-ExecStart=/usr/local/bin/autoreview --config /etc/autoreview/config.yaml review-queue
-EnvironmentFile=/etc/autoreview/autoreview.env
-StateDirectory=autoreview
-RuntimeDirectory=autoreview
-RuntimeDirectoryPreserve=yes
-NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=/var/lib/autoreview /run/autoreview
-PrivateTmp=yes
-CapabilityBoundingSet=
-```
-
-`/etc/systemd/system/autoreview-queue.timer`, hourly from 08:00 to 20:00 host
-local time:
-
-```ini
-[Unit]
-Description=Hourly autoreview review queue, 08:00-20:00 local time
-
-[Timer]
-OnCalendar=*-*-* 08..20:00:00
-Unit=autoreview-queue.service
-
-[Install]
-WantedBy=timers.target
-```
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now autoreview.service autoreview-queue.timer
-```
+The units run the service without capabilities, with a read-only file system
+except `/var/lib/autoreview` and `/run/autoreview`, without access to home
+directories, with a private `/tmp` and a system call filter. Both units set
+`RuntimeDirectoryPreserve=yes`, so the hourly oneshot cannot remove
+`/run/autoreview` while `serve` runs.
 
 The `autoreview` user needs a route to each review host (for example NetBird) and
 the pohunek client access the CLI needs. That setup is not in the reference pages yet.
@@ -278,10 +236,12 @@ profile with [`autoreview profiles install`](cli.md#autoreview-profiles-install)
 run as the user of the pohunek daemon on that host. It also writes the reviewer
 adapter that the profile starts, which needs Python 3.11 or newer as `python3`.
 
-Check configuration, policy and prompts before every start:
+Check configuration, policy and prompts before every start, as the service user
+with the secrets file of path b:
 
 ```sh
-sudo -u autoreview autoreview --config /etc/autoreview/config.yaml validate
+sudo -u autoreview autoreview --config /etc/autoreview/config.yaml \
+  --env-file /etc/autoreview/autoreview.env validate
 ```
 
 The output is one JSON object; error messages are listed in [policy validation errors](policy.md#validation-errors).
@@ -292,10 +252,12 @@ Start the service, then check what discovery picks up and run one pass. A review
 starts after `schedule.debounce_seconds`.
 
 ```sh
-autoreview --config /etc/autoreview/config.yaml candidates
-autoreview --config /etc/autoreview/config.yaml poll
-autoreview --config /etc/autoreview/config.yaml reviews
-autoreview --config /etc/autoreview/config.yaml review --repository <owner/repo> <number>
+run() { sudo -u autoreview autoreview --config /etc/autoreview/config.yaml \
+  --env-file /etc/autoreview/autoreview.env "$@"; }
+run candidates
+run poll
+run reviews
+run review --repository <owner/repo> <number>
 ```
 
 Open a test pull request in a matching repository and request a review from the

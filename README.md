@@ -61,7 +61,8 @@ GitHub (gh) --> discovery --> policy match --> review workflow (SQLite)
 The engine needs three parts to be useful: the engine itself (Rust), the
 reviewer adapters that turn a pohunek agent session into one structured,
 read-only review run, and an installer that creates the pohunek agent profiles
-(`autoreview profiles install`) and the service unit (planned in #39).
+(`autoreview profiles install`) and the service units with their installer
+(`deploy/install.sh`, after 0.3.0).
 
 ## Rough plan
 
@@ -99,10 +100,9 @@ scenarios are guides without a policy of their own:
 - `gh` CLI and one GitHub token (tokens per owner or repository are planned in #13)
 - Claude Code and/or Codex CLI on the review hosts
 - Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` (after 0.2.0)
-  writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the system units
-  of a server user are written by hand from the
-  install page (shipped units are planned in #39, the container image in #40
-  and the workflow plugin in #41)
+  writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the
+  installer of the install page writes the system units of a server user (after
+  0.3.0; the container image is planned in #40 and the workflow plugin in #41)
 
 ## Security model
 
@@ -128,7 +128,7 @@ keeps untrusted authors behind a maintainer label.
   App identity come after v1 (#46, #47).
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
-- Distributed as static Linux release archives from 0.1.0 on; systemd units
-  and an installer (planned in #39), a container image (planned in #40) and a
+- Distributed as static Linux release archives from 0.1.0 on, with systemd
+  units and an installer after 0.3.0; a container image (planned in #40) and a
   pohunek workflow plugin (planned in #41) follow.
 - MIT license.

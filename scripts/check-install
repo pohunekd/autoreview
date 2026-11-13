@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Checks deploy/install.sh in a temporary root, without root rights.
+#
+# usage: scripts/check-install rerun|verify
+#
+# rerun: installs twice and fails unless the first run places the expected
+# files with their modes and the second run changes nothing (path, type, mode,
+# size, mtime and sha256 of every file). verify: installs once and fails unless
+# `systemd-analyze verify` accepts the units silently.
+set -euo pipefail
+
+cd "$(dirname "$0")/.." || exit 2
+
+fail() {
+    printf 'check-install: %s\n' "$*" >&2
+    exit 1
+}
+
+if [ "$#" -ne 1 ] || { [ "$1" != rerun ] && [ "$1" != verify ]; }; then
+    fail "usage: scripts/check-install rerun|verify"
+fi
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/check-install.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+root=$work/root
+mkdir -m 0755 "$root"
+# Stands in for the release binary: the installer only runs its --version.
+printf '#!/bin/sh\necho "autoreview 0.0.0"\n' >"$work/autoreview"
+chmod 0755 "$work/autoreview"
+
+install_once() {
+    deploy/install.sh --root "$root" --binary "$work/autoreview" >"$work/$1.log" \
+        || { cat "$work/$1.log"; fail "deploy/install.sh failed on the $1 run"; }
+}
+
+# Every path under the root with its type, mode, size and mtime, then the
+# sha256 of every file.
+snapshot() {
+    (cd "$root" && find . -printf '%p %y %m %s %T@\n' | LC_ALL=C sort \
+        && find . -type f -exec sha256sum -- {} + | LC_ALL=C sort)
+}
+
+install_once first
+units=(autoreview.service autoreview-queue.service autoreview-queue.timer)
+
+if [ "$1" = verify ]; then
+    output=$(systemd-analyze verify --root="$root" "${units[@]/#/$root/etc/systemd/system/}" 2>&1) \
+        || { printf '%s\n' "$output"; fail "systemd-analyze verify failed"; }
+    # verify exits 0 on an unknown key or a value it cannot parse; it only warns.
+    [ -z "$output" ] || { printf '%s\n' "$output"; fail "systemd-analyze verify warned"; }
+    echo "check-install: systemd-analyze verify accepts ${units[*]}"
+    exit 0
+fi
+
+expected=". d 755
+./etc d 755
+./etc/autoreview d 755
+./etc/autoreview/autoreview.env f 600
+./etc/systemd d 755
+./etc/systemd/system d 755
+./etc/systemd/system/autoreview-queue.service f 644
+./etc/systemd/system/autoreview-queue.timer f 644
+./etc/systemd/system/autoreview.service f 644
+./usr d 755
+./usr/local d 755
+./usr/local/bin d 755
+./usr/local/bin/autoreview f 755
+./var d 755
+./var/lib d 755
+./var/lib/autoreview d 700"
+placed=$(cd "$root" && find . -printf '%p %y %m\n' | LC_ALL=C sort)
+[ "$placed" = "$expected" ] \
+    || { diff <(printf '%s\n' "$expected") <(printf '%s\n' "$placed") || true; \
+        fail "the first run placed other paths or modes than expected"; }
+[ ! -s "$root/etc/autoreview/autoreview.env" ] || fail "the secrets file is not empty"
+cmp -s "$work/autoreview" "$root/usr/local/bin/autoreview" || fail "the binary differs"
+for name in "${units[@]}"; do
+    cmp -s "deploy/systemd/$name" "$root/etc/systemd/system/$name" || fail "$name differs"
+done
+
+before=$(snapshot)
+install_once second
+after=$(snapshot)
+[ "$before" = "$after" ] \
+    || { diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true; \
+        fail "the second run changed the files above"; }
+if grep -Ev ' (in place|skipped .*)$|^installing autoreview |^Next: ' "$work/second.log"; then
+    fail "the second run reported the changes above"
+fi
+echo "check-install: a second run of deploy/install.sh changes nothing"
