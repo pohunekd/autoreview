@@ -152,15 +152,21 @@ pub struct ReviewRequestList {
 /// caller's cancellation token, as each Go method takes the caller's context.
 pub trait Integrations {
     /// Returns the pull requests the policy covers and the ones whose data was refused.
+    ///
+    /// It searches with `credential`'s token, only where `credential` serves repositories.
     fn list_candidates(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
     ) -> impl Future<Output = Result<CandidateList, Error>> + Send;
 
     /// Marks the requesting coding agents' drafts ready for review and returns them.
+    ///
+    /// It searches with `credential`'s token, only where `credential` serves repositories.
     fn ready_drafts(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
     ) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send;
 
     /// Reads a pull request and checks it against the trigger of its rule.
@@ -325,10 +331,13 @@ pub trait Integrations {
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    /// Returns the open review requests of the configured login, at most `max` of them.
+    /// Returns the open review requests of `credential`'s login, at most `max` of them.
+    ///
+    /// It searches with `credential`'s token.
     fn list_review_requests(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         max: i64,
     ) -> impl Future<Output = Result<ReviewRequestList, Error>> + Send;
 

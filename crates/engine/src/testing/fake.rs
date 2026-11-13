@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Credential, NotifyRoute};
+use crate::config::{Credential, Credentials, NotifyRoute};
 use crate::error::{Error, WORKFLOW_FAILED};
 use crate::integrations::{
     ChangedFile, ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState,
@@ -170,6 +170,12 @@ pub(crate) struct FakeState {
     pub(crate) permission_reads: Vec<String>,
     /// Error code of each failing permission read, keyed by `repository login`.
     pub(crate) permission_fail: BTreeMap<String, String>,
+    /// Credentials of the engine; reads of a repository that none serves fail as in `gh`.
+    pub(crate) credentials: Option<Credentials>,
+    /// Error code of each failing credential's searches, keyed by credential name.
+    ///
+    /// Its reads fail transiently, as with a revoked token.
+    pub(crate) failing_credentials: BTreeMap<String, String>,
     /// GitHub's answer to each token, keyed by the token; a token without one fails.
     pub(crate) token_answers: BTreeMap<String, TokenAnswer>,
     /// Name of every credential whose token was checked, in order.
@@ -369,6 +375,24 @@ fn transient_error() -> Error {
 }
 
 impl FakeState {
+    /// Returns the read error of `repository`: no serving credential, or a failing one.
+    fn credential_error(&self, repository: &str) -> Option<Error> {
+        let credentials = self.credentials.as_ref()?;
+        match credentials.serving(repository) {
+            Err(err) => Some(err),
+            Ok(credential) if self.failing_credentials.contains_key(&credential.name) => {
+                Some(transient_error())
+            }
+            Ok(_) => None,
+        }
+    }
+
+    /// Returns the search error of `credential`, if it fails.
+    fn search_error(&self, credential: &Credential) -> Option<Error> {
+        let code = self.failing_credentials.get(&credential.name)?;
+        Some(Error::workflow(code.clone(), true, None))
+    }
+
     fn transient(&self) -> bool {
         match self.transient_until {
             Some(until) => Instant::now() < until,
@@ -381,12 +405,15 @@ impl Integrations for FakeIntegration {
     fn list_candidates(
         &self,
         _cancel: &CancellationToken,
+        credential: &Credential,
     ) -> impl Future<Output = Result<CandidateList, Error>> + Send {
         let result = {
             let mut state = self.lock();
             state.listings += 1;
             if state.transient() {
                 Err(transient_error())
+            } else if let Some(err) = state.search_error(credential) {
+                Err(err)
             } else {
                 let candidates = state.candidates.values().cloned().collect();
                 let rejected = state.rejected.clone();
@@ -402,6 +429,7 @@ impl Integrations for FakeIntegration {
     fn ready_drafts(
         &self,
         _cancel: &CancellationToken,
+        _credential: &Credential,
     ) -> impl Future<Output = Result<Vec<ReadiedDraft>, Error>> + Send {
         ready(Ok(Vec::new()))
     }
@@ -418,6 +446,8 @@ impl Integrations for FakeIntegration {
             let state = self.lock();
             if state.transient() {
                 Err(transient_error())
+            } else if let Some(err) = state.credential_error(repository) {
+                Err(err)
             } else if let Some(code) = state.lapsed.get(&key) {
                 Err(Error::workflow(code.clone(), true, None))
             } else if let Some(pr) = state.current.get(&key) {
@@ -443,6 +473,9 @@ impl Integrations for FakeIntegration {
         let key = format!("{repository}#{number}");
         let result = {
             let state = self.lock();
+            if let Some(err) = state.credential_error(repository) {
+                return ready(Err(err));
+            }
             match state.current.get(&key) {
                 None => Ok(PullRequestState::default()),
                 Some(_) if state.closed.contains(&key) => Ok(PullRequestState::default()),
@@ -790,10 +823,14 @@ impl Integrations for FakeIntegration {
     fn list_review_requests(
         &self,
         _cancel: &CancellationToken,
+        credential: &Credential,
         max: i64,
     ) -> impl Future<Output = Result<ReviewRequestList, Error>> + Send {
         let result = {
             let state = self.lock();
+            if let Some(err) = state.search_error(credential) {
+                return ready(Err(err));
+            }
             let len = state.requests.len() as i64;
             let take = if max < 0 {
                 0

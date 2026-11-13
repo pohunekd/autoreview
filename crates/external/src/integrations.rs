@@ -90,12 +90,24 @@ impl External {
 }
 
 impl Integrations for External {
-    async fn list_candidates(&self, cancel: &CancellationToken) -> Result<CandidateList, Error> {
-        self.github.list_candidates(cancel, &self.policy).await
+    async fn list_candidates(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+    ) -> Result<CandidateList, Error> {
+        self.github
+            .list_candidates(cancel, &self.policy, credential)
+            .await
     }
 
-    async fn ready_drafts(&self, cancel: &CancellationToken) -> Result<Vec<ReadiedDraft>, Error> {
-        self.github.ready_drafts(cancel, &self.policy).await
+    async fn ready_drafts(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+    ) -> Result<Vec<ReadiedDraft>, Error> {
+        self.github
+            .ready_drafts(cancel, &self.policy, credential)
+            .await
     }
 
     async fn get_pull_request(
@@ -295,9 +307,12 @@ impl Integrations for External {
     async fn list_review_requests(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         max: i64,
     ) -> Result<ReviewRequestList, Error> {
-        self.github.list_review_requests(cancel, max).await
+        self.github
+            .list_review_requests(cancel, credential, max)
+            .await
     }
 
     async fn send_queue_digest(
