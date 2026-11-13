@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::route::{HostPass, host_unavailable};
 use super::{Notice, record_event};
+use crate::config::Credential;
 use crate::engine::{Clock, Engine, STEP_PUBLICATION, is_permanent, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
@@ -461,6 +462,25 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
         }
         Ok(bases)
+    }
+
+    /// Returns the credential that the stored review `workflow_id` reads and publishes with.
+    ///
+    /// `None` when the review is not stored or its credential no longer fits it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store.
+    #[expect(dead_code, reason = "the reads of round A2b call it")]
+    fn stored_credential(&self, workflow_id: &str) -> Result<Option<&Credential>, Error> {
+        let Some(review) = self.store.get_review(workflow_id)? else {
+            return Ok(None);
+        };
+        let input = &review.input;
+        let name = self.review_credential(workflow_id, input, false)?;
+        let repository = &input.pull_request.repository;
+        let credentials = &self.config.credentials;
+        Ok((credentials.reviewing(&name, repository, &input.publisher_login)).ok())
     }
 
     /// Reports whether the approval that `workflow_id` published on the head of `pr` stands.

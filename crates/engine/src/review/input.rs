@@ -48,6 +48,9 @@ pub(crate) const STATE_DEADLINE: &str = "collect_deadline";
 /// State that holds the deadline of the verifier, which runs after the reviewers.
 pub(crate) const STATE_VERIFIER_DEADLINE: &str = "verify_deadline";
 
+/// State that holds the credential name a review stored before names adopted.
+pub(crate) const STATE_CREDENTIAL: &str = "credential";
+
 /// Prefix of the state that holds the progress of one slot.
 pub(crate) const SLOT_STATE_PREFIX: &str = "slot/";
 

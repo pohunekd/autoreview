@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::input::{NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, SlotState, still_wanted};
+use crate::config::Credential;
 use crate::discovery::poll::live;
 use crate::discovery::{SHUTDOWN, notification_span};
 use crate::engine::{Clock, Engine, StepRetryPolicy, retry_step};
@@ -170,6 +171,8 @@ pub(crate) struct Review<'a, I, C> {
     pub(crate) workflow_id: String,
     /// The stored input the review decides by.
     pub(crate) input: ReviewInput,
+    /// Name of the credential the review reads and publishes with; empty when none fits.
+    pub(crate) credential_name: String,
     /// The reviewer slots, in the order of the input reviewers.
     pub(crate) slots: Vec<ReviewerSlot>,
     /// The verifier slot of a pipeline that has a verifier.
@@ -186,6 +189,21 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Returns the loop limits of the review, read from its input.
     pub(crate) fn limits(&self) -> &RunLimits {
         &self.input.limits
+    }
+
+    /// Returns the credential the review reads and publishes with.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credential_not_covered` when it is missing, no longer matches the repository
+    /// or belongs to another login than the publisher. The error is permanent: no step retry
+    /// can bring the credential back.
+    #[expect(dead_code, reason = "the reads of round A2b call it")]
+    pub(crate) fn credential(&self) -> Result<&Credential, Error> {
+        let (input, credentials) = (&self.input, &self.engine.config.credentials);
+        let repository = &input.pull_request.repository;
+        (credentials.reviewing(&self.credential_name, repository, &input.publisher_login))
+            .map_err(|err| Error::workflow(error_code(&err).to_owned(), true, Some(Box::new(err))))
     }
 
     /// Returns the step retry policy of the review, read from its limits.

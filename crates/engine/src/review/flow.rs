@@ -11,8 +11,9 @@ use time::{OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
 use super::input::{
-    ArtifactOutcome, RenderOutcome, SLOT_STATE_PREFIX, STEP_COMMENTABLE, STEP_DISCUSSION,
-    STEP_HUMAN_REVIEW, STEP_PLAN, STEP_PUBLISHED_AT, STEP_RENDERED, SlotState, validate_input,
+    ArtifactOutcome, RenderOutcome, SLOT_STATE_PREFIX, STATE_CREDENTIAL, STEP_COMMENTABLE,
+    STEP_DISCUSSION, STEP_HUMAN_REVIEW, STEP_PLAN, STEP_PUBLISHED_AT, STEP_RENDERED, SlotState,
+    validate_input,
 };
 use super::sessions::{Review, ReviewerSlot, StepFailure};
 use crate::discovery::poll::live;
@@ -23,7 +24,8 @@ use crate::integrations::{
 };
 use crate::messages::published_message;
 use crate::model::{
-    Artifact, Discussion, Outcome, PublishResult, PublishedRecord, PullRequest, ReviewOutcome,
+    Artifact, Discussion, Outcome, PublishResult, PublishedRecord, PullRequest, ReviewInput,
+    ReviewOutcome,
 };
 use crate::prior::settle_prior;
 use crate::protocol::combine::combine_results;
@@ -57,6 +59,40 @@ fn first_state() -> SlotState {
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Returns the name of the credential that the review `workflow_id` reads and publishes with.
+    ///
+    /// A review stored before names takes the name adopted for it. With `adopt`, it adopts the
+    /// serving credential once, if that one belongs to its publisher. Empty when none fits.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store.
+    pub(crate) fn review_credential(
+        &self,
+        workflow_id: &str,
+        input: &ReviewInput,
+        adopt: bool,
+    ) -> Result<String, Error> {
+        if !input.credential.is_empty() {
+            return Ok(input.credential.clone());
+        }
+        if let Some(name) = self
+            .store
+            .get_state::<String>(workflow_id, STATE_CREDENTIAL)?
+        {
+            return Ok(name);
+        }
+        let repository = &input.pull_request.repository;
+        let serving = (self.config.credentials).reviewing("", repository, &input.publisher_login);
+        match serving {
+            Ok(credential) if adopt => {
+                (self.store).set_state(workflow_id, STATE_CREDENTIAL, &credential.name)?;
+                Ok(credential.name.clone())
+            }
+            _ => Ok(String::new()),
+        }
+    }
+
     /// Runs or resumes `stored` until it completes or waits for an approval.
     ///
     /// # Errors
@@ -73,6 +109,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             cancel: cancel.clone(),
             workflow_id: stored.workflow_id,
             input: stored.input,
+            credential_name: String::new(),
             slots: Vec::new(),
             verifier: None,
             discussion: Discussion::default(),
@@ -84,6 +121,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 .fail(Error::workflow("review_input_invalid", true, Some(err)))
                 .await;
         }
+        live(&review.cancel)?;
+        review.credential_name =
+            self.review_credential(&review.workflow_id, &review.input, true)?;
         if !review.input.prior.is_empty() {
             let settled = review
                 .once_recorded::<Discussion, _>(ReviewStep::Discussion, STEP_DISCUSSION, || {
