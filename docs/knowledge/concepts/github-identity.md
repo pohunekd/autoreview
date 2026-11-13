@@ -36,6 +36,14 @@ Every repository of the [policy rules](../../policy.md#repository-rules) must
 have a credential (`credential_not_covered` otherwise), and every credential
 must serve one of them (`credential_unused` otherwise).
 
+A review keeps the credential that served its repository when it was dispatched.
+It reads the pull request, looks for its earlier review and publishes with that
+token and login, also after a restart or a config change. A review whose
+credential is gone, no longer matches the repository or now has another login
+stops with `credential_not_covered`; `autoreview retry` dispatches it again with
+the credential that serves it now. A review stored without a credential name
+takes the serving credential once, if it has the review's login, and keeps it.
+
 ## Choosing the shape
 
 The commands that call GitHub accept one credential: one account reviews
