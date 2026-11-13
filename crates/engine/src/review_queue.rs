@@ -14,7 +14,7 @@ use crate::discovery::SHUTDOWN;
 use crate::discovery::poll::{STEP_READ_PULL_REQUEST_STATE, live};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
-use crate::integrations::{Integrations, ReviewRequest};
+use crate::integrations::{Integrations, ReviewRequest, ReviewRequestList};
 use crate::messages::{excerpt, handoff_age};
 use crate::model::{AwaitRecord, PublishedRecord};
 use crate::publish::decision_text;
@@ -167,21 +167,33 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ///
     /// # Errors
     ///
-    /// Returns the error of the search or the store, and `configuration_invalid` without a
-    /// policy or with a negative limit.
+    /// Returns the search error when every credential fails, the error of the store, and
+    /// `configuration_invalid` without a policy or with a negative limit.
     pub(crate) async fn queue_snapshot(
         &self,
         cancel: &CancellationToken,
     ) -> Result<(Vec<QueueEntry>, bool), Error> {
         let limit = self.config.queue_max_items;
-        let list = retry_step(
-            STEP_LIST_REVIEW_REQUESTS,
-            self.step_policy(),
-            &self.clock,
-            cancel,
-            || self.integration.list_review_requests(cancel, limit),
-        )
-        .await?;
+        let (searches, failed) = self
+            .search_each(STEP_LIST_REVIEW_REQUESTS, true, cancel, |credential| {
+                self.integration
+                    .list_review_requests(cancel, credential, limit)
+            })
+            .await?;
+        // A failed credential's requests are missing, so the queue reports itself truncated.
+        let mut list = ReviewRequestList {
+            requests: Vec::new(),
+            truncated: !failed.is_empty(),
+        };
+        for (credential, found) in searches {
+            let owned = |request: &ReviewRequest| {
+                (self.config.credentials.serving(&request.repository))
+                    .is_ok_and(|serving| serving.name == credential.name)
+            };
+            list.requests
+                .extend(found.requests.into_iter().filter(|request| owned(request)));
+            list.truncated |= found.truncated;
+        }
         live(cancel)?;
         let discovery = self.store.load_discovery()?;
         let state = QueueState {

@@ -804,10 +804,14 @@ impl Integrations for FakeIntegration {
     fn list_review_requests(
         &self,
         _cancel: &CancellationToken,
+        credential: &Credential,
         max: i64,
     ) -> impl Future<Output = Result<ReviewRequestList, Error>> + Send {
         let result = {
             let state = self.lock();
+            if let Some(err) = state.search_error(credential) {
+                return ready(Err(err));
+            }
             let len = state.requests.len() as i64;
             let take = if max < 0 {
                 0

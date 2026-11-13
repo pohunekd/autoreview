@@ -52,20 +52,36 @@ impl Policy {
     }
 
     /// Returns the search qualifiers of the rules triggered by label, sorted.
-    ///
-    /// An owner rule gives `user:<owner>` and a repository rule `repo:<owner>/<name>`.
-    /// GitHub combines them with OR, and `user:` matches organizations as well.
     #[must_use]
     pub fn label_scopes(&self, label: &str) -> Vec<String> {
+        Self::search_qualifiers(&self.label_matches(label))
+    }
+
+    /// Returns the distinct match patterns of the rules triggered by `label`, sorted.
+    #[must_use]
+    pub fn label_matches(&self, label: &str) -> Vec<String> {
         let mut set = BTreeSet::new();
         for rule in &self.rules {
             if rule.trigger.kind == TriggerKind::Label && rule.trigger.label == label {
-                let (owner, name) = cut(&rule.match_glob);
-                if name == "*" {
-                    set.insert(format!("user:{owner}"));
-                } else {
-                    set.insert(format!("repo:{}", rule.match_glob));
-                }
+                set.insert(rule.match_glob.clone());
+            }
+        }
+        set.into_iter().collect()
+    }
+
+    /// Returns the search qualifiers of the match patterns `matches`, sorted.
+    ///
+    /// An owner pattern gives `user:<owner>` and a repository pattern `repo:<owner>/<name>`.
+    /// GitHub combines them with OR, and `user:` matches organizations as well.
+    #[must_use]
+    pub fn search_qualifiers(matches: &[String]) -> Vec<String> {
+        let mut set = BTreeSet::new();
+        for pattern in matches {
+            let (owner, name) = cut(pattern);
+            if name == "*" {
+                set.insert(format!("user:{owner}"));
+            } else {
+                set.insert(format!("repo:{pattern}"));
             }
         }
         set.into_iter().collect()

@@ -307,10 +307,13 @@ pub trait Integrations {
         message: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    /// Returns the open review requests of the configured login, at most `max` of them.
+    /// Returns the open review requests of `credential`'s login, at most `max` of them.
+    ///
+    /// It searches with `credential`'s token.
     fn list_review_requests(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         max: i64,
     ) -> impl Future<Output = Result<ReviewRequestList, Error>> + Send;
 
