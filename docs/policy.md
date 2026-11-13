@@ -261,6 +261,9 @@ Rules:
   findings keeps its `on_findings` outcome.
 - The signals are evaluated when the review finishes and stored with it, so a
   resumed review keeps its decision.
+- A path, label or login in a signal is a code span on one line, and each bidi
+  control or zero-width character in it is shown as `<U+XXXX>`, such as
+  `<U+202E>`, so a name cannot look like another.
 
 ```yaml
 human_review: {labels: [needs-human], deleted_tests: ["**/tests/**"], paths: ["migrations/**", ".github/**"], max_changed_lines: 1000, max_changed_files: 40, max_notes: 5, authors: ["octocat"]}
