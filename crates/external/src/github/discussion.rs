@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
+use autoreview_engine::config::Credential;
 use autoreview_engine::discussion::{
     DiscussionBudget, ai_signed, discussion_role, finding_heading_id,
 };
@@ -532,11 +533,11 @@ impl GitHub {
     pub(crate) async fn list_discussion(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         prior: &[PriorFinding],
         max_characters: i64,
     ) -> Result<Discussion, Error> {
-        let credential = self.credentials.serving(&pull_request.repository)?;
         read_discussion(
             |args: Vec<String>| async move {
                 self.github::<()>(cancel, credential, &args, None).await

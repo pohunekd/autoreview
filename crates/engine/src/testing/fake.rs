@@ -703,6 +703,7 @@ impl Integrations for FakeIntegration {
     fn list_commentable_lines(
         &self,
         _cancel: &CancellationToken,
+        _credential: &Credential,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<CommentableLines, Error>> + Send {
         let result = {
@@ -715,6 +716,7 @@ impl Integrations for FakeIntegration {
     fn list_changed_files(
         &self,
         _cancel: &CancellationToken,
+        _credential: &Credential,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send {
         let result = {
@@ -731,6 +733,7 @@ impl Integrations for FakeIntegration {
     fn list_discussion(
         &self,
         _cancel: &CancellationToken,
+        _credential: &Credential,
         _pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> impl Future<Output = Result<Discussion, Error>> + Send {

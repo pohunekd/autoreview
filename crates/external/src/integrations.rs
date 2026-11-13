@@ -222,28 +222,36 @@ impl Integrations for External {
     async fn list_commentable_lines(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
     ) -> Result<CommentableLines, Error> {
-        self.github.commentable_lines(cancel, pull_request).await
+        self.github
+            .commentable_lines(cancel, credential, pull_request)
+            .await
     }
 
     async fn list_changed_files(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
     ) -> Result<ChangedFiles, Error> {
-        self.github.changed_files(cancel, pull_request).await
+        self.github
+            .changed_files(cancel, credential, pull_request)
+            .await
     }
 
     async fn list_discussion(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> Result<Discussion, Error> {
         self.github
             .list_discussion(
                 cancel,
+                credential,
                 pull_request,
                 prior,
                 self.config.max_discussion_characters,

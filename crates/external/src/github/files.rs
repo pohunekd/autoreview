@@ -7,6 +7,7 @@
 
 use std::collections::BTreeSet;
 
+use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::{ChangedFile, ChangedFiles, CommentableLines};
 use autoreview_engine::model::PullRequest;
@@ -310,11 +311,12 @@ impl GitHub {
     pub(crate) async fn commentable_lines(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pr: &PullRequest,
     ) -> Result<CommentableLines, Error> {
         let mut result: CommentableLines = CommentableLines::new();
         let end = self
-            .visit_changed_files(cancel, pr, None, |file| {
+            .visit_changed_files(cancel, credential, pr, None, |file| {
                 let lines = commentable_lines_from_patch(&file.patch)?;
                 result.insert(file.filename.clone(), lines);
                 Ok(())
@@ -333,11 +335,12 @@ impl GitHub {
     pub(crate) async fn changed_files(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pr: &PullRequest,
     ) -> Result<ChangedFiles, Error> {
         let mut files: Vec<ChangedFile> = Vec::new();
         let end = self
-            .visit_changed_files(cancel, pr, Some(LISTED_FILES_CAP), |file| {
+            .visit_changed_files(cancel, credential, pr, Some(LISTED_FILES_CAP), |file| {
                 let previous_path = match (file.status.as_str(), file.previous_filename.as_deref())
                 {
                     ("renamed", Some(previous)) if valid_changed_path(previous) => {
@@ -369,11 +372,11 @@ impl GitHub {
     async fn visit_changed_files(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pr: &PullRequest,
         cap: Option<usize>,
         mut visit: impl FnMut(&ChangedFileRecord) -> Result<(), Error>,
     ) -> Result<ListingEnd, Error> {
-        let credential = self.credentials.serving(&pr.repository)?;
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for page in 1..=self.search_page_limit {
             let arguments = files_args(&pr.repository, pr.number, page);

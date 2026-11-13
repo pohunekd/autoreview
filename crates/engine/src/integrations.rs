@@ -262,25 +262,33 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// Returns the lines of the pull request that accept an inline comment.
+    ///
+    /// It reads with `credential`'s token.
     fn list_commentable_lines(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<CommentableLines, Error>> + Send;
 
     /// Returns the files the pull request changes, in listing order.
     ///
     /// A listing that stops at a limit returns what it listed with `truncated` set.
+    /// It reads with `credential`'s token.
     fn list_changed_files(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send;
 
     /// Reads the reply threads of the prior findings and the conversation, bounded in size.
+    ///
+    /// It reads with `credential`'s token; the replies of its login are the reviewer's.
     fn list_discussion(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         pull_request: &PullRequest,
         prior: &[PriorFinding],
     ) -> impl Future<Output = Result<Discussion, Error>> + Send;

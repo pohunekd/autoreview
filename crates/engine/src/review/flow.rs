@@ -128,11 +128,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             let settled = review
                 .once_recorded::<Discussion, _>(ReviewStep::Discussion, STEP_DISCUSSION, || {
                     let integration = &*self.integration;
-                    let cancel = &review.cancel;
-                    let input = &review.input;
+                    let (cancel, credential) = (&review.cancel, review.credential());
+                    let (pull_request, prior) = (&review.input.pull_request, &review.input.prior);
                     async move {
-                        integration
-                            .list_discussion(cancel, &input.pull_request, &input.prior)
+                        (integration.list_discussion(cancel, credential?, pull_request, prior))
                             .await
                     }
                 })
@@ -297,9 +296,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let commentable = self
             .once::<CommentableLines, _>(STEP_COMMENTABLE, || {
                 let integration = &*self.engine.integration;
-                let cancel = &self.cancel;
+                let (cancel, credential) = (&self.cancel, self.credential());
                 let current = &current;
-                async move { integration.list_commentable_lines(cancel, current).await }
+                async move {
+                    (integration.list_commentable_lines(cancel, credential?, current)).await
+                }
             })
             .await;
         let commentable = match commentable {
@@ -411,10 +412,12 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             .unwrap_or(i64::MAX);
         self.once::<Vec<String>, _>(STEP_HUMAN_REVIEW, || {
             let integration = &*self.engine.integration;
-            let cancel = &self.cancel;
+            let (cancel, credential) = (&self.cancel, self.credential());
             async move {
                 let listing = if signals.needs_changed_files() {
-                    integration.list_changed_files(cancel, current).await?
+                    integration
+                        .list_changed_files(cancel, credential?, current)
+                        .await?
                 } else {
                     ChangedFiles::default()
                 };
