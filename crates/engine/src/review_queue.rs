@@ -15,7 +15,7 @@ use crate::discovery::poll::{STEP_READ_PULL_REQUEST_STATE, live};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::{Integrations, ReviewRequest};
-use crate::messages::handoff_age;
+use crate::messages::{excerpt, handoff_age};
 use crate::model::{AwaitRecord, PublishedRecord};
 use crate::publish::decision_text;
 
@@ -538,20 +538,9 @@ fn escape_html(value: &str) -> String {
     out
 }
 
-/// Turns GitHub-provided text into one line of at most `max` characters.
+/// Turns GitHub-provided text into one line of at most `max` characters (see `excerpt`).
 pub(crate) fn clean_text(text: &str, max: i64) -> String {
-    let parts: Vec<&str> = text
-        .split(|character: char| character.is_whitespace() || character.is_control())
-        .filter(|part| !part.is_empty())
-        .collect();
-    let line = parts.join(" ");
-    let max_usize = usize::try_from(max).unwrap_or(0);
-    if line.chars().count() > max_usize {
-        let kept: String = line.chars().take(max_usize.saturating_sub(1)).collect();
-        format!("{kept}…")
-    } else {
-        line
-    }
+    excerpt(text, max)
 }
 
 #[cfg(test)]
@@ -929,7 +918,7 @@ notifications:
         let mut request = queue_request(
             "example-org/example-repo",
             12,
-            "<img src=x onerror=\"alert(1)\"> & \"quoted\"",
+            "<img src=x onerror=\"alert(1)\"> & \"quoted\" \u{202e}gnp",
         );
         request.author = "dev<script>".to_owned();
         let entries = vec![super::QueueEntry {
@@ -957,14 +946,18 @@ notifications:
             rendered.formatted
         );
         assert!(
-            rendered
-                .formatted
-                .contains("&lt;img src=x onerror=&#34;alert(1)&#34;&gt; &amp; &#34;quoted&#34;"),
+            rendered.formatted.contains(concat!(
+                "&lt;img src=x onerror=&#34;alert(1)&#34;&gt; &amp; &#34;quoted&#34; ",
+                "&lt;U+202E&gt;gnp"
+            )),
             "title not escaped: {}",
             rendered.formatted
         );
         assert!(
             rendered.plain.contains("Reviews waiting for you (1)")
+                && rendered
+                    .plain
+                    .contains("- <img src=x onerror=\"alert(1)\"> & \"quoted\" <U+202E>gnp (")
                 && rendered
                     .plain
                     .contains("https://github.com/example-org/example-repo/pull/12"),
@@ -1011,6 +1004,14 @@ notifications:
     fn clean_text_collapses_control_characters_and_limits_length() {
         assert_eq!(clean_text("a\n\tb\u{0}  c", 10), "a b c");
         assert_eq!(clean_text("abcdef", 4), "abc…");
+        assert_eq!(
+            clean_text("Fix\n\u{202e}gnp.exe", 200),
+            "Fix <U+202E>gnp.exe"
+        );
+        // The limit counts written characters; a cut keeps a `<U+XXXX>` whole or drops it.
+        assert_eq!(clean_text("a\u{202e}b", 10), "a<U+202E>b");
+        assert_eq!(clean_text("a\u{202e}bc", 10), "a<U+202E>…");
+        assert_eq!(clean_text("ab\u{202e}cd", 10), "ab…");
     }
 
     /// A clock frozen at one wall time; its waits end at once, as in Go's `newQueueEngine`.

@@ -339,6 +339,59 @@ pub(crate) fn visible(text: &str) -> String {
     out
 }
 
+/// Replaces every run of line breaks and control characters with one space, so that a value
+/// cannot end a paragraph inside a code span or start a notification line of its own.
+///
+/// Each bidi control and zero-width character is written as `<U+XXXX>` (see `push_visible`),
+/// so a value cannot show a different name than it holds.
+pub(crate) fn single_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_break = false;
+    for character in text.chars() {
+        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
+            if !in_break {
+                out.push(' ');
+            }
+            in_break = true;
+        } else {
+            push_visible(&mut out, character);
+            in_break = false;
+        }
+    }
+    out
+}
+
+/// Returns `text` as one line of at most `limit` characters, as notifications show a value.
+///
+/// Whitespace and control characters split the words, which are joined by one space and
+/// written by `push_visible`. A longer line keeps whole written characters up to `limit - 1`
+/// and ends with `…`, so a cut never splits a `<U+XXXX>`.
+pub(crate) fn visible_excerpt(text: &str, limit: usize) -> String {
+    let words: Vec<&str> = text
+        .split(|character: char| character.is_whitespace() || character.is_control())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let line = words.join(" ");
+    let shown = visible(&line);
+    if shown.chars().count() <= limit {
+        return shown;
+    }
+    let budget = limit.saturating_sub(1);
+    let mut kept = String::new();
+    let mut piece = String::new();
+    let mut used = 0_usize;
+    for character in line.chars() {
+        piece.clear();
+        push_visible(&mut piece, character);
+        used = used.saturating_add(piece.chars().count());
+        if used > budget {
+            break;
+        }
+        kept.push_str(&piece);
+    }
+    format!("{}…", kept.trim_end())
+}
+
 /// Reports whether a character is a bidi control (`Bidi_Control`) or has no width.
 ///
 /// Bidi controls reorder the shown text; zero-width characters hide a difference between names.

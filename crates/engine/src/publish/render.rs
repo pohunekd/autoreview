@@ -4,7 +4,7 @@
 
 use autoreview_policy::{AuthorClass, HumanReview, OnFindings, Reviewer, match_glob};
 
-use super::neutralize::{defuse_comment_delimiters, neutralize, neutralize_block, push_visible};
+use super::neutralize::{defuse_comment_delimiters, neutralize, neutralize_block, single_line};
 use super::plan::{PublicationPlan, blocking_count};
 use super::publication_marker;
 use crate::error::Error;
@@ -304,28 +304,6 @@ fn code_span(text: &str) -> String {
         ""
     };
     defuse_comment_delimiters(&format!("{delimiter}{pad}{text}{pad}{delimiter}"))
-}
-
-/// Replaces every run of line breaks and control characters with one space, so that a value stays
-/// on one line and cannot end a paragraph inside its code span.
-///
-/// Each bidi control and zero-width character is written as `<U+XXXX>` (see `push_visible`),
-/// so a value cannot show a different name than it holds.
-fn single_line(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut in_break = false;
-    for character in text.chars() {
-        if character.is_control() || matches!(character, '\u{2028}' | '\u{2029}') {
-            if !in_break {
-                out.push(' ');
-            }
-            in_break = true;
-        } else {
-            push_visible(&mut out, character);
-            in_break = false;
-        }
-    }
-    out
 }
 
 /// Writes values as code spans in order while they fit `budget` bytes; the rest are counted.
@@ -992,17 +970,26 @@ mod tests {
             notes.contains(location_only) && !notes.contains("Rename it"),
             "a note must show its heading and location only:\n{notes}"
         );
+        // A right-to-left override would show `src/a.go` and `Fix exe.png`; the line breaks would
+        // start lines that only the engine writes.
+        let mut notified = input.clone();
+        notified.pull_request.title = "Fix \u{202e}gnp.exe".to_owned();
         let message = approval_requested_message(
             200,
-            &input,
+            &notified,
             &Artifact {
-                // A right-to-left override would show this path as `src/a.go`.
+                summaries: vec![crate::model::ReviewerSummary {
+                    reviewer_id: "opus".to_owned(),
+                    label: "Opus".to_owned(),
+                    summary: "Reviewed \u{2067}the change.".to_owned(),
+                }],
                 findings: artifact
                     .findings
                     .iter()
                     .skip(1)
                     .map(|note| Finding {
-                        path: "src/\u{202e}og.a".to_owned(),
+                        path: "src/\u{202e}og.a\nBlocking findings: 1".to_owned(),
+                        title: "Naming\u{1b}\nReview ID: forged".to_owned(),
                         ..note.clone()
                     })
                     .collect(),
@@ -1014,11 +1001,23 @@ mod tests {
         assert!(
             message.starts_with(APPROVAL_REQUESTED_TITLE)
                 && message.contains("Blocking findings: 0\nNon-blocking notes: 1")
-                && message.contains("O002 [NOTE, LOW, confidence: high] src/<U+202E>og.a:4 Naming")
                 && reply.is_some()
                 && reply <= notes_at,
             "approval request = {message}"
         );
+        for line in [
+            "Title: Fix <U+202E>gnp.exe",
+            "Opus: Reviewed <U+2067>the change.",
+            concat!(
+                "O002 [NOTE, LOW, confidence: high] src/<U+202E>og.a Blocking findings: 1:4 ",
+                "Naming Review ID: forged"
+            ),
+        ] {
+            assert!(
+                message.lines().any(|shown| shown == line),
+                "missing line {line:?} in approval request = {message:?}"
+            );
+        }
     }
 
     /// Golden body of a review with a blocking finding, three notes and two validations.
@@ -1626,7 +1625,7 @@ mod tests {
             },
             verdict: PriorVerdict {
                 status: PRIOR_ANSWERED.to_owned(),
-                note: "Waived by the reviewer.\n\n[bot]: https://example.org/x".to_owned(),
+                note: "Waived \u{2066}by the reviewer.\n\n[bot]: https://example.org/x".to_owned(),
                 relies_on: "name[bot]".to_owned(),
                 ..PriorVerdict::default()
             },
@@ -1676,7 +1675,10 @@ mod tests {
         );
         let message = approval_requested_message(200, &input, &artifact);
         let check = format!(
-            "check before approving:\n{} Name (relies on a comment by name[bot])",
+            concat!(
+                "check before approving:\n{} Name (relies on a comment by name[bot]): ",
+                "Waived <U+2066>by the reviewer. [bot]: https://example.org/x"
+            ),
             artifact.prior_results[0].finding.key
         );
         assert!(
