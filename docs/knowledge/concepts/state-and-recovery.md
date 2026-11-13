@@ -222,6 +222,10 @@ Two consequences follow from the retention periods:
 - A notes hand-off reminder reads the published decision, so the reminder period
   must be shorter than `store.published_retention_seconds`. The configuration
   validator also checks this, see [configuration](../../configuration.md#store).
+  It reads the pull request with the credential stored with the review; once the
+  review is removed after `store.review_retention_seconds`, the serving
+  credential reads it (see
+  [GitHub identity](github-identity.md#what-a-credential-is)).
 
 The engine also refuses to grow the discovery state without limit. The state
 holds at most `schedule.state_entry_limit` pull request entries and review

@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Credential, Credentials, NotifyRoute};
+use crate::config::{Credential, NotifyRoute};
 use crate::error::{Error, WORKFLOW_FAILED};
 use crate::integrations::{
     ChangedFile, ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState,
@@ -176,8 +176,6 @@ pub(crate) struct FakeState {
     pub(crate) permission_reads: Vec<String>,
     /// Error code of each failing permission read, keyed by `repository login`.
     pub(crate) permission_fail: BTreeMap<String, String>,
-    /// Credentials of the engine; reads of a repository that none serves fail as in `gh`.
-    pub(crate) credentials: Option<Credentials>,
     /// Error code of each failing credential's searches, keyed by credential name.
     ///
     /// Its reads fail transiently as `github_request_failed`.
@@ -188,7 +186,7 @@ pub(crate) struct FakeState {
     pub(crate) token_answers: BTreeMap<String, TokenAnswer>,
     /// Name of every credential whose token was checked, in order.
     pub(crate) token_checks: Vec<String>,
-    /// Every pull request state read, as `repository#number`, in order.
+    /// Every pull request state read, as `repository#number credential`, in order.
     pub(crate) state_reads: Vec<String>,
 }
 
@@ -388,18 +386,6 @@ fn transient_error() -> Error {
 }
 
 impl FakeState {
-    /// Returns the read error of `repository`: no serving credential, or a failing one.
-    fn credential_error(&self, repository: &str) -> Option<Error> {
-        let credentials = self.credentials.as_ref()?;
-        match credentials.serving(repository) {
-            Err(err) => Some(err),
-            Ok(credential) if self.failing_credentials.contains_key(&credential.name) => {
-                Some(transient_error())
-            }
-            Ok(_) => None,
-        }
-    }
-
     /// Returns the search error of `credential`, if it fails.
     fn search_error(&self, credential: &Credential) -> Option<Error> {
         let code = self.failing_credentials.get(&credential.name)?;
@@ -480,15 +466,16 @@ impl Integrations for FakeIntegration {
     fn read_pull_request_state(
         &self,
         _cancel: &CancellationToken,
+        credential: &Credential,
         repository: &str,
         number: i64,
     ) -> impl Future<Output = Result<PullRequestState, Error>> + Send {
         let key = format!("{repository}#{number}");
         let result = {
             let mut state = self.lock();
-            state.state_reads.push(key.clone());
-            if let Some(err) = state.credential_error(repository) {
-                return ready(Err(err));
+            state.state_reads.push(format!("{key} {}", credential.name));
+            if state.failing_credentials.contains_key(&credential.name) {
+                return ready(Err(transient_error()));
             }
             match state.current.get(&key) {
                 None => Ok(PullRequestState::default()),
