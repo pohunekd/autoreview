@@ -2117,7 +2117,8 @@ pub(crate) mod tests {
     /// `example-org/example-repo`, `example-org/*` and `example-owner/*` in that order.
     ///
     /// Each row lists credentials as (name, match) and either the credential that serves each
-    /// repository or the load error.
+    /// repository or the load error. Each scope row lists the parts of the policy's review
+    /// request and label patterns that each credential searches.
     #[test]
     fn credentials_resolve_by_first_match_and_cover_the_policy() {
         /// Credentials as (name, match), then each repository's credential or the load error.
@@ -2261,7 +2262,7 @@ pub(crate) mod tests {
                 ]),
             ),
         ];
-        for (index, (credentials, expected)) in rows.into_iter().enumerate() {
+        let load = |credentials: &[(&str, &str)]| {
             let entries: String = credentials
                 .iter()
                 .map(|(name, matches)| {
@@ -2270,8 +2271,10 @@ pub(crate) mod tests {
                         .replace("[\"*\"]", matches)
                 })
                 .collect();
-            let result = parse(&mutated(EXAMPLE_ENTRY, &entries), secret, example_policy);
-            match (result, expected) {
+            parse(&mutated(EXAMPLE_ENTRY, &entries), secret, example_policy)
+        };
+        for (index, (credentials, expected)) in rows.into_iter().enumerate() {
+            match (load(credentials), expected) {
                 (Ok(config), Ok(served)) => {
                     for (repository, name) in served {
                         let resolved = config.credentials.resolve(repository);
@@ -2281,6 +2284,50 @@ pub(crate) mod tests {
                 }
                 (Err(error), Err(text)) => assert_eq!(error.to_string(), text, "row {index}"),
                 (result, _) => panic!("row {index}: unexpected {:?}", result.map(|_| ())),
+            }
+        }
+        /// A credential's name, its review request scopes and its label scopes.
+        type Scopes<'a> = (&'a str, &'a [&'a str], &'a [&'a str]);
+        /// Credentials as (name, match), then the scopes of each credential.
+        type ScopeRow<'a> = (&'a [(&'a str, &'a str)], &'a [Scopes<'a>]);
+        let scope_rows: [ScopeRow<'_>; 3] = [
+            (
+                &[("default", "[\"*\"]")],
+                &[(
+                    "default",
+                    &["example-org/*", "example-org/example-repo"],
+                    &["example-owner/*"],
+                )],
+            ),
+            (
+                &[("org", "[example-org/*]"), ("rest", "[\"*\"]")],
+                &[
+                    ("org", &["example-org/*", "example-org/example-repo"], &[]),
+                    ("rest", &[], &["example-owner/*"]),
+                ],
+            ),
+            (
+                &[("repo", "[example-org/example-repo]"), ("rest", "[\"*\"]")],
+                &[
+                    ("repo", &["example-org/example-repo"], &[]),
+                    ("rest", &["example-org/*"], &["example-owner/*"]),
+                ],
+            ),
+        ];
+        for (index, (credentials, expected)) in scope_rows.into_iter().enumerate() {
+            let config =
+                load(credentials).unwrap_or_else(|error| panic!("scope row {index}: {error}"));
+            let policy = config.policy.as_ref().expect("the policy loads");
+            let requested = policy.review_request_scopes();
+            let labelled = policy.label_matches("ai:review");
+            for (name, review, label) in expected {
+                let credential = (config.credentials.iter())
+                    .find(|credential| credential.name == *name)
+                    .expect("the row names a credential");
+                let searched = config.credentials.search_scopes(credential, &requested);
+                assert_eq!(searched, *review, "scope row {index}: {name}");
+                let searched = config.credentials.search_scopes(credential, &labelled);
+                assert_eq!(searched, *label, "scope row {index}: {name} labels");
             }
         }
     }

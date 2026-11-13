@@ -142,6 +142,32 @@ impl Credentials {
             })
     }
 
+    /// Returns the parts of the policy patterns `scopes` that `credential` searches, in order.
+    ///
+    /// A part is a pattern of `credential` narrowed to a scope, left out when an earlier
+    /// credential matches all of it. Its search may still find repositories of an earlier,
+    /// narrower credential; the caller drops them with [`Credentials::serving`].
+    #[must_use]
+    pub fn search_scopes(&self, credential: &Credential, scopes: &[String]) -> Vec<String> {
+        let earlier: Vec<&Credential> = (self.list.iter())
+            .take_while(|first| first.name != credential.name)
+            .collect();
+        let mut parts: Vec<String> = Vec::new();
+        for scope in scopes {
+            for pattern in &credential.matches {
+                let Some(part) = narrower(pattern, scope) else {
+                    continue;
+                };
+                let taken =
+                    (earlier.iter()).any(|first| first.matches.iter().any(|p| covers(p, part)));
+                if !taken && !parts.iter().any(|known| known == part) {
+                    parts.push(part.to_owned());
+                }
+            }
+        }
+        parts
+    }
+
     /// Returns the credential when it is the only one.
     #[must_use]
     pub fn single(&self) -> Option<&Credential> {

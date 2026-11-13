@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
 use autoreview_engine::integrations::{ReadiedDraft, ReviewRequest, ReviewRequestList};
@@ -322,6 +323,13 @@ fn search_requested_args(poll_limit: i64, scopes: &[String], extra: &[String]) -
         "number,repository".to_owned(),
     ];
     args.extend(extra.iter().cloned());
+    args.extend(scope_args(scopes));
+    args
+}
+
+/// Returns the scope flags of a search: `--owner` for `owner/*`, else `--repo`.
+fn scope_args(scopes: &[String]) -> Vec<String> {
+    let mut args = Vec::new();
     for scope in scopes {
         if let Some((owner, name)) = scope.split_once('/')
             && name == "*"
@@ -336,12 +344,13 @@ fn search_requested_args(poll_limit: i64, scopes: &[String], extra: &[String]) -
     args
 }
 
-/// Returns the argv of the search of requested reviews in every repository (`ListReviewRequests`).
+/// Returns the argv of the search of requested reviews in the credential patterns `matches`
+/// (`ListReviewRequests`).
 ///
 /// The search asks for one result more than `max`. `wrapping_add` keeps Go's `int` wrap at the
-/// largest value.
-fn list_review_requests_args(max: i64) -> Vec<String> {
-    vec![
+/// largest value. With the pattern `*`, it searches every repository.
+fn list_review_requests_args(max: i64, matches: &[String]) -> Vec<String> {
+    let mut args = vec![
         "search".to_owned(),
         "prs".to_owned(),
         "--review-requested=@me".to_owned(),
@@ -351,7 +360,11 @@ fn list_review_requests_args(max: i64) -> Vec<String> {
         max.wrapping_add(1).to_string(),
         "--json".to_owned(),
         "number,repository,title,url,author".to_owned(),
-    ]
+    ];
+    if !matches.iter().any(|pattern| pattern == "*") {
+        args.extend(scope_args(matches));
+    }
+    args
 }
 
 /// Decodes the search of requested reviews in every repository and keeps the results whose URL
@@ -400,14 +413,14 @@ fn decode_review_request_search(
     })
 }
 
-/// Returns the search query of a label trigger (`labelSearchQuery`).
+/// Returns the search query of a label trigger in the match patterns `scopes`.
 ///
 /// The label is quoted as Go's `%q` quotes it. The policy parser admits only the label pattern,
 /// which contains nothing that `%q` escapes.
-fn label_search_query(policy: &Policy, label: &str) -> String {
+fn label_search_query(label: &str, scopes: &[String]) -> String {
     format!(
         "is:pr is:open draft:false label:\"{label}\" {} sort:created-asc",
-        policy.label_scopes(label).join(" ")
+        Policy::search_qualifiers(scopes).join(" ")
     )
 }
 
@@ -474,23 +487,30 @@ fn decode_mark_ready_response(output: &str) -> Result<(), Error> {
 
 impl GitHub {
     /// Returns the pull requests that the policy covers and the ones whose data was refused
-    /// (`ListCandidates`).
+    /// (`ListCandidates`), searched with `credential` where it serves repositories.
     pub(crate) async fn list_candidates(
         &self,
         cancel: &CancellationToken,
         policy: &Policy,
+        credential: &Credential,
     ) -> Result<CandidateList, Error> {
         let mut found: BTreeMap<String, Candidate> = BTreeMap::new();
         let mut rejected: BTreeMap<String, RejectedCandidate> = BTreeMap::new();
-        let scopes = policy.review_request_scopes();
+        let credentials = &self.credentials;
+        let scopes = credentials.search_scopes(credential, &policy.review_request_scopes());
         if !scopes.is_empty() {
             let requested = self
-                .review_requested_candidates(cancel, policy, &scopes)
+                .review_requested_candidates(cancel, policy, credential, &scopes)
                 .await?;
             collect(&mut found, &mut rejected, requested);
         }
         for label in policy.labels() {
-            let labelled = self.label_candidates(cancel, policy, &label).await?;
+            let scopes = credentials.search_scopes(credential, &policy.label_matches(&label));
+            if scopes.is_empty() {
+                continue;
+            }
+            let labelled =
+                (self.label_candidates(cancel, policy, credential, &label, &scopes)).await?;
             collect(&mut found, &mut rejected, labelled);
         }
         let candidates = found.values().cloned().collect();
@@ -510,14 +530,15 @@ impl GitHub {
         })
     }
 
-    /// Marks the drafts of the policy's ready-draft authors that ask the login for a review as
-    /// ready for review (`ReadyDrafts`).
+    /// Marks the drafts of the policy's ready-draft authors that ask `credential`'s login for a
+    /// review as ready for review (`ReadyDrafts`), searched where `credential` serves.
     pub(crate) async fn ready_drafts(
         &self,
         cancel: &CancellationToken,
         policy: &Policy,
+        credential: &Credential,
     ) -> Result<Vec<ReadiedDraft>, Error> {
-        let scopes = policy.review_request_scopes();
+        let scopes = (self.credentials).search_scopes(credential, &policy.review_request_scopes());
         let mut readied: Vec<ReadiedDraft> = Vec::new();
         if scopes.is_empty() {
             return Ok(readied);
@@ -528,22 +549,24 @@ impl GitHub {
                 "--author".to_owned(),
                 format!("app/{author}"),
             ];
-            let identities = self.search_requested(cancel, &scopes, &extra).await?;
+            let identities = (self.search_requested(cancel, credential, &scopes, &extra)).await?;
             for identity in &identities {
                 let repository = repository_name(&identity.repository).to_ascii_lowercase();
                 let number = identity.number;
                 let Some(rule) = policy.resolve(&repository) else {
                     continue;
                 };
+                if !self.owns(credential, &repository) {
+                    continue;
+                }
                 if rule.trigger.kind != TriggerKind::ReviewRequested {
                     continue;
                 }
                 let raw = self.fetch_pull_request(cancel, &repository, number).await?;
-                let login = &self.only_credential()?.login;
+                let login = &credential.login;
                 let Some(id) = ready_draft_id(&raw, author, &repository, number, login) else {
                     continue;
                 };
-                let credential = self.credentials.serving(&repository)?;
                 let args = mark_ready_args(&id);
                 let output = self.github::<()>(cancel, credential, &args, None).await?;
                 decode_mark_ready_response(&output)?;
@@ -563,27 +586,29 @@ impl GitHub {
         Ok(readied)
     }
 
-    /// Searches every repository for requested reviews (`ListReviewRequests`).
+    /// Searches the repositories of `credential`'s patterns for requested reviews
+    /// (`ListReviewRequests`).
     pub(crate) async fn list_review_requests(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         max: i64,
     ) -> Result<ReviewRequestList, Error> {
-        let args = list_review_requests_args(max);
-        let credential = self.only_credential()?;
+        let args = list_review_requests_args(max, &credential.matches);
         let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_review_request_search(&output, max, &self.host)
     }
 
-    /// Runs the review request search of `scopes` with the `extra` flags (`searchRequested`).
+    /// Runs the review request search of `scopes` with the `extra` flags and `credential`'s
+    /// token (`searchRequested`).
     async fn search_requested(
         &self,
         cancel: &CancellationToken,
+        credential: &Credential,
         scopes: &[String],
         extra: &[String],
     ) -> Result<Vec<SearchIdentity>, Error> {
         let args = search_requested_args(self.poll_limit, scopes, extra);
-        let credential = self.only_credential()?;
         let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_search_identities(&output, self.poll_limit)
     }
@@ -594,11 +619,11 @@ impl GitHub {
         &self,
         cancel: &CancellationToken,
         policy: &Policy,
+        credential: &Credential,
         scopes: &[String],
     ) -> Result<CandidateList, Error> {
-        let identities = self
-            .search_requested(cancel, scopes, &["--draft=false".to_owned()])
-            .await?;
+        let draft = ["--draft=false".to_owned()];
+        let identities = (self.search_requested(cancel, credential, scopes, &draft)).await?;
         let mut list = CandidateList::default();
         let trigger = Trigger {
             kind: TriggerKind::ReviewRequested,
@@ -623,6 +648,9 @@ impl GitHub {
                 );
                 continue;
             }
+            if !self.owns(credential, &repository) {
+                continue;
+            }
             let outcome = self
                 .get_pull_request(cancel, &repository, number, &trigger)
                 .await;
@@ -631,22 +659,23 @@ impl GitHub {
         Ok(list)
     }
 
-    /// Returns the candidates of one label trigger, reading the label search page by page
-    /// (`labelCandidates`).
+    /// Returns the candidates of one label trigger in `scopes`, reading the label search page
+    /// by page with `credential`'s token (`labelCandidates`).
     async fn label_candidates(
         &self,
         cancel: &CancellationToken,
         policy: &Policy,
+        credential: &Credential,
         name: &str,
+        scopes: &[String],
     ) -> Result<CandidateList, Error> {
-        let query = label_search_query(policy, name);
+        let query = label_search_query(name, scopes);
         let mut after = String::new();
         let mut list = CandidateList::default();
         let trigger = Trigger {
             kind: TriggerKind::Label,
             label: name.to_owned(),
         };
-        let credential = self.only_credential()?;
         for _ in 0..self.search_page_limit {
             let args = label_search_args(&query, &after);
             let output = self.github::<()>(cancel, credential, &args, None).await?;
@@ -656,6 +685,9 @@ impl GitHub {
                 let Some(covered) = covering(policy, &repository, &trigger) else {
                     continue;
                 };
+                if !self.owns(credential, &repository) {
+                    continue;
+                }
                 let outcome = decode_pull_request(node, &self.host, &credential.login, &trigger);
                 classify(&mut list, &repository, number, covered, outcome)?;
             }
@@ -668,6 +700,11 @@ impl GitHub {
             }
         }
         Err(Error::workflow("github_search_limit_exceeded", true, None))
+    }
+
+    /// Reports whether `credential` serves `repository`; another credential's result is dropped.
+    fn owns(&self, credential: &Credential, repository: &str) -> bool {
+        (self.credentials.serving(repository)).is_ok_and(|serving| serving.name == credential.name)
     }
 }
 
@@ -954,11 +991,24 @@ notifications:
 
     #[test]
     fn list_review_requests_searches_all_repositories_and_skips_foreign_urls() {
-        let args = list_review_requests_args(50);
-        assert!(args.windows(2).any(|pair| pair == ["--limit", "51"]));
-        assert!(args.iter().any(|arg| arg == "--draft=false"));
-        assert!(args.iter().any(|arg| arg == "search"));
-        assert!(!args.iter().any(|arg| arg == "--repo" || arg == "--owner"));
+        // The argv of a `*` credential is the one of the single-credential search.
+        let args = list_review_requests_args(50, &["*".to_owned()]);
+        let all = [
+            "search",
+            "prs",
+            "--review-requested=@me",
+            "--state=open",
+            "--draft=false",
+            "--limit",
+            "51",
+            "--json",
+            "number,repository,title,url,author",
+        ];
+        assert_eq!(args, all);
+        let narrow = ["acme/*".to_owned(), "beta/tool".to_owned()];
+        let args = list_review_requests_args(50, &narrow);
+        let scopes = ["--owner", "acme", "--repo", "beta/tool"];
+        assert_eq!(args, [all.as_slice(), scopes.as_slice()].concat());
 
         let result =
             decode_review_request_search(SEARCH_RESPONSE, 50, HOST).expect("search decodes");
