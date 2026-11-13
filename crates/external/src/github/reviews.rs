@@ -229,7 +229,11 @@ impl GitHub {
             event: review.decision.clone(),
         };
         let arguments = reviews_post_args(&pr.repository, pr.number);
-        let output = match self.github(cancel, &arguments, Some(&payload)).await {
+        let credential = self.credentials.serving(&pr.repository)?;
+        let output = match self
+            .github(cancel, credential, &arguments, Some(&payload))
+            .await
+        {
             Ok(value) => value,
             Err(post_error) => {
                 let second = self.find_published_review(cancel, pr, review).await;
@@ -263,10 +267,14 @@ impl GitHub {
         pr: &PullRequest,
         review: &GitHubReview,
     ) -> Result<Option<PublishResult>, Error> {
+        let credential = self.credentials.serving(&pr.repository)?;
+        let login = &self.only_credential()?.login;
         for page in 1..=self.search_page_limit {
             let arguments = reviews_list_args(&pr.repository, pr.number, page);
-            let output = self.github::<()>(cancel, &arguments, None).await?;
-            match review_page_step(&output, review, &pr.head_sha, &self.login)? {
+            let output = self
+                .github::<()>(cancel, credential, &arguments, None)
+                .await?;
+            match review_page_step(&output, review, &pr.head_sha, login)? {
                 PageStep::Found(result) => return Ok(Some(result)),
                 PageStep::Done => return Ok(None),
                 PageStep::Next => {

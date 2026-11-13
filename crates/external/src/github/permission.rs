@@ -47,8 +47,9 @@ impl GitHub {
     ///
     /// # Errors
     ///
-    /// Returns `github_request_invalid` for an invalid repository or login, the error of the
-    /// `gh` call, and `github_response_invalid` when its output holds no role.
+    /// Returns `github_request_invalid` for an invalid repository or login,
+    /// `credential_not_covered` when no credential serves the repository, the error of the `gh`
+    /// call, and `github_response_invalid` when its output holds no role.
     pub(crate) async fn author_permission(
         &self,
         cancel: &CancellationToken,
@@ -58,9 +59,9 @@ impl GitHub {
         if !repository_valid(repository) || !user_login_valid(login) {
             return Err(Error::workflow("github_request_invalid", true, None));
         }
-        let output = self
-            .github::<()>(cancel, &permission_args(repository, login), None)
-            .await?;
+        let credential = self.credentials.serving(repository)?;
+        let args = permission_args(repository, login);
+        let output = self.github::<()>(cancel, credential, &args, None).await?;
         decode_permission(&output)
     }
 }

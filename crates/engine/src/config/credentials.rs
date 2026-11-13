@@ -12,6 +12,9 @@ const CREDENTIALS_KEY: &str = "github.credentials";
 /// Key of a credential's repository patterns in `config.yaml`.
 const MATCH_KEY: &str = "github.credentials.match";
 
+/// Code of a repository that no credential matches.
+const NOT_COVERED: &str = "credential_not_covered";
+
 /// One GitHub token, the account it belongs to and the repositories it serves.
 #[derive(Clone)]
 pub struct Credential {
@@ -93,7 +96,7 @@ impl Credentials {
                 .any(|credential| credential.matches.iter().any(|p| covers(p, rule)));
             if !covered {
                 let message = format!("no credential matches {rule} of the policy");
-                return Err(error("credential_not_covered", CREDENTIALS_KEY, message));
+                return Err(error(NOT_COVERED, CREDENTIALS_KEY, message));
             }
         }
         for (index, credential) in self.list.iter().enumerate() {
@@ -121,6 +124,22 @@ impl Credentials {
         self.list
             .iter()
             .find(|credential| credential.matches.iter().any(|p| covers(p, repository)))
+    }
+
+    /// Returns the credential that serves `repository`, compared in lower case.
+    ///
+    /// GitHub names ignore case, so a mixed-case name never falls through to a later pattern.
+    ///
+    /// # Errors
+    ///
+    /// Returns `credential_not_covered` naming `github.credentials` when no credential
+    /// matches the repository.
+    pub fn serving(&self, repository: &str) -> Result<&Credential, Error> {
+        self.resolve(&repository.to_ascii_lowercase())
+            .ok_or_else(|| {
+                let message = format!("no credential matches {repository}");
+                error(NOT_COVERED, CREDENTIALS_KEY, message)
+            })
     }
 
     /// Returns the credential when it is the only one.
