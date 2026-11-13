@@ -32,6 +32,9 @@ a file by autoreview. It is read from the variable named by `token_env`, in the
 | `match` | The repositories the credential serves: `owner/repository`, `owner/*` or `*` |
 
 Each repository is served by the first credential whose `match` covers it.
+A credential's searches leave out the repositories of the credentials before it
+with negative qualifiers (`-repo:owner/repository`, `-user:owner`), so they
+never count toward its search limits.
 Every repository of the [policy rules](../../policy.md#repository-rules) must
 have a credential (`credential_not_covered` otherwise), and every credential
 must serve one of them (`credential_unused` otherwise).
