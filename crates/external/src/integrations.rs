@@ -1,4 +1,4 @@
-//! The engine's side effects over the `gh` CLI, the pohunek CLI and Matrix.
+//! The engine's side effects over the `gh` CLI, the pohunek CLI and the notifiers.
 //!
 //! Each method of [`Integrations`] hands its arguments to one client method.
 
@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use autoreview_engine::Error;
-use autoreview_engine::config::{Config, Credential, NotifyRoute};
+use autoreview_engine::config::{Config, Credential};
 use autoreview_engine::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft,
     ReviewRequestList, SessionRequest, TokenAnswer,
@@ -16,18 +16,19 @@ use autoreview_engine::model::{
     CandidateList, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
     PullRequest, SessionIdentity,
 };
-use autoreview_policy::{Level, Permission, Policy, Protocol, Trigger};
+use autoreview_engine::notify::Notification;
+use autoreview_policy::{Permission, Policy, Protocol, Trigger};
 use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 
 use crate::github::GitHub;
-use crate::notify::{self, Matrix};
+use crate::notify::{self, Backend, Backends};
 use crate::pohunek::{self, output, sessions};
 
 /// Configuration key named when the configuration holds no policy.
 const POLICY_KEY: &str = "policy_file";
 
-/// The [`Integrations`] of the engine: GitHub, pohunek and Matrix.
+/// The [`Integrations`] of the engine: GitHub, pohunek and the notification backends.
 ///
 /// The tokens of the configuration are left out of the `Debug` output. Once the token of a call
 /// is cancelled, the call starts no child process or request, and one in flight is stopped.
@@ -41,9 +42,9 @@ pub struct External {
     policy: Policy,
     /// The `gh` client and the credentials of its calls.
     github: GitHub,
-    /// The Matrix settings of the notifications.
-    matrix: Matrix,
-    /// The HTTP client of the Matrix requests.
+    /// The notification backends by name.
+    backends: Backends,
+    /// The HTTP client of the notification requests.
     http: Client,
 }
 
@@ -70,12 +71,8 @@ impl External {
             .build()
             .map_err(|error| Error::workflow("matrix_unavailable", false, Some(Box::new(error))))?;
         let github = GitHub::new(&config);
-        let matrix = Matrix::new(
-            config.matrix_homeserver_url.clone(),
-            config.matrix_access_token.clone(),
-            config.matrix_mention_user.clone(),
-            config.matrix_rooms.clone(),
-            config.queue_matrix_room.clone(),
+        let backends = Backends::new(
+            &config.notify,
             config.matrix_max_characters,
             config.matrix_timeout,
         );
@@ -83,7 +80,7 @@ impl External {
             config,
             policy,
             github,
-            matrix,
+            backends,
             http,
         })
     }
@@ -308,21 +305,31 @@ impl Integrations for External {
     async fn notify(
         &self,
         cancel: &CancellationToken,
-        route: NotifyRoute,
-        level: Level,
-        message: &str,
+        backend: &str,
+        notification: &Notification,
     ) -> Result<(), Error> {
-        notify::notify(&self.http, &self.matrix, cancel, &route, level, message).await
+        let (level, text) = (notification.level.clone(), &notification.text);
+        match self.backends.get(backend)? {
+            Backend::None => Ok(()),
+            Backend::Matrix(matrix) => {
+                notify::notify(&self.http, matrix, cancel, level, text).await
+            }
+        }
     }
 
     async fn notify_unmuted(
         &self,
         cancel: &CancellationToken,
-        route: NotifyRoute,
-        level: Level,
-        message: &str,
+        backend: &str,
+        notification: &Notification,
     ) -> Result<(), Error> {
-        notify::send_matrix(&self.http, &self.matrix, cancel, &route, level, message).await
+        let (level, text) = (notification.level.clone(), &notification.text);
+        match self.backends.get(backend)? {
+            Backend::None => Ok(()),
+            Backend::Matrix(matrix) => {
+                notify::send_matrix(&self.http, matrix, cancel, level, text).await
+            }
+        }
     }
 
     async fn list_review_requests(
@@ -339,18 +346,19 @@ impl Integrations for External {
     async fn send_queue_digest(
         &self,
         cancel: &CancellationToken,
+        backend: &str,
         transaction: &str,
         plain: &str,
         formatted: &str,
     ) -> Result<(), Error> {
-        notify::send_queue_digest(
-            &self.http,
-            &self.matrix,
-            cancel,
-            transaction,
-            plain,
-            formatted,
-        )
-        .await
+        match self.backends.get(backend)? {
+            Backend::None => Ok(()),
+            Backend::Matrix(matrix) => {
+                let http = &self.http;
+                let sent =
+                    notify::send_queue_digest(http, matrix, cancel, transaction, plain, formatted);
+                sent.await
+            }
+        }
     }
 }

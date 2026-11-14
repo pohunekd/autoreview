@@ -13,13 +13,13 @@ use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{
-    Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules, MatrixRooms,
-    RouteOverride, signature_text,
+    BackendKind, Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules,
+    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, signature_text,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::publish::MarkerName;
-use autoreview_policy::{EVENTS, Event, OPTIONAL_EVENTS, Policy, user_login_valid};
+use autoreview_policy::{EVENTS, OPTIONAL_EVENTS, Policy, user_login_valid};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -682,7 +682,7 @@ pub(crate) fn parse(
 ) -> Result<Config, Error> {
     let file = parse_file(text)?;
     let mapped = map_file(&file, &secret, load_policy)?;
-    // The queue posts only to Matrix until M3. The check follows the mapping, so a test can map
+    // The queue posts only to Matrix until #29. The check follows the mapping, so a test can map
     // a config whose queue names only `none` backends.
     if !mapped.queue_on_matrix {
         return Err(invalid(
@@ -714,8 +714,8 @@ pub(crate) fn parse_file(text: &str) -> Result<FileConfig, Error> {
 
 /// Maps the file into the engine configuration without the engine's final validation.
 ///
-/// A review queue without a Matrix backend maps to an empty `queue_matrix_room`. The tests use
-/// it to map configs that [`parse`] refuses.
+/// A review queue without a Matrix backend maps as it is. The tests use it to map configs that
+/// [`parse`] refuses.
 ///
 /// # Errors
 ///
@@ -928,8 +928,11 @@ fn map_file(
     let review_queue = section(&notify.review_queue, "notify.review_queue")?;
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
     let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
-    let shape = matrix_shape(&backends, routes, &queue_backends)?;
-    let queue_on_matrix = shape.queue_room.is_some();
+    let notify = notify_settings(&backends, routes, queue_backends)?;
+    let queue_on_matrix = (notify.queue.iter()).any(|name| {
+        let backend = notify.backend(name).map(|backend| &backend.kind);
+        matches!(backend, Some(BackendKind::Matrix(_)))
+    });
     let config = Config {
         policy: Some(policy),
         schedule,
@@ -942,12 +945,8 @@ fn map_file(
         pohunek_hosts,
         route_overrides,
         host_state,
-        matrix_homeserver_url: shape.homeserver_url,
-        matrix_access_token: shape.access_token,
+        notify,
         secret_variables: secret_variables.take(),
-        matrix_mention_user: shape.mention_user,
-        matrix_rooms: shape.rooms,
-        queue_matrix_room: shape.queue_room.unwrap_or_default(),
         queue_max_items,
         state_db_path,
         gh_timeout,
@@ -1229,18 +1228,10 @@ enum Backend {
     Matrix {
         /// Name the routes refer to.
         name: String,
-        /// Homeserver base URL.
-        homeserver_url: String,
-        /// Environment variable that holds the access token.
-        access_token_env: String,
-        /// The access token, read from the environment variable named by the key.
-        access_token: String,
-        /// Room identifier.
-        room: String,
-        /// Matrix user mentioned in action messages.
-        mention_user: String,
+        /// The homeserver, the access token read from `access_token_env`, the room and the user.
+        settings: MatrixBackend,
     },
-    /// The `webhook` type; parsed and validated, but routes to it are refused until M3.
+    /// The `webhook` type; parsed and validated, but routes to it are refused until #29.
     Webhook {
         /// Name the routes refer to.
         name: String,
@@ -1254,19 +1245,6 @@ impl Backend {
             Backend::None { name } => name,
             Backend::Matrix { name, .. } => name,
             Backend::Webhook { name } => name,
-        }
-    }
-
-    /// Returns the homeserver, token variable and mentioned user of a Matrix backend.
-    fn matrix_identity(&self) -> Option<(&str, &str, &str)> {
-        match self {
-            Backend::Matrix {
-                homeserver_url,
-                access_token_env,
-                mention_user,
-                ..
-            } => Some((homeserver_url, access_token_env, mention_user)),
-            Backend::None { .. } | Backend::Webhook { .. } => None,
         }
     }
 }
@@ -1322,14 +1300,13 @@ fn notify_backends(
                 )?;
                 let room = text(room, "notify.backends.room")?;
                 let mention_user = text(mention_user, "notify.backends.mention_user")?;
-                out.push(Backend::Matrix {
-                    name,
+                let settings = MatrixBackend {
                     homeserver_url,
-                    access_token_env: variable,
                     access_token,
                     room,
                     mention_user,
-                });
+                };
+                out.push(Backend::Matrix { name, settings });
             }
             BackendFile::Webhook {
                 name,

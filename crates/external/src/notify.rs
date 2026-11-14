@@ -496,26 +496,12 @@ mod tests {
     #[test]
     fn send_matrix_still_mentions_only_on_action_level() {
         let matrix = matrix();
-        let action_route = NotifyRoute::Level(Level::Action);
-        let digest_route = NotifyRoute::Level(Level::Digest);
-        let action = matrix_request(
-            &matrix,
-            &action_route,
-            Level::Action,
-            "action",
-            "notify-test",
-        )
-        .expect("action request");
-        let digest = matrix_request(
-            &matrix,
-            &digest_route,
-            Level::Digest,
-            "digest",
-            "notify-test",
-        )
-        .expect("digest request");
-        assert_eq!(action.room, "!action:example.org");
-        assert_eq!(digest.room, "!digest:example.org");
+        let action = matrix_request(&matrix, Level::Action, "action", "notify-test")
+            .expect("action request");
+        let digest = matrix_request(&matrix, Level::Digest, "digest", "notify-test")
+            .expect("digest request");
+        assert_eq!(action.room, "!queue:example.org");
+        assert_eq!(digest.room, "!queue:example.org");
         let action_payload: Value =
             serde_json::from_slice(&action.content).expect("action JSON content");
         let digest_payload: Value =
