@@ -29,6 +29,7 @@ use crate::messages::{
 };
 use crate::model::review::milliseconds;
 use crate::model::{Discussion, PullRequest, ReviewInput, RunLimits};
+use crate::notify::Notification;
 use crate::store::{RESULT_FAILURE, ReviewStep, StepOutcome, StepRun};
 
 /// Step name of the read of the current pull request in the retry log.
@@ -431,10 +432,13 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         let review_key = self.input.pull_request.key();
         let span = notification_span(&event, &review_key, &level);
         let route = self.engine.config.notify_route(&event, level.clone());
-        let sent = self
-            .engine
-            .integration
-            .notify(&self.cancel, route, level.clone(), message)
+        let notification = Notification {
+            event: event.clone(),
+            level: level.clone(),
+            text: message.to_owned(),
+        };
+        let sent = (self.engine)
+            .deliver(&self.cancel, &route, &notification, true)
             .instrument(span)
             .await;
         let shutdown = self.cancel.is_cancelled();

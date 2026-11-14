@@ -15,6 +15,7 @@ use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::model::RejectedCandidate;
+use crate::notify::Notification;
 use crate::store::DiscoveryState;
 
 pub(crate) mod authors;
@@ -164,14 +165,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 // A shutdown is no notifier failure, so the notifier is not blamed for it.
                 None if cancel.is_cancelled() => (SHUTDOWN.to_owned(), false),
                 None => {
+                    let notification = Notification {
+                        event: notice.event.clone(),
+                        level: notice.level.clone(),
+                        text: notice.message.clone(),
+                    };
                     let sent = self
-                        .integration
-                        .notify_unmuted(
-                            cancel,
-                            notice.route.clone(),
-                            notice.level.clone(),
-                            &notice.message,
-                        )
+                        .deliver(cancel, &notice.route, &notification, false)
                         .await;
                     let Err(err) = sent else {
                         continue;

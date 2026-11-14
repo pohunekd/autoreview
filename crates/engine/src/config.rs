@@ -605,6 +605,29 @@ pub fn identifier_valid(value: &str) -> bool {
     true
 }
 
+/// Validates the homeserver, the identity and the room of a Matrix backend.
+///
+/// # Errors
+///
+/// Returns a configuration error when a Matrix field is invalid.
+fn validate_matrix(matrix: &MatrixBackend) -> Result<(), Error> {
+    let parsed = match parse_matrix_url(&matrix.homeserver_url) {
+        Some(value) => value,
+        None => return Err(invalid("invalid Matrix URL")),
+    };
+    if parsed.scheme != "https" && !(parsed.scheme == "http" && parsed.hostname == LOOPBACK_HOST) {
+        return Err(invalid("matrix URL must use HTTPS or loopback HTTP"));
+    }
+    let token_unsafe = matrix.access_token.contains(['\r', '\n', ' ']);
+    if !matrix_user_valid(&matrix.mention_user) || token_unsafe {
+        return Err(invalid("invalid Matrix identity"));
+    }
+    if !matrix_room_valid(&matrix.room) {
+        return Err(invalid("invalid Matrix room"));
+    }
+    Ok(())
+}
+
 /// Reports whether `room` is a valid Matrix room.
 fn matrix_room_valid(room: &str) -> bool {
     let bytes = room.as_bytes();
@@ -1033,7 +1056,9 @@ mod tests {
 
     use autoreview_schedule::scheduler;
 
-    use super::{Config, MarkerName, MatrixRooms};
+    use autoreview_policy::Event;
+
+    use super::{BackendKind, Config, MarkerName, NotifySettings};
 
     use crate::error::error_code;
 
@@ -1054,17 +1079,8 @@ mod tests {
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
             host_state: None,
-            matrix_homeserver_url: "https://matrix.example.org".to_owned(),
-            matrix_access_token: "placeholder-token".to_owned(),
+            notify: NotifySettings::single_for_tests(),
             secret_variables: std::collections::BTreeSet::new(),
-            matrix_mention_user: "@example-user:example.org".to_owned(),
-            matrix_rooms: MatrixRooms {
-                action: "!action:example.org".to_owned(),
-                digest: "!digest:example.org".to_owned(),
-                log: "!log:example.org".to_owned(),
-                events: std::collections::BTreeMap::new(),
-            },
-            queue_matrix_room: "!queue:example.org".to_owned(),
             queue_max_items: 10,
             state_db_path: "/var/lib/autoreview/state.db".to_owned(),
             gh_timeout: Duration::from_secs(30),
@@ -1202,15 +1218,44 @@ mod tests {
                 "{login}"
             );
         }
-        let mut config = valid_config();
-        config.matrix_rooms.action = String::new();
-        let error = config
-            .validate()
-            .expect_err("an empty action room is refused");
-        assert_eq!(
-            error.to_string(),
-            "configuration_invalid: config: invalid Matrix action room"
-        );
+        /// One change of the notification settings.
+        type Change = fn(&mut NotifySettings);
+        let routes: [(Change, &str); 4] = [
+            (
+                |notify| notify.action.clear(),
+                "invalid notification route action",
+            ),
+            (
+                |notify| notify.queue = vec!["missing".to_owned()],
+                "invalid notification route queue",
+            ),
+            (
+                |notify| {
+                    let names = vec!["missing".to_owned()];
+                    notify.events.insert(Event::Approved, names);
+                },
+                "invalid notification route approved",
+            ),
+            (
+                |notify| {
+                    if let Some(BackendKind::Matrix(matrix)) =
+                        notify.backends.first_mut().map(|backend| &mut backend.kind)
+                    {
+                        matrix.room = String::new();
+                    }
+                },
+                "invalid Matrix room",
+            ),
+        ];
+        for (change, message) in routes {
+            let mut config = valid_config();
+            change(&mut config.notify);
+            let error = config.validate().expect_err("the route is refused");
+            assert_eq!(
+                error.to_string(),
+                format!("configuration_invalid: config: {message}")
+            );
+        }
     }
 
     #[test]

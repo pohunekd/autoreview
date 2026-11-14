@@ -142,10 +142,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow(REVIEW_QUEUE_TOO_LONG, true, None));
         }
         let transaction = queue_transaction_id()?;
-        let sent = self
-            .integration
-            .send_queue_digest(cancel, &transaction, &rendered.plain, &rendered.formatted)
-            .await;
+        let sent = self.send_queue(cancel, &transaction, &rendered).await;
         if let Err(err) = sent {
             // The notifier fails at once on a cancelled token, so the shutdown is the cause.
             let code = if cancel.is_cancelled() {
