@@ -914,7 +914,7 @@ fn map_file(
     let review_list_limit = positive(&cli.review_list_limit, "cli.review_list_limit")?;
     let publish = section(&file.publish, "publish")?;
     let ai_signature = text(&publish.signature, "publish.signature")?;
-    let _ = text(&publish.ai_signed_pattern, "publish.ai_signed_pattern")?;
+    let ai_signed_pattern = text(&publish.ai_signed_pattern, "publish.ai_signed_pattern")?;
     let github_body_max_bytes = positive(
         &publish.github_body_max_bytes,
         "publish.github_body_max_bytes",
@@ -993,6 +993,7 @@ fn map_file(
         max_test_characters,
         github_body_max_bytes,
         ai_signature,
+        ai_signed_pattern,
         matrix_max_characters,
         excerpt_characters,
         terminal_cols,

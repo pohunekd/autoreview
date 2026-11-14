@@ -357,6 +357,7 @@ pub(crate) mod tests {
             max_test_characters: 256,
             github_body_max_bytes: 65_536,
             ai_signature: "Written by AI: example-agent".to_owned(),
+            ai_signed_pattern: "Written by AI:".to_owned(),
             matrix_max_characters: 4000,
             published_retention: Duration::from_secs(7 * 24 * 60 * 60),
             excerpt_characters: 1000,

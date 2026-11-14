@@ -36,9 +36,6 @@ const GITHUB_HOST: &str = "github.com";
 /// Longest AI signature in bytes.
 const AI_SIGNATURE_MAX_BYTES: usize = 200;
 
-/// Text that every AI signature starts with, after its optional leading symbols.
-pub(crate) const AI_SIGNATURE_PREFIX: &str = "Written by AI:";
-
 /// Host of the only plain HTTP Matrix homeserver the engine accepts.
 const LOOPBACK_HOST: &str = "127.0.0.1";
 
@@ -314,8 +311,10 @@ pub struct Config {
     /// Largest GitHub review body, in bytes.
     pub github_body_max_bytes: i64,
     /// Line that ends every published review body and inline comment; it starts with
-    /// "Written by AI:" after an optional leading symbol.
+    /// `ai_signed_pattern`, each after its optional leading symbols.
     pub ai_signature: String,
+    /// Text that marks a comment as machine-written, as the start of its last line.
+    pub ai_signed_pattern: String,
     /// Largest Matrix message, in characters.
     pub matrix_max_characters: i64,
     /// Time that the last published decision of a pull request is kept as a baseline.
@@ -404,7 +403,7 @@ impl Config {
                 return Err(invalid("invalid route override"));
             }
         }
-        if !signature_valid(&self.ai_signature) {
+        if !signature_valid(&self.ai_signature, &self.ai_signed_pattern) {
             return Err(invalid("invalid AI signature"));
         }
         if !is_valid_session_group(&self.session_group) {
@@ -728,8 +727,8 @@ fn matrix_user_valid(user: &str) -> bool {
     true
 }
 
-/// Reports whether `signature` is a valid AI signature.
-fn signature_valid(signature: &str) -> bool {
+/// Reports whether `signature` is a valid AI signature that starts with `pattern`.
+fn signature_valid(signature: &str, pattern: &str) -> bool {
     if signature.trim() != signature {
         return false;
     }
@@ -742,8 +741,9 @@ fn signature_valid(signature: &str) -> bool {
     if signature.chars().any(char::is_control) {
         return false;
     }
+    let wanted = pattern.trim_start_matches(is_signature_symbol);
     let trimmed = signature.trim_start_matches(is_signature_symbol);
-    trimmed.starts_with(AI_SIGNATURE_PREFIX)
+    !wanted.is_empty() && trimmed.starts_with(wanted)
 }
 
 /// Reports whether `symbol` may start an AI signature.
@@ -1147,6 +1147,7 @@ mod tests {
             max_test_characters: 256,
             github_body_max_bytes: 65_536,
             ai_signature: "Written by AI: example-agent".to_owned(),
+            ai_signed_pattern: "Written by AI:".to_owned(),
             matrix_max_characters: 4000,
             published_retention: Duration::from_secs(7 * 24 * 60 * 60),
             excerpt_characters: 1000,
@@ -1184,6 +1185,25 @@ mod tests {
                 "configuration_invalid: config: invalid AI signature"
             );
             assert_eq!(error_code(&error), "configuration_invalid");
+        }
+        // Each row is a pattern, a signature and whether the pair is valid (#7).
+        let pairs = [
+            ("🤖 Written by AI:", "Written by AI: example-agent", true),
+            ("Written by AI:", "🤖 Written by AI: example-agent", true),
+            ("AI review:", "🤖 AI review: example-agent", true),
+            ("AI review:", "Written by AI: example-agent", false),
+            ("🤖", "🤖 Written by AI: example-agent", false),
+            ("", "Written by AI: example-agent", false),
+        ];
+        for (pattern, signature, want) in pairs {
+            let mut config = valid_config();
+            config.ai_signed_pattern = pattern.to_owned();
+            config.ai_signature = signature.to_owned();
+            assert_eq!(
+                config.validate().is_ok(),
+                want,
+                "{pattern:?} and {signature:?}"
+            );
         }
         // A managed user is `handle_shortcode`; an app's `name[bot]` never owns the token.
         let longest = format!("{}_octo", "a".repeat(34));
