@@ -142,21 +142,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow(REVIEW_QUEUE_TOO_LONG, true, None));
         }
         let transaction = queue_transaction_id()?;
-        let sent = self.send_queue(cancel, &transaction, &rendered).await;
-        if let Err(err) = sent {
-            // The notifier fails at once on a cancelled token, so the shutdown is the cause.
-            let code = if cancel.is_cancelled() {
-                SHUTDOWN
-            } else {
-                error_code(&err)
-            };
-            tracing::warn!(
-                count = rendered.shown,
-                error_code = code,
-                "review queue digest dropped"
-            );
-            return Err(err);
-        }
+        self.send_queue(cancel, &transaction, &rendered).await?;
         Ok(QueueResult {
             count: i64::try_from(rendered.shown).unwrap_or(i64::MAX),
             sent: true,
@@ -166,7 +152,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Posts `rendered` to each backend of the review queue, in configured order.
     ///
-    /// The first failure stops the delivery and is returned.
+    /// Every backend gets one attempt; each failure is logged with its backend, and the first
+    /// failure in queue order is returned. After a shutdown the remaining backends get none.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the first backend that failed.
     async fn send_queue(
         &self,
         cancel: &CancellationToken,
@@ -174,6 +165,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         rendered: &RenderedQueue,
     ) -> Result<(), Error> {
         let (plain, formatted) = (&rendered.plain, &rendered.formatted);
+        let mut first = None;
         for backend in &self.config.notify.queue {
             let sent = (self.integration).send_queue_digest(
                 cancel,
