@@ -556,15 +556,16 @@ attempt and is then dropped with the warning `review notification dropped`,
 which names the event, the review key, the level and the code (`shutdown` when
 the service stopped during the attempt). The review goes on and does not resend
 it; `autoreview awaiting` still lists a review that waits for approval. A message
-of a discovery pass, at any level, gets at most one attempt (none after an
-earlier failure of its route in the same pass, none after a shutdown, which
+of a discovery pass, at any level, gets at most one attempt per backend (none
+on a backend after its earlier failure on the same route in the pass, none after a shutdown, which
 logs the code `shutdown`) and is then dropped with the warning
 `discovery notification dropped`, which names the event, the review key, the
-level, the code and `skipped_after_failure`. It is never resent; send its
+level, the backend, the code and `skipped_after_failure`. It is never resent; send its
 content by hand if it matters. Every retry of a
 step is logged as `step failed, retrying` with the step, the code and `delay_ms`. Test a backend
-with `autoreview review-queue`, which sends the queue to `notify.review_queue.backends` once and
-exits with the backend's error code, logged as `review queue digest dropped`, when it fails.
+with `autoreview review-queue`, which sends the queue to each of `notify.review_queue.backends`
+once and exits with the first failing backend's error code; each failure is logged as
+`review queue digest dropped` with the backend.
 
 ## Approval errors
 
