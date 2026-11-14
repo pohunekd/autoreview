@@ -20,8 +20,18 @@ BRACKETED_PASTE_START = b"\x1b[200~"
 BRACKETED_PASTE_END = b"\x1b[201~"
 SUBMIT = b"\r"
 EXIT_USAGE = 64
-REQUEST_PROTOCOL = "claude-otel-noninteractive/request-v1"
-RESULT_PROTOCOL = "claude-otel-noninteractive/v2"
+REQUEST_PROTOCOL = "autoreview-claude/v1"
+RESULT_PROTOCOL = "autoreview-claude/v1"
+# Names that an older engine sends and reads. A result answers in the name of its request,
+# so an engine that reads only the legacy result name keeps reading this adapter.
+LEGACY_REQUEST_PROTOCOL = "claude-otel-noninteractive/request-v1"
+LEGACY_RESULT_PROTOCOL = "claude-otel-noninteractive/v2"
+RESULT_PROTOCOLS = {
+    REQUEST_PROTOCOL: RESULT_PROTOCOL,
+    LEGACY_REQUEST_PROTOCOL: LEGACY_RESULT_PROTOCOL,
+}
+# A JSON prompt whose protocol starts with one of these claims to be a request.
+CLAIMED_PROTOCOL_PREFIXES = ("autoreview-claude/", "claude-otel-noninteractive/")
 PROGRAM_NAME = "claude-adapter"
 # The renderer writes the Claude Code path into this file next to the wrapper.
 # The bare --version probe gets no arguments and no profile environment, so the
@@ -150,20 +160,25 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(EXIT_USAGE)
 
 
-def parse_request(raw_prompt: str, maximum_bytes: int) -> tuple[str, str | None, str]:
+def parse_request(
+    raw_prompt: str, maximum_bytes: int
+) -> tuple[str, str | None, str, str]:
+    """Returns the prompt, the canonical schema, the mode and the result protocol name.
+
+    A plain prompt is answered in the legacy result name, which every engine reads.
+    """
+    plain = (raw_prompt, None, "text", LEGACY_RESULT_PROTOCOL)
     try:
         value = json.loads(raw_prompt)
     except json.JSONDecodeError:
-        return raw_prompt, None, "text"
+        return plain
     if not isinstance(value, dict):
-        return raw_prompt, None, "text"
+        return plain
 
     protocol = value.get("protocol")
-    if not isinstance(protocol, str) or not protocol.startswith(
-        "claude-otel-noninteractive/"
-    ):
-        return raw_prompt, None, "text"
-    if protocol != REQUEST_PROTOCOL or set(value) != {
+    if not isinstance(protocol, str) or not protocol.startswith(CLAIMED_PROTOCOL_PREFIXES):
+        return plain
+    if protocol not in RESULT_PROTOCOLS or set(value) != {
         "protocol",
         "prompt",
         "json_schema",
@@ -181,11 +196,16 @@ def parse_request(raw_prompt: str, maximum_bytes: int) -> tuple[str, str | None,
     )
     if len(canonical_schema.encode("utf-8")) > maximum_bytes:
         raise InputFrameError("JSON schema exceeds the configured byte limit")
-    return prompt, canonical_schema, "structured"
+    return prompt, canonical_schema, "structured", RESULT_PROTOCOLS[protocol]
 
 
 def result_envelope(
-    return_code: int, stdout: bytes, stderr: bytes, mode: str, checked_checkout: str
+    return_code: int,
+    stdout: bytes,
+    stderr: bytes,
+    mode: str,
+    checked_checkout: str,
+    protocol: str,
 ) -> bytes:
     """Returns the result line of a Claude Code run on the checkout the adapter checked.
 
@@ -195,7 +215,7 @@ def result_envelope(
     """
     return json.dumps(
         {
-            "protocol": RESULT_PROTOCOL,
+            "protocol": protocol,
             "mode": mode,
             "exit_code": return_code,
             "stdout_base64": base64.b64encode(stdout).decode("ascii"),
@@ -207,11 +227,11 @@ def result_envelope(
     ).encode("utf-8") + b"\n"
 
 
-def refusal_envelope(refusal: str, message: str, mode: str) -> bytes:
+def refusal_envelope(refusal: str, message: str, mode: str, protocol: str) -> bytes:
     """Returns the result line of a run that the adapter refused before or after Claude Code."""
     return json.dumps(
         {
-            "protocol": RESULT_PROTOCOL,
+            "protocol": protocol,
             "mode": mode,
             "exit_code": EXIT_USAGE,
             "stdout_base64": "",
@@ -403,7 +423,7 @@ def hold_output() -> NoReturn:
         signal.pause()
 
 
-def refuse(error: InputFrameError, mode: str) -> NoReturn:
+def refuse(error: InputFrameError, mode: str, protocol: str) -> NoReturn:
     """Ends a run whose checkout the adapter refuses with a refusal envelope.
 
     The envelope is the only output, because pohunek reads stderr from the same terminal.
@@ -412,7 +432,7 @@ def refuse(error: InputFrameError, mode: str) -> NoReturn:
         refusal = REFUSAL_HEAD_UNAVAILABLE
     else:
         refusal = REFUSAL_CHECKOUT_INVALID
-    sys.stdout.buffer.write(refusal_envelope(refusal, str(error), mode))
+    sys.stdout.buffer.write(refusal_envelope(refusal, str(error), mode, protocol))
     sys.stdout.buffer.flush()
     hold_output()
 
@@ -446,7 +466,7 @@ def main() -> NoReturn:
     try:
         tty.setraw(descriptor)
         raw_prompt = read_framed_prompt(sys.stdin.buffer, maximum_bytes)
-        prompt, json_schema, mode = parse_request(raw_prompt, maximum_bytes)
+        prompt, json_schema, mode, protocol = parse_request(raw_prompt, maximum_bytes)
     except InputFrameError as error:
         fail(str(error))
     finally:
@@ -456,7 +476,7 @@ def main() -> NoReturn:
         checkout = trusted_checkout(prompt)
         checkout_sha = verify_review_checkout(prompt, checkout)
     except InputFrameError as error:
-        refuse(error, mode)
+        refuse(error, mode, protocol)
 
     arguments = claude_arguments(claude_binary, sys.argv[3:], json_schema)
     completed = subprocess.run(
@@ -470,9 +490,11 @@ def main() -> NoReturn:
     try:
         verify_review_checkout_after_run(prompt, checkout, checkout_sha)
     except InputFrameError as error:
-        refuse(error, mode)
+        refuse(error, mode, protocol)
     sys.stdout.buffer.write(
-        result_envelope(completed.returncode, completed.stdout, completed.stderr, mode, checkout)
+        result_envelope(
+            completed.returncode, completed.stdout, completed.stderr, mode, checkout, protocol
+        )
     )
     sys.stdout.buffer.flush()
     hold_output()
