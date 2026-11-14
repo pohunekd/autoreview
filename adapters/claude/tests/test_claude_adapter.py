@@ -271,12 +271,14 @@ class BaseCheckoutTests(unittest.TestCase):
         sidecar.chmod(0o600)
         return script, fake
 
-    def run_adapter(self, prompt: str, during_run: str = "") -> tuple[dict, str]:
+    def run_adapter(
+        self, prompt: str, during_run: str = "", protocol: str = "autoreview-claude/v1"
+    ) -> tuple[dict, str]:
         """Runs the adapter on a structured request; returns its result line and stderr."""
         script, fake = self.install(during_run)
         request = json.dumps(
             {
-                "protocol": wrapper.REQUEST_PROTOCOL,
+                "protocol": protocol,
                 "prompt": prompt,
                 "json_schema": {"type": "object"},
             }
@@ -335,37 +337,44 @@ class BaseCheckoutTests(unittest.TestCase):
         self.fetch_head()
         refs = self.git(self.checkout, "for-each-ref")
 
-        result, stderr = self.run_adapter(self.prompt())
+        for request_protocol, result_protocol in PROTOCOL_NAMES:
+            with self.subTest(protocol=request_protocol):
+                result, stderr = self.run_adapter(self.prompt(), protocol=request_protocol)
 
-        self.assertEqual(result["exit_code"], 0, result)
-        self.assertNotIn("refusal", result)
-        self.assertEqual(result["checked_checkout"], "base")
-        self.assertEqual(base64.b64decode(result["stdout_base64"]).decode(), CLAUDE_STDOUT)
-        self.assertEqual(stderr, "")
-        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
-        self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
-        self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
+                self.assertEqual(result["protocol"], result_protocol)
+                self.assertEqual(result["exit_code"], 0, result)
+                self.assertNotIn("refusal", result)
+                self.assertEqual(result["checked_checkout"], "base")
+                self.assertEqual(
+                    base64.b64decode(result["stdout_base64"]).decode(), CLAUDE_STDOUT
+                )
+                self.assertEqual(stderr, "")
+                self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
+                self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
+                self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
 
     def test_base_checkout_without_the_head_is_refused_before_claude_runs(self) -> None:
-        result, stderr = self.run_adapter(self.prompt())
+        for request_protocol, result_protocol in PROTOCOL_NAMES:
+            with self.subTest(protocol=request_protocol):
+                result, stderr = self.run_adapter(self.prompt(), protocol=request_protocol)
 
-        self.assertEqual(
-            result,
-            {
-                "protocol": wrapper.RESULT_PROTOCOL,
-                "mode": "structured",
-                "exit_code": wrapper.EXIT_USAGE,
-                "stdout_base64": "",
-                "stderr_base64": base64.b64encode(
-                    b"claude-adapter: trusted pull request head is unavailable in the review "
-                    b"checkout\n"
-                ).decode("ascii"),
-                "refusal": "head_unavailable",
-            },
-        )
-        # The refusal is the only output: pohunek reads stderr from the same terminal.
-        self.assertEqual(stderr, "")
-        self.assertFalse(self.claude_ran())
+                self.assertEqual(
+                    result,
+                    {
+                        "protocol": result_protocol,
+                        "mode": "structured",
+                        "exit_code": wrapper.EXIT_USAGE,
+                        "stdout_base64": "",
+                        "stderr_base64": base64.b64encode(
+                            b"claude-adapter: trusted pull request head is unavailable in the "
+                            b"review checkout\n"
+                        ).decode("ascii"),
+                        "refusal": "head_unavailable",
+                    },
+                )
+                # The refusal is the only output: pohunek reads stderr from the same terminal.
+                self.assertEqual(stderr, "")
+                self.assertFalse(self.claude_ran())
 
     def test_base_checkout_refuses_any_other_head(self) -> None:
         moved = "git checkout --quiet --detach HEAD~1"
