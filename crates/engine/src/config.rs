@@ -405,7 +405,7 @@ impl Config {
     fn validate_notify(&self) -> Result<(), Error> {
         for backend in &self.notify.backends {
             if let BackendKind::Matrix(matrix) = &backend.kind {
-                validate_matrix(matrix)?;
+                validate_matrix(&backend.name, matrix)?;
             }
         }
         let levels = [
@@ -605,25 +605,38 @@ pub fn identifier_valid(value: &str) -> bool {
     true
 }
 
-/// Validates the homeserver, the identity and the room of a Matrix backend.
+/// Validates the homeserver, the identity and the room of the Matrix backend `name`.
 ///
 /// # Errors
 ///
-/// Returns a configuration error when a Matrix field is invalid.
-fn validate_matrix(matrix: &MatrixBackend) -> Result<(), Error> {
-    let parsed = match parse_matrix_url(&matrix.homeserver_url) {
-        Some(value) => value,
-        None => return Err(invalid("invalid Matrix URL")),
+/// Returns a configuration error that names the backend and the key of the invalid field.
+fn validate_matrix(name: &str, matrix: &MatrixBackend) -> Result<(), Error> {
+    let refused = |key: &str, message: &str| {
+        let key = format!("notify.backends.{name}.{key}");
+        Err(Error::config(
+            CONFIGURATION_INVALID,
+            key,
+            Some(BoxError::from(message)),
+        ))
+    };
+    let Some(parsed) = parse_matrix_url(&matrix.homeserver_url) else {
+        return refused("homeserver_url", "invalid Matrix URL");
     };
     if parsed.scheme != "https" && !(parsed.scheme == "http" && parsed.hostname == LOOPBACK_HOST) {
-        return Err(invalid("matrix URL must use HTTPS or loopback HTTP"));
+        return refused(
+            "homeserver_url",
+            "matrix URL must use HTTPS or loopback HTTP",
+        );
     }
-    let token_unsafe = matrix.access_token.contains(['\r', '\n', ' ']);
-    if !matrix_user_valid(&matrix.mention_user) || token_unsafe {
-        return Err(invalid("invalid Matrix identity"));
+    if !matrix_user_valid(&matrix.mention_user) {
+        return refused("mention_user", "invalid Matrix user");
+    }
+    // The token is never shown; the key names the variable that holds it.
+    if matrix.access_token.contains(['\r', '\n', ' ']) {
+        return refused("access_token_env", "invalid Matrix token");
     }
     if !matrix_room_valid(&matrix.room) {
-        return Err(invalid("invalid Matrix room"));
+        return refused("room", "invalid Matrix room");
     }
     Ok(())
 }
@@ -1058,7 +1071,7 @@ mod tests {
 
     use autoreview_policy::Event;
 
-    use super::{BackendKind, Config, MarkerName, NotifySettings};
+    use super::{BackendKind, Config, MarkerName, MatrixBackend, NotifySettings};
 
     use crate::error::error_code;
 
@@ -1220,31 +1233,45 @@ mod tests {
         }
         /// One change of the notification settings.
         type Change = fn(&mut NotifySettings);
-        let routes: [(Change, &str); 4] = [
+        /// One change of the only Matrix backend, `matrix`.
+        type MatrixChange = fn(&mut MatrixBackend);
+        let routes: [(Change, &str); 3] = [
             (
                 |notify| notify.action.clear(),
-                "invalid notification route action",
+                "config: invalid notification route action",
             ),
             (
                 |notify| notify.queue = vec!["missing".to_owned()],
-                "invalid notification route queue",
+                "config: invalid notification route queue",
             ),
             (
                 |notify| {
                     let names = vec!["missing".to_owned()];
                     notify.events.insert(Event::Approved, names);
                 },
-                "invalid notification route approved",
+                "config: invalid notification route approved",
+            ),
+        ];
+        let backends: [(MatrixChange, &str); 5] = [
+            (
+                |matrix| matrix.homeserver_url = "matrix.example.org".to_owned(),
+                "homeserver_url: invalid Matrix URL",
             ),
             (
-                |notify| {
-                    if let Some(BackendKind::Matrix(matrix)) =
-                        notify.backends.first_mut().map(|backend| &mut backend.kind)
-                    {
-                        matrix.room = String::new();
-                    }
-                },
-                "invalid Matrix room",
+                |matrix| matrix.homeserver_url = "http://matrix.example.org".to_owned(),
+                "homeserver_url: matrix URL must use HTTPS or loopback HTTP",
+            ),
+            (
+                |matrix| matrix.mention_user = "example-user".to_owned(),
+                "mention_user: invalid Matrix user",
+            ),
+            (
+                |matrix| matrix.access_token = "two words".to_owned(),
+                "access_token_env: invalid Matrix token",
+            ),
+            (
+                |matrix| matrix.room = String::new(),
+                "room: invalid Matrix room",
             ),
         ];
         for (change, message) in routes {
@@ -1253,7 +1280,19 @@ mod tests {
             let error = config.validate().expect_err("the route is refused");
             assert_eq!(
                 error.to_string(),
-                format!("configuration_invalid: config: {message}")
+                format!("configuration_invalid: {message}")
+            );
+        }
+        for (change, message) in backends {
+            let mut config = valid_config();
+            let first = config.notify.backends.first_mut();
+            if let Some(BackendKind::Matrix(matrix)) = first.map(|backend| &mut backend.kind) {
+                change(matrix);
+            }
+            let error = config.validate().expect_err("the backend is refused");
+            assert_eq!(
+                error.to_string(),
+                format!("configuration_invalid: notify.backends.matrix.{message}")
             );
         }
     }

@@ -697,15 +697,18 @@ async fn rejected_pull_request_is_reported_once_and_does_not_block_others() {
 }
 
 // An event route carries its event, in discovery and in a review (#187).
-// Every other event keeps the route of its level.
+// Every other event keeps the route of its level, and each level has its own backend (#27).
 #[tokio::test]
 async fn event_routes_carry_their_events_and_the_rest_keep_their_levels() {
     let mut h = start_harness(|cfg| {
-        for name in ["approved", "stopped"] {
+        for name in ["approved", "stopped", "action", "digest", "log"] {
             let mut backend = cfg.notify.backends[0].clone();
             backend.name = name.to_owned();
             cfg.notify.backends.push(backend);
         }
+        cfg.notify.action = vec!["action".to_owned()];
+        cfg.notify.digest = vec!["digest".to_owned()];
+        cfg.notify.log = vec!["log".to_owned()];
         cfg.notify.events = BTreeMap::from([
             (Event::Approved, vec!["approved".to_owned()]),
             (Event::ReviewStopped, vec!["stopped".to_owned()]),
@@ -736,10 +739,10 @@ async fn event_routes_carry_their_events_and_the_rest_keep_their_levels() {
         } else if note.message.contains(&rejected) {
             "stopped"
         } else {
-            "matrix"
+            note.level.as_str()
         };
         assert_eq!(note.backend, expected, "backend of {note:?}");
-        if note.backend != "matrix" {
+        if note.backend != note.level.as_str() {
             own.push(note.backend.as_str());
         }
     }

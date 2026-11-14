@@ -1910,9 +1910,8 @@ pub(crate) mod tests {
     pub(crate) fn secret(name: &str) -> Option<String> {
         match name {
             "AUTOREVIEW_GH_TOKEN" => Some("synthetic-token".to_owned()),
-            "AUTOREVIEW_MATRIX_TOKEN" | "AUTOREVIEW_MATRIX_TOKEN_OTHER" => {
-                Some("synthetic-matrix-token".to_owned())
-            }
+            "AUTOREVIEW_MATRIX_TOKEN" => Some("synthetic-matrix-token".to_owned()),
+            "AUTOREVIEW_MATRIX_TOKEN_OTHER" => Some("synthetic-matrix-token-other".to_owned()),
             "AUTOREVIEW_WEBHOOK_URL" => Some("https://hooks.example.org/synthetic".to_owned()),
             _ => None,
         }
@@ -2483,6 +2482,14 @@ pub(crate) mod tests {
         assert_eq!(config.notify.digest, ["digest"]);
         assert_eq!(config.notify.log, ["log"]);
         assert_eq!(config.notify.queue, ["queue"]);
+        for (level, name) in [
+            (Level::Action, "action"),
+            (Level::Digest, "digest"),
+            (Level::Log, "log"),
+        ] {
+            let route = NotifyRoute::Level(level);
+            assert_eq!(config.notify.backends_of(&route), [name], "{route:?}");
+        }
         let rooms = ["action", "digest", "log", "queue"]
             .map(|name| example_matrix(name, &format!("!{name}:example.org")));
         assert_eq!(config.notify.backends, rooms);
@@ -2620,6 +2627,8 @@ pub(crate) mod tests {
             };
             assert_eq!(matrix.homeserver_url, homeserver);
             assert_eq!(matrix.mention_user, mention);
+            let token = secret(token_env).expect("a synthetic token");
+            assert_eq!(matrix.access_token, token, "token of {token_env}");
         }
         let refused = [
             (

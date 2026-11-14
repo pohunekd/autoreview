@@ -151,7 +151,7 @@ Planned in #29.
 
 ## Several backends for one level
 
-Planned in #27.
+Planned in #30.
 
 ## Review queue
 
