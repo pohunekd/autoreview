@@ -124,14 +124,19 @@ follow:
   the `prr-v2-` prefix (`discovery.go:126-128`).
 - **R11 Input versions.** `ReviewInput` versions 2 to 5 are accepted
   (`model.go:21-32`) with the same version gates (`model.go:269-283`).
-- **R12 Published text.** The marker stays exactly
+- **R12 Published text.** With `publish.marker: hermes-pr-review`, or without
+  the key, the marker stays exactly
   `<!-- hermes-pr-review:v1:{repo}#{n}@{head}:decision={d}:findings={k}:digest={hex} -->`
   (`publish.go:238-249`): a retry after a lost acknowledgement finds the
   existing review by substring (`github.go:781,806-811`) and external merge
-  gates read it (`publish.go:232-236`). The finding heading that
-  `discussion.go:29` matches, the signature rule (`config.go:342-352`,
-  `discussion.go:51-62`) and `republishedPrefix` `P` (`prior.go:11`) are
-  unchanged. #7 changes the marker after cutover and reads both forms. The body
+  gates read it (`publish.go:232-236`). `publish.marker: autoreview` writes
+  `autoreview` in place of `hermes-pr-review` in both markers, and the lookup
+  matches either name (`marker_forms`, `crates/engine/src/publish/mod.rs`).
+  The finding heading that `discussion.go:29` matches and `republishedPrefix`
+  `P` (`prior.go:11`) are unchanged. The signature rule (`config.go:342-352`,
+  `discussion.go:51-62`) reads `publish.ai_signed_pattern` with its leading
+  symbols ignored, which is Go's fixed `Written by AI:` for every pattern that
+  `scripts/env-to-config` writes. The body
   still starts with the unchanged marker; a comment that names the base branch
   follows it on the same line and does not start with the marker's prefix, so a
   reader that matches the marker as a substring is unaffected (#297, see "What
@@ -437,9 +442,10 @@ What is not compatible, by decision:
   `verifier_failure_before_its_verification_is_stored_records_the_resumed_run`.
 - **Review reuse across base branches (#297):** the review body carries
   `<!-- hermes-pr-review-base:v1:<hex SHA-256 of the base branch name> -->`
-  right after the legacy marker. The Rust lookup (`review_page_step`,
+  right after the legacy marker (`hermes-pr-review` is the name of
+  `publish.marker`). The Rust lookup (`review_page_step`,
   `crates/external/src/github/reviews.rs`) searches for the whole stored marker
-  text, which includes that comment, so it does not reuse a review of the same
+  text under each name, which includes that comment, so it does not reuse a review of the same
   head for another base branch, and it does not match a review that carries the
   legacy marker alone (published by Go or by a binary built before #297): it
   posts a new review where Go reuses that one. It skips a review GitHub
