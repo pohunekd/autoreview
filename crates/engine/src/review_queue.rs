@@ -164,6 +164,29 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         })
     }
 
+    /// Posts `rendered` to each backend of the review queue, in configured order.
+    ///
+    /// The first failure stops the delivery and is returned.
+    async fn send_queue(
+        &self,
+        cancel: &CancellationToken,
+        transaction: &str,
+        rendered: &RenderedQueue,
+    ) -> Result<(), Error> {
+        let (plain, formatted) = (&rendered.plain, &rendered.formatted);
+        for backend in &self.config.notify.queue {
+            let sent = (self.integration).send_queue_digest(
+                cancel,
+                backend,
+                transaction,
+                plain,
+                formatted,
+            );
+            sent.await?;
+        }
+        Ok(())
+    }
+
     /// Returns the queue entries in digest order, at most `queue_max_items` of them.
     ///
     /// The flag reports that requests were left out. Nothing is sent.
@@ -1122,7 +1145,6 @@ notifications:
         let mut cfg = test_config();
         cfg.policy = Some(policy);
         cfg.credentials = crate::config::Credentials::single_for_tests("example-user");
-        cfg.queue_matrix_room = "!queue:example.org".to_owned();
         cfg.queue_max_items = 50;
         cfg.published_retention = Duration::from_secs(1_209_600);
         cfg.step_retry = Duration::from_secs(1800);
@@ -1488,11 +1510,13 @@ notifications:
     #[test]
     fn review_queue_configuration_is_required() {
         let mut cfg = queue_config();
-        cfg.queue_matrix_room = String::new();
-        let error = cfg.validate().expect_err("a missing queue room is refused");
+        cfg.notify.queue = Vec::new();
+        let error = cfg
+            .validate()
+            .expect_err("a queue without backends is refused");
         assert_eq!(
             error.to_string(),
-            "configuration_invalid: config: invalid Matrix queue room"
+            "configuration_invalid: config: invalid notification route queue"
         );
         let mut cfg = queue_config();
         cfg.queue_max_items = 1000;
@@ -1504,11 +1528,13 @@ notifications:
             "configuration_invalid: config: configured limit is outside the safe range"
         );
         let mut cfg = queue_config();
-        cfg.queue_matrix_room = "not-a-room".to_owned();
-        let error = cfg.validate().expect_err("invalid queue room was accepted");
+        cfg.notify.queue = vec!["missing".to_owned()];
+        let error = cfg
+            .validate()
+            .expect_err("an unknown queue backend was accepted");
         assert_eq!(
             error.to_string(),
-            "configuration_invalid: config: invalid Matrix queue room"
+            "configuration_invalid: config: invalid notification route queue"
         );
     }
 }

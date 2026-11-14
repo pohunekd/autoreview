@@ -1,15 +1,16 @@
-//! Matrix notifications: messages of each level and the review queue digest.
+//! Notification backends: the registry by name, and Matrix messages and queue digests.
 //!
-//! Requests are built by pure functions, so their room, transaction path and body are checked
-//! without a homeserver. Sending is one PUT.
+//! Matrix requests are built by pure functions, so their room, transaction path and body are
+//! checked without a homeserver. Sending is one PUT.
 
 // Rust guideline compliant 2026-06-26
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::time::Duration;
 
-use autoreview_engine::config::{MatrixRooms, NotifyRoute};
+use autoreview_engine::config::{BackendKind, MatrixBackend, NotifySettings};
 use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
 use autoreview_policy::Level;

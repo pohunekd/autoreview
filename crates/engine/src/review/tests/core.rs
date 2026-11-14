@@ -11,9 +11,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{
-    Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules, NotifyRoute,
-};
+use crate::config::{Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules};
 use crate::engine::{Engine, SystemClock};
 use crate::error::{Error, error_code};
 use crate::integrations::{SessionRequest, TokenAnswer};
@@ -703,9 +701,14 @@ async fn rejected_pull_request_is_reported_once_and_does_not_block_others() {
 #[tokio::test]
 async fn event_routes_carry_their_events_and_the_rest_keep_their_levels() {
     let mut h = start_harness(|cfg| {
-        cfg.matrix_rooms.events = BTreeMap::from([
-            (Event::Approved, "!approved:example.org".to_owned()),
-            (Event::ReviewStopped, "!stopped:example.org".to_owned()),
+        for name in ["approved", "stopped"] {
+            let mut backend = cfg.notify.backends[0].clone();
+            backend.name = name.to_owned();
+            cfg.notify.backends.push(backend);
+        }
+        cfg.notify.events = BTreeMap::from([
+            (Event::Approved, vec!["approved".to_owned()]),
+            (Event::ReviewStopped, vec!["stopped".to_owned()]),
         ]);
     })
     .await;
@@ -729,23 +732,20 @@ async fn event_routes_carry_their_events_and_the_rest_keep_their_levels() {
     let mut own = Vec::new();
     for note in &notes {
         let expected = if note.message.contains("Approved acme/widget PR") {
-            NotifyRoute::Event(Event::Approved)
+            "approved"
         } else if note.message.contains(&rejected) {
-            NotifyRoute::Event(Event::ReviewStopped)
+            "stopped"
         } else {
-            NotifyRoute::Level(note.level.clone())
+            "matrix"
         };
-        assert_eq!(note.route, expected, "route of {note:?}");
-        if matches!(note.route, NotifyRoute::Event(_)) {
-            own.push(note.route.clone());
+        assert_eq!(note.backend, expected, "backend of {note:?}");
+        if note.backend != "matrix" {
+            own.push(note.backend.as_str());
         }
     }
     assert_eq!(
         own,
-        [
-            NotifyRoute::Event(Event::ReviewStopped),
-            NotifyRoute::Event(Event::Approved)
-        ],
+        ["stopped", "approved"],
         "each routed event was sent once on its own route"
     );
     assert!(
