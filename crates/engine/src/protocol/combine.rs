@@ -188,7 +188,7 @@ pub(crate) fn combine_prior(
 }
 
 /// Rank of a verdict status, the lower the more cautious. An unknown status ranks like an open
-/// one, as the zero value of Go's rank map does.
+/// one, which is the zero rank.
 fn prior_rank(status: &str) -> u8 {
     match status {
         s if s == PRIOR_FIXED => 2,
