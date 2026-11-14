@@ -611,4 +611,123 @@ mod tests {
         );
         assert_eq!(digest_payload["m.mentions"], json!({}));
     }
+
+    /// A log writer that keeps every line in memory.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut lines = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            lines.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Captured {
+        type Writer = Captured;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Returns the error's text, its debug form and every cause.
+    fn chain(error: &(dyn std::error::Error + 'static)) -> String {
+        let mut text = format!("{error} {error:?}");
+        let mut cause = error.source();
+        while let Some(next) = cause {
+            text.push_str(&format!(" {next} {next:?}"));
+            cause = next.source();
+        }
+        text
+    }
+
+    #[tokio::test]
+    async fn webhook_url_never_reaches_errors_logs_or_debug() {
+        const SECRET: &str = "secret-path-marker";
+        let webhook = |name: &str, url: String, format| NotifyBackend {
+            name: name.to_owned(),
+            kind: BackendKind::Webhook(WebhookBackend { url, format }),
+        };
+        let notify = NotifySettings {
+            backends: vec![
+                webhook(
+                    "hook",
+                    format!("https://hooks.example.org/{SECRET}"),
+                    WebhookFormat::Slack,
+                ),
+                webhook("broken", format!("{SECRET} is no URL"), WebhookFormat::Json),
+                NotifyBackend {
+                    name: "quiet".to_owned(),
+                    kind: BackendKind::None,
+                },
+            ],
+            action: Vec::new(),
+            digest: Vec::new(),
+            log: Vec::new(),
+            events: BTreeMap::new(),
+            queue: Vec::new(),
+        };
+        let backends = Backends::new(&notify, 32_000, Duration::from_secs(30));
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(captured.clone())
+            .finish();
+        let _logs = tracing::subscriber::set_default(subscriber);
+        // A cancelled token stops every request before it is sent, so nothing leaves the host.
+        let (client, cancel) = (Client::new(), CancellationToken::new());
+        cancel.cancel();
+        let mut texts = vec![format!("{backends:?} {notify:?}")];
+        let mut codes = Vec::new();
+        let sends = [
+            ("hook", Level::Action),
+            ("hook", Level::Digest),
+            ("broken", Level::Action),
+            ("quiet", Level::Log),
+        ];
+        for (name, level) in sends {
+            let backend = backends.get(name).expect("a configured backend");
+            let notification = Notification {
+                event: Event::Approved,
+                level,
+                text: "Approved".to_owned(),
+            };
+            let sent = deliver(&client, name, backend, &cancel, &notification, true).await;
+            if let Err(error) = sent {
+                codes.push(error_code(&error).to_owned());
+                texts.push(chain(&error));
+            }
+        }
+        let hook = backends.get("hook").expect("the hook backend");
+        let queue = deliver_queue(&client, hook, &cancel, "queue-txn", "plain", "<p>plain</p>");
+        let queue = queue.await.expect_err("the queue post fails");
+        codes.push(error_code(&queue).to_owned());
+        texts.push(chain(&queue));
+        let logs = captured
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let logs = String::from_utf8(logs).expect("UTF-8 logs");
+        assert_eq!(
+            codes,
+            [
+                "webhook_unavailable",
+                "webhook_request_invalid",
+                "webhook_unavailable"
+            ]
+        );
+        assert!(logs.contains("webhook notification dropped"), "{logs}");
+        assert!(logs.contains("notification logged only"), "{logs}");
+        texts.push(logs);
+        for text in texts {
+            assert!(!text.contains(SECRET), "the URL leaked: {text}");
+        }
+    }
 }
