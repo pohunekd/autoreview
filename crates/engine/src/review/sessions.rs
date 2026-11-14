@@ -452,14 +452,55 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 error_code = code,
                 "review notification dropped"
             );
+        };
+        let backends = match self.engine.route_backends(&route) {
+            Ok(backends) => backends,
+            Err(err) => {
+                dropped("", error_code(&err));
+                return (self.engine.store).save_step(&self.workflow_id, &step_name, &false);
+            }
+        };
+        // Each backend of a route with several records its acceptance, so a resumed review
+        // never sends the message again to a backend that took it. An action message is never
+        // dropped, so its success is an acceptance also during a shutdown.
+        let several = backends.len() > 1;
+        let accepted_on_shutdown = level == Level::Action;
+        let mut delivered = true;
+        for backend in backends {
+            let backend_step = format!("{step_name}{BACKEND_STEP_SEPARATOR}{backend}");
+            let store = &self.engine.store;
+            if several
+                && store
+                    .load_step::<bool>(&self.workflow_id, &backend_step)?
+                    .is_some()
+            {
+                continue;
+            }
+            let sent = (self.engine)
+                .deliver_to(&self.cancel, backend, &notification, true)
+                .instrument(span.clone())
+                .await;
+            let shutdown = self.cancel.is_cancelled();
+            match sent {
+                Ok(()) if several && (accepted_on_shutdown || !shutdown) => {
+                    store.save_step(&self.workflow_id, &backend_step, &true)?;
+                }
+                Ok(()) => {}
+                Err(err) => {
+                    // The notifier fails at once on a cancelled token, so the shutdown is the
+                    // cause.
+                    dropped(backend, if shutdown { SHUTDOWN } else { error_code(&err) });
+                    delivered = false;
+                }
+            }
+            if shutdown {
+                return Err(shutdown_error());
+            }
         }
-        if shutdown {
-            return Err(shutdown_error());
-        }
-        // `false` marks a dropped message; Go's `notify` reads any stored value as handled.
+        // `false` marks a message that a backend dropped; any stored value reads as handled.
         self.engine
             .store
-            .save_step(&self.workflow_id, &step_name, &sent.is_ok())
+            .save_step(&self.workflow_id, &step_name, &delivered)
     }
 
     /// Returns the slot that `id` names, or `None` when the review has no such slot.
