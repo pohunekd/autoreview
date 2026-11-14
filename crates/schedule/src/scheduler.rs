@@ -10,7 +10,7 @@ use time::{Duration, OffsetDateTime, UtcOffset, macros::datetime};
 
 use crate::{Error, diagnostic::failure_explanation, phase};
 
-/// Characters of the head SHA that a notification shows, as Go's `%.12s`.
+/// Characters of the head SHA that a notification shows: the first twelve.
 const NOTIFICATION_HEAD_CHARS: usize = 12;
 
 /// The pull request and head that a review request names.
@@ -117,7 +117,7 @@ fn is_zero(value: &i64) -> bool {
     *value == 0
 }
 
-/// Go's zero `time.Time`, which Go writes for a record without a due time.
+/// The zero instant (0001-01-01 UTC) that a record without a due time stores.
 fn go_zero_time() -> OffsetDateTime {
     datetime!(0001-01-01 0:00 UTC)
 }
