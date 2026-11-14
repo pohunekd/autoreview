@@ -169,30 +169,40 @@ class WrapperTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(wrapper.exit_reason(stderr), reason)
         self.assertEqual(
-            wrapper.reason_marker(b"ERROR: x\n"),
+            wrapper.reason_marker(b"ERROR: x\n", wrapper.LEGACY_MARKERS),
             "[pohunek-codex-review-reason-v1:RVJST1I6IHg=]",
         )
-        self.assertEqual(wrapper.reason_marker(b""), "[pohunek-codex-review-reason-v1:]")
+        self.assertEqual(
+            wrapper.reason_marker(b"ERROR: x\n", wrapper.MARKERS),
+            "[autoreview-codex/v1 reason:RVJST1I6IHg=]",
+        )
+        self.assertEqual(
+            wrapper.reason_marker(b"", wrapper.LEGACY_MARKERS), "[pohunek-codex-review-reason-v1:]"
+        )
 
     def test_refusal_after_the_run_names_its_message_on_a_reason_line(self) -> None:
         missing = wrapper.HeadUnavailableError("head is unavailable")
         unread = wrapper.InputFrameError("Codex did not produce a review result")
-        head_marker = "[pohunek-codex-review-refused-v1:head_unavailable]"
         reason = base64.b64encode(
             b"codex-adapter: Codex did not produce a review result"
         ).decode("ascii")
         missing_reason = base64.b64encode(b"codex-adapter: head is unavailable").decode("ascii")
-        cases = (
-            ("refusal before the run", unread, False, ""),
-            ("missing head before the run", missing, False, head_marker),
-            ("refusal after the run", unread, True,
-             f"[pohunek-codex-review-reason-v1:{reason}]"),
-            ("missing head after the run", missing, True,
-             f"[pohunek-codex-review-reason-v1:{missing_reason}]\n{head_marker}"),
-        )
-        for name, error, after_run, marker in cases:
-            with self.subTest(name=name):
-                self.assertEqual(wrapper.refusal_marker(error, after_run), marker)
+        for markers, head_marker, reason_prefix in (
+            (wrapper.LEGACY_MARKERS, "[pohunek-codex-review-refused-v1:head_unavailable]",
+             "[pohunek-codex-review-reason-v1:"),
+            (wrapper.MARKERS, "[autoreview-codex/v1 refused:head_unavailable]",
+             "[autoreview-codex/v1 reason:"),
+        ):
+            cases = (
+                ("refusal before the run", unread, False, ""),
+                ("missing head before the run", missing, False, head_marker),
+                ("refusal after the run", unread, True, f"{reason_prefix}{reason}]"),
+                ("missing head after the run", missing, True,
+                 f"{reason_prefix}{missing_reason}]\n{head_marker}"),
+            )
+            for name, error, after_run, marker in cases:
+                with self.subTest(name=name, markers=head_marker):
+                    self.assertEqual(wrapper.refusal_marker(error, after_run, markers), marker)
 
     def write_result(self, directory: str, value: object) -> Path:
         result = Path(directory) / "result.json"
@@ -295,6 +305,27 @@ class WrapperTests(unittest.TestCase):
             with self.subTest(prompt=prompt):
                 with self.assertRaisesRegex(wrapper.InputFrameError, "ambiguous or invalid"):
                     wrapper.trusted_checkout(prompt)
+
+    def test_trusted_protocol_line_selects_the_markers(self) -> None:
+        # A prompt of an older engine has no protocol line and gets the legacy markers (#24).
+        self.assertEqual(
+            wrapper.result_markers("- Trusted checkout: base").result_prefix,
+            "[pohunek-codex-review-result-v1:",
+        )
+        self.assertEqual(
+            wrapper.result_markers("- Trusted protocol: autoreview-codex/v1").result_prefix,
+            "[autoreview-codex/v1 result:",
+        )
+        for prompt in (
+            "- Trusted protocol: autoreview-codex/v1\n- Trusted protocol: autoreview-codex/v1",
+            "- Trusted protocol: autoreview-codex/v2",
+            "- Trusted protocol: autoreview-claude/v1",
+            "- Trusted protocol: autoreview-codex/v1 ",
+            "- Trusted protocol: ",
+        ):
+            with self.subTest(prompt=prompt):
+                with self.assertRaisesRegex(wrapper.InputFrameError, "ambiguous or unknown"):
+                    wrapper.result_markers(prompt)
 
     def test_checkout_head_must_match_trusted_pull_request_head(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -425,13 +456,15 @@ class BaseCheckoutTests(unittest.TestCase):
             capture_output=True,
         ).returncode == 0
 
-    def prompt(self) -> str:
+    def prompt(self, protocol: str | None = None) -> str:
+        """Returns the prompt of an engine; one that names `protocol` has its protocol line."""
+        protocol_line = f"\n- Trusted protocol: {protocol}" if protocol is not None else ""
         return (
             "Review the pull request.\n\nTrusted review context:\n"
             "- Repository: acme/widget\n- Pull request: #9\n"
             "- URL: https://github.com/acme/widget/pull/9\n"
             f"- Trusted head SHA: {self.head_sha}\n- Trusted base SHA: {self.base_sha}\n"
-            "- Base branch: main\n- Trusted checkout: base"
+            f"- Base branch: main\n- Trusted checkout: base{protocol_line}"
         )
 
     def install(self, during_run: str = "") -> tuple[Path, Path]:
@@ -459,7 +492,9 @@ class BaseCheckoutTests(unittest.TestCase):
         sidecar.chmod(0o600)
         return script, fake
 
-    def run_adapter(self, during_run: str = "") -> tuple[int, str, str]:
+    def run_adapter(
+        self, during_run: str = "", protocol: str | None = None
+    ) -> tuple[int, str, str]:
         script, fake = self.install(during_run)
         primary, secondary = pty.openpty()
         process = subprocess.Popen(
@@ -477,7 +512,7 @@ class BaseCheckoutTests(unittest.TestCase):
             while termios.tcgetattr(primary)[3] & termios.ICANON:
                 self.assertLess(time.monotonic(), deadline, "the adapter never read its input")
                 time.sleep(0.01)
-            frame = wrapper.BRACKETED_PASTE_START + self.prompt().encode("utf-8")
+            frame = wrapper.BRACKETED_PASTE_START + self.prompt(protocol).encode("utf-8")
             os.write(primary, frame + wrapper.BRACKETED_PASTE_END + wrapper.SUBMIT)
             stdout, stderr = process.communicate(timeout=30)
         finally:
@@ -490,14 +525,23 @@ class BaseCheckoutTests(unittest.TestCase):
         self.fetch_head()
         refs = self.git(self.checkout, "for-each-ref")
 
-        status, stdout, stderr = self.run_adapter()
+        # The result answers in the markers of the prompt's protocol line, or in the legacy
+        # markers for a prompt without one (#24).
+        for protocol, result, exit_line in (
+            (None, "\n[pohunek-codex-review-result-v1:",
+             "]\n\n[pohunek-codex-review exited with status 0]\n"),
+            ("autoreview-codex/v1", "\n[autoreview-codex/v1 result:",
+             "]\n\n[autoreview-codex/v1 exited with status 0]\n"),
+        ):
+            with self.subTest(protocol=protocol):
+                status, stdout, stderr = self.run_adapter(protocol=protocol)
 
-        self.assertEqual(status, 0, stderr)
-        self.assertIn(wrapper.RESULT_MARKER_PREFIX, stdout)
-        self.assertIn(wrapper.EXIT_LINE_FORMAT.format(0), stdout)
-        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
-        self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
-        self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
+                self.assertEqual(status, 0, stderr)
+                self.assertIn(result, stdout)
+                self.assertTrue(stdout.endswith(exit_line), stdout)
+                self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
+                self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
+                self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
 
     def test_base_checkout_refuses_any_other_head(self) -> None:
         moved = "git checkout --quiet --detach HEAD~1"
@@ -518,10 +562,10 @@ class BaseCheckoutTests(unittest.TestCase):
 
                 self.assertEqual(status, wrapper.EXIT_USAGE, stderr)
                 self.assertIn(message, stderr)
-                self.assertNotIn(wrapper.RESULT_MARKER_PREFIX, stdout)
+                self.assertNotIn("[pohunek-codex-review-result-v1:", stdout)
                 # Only a missing head gets the marker, right before the exit line.
                 refused = "[pohunek-codex-review-refused-v1:head_unavailable]\n"
-                exit_line = wrapper.EXIT_LINE_FORMAT.format(wrapper.EXIT_USAGE)
+                exit_line = "[pohunek-codex-review exited with status 64]"
                 self.assertEqual(
                     refused + exit_line in stdout, name == "head not fetched", stdout
                 )
@@ -535,7 +579,24 @@ class BaseCheckoutTests(unittest.TestCase):
                     encoded = lines[-2].removeprefix("[pohunek-codex-review-reason-v1:")
                     self.assertIn(message, base64.b64decode(encoded[:-1]).decode("utf-8"))
                 # The engine reads the output as finished only at the exit line.
-                self.assertIn(wrapper.EXIT_LINE_FORMAT.format(wrapper.EXIT_USAGE), stdout)
+                self.assertIn(exit_line, stdout)
+
+    def test_refusal_answers_in_the_markers_of_the_protocol_line(self) -> None:
+        # The head is not fetched, so the adapter refuses before Codex runs (#24).
+        cases = (
+            ("autoreview-codex/v1", "head is unavailable in the review checkout",
+             "\n[autoreview-codex/v1 refused:head_unavailable]\n"
+             "[autoreview-codex/v1 exited with status 64]\n"),
+            ("autoreview-codex/v2", "trusted protocol is ambiguous or unknown",
+             "\x07\n[pohunek-codex-review exited with status 64]\n"),
+        )
+        for protocol, message, ending in cases:
+            with self.subTest(protocol=protocol):
+                status, stdout, stderr = self.run_adapter(protocol=protocol)
+
+                self.assertEqual(status, wrapper.EXIT_USAGE, stderr)
+                self.assertIn(message, stderr)
+                self.assertTrue(stdout.endswith(ending), stdout)
 
     def test_failed_codex_run_reports_its_error_line_before_the_exit_line(self) -> None:
         self.fetch_head()
@@ -547,21 +608,23 @@ class BaseCheckoutTests(unittest.TestCase):
             "exit 3"
         )
 
-        status, stdout, stderr = self.run_adapter(failing)
-
-        self.assertEqual(status, 3, stderr)
         reason = base64.b64encode(b"ERROR: model-x is not supported").decode("ascii")
-        self.assertTrue(
-            stdout.endswith(
-                f"\n[pohunek-codex-review-reason-v1:{reason}]\n"
-                "[pohunek-codex-review exited with status 3]\n"
-            ),
-            stdout,
-        )
-        self.assertNotIn(wrapper.RESULT_MARKER_PREFIX, stdout)
-        # Codex's stderr still reaches the session output, in full.
-        self.assertIn("x" * 70000 + "\nOpenAI Codex v0.0.0\n", stderr)
-        self.assertTrue(stderr.endswith("tokens used\n12\n"), stderr[-200:])
+        for protocol, ending in (
+            (None, f"\n[pohunek-codex-review-reason-v1:{reason}]\n"
+             "[pohunek-codex-review exited with status 3]\n"),
+            ("autoreview-codex/v1", f"\n[autoreview-codex/v1 reason:{reason}]\n"
+             "[autoreview-codex/v1 exited with status 3]\n"),
+        ):
+            with self.subTest(protocol=protocol):
+                status, stdout, stderr = self.run_adapter(failing, protocol)
+
+                self.assertEqual(status, 3, stderr)
+                self.assertTrue(stdout.endswith(ending), stdout)
+                self.assertNotIn(" result:", stdout)
+                self.assertNotIn("-result-v1:", stdout)
+                # Codex's stderr still reaches the session output, in full.
+                self.assertIn("x" * 70000 + "\nOpenAI Codex v0.0.0\n", stderr)
+                self.assertTrue(stderr.endswith("tokens used\n12\n"), stderr[-200:])
 
 
 class VersionProbeTests(unittest.TestCase):

@@ -17,7 +17,10 @@ use crate::protocol::validate::{
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
 /// Protocol name of the wrapper around a finished structured Claude session.
-pub(crate) const CLAUDE_RESULT_PROTOCOL: &str = "claude-otel-noninteractive/v2";
+pub(crate) const CLAUDE_RESULT_PROTOCOL: &str = "autoreview-claude/v1";
+
+/// Legacy protocol name of the wrapper, which older adapters write and the engine still reads.
+const LEGACY_CLAUDE_RESULT_PROTOCOL: &str = "claude-otel-noninteractive/v2";
 
 /// Severities that hold the merge back when a finding flags itself as blocking.
 const BLOCKING_SEVERITIES: [&str; 2] = ["critical", "high"];
@@ -207,15 +210,14 @@ where
     if !wrapper.refusal.is_empty() {
         return Err(adapter_refusal(&wrapper));
     }
-    if wrapper.protocol == CLAUDE_RESULT_PROTOCOL
-        && wrapper.checked_checkout != checkout_name(checkout)
+    if is_result_protocol(&wrapper.protocol) && wrapper.checked_checkout != checkout_name(checkout)
     {
         return Err(review_adapter_outdated());
     }
     let stderr = decode_go_base64(&wrapper.stderr_base64);
     if stderr.is_none()
         || stderr.as_ref().is_some_and(|v| !v.is_empty())
-        || wrapper.protocol != CLAUDE_RESULT_PROTOCOL
+        || !is_result_protocol(&wrapper.protocol)
         || wrapper.mode != "structured"
         || wrapper.exit_code != 0
     {
@@ -267,6 +269,11 @@ where
     }
 }
 
+/// Reports whether `protocol` names the result wrapper, by its name or by its legacy name.
+fn is_result_protocol(protocol: &str) -> bool {
+    protocol == CLAUDE_RESULT_PROTOCOL || protocol == LEGACY_CLAUDE_RESULT_PROTOCOL
+}
+
 /// Reports whether `id` matches `^C[0-9]{3,}$`: `C` and at least three ASCII digits.
 fn is_source_id(id: &str) -> bool {
     if let Some(digits) = id.strip_prefix('C') {
@@ -284,7 +291,7 @@ fn is_source_id(id: &str) -> bool {
 /// untrusted, so it is bounded and neutralized, and it only goes into the log line of the
 /// refused output.
 fn adapter_refusal(wrapper: &ClaudeWrapper) -> Error {
-    if wrapper.protocol == CLAUDE_RESULT_PROTOCOL
+    if is_result_protocol(&wrapper.protocol)
         && wrapper.exit_code == EXIT_REFUSED
         && wrapper.stdout_base64.is_empty()
         && wrapper.refusal == REFUSAL_HEAD_UNAVAILABLE
@@ -565,6 +572,48 @@ mod tests {
         }
         parse_claude_output(&pr, &Checkout::Head, &format!("{other_checkout}\n"))
             .expect("a head result is read on a head checkout");
+    }
+
+    // A result is read under its protocol name and under the legacy name that older adapters
+    // write, with the same checks; any other name is refused (#24).
+    #[test]
+    fn claude_result_is_read_under_both_protocol_names() {
+        let pr = test_pull_request(3);
+        let review: Value = serde_json::from_str(&claude_output(&pr, json!([]), None))
+            .expect("the fixture is JSON");
+        for name in ["autoreview-claude/v1", "claude-otel-noninteractive/v2"] {
+            let mut success = review.clone();
+            success["protocol"] = json!(name);
+            parse_claude_output(&pr, &Checkout::Base, &format!("{success}\n")).expect(name);
+            let mut unchecked = success.clone();
+            let fields = unchecked.as_object_mut().expect("the fixture is an object");
+            fields.remove("checked_checkout");
+            let mut refused = unchecked.clone();
+            refused["exit_code"] = json!(64);
+            refused["stdout_base64"] = json!("");
+            refused["refusal"] = json!("head_unavailable");
+            for (output, code) in [
+                (unchecked, "review_adapter_outdated"),
+                (refused, "review_head_unavailable"),
+            ] {
+                let err = parse_claude_output(&pr, &Checkout::Base, &format!("{output}\n"))
+                    .expect_err(name);
+                assert_eq!(error_code(&err), code, "{name}");
+            }
+        }
+        for name in [
+            "claude-otel-noninteractive/request-v1",
+            "autoreview-claude/v2",
+            "Autoreview-Claude/v1",
+            "autoreview-codex/v1",
+            "",
+        ] {
+            let mut other = review.clone();
+            other["protocol"] = json!(name);
+            let err =
+                parse_claude_output(&pr, &Checkout::Base, &format!("{other}\n")).expect_err(name);
+            assert_eq!(error_code(&err), "review_wrapper_invalid", "{name}");
+        }
     }
 
     // A Claude Code run that exits with a status other than 0 gets the end of its stderr,

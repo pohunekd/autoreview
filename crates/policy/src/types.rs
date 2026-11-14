@@ -58,7 +58,7 @@ pub const REPUBLISHED_PREFIX: &str = "P";
 /// Names the input and output contract of a reviewer agent profile.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Protocol {
-    /// Sends a JSON request with an enforced schema and reads the claude-otel-noninteractive
+    /// Sends a JSON request with an enforced schema and reads the `autoreview-claude/v1`
     /// structured result wrapper.
     #[serde(rename = "claude-structured")]
     ClaudeStructured,

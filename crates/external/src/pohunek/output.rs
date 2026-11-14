@@ -20,8 +20,12 @@ use tokio_util::sync::CancellationToken;
 use super::sessions::session_list_arguments;
 use super::{decode_ok, decode_strict, pohunek_call, response_invalid};
 
-/// Prefix of the line that the pohunek Codex wrapper prints with its run status.
-const CODEX_EXIT_PREFIX: &[u8] = b"[pohunek-codex-review exited with status ";
+/// Prefixes of the line that the Codex adapter prints with its run status: the one of
+/// `autoreview-codex/v1`, then the legacy one that older adapters print.
+const CODEX_EXIT_PREFIXES: [&[u8]; 2] = [
+    b"[autoreview-codex/v1 exited with status ",
+    b"[pohunek-codex-review exited with status ",
+];
 
 /// Error code of a removal whose session is already absent.
 const SESSION_NOT_FOUND: &str = "pohunek_session_not_found";
@@ -190,9 +194,9 @@ pub(crate) fn output_complete(protocol: &Protocol, output: &[u8]) -> bool {
             let text = String::from_utf8_lossy(output);
             serde_json::from_str::<IgnoredAny>(text.trim()).is_ok() || output.ends_with(b"\n")
         }
-        Protocol::CodexEnvelope => output
-            .windows(CODEX_EXIT_PREFIX.len())
-            .any(|window| window == CODEX_EXIT_PREFIX),
+        Protocol::CodexEnvelope => CODEX_EXIT_PREFIXES
+            .iter()
+            .any(|prefix| output.windows(prefix.len()).any(|window| window == *prefix)),
         Protocol::Unset | Protocol::Other(_) => false,
     }
 }
@@ -390,4 +394,32 @@ pub(crate) async fn remove_session_confirmed(
     let call =
         |arguments: Vec<String>| async move { pohunek_call(config, cancel, &arguments).await };
     remove_session_confirmed_with(&call, session).await
+}
+
+#[cfg(test)]
+mod tests {
+    use autoreview_policy::Protocol;
+
+    use super::output_complete;
+
+    // A Codex session is complete at the exit line of either marker name (#24).
+    #[test]
+    fn codex_output_is_complete_at_the_exit_line_of_either_name() {
+        let cases: [(&[u8], bool); 6] = [
+            (b"[autoreview-codex/v1 exited with status 0]\n", true),
+            (b"[pohunek-codex-review exited with status 0]\n", true),
+            (b"text\n[autoreview-codex/v1 exited with status ", true),
+            (b"[autoreview-codex/v1 result:e30=]\n", false),
+            (b"[autoreview-codex/v2 exited with status 0]\n", false),
+            (b"", false),
+        ];
+        for (output, complete) in cases {
+            let text = String::from_utf8_lossy(output);
+            assert_eq!(
+                output_complete(&Protocol::CodexEnvelope, output),
+                complete,
+                "{text}"
+            );
+        }
+    }
 }

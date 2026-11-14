@@ -11,7 +11,15 @@ use crate::error::{Error, error_code};
 use crate::model::{Discussion, PullRequest, ReviewInput};
 
 /// Protocol name that the request of a claude-structured reviewer carries.
+///
+/// It stays the legacy name until every installed adapter reads `autoreview-claude/v1`: an
+/// older adapter runs a request of another name as a plain prompt.
 pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "claude-otel-noninteractive/request-v1";
+
+/// Protocol name on the trusted protocol line of a codex-envelope prompt.
+///
+/// The adapter answers with the markers of this name; an older adapter ignores the line.
+const CODEX_REQUEST_PROTOCOL: &str = "autoreview-codex/v1";
 
 /// The schema that a claude-structured reviewer must satisfy.
 ///
@@ -252,7 +260,7 @@ fn codex_prompt(
     let mut prompt = format!(
         "{}\n\n{}\n\nTrusted review context:\n- Repository: {}\n- Pull request: #{}\n\
 - URL: {}\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n- Base branch: {}\n\
-- Trusted checkout: {}",
+- Trusted checkout: {}\n- Trusted protocol: {}",
         input.rule.pipeline.prompt,
         instructions,
         pull_request.repository,
@@ -261,7 +269,8 @@ fn codex_prompt(
         pull_request.head_sha,
         pull_request.base_sha,
         pull_request.base_branch,
-        checkout
+        checkout,
+        CODEX_REQUEST_PROTOCOL
     );
     if input.scope.incremental() {
         prompt.push_str(&format!(
@@ -359,7 +368,7 @@ mod tests {
     use crate::protocol::validate::reviewer_output_invalid;
     use crate::protocol::validate::tests::test_config;
 
-    use super::{CLAUDE_REQUEST_PROTOCOL, REVIEW_SCHEMA, build_reviewer_request};
+    use super::{REVIEW_SCHEMA, build_reviewer_request};
 
     #[test]
     fn reviewer_requests_carry_the_trusted_context_their_prompt_refers_to() {
@@ -376,7 +385,7 @@ mod tests {
         let request: serde_json::Value =
             serde_json::from_str(&raw).expect("claude request is JSON");
         let prompt = request["prompt"].as_str().expect("prompt is a string");
-        assert_eq!(request["protocol"], CLAUDE_REQUEST_PROTOCOL);
+        assert_eq!(request["protocol"], "claude-otel-noninteractive/request-v1");
         assert!(request["json_schema"].is_object());
         assert!(prompt.contains(&format!(
             "Trusted request context:\nRepository: acme/widget\nPull request: 9\nHead SHA: {}",
@@ -427,7 +436,7 @@ mod tests {
         );
         assert!(prompt.contains(&format!(
             "- Trusted base SHA: {}\n- Base branch: main\n- Trusted checkout: base\n\
-- Trusted previously reviewed head SHA: {}\n\n",
+- Trusted protocol: autoreview-codex/v1\n- Trusted previously reviewed head SHA: {}\n\n",
             pr.base_sha,
             sha("c")
         )));
@@ -448,7 +457,7 @@ reviewed_head_sha to {}.",
         .expect("codex prompt builds");
         assert!(prompt.ends_with(&format!(
             "- Base branch: main\n- Trusted checkout: head\n\
-- Trusted previously reviewed head SHA: {}",
+- Trusted protocol: autoreview-codex/v1\n- Trusted previously reviewed head SHA: {}",
             sha("c")
         )));
     }
