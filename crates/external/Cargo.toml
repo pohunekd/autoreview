@@ -23,5 +23,9 @@ tokio = { workspace = true, features = ["io-util", "macros", "process", "time"] 
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt"] }
+tracing-subscriber = { workspace = true }
+
 [lints]
 workspace = true

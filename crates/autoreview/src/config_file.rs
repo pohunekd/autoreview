@@ -2562,13 +2562,33 @@ pub(crate) mod tests {
                 *entry = format!("    - name: {level}\n      type: none\n");
             }
             let text = four_backends(entries, "[queue]");
+            let config = parse(&text, secret, example_policy).expect("a none route loads");
+            let kind = config.notify.backend(level).map(|backend| &backend.kind);
+            assert_eq!(kind, Some(&BackendKind::None), "{level} routed to none");
+            let (name, format) = formats[index];
+            let mut entries = shared_backends();
+            if let Some(entry) = entries.get_mut(index) {
+                *entry = format!(
+                    "    - name: {level}\n      type: webhook\n      \
+                     url_env: AUTOREVIEW_WEBHOOK_URL\n      format: {name}\n"
+                );
+            }
+            let text = four_backends(entries, "[queue]");
+            let config = parse(&text, secret, example_policy).expect("a webhook route loads");
+            let kind = config.notify.backend(level).map(|backend| &backend.kind);
+            let Some(BackendKind::Webhook(webhook)) = kind else {
+                panic!("{level} is no webhook: {kind:?}");
+            };
+            assert_eq!(webhook.format, format, "{level}");
+            assert_eq!(webhook.url, "https://hooks.example.org/synthetic");
+            let text = text.replace("AUTOREVIEW_WEBHOOK_URL", "AUTOREVIEW_PLAIN_URL");
             assert_eq!(
                 error_text(parse(&text, secret, example_policy)),
                 format!(
-                    "configuration_invalid: notify.routes.{level}: \
-                     none backends are not routed until #29"
+                    "configuration_invalid: notify.backends.{level}.url_env: \
+                     webhook URL must use HTTPS or loopback HTTP"
                 ),
-                "{level} routed to none"
+                "{level}"
             );
         }
     }
@@ -2625,7 +2645,7 @@ pub(crate) mod tests {
         let refused = [
             (
                 "[queue, log]",
-                "must name at most one Matrix backend until #30",
+                "must name at most one Matrix or webhook backend until #30",
             ),
             ("[queue, queue]", "names a backend twice"),
         ];
@@ -2702,13 +2722,6 @@ pub(crate) mod tests {
                 concat!(
                     "configuration_invalid: notify.routes.approved: ",
                     "must name exactly one backend until #30"
-                ),
-            ),
-            (
-                "    approved: [quiet]\n",
-                concat!(
-                    "configuration_invalid: notify.routes.approved: ",
-                    "none backends are not routed until #29"
                 ),
             ),
         ];
