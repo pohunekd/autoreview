@@ -60,8 +60,7 @@ fn contains_line(lines: &[i64], target: i64) -> bool {
 
 /// Returns the closest line to `target`, or 0 when there is none.
 ///
-/// On a tie the lower line wins. Only positive lines are candidates. Distances wrap on overflow,
-/// as Go's `int` does.
+/// On a tie the lower line wins. Only positive lines are candidates. Distances wrap on overflow.
 fn nearest_line(lines: &[i64], target: i64) -> i64 {
     let mut best = 0;
     for &line in lines {

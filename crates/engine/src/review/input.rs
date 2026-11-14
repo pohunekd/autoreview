@@ -62,7 +62,7 @@ pub(crate) const BACKEND_STEP_SEPARATOR: &str = "@";
 
 /// Checks that a stored review input is complete and consistent.
 ///
-/// The checks run in Go's order, so the first failing one names the error.
+/// The checks run in a fixed order, so the first failing one names the error.
 pub(crate) fn validate_input(input: &ReviewInput) -> Result<(), BoxError> {
     let pull_request = &input.pull_request;
     if input.version < MIN_INPUT_VERSION
@@ -237,7 +237,7 @@ pub(crate) struct RenderOutcome {
 
 autoreview_go_compat::object_only_serde!(RenderOutcome);
 
-/// Reports whether an integer is zero, which Go omits from the JSON.
+/// Reports whether an integer is zero; the JSON omits a zero.
 fn is_zero(value: &i64) -> bool {
     *value == 0
 }

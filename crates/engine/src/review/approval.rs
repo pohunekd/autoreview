@@ -25,7 +25,7 @@ use crate::model::{
 use crate::publish::plan::PublicationPlan;
 use crate::store::{RESULT_SUCCESS, REVIEW_AWAITING};
 
-/// Nanoseconds in one second, as Go's `time.Second`.
+/// Nanoseconds in one second.
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
 /// Error code of an approval whose review, artifact or plan is not stored.
