@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn pohunek_version_output_is_read_and_checked_against_the_range() {
         let invalid = Err(Refusal::Invalid);
-        let cases: [(&str, Result<Release, Refusal>); 23] = [
+        let cases: [(&str, Result<Release, Refusal>); 24] = [
             ("pohunek 0.41.0\n", Ok(Release::new(0, 41, 0))),
             ("pohunek 0.41.0", Ok(Release::new(0, 41, 0))),
             ("pohunek 0.41.7\n", Ok(Release::new(0, 41, 7))),
@@ -191,6 +191,7 @@ mod tests {
             ),
             ("pohunek 0.42.0-rc.1\n", invalid),
             ("pohunek 0.42.0+build\n", invalid),
+            ("pohunek 0.+42.0\n", invalid),
             ("pohunek 0.42\n", invalid),
             ("pohunek 0.42.0.1\n", invalid),
             ("pohunek dev\n", invalid),

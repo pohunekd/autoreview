@@ -27,9 +27,10 @@ pohunek daemon runs and the repositories are registered.
   `validate` and `serve` run `pohunek --version` and refuse a release outside
   the range with `pohunek_version_unsupported` and an output they cannot read
   with `pohunek_version_invalid`, see [validate](cli.md#autoreview-validate).
-  The engine runs these CLI commands, each with `--host`: `project list`,
-  `session list`, `session new`, `session output` and `session rm`, and
-  `host command run` with a [`host_state`](configuration.md#pohunek) section.
+  The engine runs these CLI commands, each after `--host <host>` or naming the
+  host: `project list`, `session list`, `session new`, `session output` and
+  `session rm`, and `host command run` with a
+  [`host_state`](configuration.md#pohunek) section.
   The check reads the CLI's version only; the daemon on each review host is
   reached through that CLI.
 - **Runtime packages** `claude` and/or `codex`, installed on each review host per the

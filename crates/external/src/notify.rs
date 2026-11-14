@@ -659,10 +659,8 @@ mod tests {
         text
     }
 
-    // A redirect could carry the secret URL as `Referer`, or the body, to another host
-    // (review of PR 386). reqwest's client `Debug` shows a redirect policy other than its
-    // default and a set `referer` flag, so the client of a built webhook is checked without
-    // a request.
+    // A redirect could carry the secret URL (`Referer`) or the body to another host;
+    // reqwest's client `Debug` shows both settings.
     #[test]
     fn webhook_requests_follow_no_redirect_and_send_no_referer() {
         let notify = NotifySettings {
