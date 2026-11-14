@@ -115,7 +115,8 @@ When you see a notification failure after a publication:
 
 1. Check GitHub. Open the pull request and look for the review. Its body ends
    with the AI signature, and its hidden marker names the repository, the number
-   and the head SHA (`<!-- autoreview:v1:<repo>#<n>@<head>:... -->`).
+   and the head SHA (`<!-- autoreview:v1:<repo>#<n>@<head>:... -->`, or
+   `hermes-pr-review` in place of `autoreview`, as `publish.marker` names it).
 2. Check the store with `autoreview review --repository <owner/repo> <number>`.
    A published decision shows `publication_status: published` and a
    `github_review_id`.

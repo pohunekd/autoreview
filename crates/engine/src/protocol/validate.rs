@@ -281,6 +281,7 @@ pub(crate) mod tests {
         Discussion, DiscussionComment, DiscussionThread, PriorFinding, PriorVerdict,
     };
     use crate::protocol::fixtures::sha;
+    use crate::publish::MarkerName;
 
     use super::{reviewer_output_retryable, validate_prior_verdicts};
 
@@ -356,6 +357,7 @@ pub(crate) mod tests {
             max_test_characters: 256,
             github_body_max_bytes: 65_536,
             ai_signature: "Written by AI: example-agent".to_owned(),
+            ai_signed_pattern: "Written by AI:".to_owned(),
             matrix_max_characters: 4000,
             published_retention: Duration::from_secs(7 * 24 * 60 * 60),
             excerpt_characters: 1000,
@@ -364,6 +366,7 @@ pub(crate) mod tests {
             session_group: "autoreview".to_owned(),
             session_name_prefix: "github-review-".to_owned(),
             session_branch_prefix: "autoreview/review/".to_owned(),
+            review_marker: MarkerName::HermesPrReview,
         }
     }
 

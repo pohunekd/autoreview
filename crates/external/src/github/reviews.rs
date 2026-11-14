@@ -1,7 +1,7 @@
 //! Publication of a review and its reconciliation by marker.
 //!
 //! A review is never posted twice: its marker is searched for before the POST and again after a
-//! POST that failed.
+//! POST that failed, under each marker name, so a change of `publish.marker` posts no second one.
 
 // Rust guideline compliant 2026-06-26
 
@@ -9,6 +9,7 @@ use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::{GitHubReview, InlineComment};
 use autoreview_engine::model::{Decision, PublishResult, PullRequest};
+use autoreview_engine::publish::marker_forms;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -132,9 +133,9 @@ fn fold_char(character: char) -> char {
 
 /// Decides what one page of the reviews lookup means.
 ///
-/// The first record, in listing order, that carries the marker on `head_sha` from `login` and is
-/// not dismissed is the review, and its state must be the expected state. A dismissed record is
-/// skipped: GitHub no longer counts it, so the review is posted again. Go reuses it.
+/// The first record, in listing order, that carries the marker in any of its forms on `head_sha`
+/// from `login` and is not dismissed is the review, and its state must be the expected state. A
+/// dismissed record is skipped: GitHub no longer counts it, so the review is posted again.
 fn review_page_step(
     output: &str,
     review: &GitHubReview,
@@ -144,8 +145,9 @@ fn review_page_step(
     let entries: Vec<Option<GitHubReviewRecord>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
     let records = autoreview_go_compat::null_entries::zero_entries(entries);
+    let forms = marker_forms(&review.marker);
     for record in &records {
-        let marker_found = record.body.contains(&review.marker);
+        let marker_found = forms.iter().any(|form| record.body.contains(form.as_str()));
         let has_id = record.id > 0;
         let has_url = !record.url.is_empty();
         let commit_matches = record.commit_id == head_sha;
@@ -393,6 +395,105 @@ mod tests {
             Ok(PageStep::Done),
             "a review with the legacy marker alone is not the review of a known base branch"
         );
+    }
+
+    /// Each row is the body of an approval on the head and whether the lookup of a review with
+    /// `STORED` as its marker reuses it (#7): either marker name matches, as a whole.
+    #[test]
+    fn lost_acknowledgement_is_reconciled_by_either_marker_name() {
+        const REVIEW: &str = "acme/widget#3@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\
+:decision=APPROVE:findings=0:digest=0123 -->";
+        const BASE: &str = "0d6e -->";
+        const OTHER_BASE: &str = "a4d4 -->";
+        let new = format!("<!-- autoreview:v1:{REVIEW}<!-- autoreview-base:v1:{BASE}");
+        let legacy =
+            format!("<!-- hermes-pr-review:v1:{REVIEW}<!-- hermes-pr-review-base:v1:{BASE}");
+        let legacy_other_base =
+            format!("<!-- hermes-pr-review:v1:{REVIEW}<!-- hermes-pr-review-base:v1:{OTHER_BASE}");
+        let legacy_alone = format!("<!-- hermes-pr-review:v1:{REVIEW}");
+        let mixed = format!("<!-- autoreview:v1:{REVIEW}<!-- hermes-pr-review-base:v1:{BASE}");
+        let other_name = format!("<!-- other-review:v1:{REVIEW}<!-- other-review-base:v1:{BASE}");
+        // The bodies hold no character that JSON escapes.
+        let record = |body: &str, state: &str| {
+            r#"{"id":1,"html_url":"https://example.org/acme/widget/pull/3#review-1","#.to_owned()
+                + &format!(r#""body":"{body}","commit_id":"{HEAD}","state":"{state}","#)
+                + &format!(r#""user":{{"login":"{LOGIN}"}}}}"#)
+        };
+        let reused = || {
+            Ok(PageStep::Found(PublishResult {
+                decision: Decision::Approve,
+                github_review_id: 1,
+                review_url: "https://example.org/acme/widget/pull/3#review-1".to_owned(),
+                reused: true,
+            }))
+        };
+        type Row<'a> = (&'a str, &'a str, &'a str, &'a str, Result<PageStep, String>);
+        let cases: [Row<'_>; 10] = [
+            ("new on new", &new, &new, "APPROVED", reused()),
+            ("legacy on legacy", &legacy, &legacy, "APPROVED", reused()),
+            (
+                "legacy published, new stored",
+                &new,
+                &legacy,
+                "APPROVED",
+                reused(),
+            ),
+            (
+                "new published, legacy stored",
+                &legacy,
+                &new,
+                "APPROVED",
+                reused(),
+            ),
+            (
+                "other name dismissed",
+                &new,
+                &legacy,
+                "DISMISSED",
+                Ok(PageStep::Done),
+            ),
+            (
+                "other name, other base",
+                &new,
+                &legacy_other_base,
+                "APPROVED",
+                Ok(PageStep::Done),
+            ),
+            (
+                "other name without base",
+                &new,
+                &legacy_alone,
+                "APPROVED",
+                Ok(PageStep::Done),
+            ),
+            ("names mixed", &new, &mixed, "APPROVED", Ok(PageStep::Done)),
+            (
+                "unknown name",
+                &new,
+                &other_name,
+                "APPROVED",
+                Ok(PageStep::Done),
+            ),
+            (
+                "other name, other decision",
+                &new,
+                &legacy,
+                "COMMENTED",
+                Err("github_review_state_conflict".to_owned()),
+            ),
+        ];
+        for (case, stored, body, state, want) in cases {
+            let review = GitHubReview {
+                decision: Decision::Approve,
+                body: format!("Findings. {stored}"),
+                comments: Vec::new(),
+                marker: stored.to_owned(),
+            };
+            let output = format!("[{}]", record(&format!("{body} Findings."), state));
+            let step = review_page_step(&output, &review, HEAD, LOGIN)
+                .map_err(|error| error_code(&error).to_owned());
+            assert_eq!(step, want, "case {case}");
+        }
     }
 
     #[test]

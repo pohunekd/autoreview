@@ -90,6 +90,8 @@ pub(crate) struct GitHub {
     search_page_limit: i64,
     /// Variables of the engine's secrets, which the `gh` child does not inherit.
     secret_variables: BTreeSet<String>,
+    /// Text that marks a discussion comment as machine-written.
+    ai_signed_pattern: String,
 }
 
 impl fmt::Debug for GitHub {
@@ -117,6 +119,7 @@ impl GitHub {
             poll_limit: config.poll_limit,
             search_page_limit: config.search_page_limit,
             secret_variables: config.secret_variables.clone(),
+            ai_signed_pattern: config.ai_signed_pattern.clone(),
         }
     }
 
@@ -336,6 +339,7 @@ mod tests {
             poll_limit: 100,
             search_page_limit: 10,
             secret_variables: BTreeSet::from(["EXAMPLE_SECOND_TOKEN".to_owned()]),
+            ai_signed_pattern: "Written by AI:".to_owned(),
         };
         let parent = pairs(&[
             ("PATH", "/usr/bin"),

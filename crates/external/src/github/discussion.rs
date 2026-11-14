@@ -238,6 +238,8 @@ struct DiscussionReader<'a> {
     pull_request: &'a PullRequest,
     /// Login of the publishing account.
     publisher: &'a str,
+    /// Text that marks a comment as machine-written.
+    ai_signed_pattern: &'a str,
     /// Head SHA of each prior finding, by the identifier of its GitHub review.
     heads: HashMap<i64, String>,
     /// Keys of the prior findings.
@@ -285,6 +287,7 @@ impl<'a> DiscussionReader<'a> {
     fn new(
         pull_request: &'a PullRequest,
         publisher: &'a str,
+        ai_signed_pattern: &'a str,
         prior: &[PriorFinding],
         max_characters: i64,
     ) -> Self {
@@ -297,6 +300,7 @@ impl<'a> DiscussionReader<'a> {
         Self {
             pull_request,
             publisher,
+            ai_signed_pattern,
             heads,
             keys,
             budget: DiscussionBudget::new(max_characters),
@@ -389,7 +393,7 @@ impl<'a> DiscussionReader<'a> {
         Some(DiscussionComment {
             author: author.login.clone(),
             role: discussion_role(&author.login, self.pull_request, self.publisher).to_owned(),
-            ai_signed: ai_signed(&node.body),
+            ai_signed: ai_signed(&node.body, self.ai_signed_pattern),
             body,
         })
     }
@@ -448,13 +452,20 @@ async fn read_discussion<F, Fut>(
     prior: &[PriorFinding],
     max_characters: i64,
     publisher: &str,
+    ai_signed_pattern: &str,
     search_page_limit: i64,
 ) -> Result<Discussion, Error>
 where
     F: FnMut(Vec<String>) -> Fut,
     Fut: Future<Output = Result<String, Error>>,
 {
-    let mut reader = DiscussionReader::new(pull_request, publisher, prior, max_characters);
+    let mut reader = DiscussionReader::new(
+        pull_request,
+        publisher,
+        ai_signed_pattern,
+        prior,
+        max_characters,
+    );
     let mut after = String::new();
     let mut page: i64 = 1;
     loop {
@@ -546,6 +557,7 @@ impl GitHub {
             prior,
             max_characters,
             &credential.login,
+            &self.ai_signed_pattern,
             self.search_page_limit,
         )
         .await
@@ -668,6 +680,7 @@ mod tests {
             &prior,
             140,
             "reviewer",
+            "🤖 Written by AI:",
             5,
         ))
         .expect("the captured page reads");

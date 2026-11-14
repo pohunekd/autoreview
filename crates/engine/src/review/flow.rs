@@ -528,6 +528,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     ) -> Result<(), Error> {
         let settings = RenderSettings {
             ai_signature: self.engine.config.ai_signature.clone(),
+            marker: self.engine.config.review_marker,
             github_body_max_bytes: self.engine.config.github_body_max_bytes,
             excerpt_characters: self.engine.config.excerpt_characters,
         };

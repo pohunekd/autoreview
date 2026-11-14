@@ -6,7 +6,7 @@ use autoreview_policy::{AuthorClass, HumanReview, OnFindings, Reviewer, match_gl
 
 use super::neutralize::{defuse_comment_delimiters, neutralize, neutralize_block, single_line};
 use super::plan::{PublicationPlan, blocking_count};
-use super::publication_marker;
+use super::{MarkerName, publication_marker};
 use crate::error::Error;
 use crate::integrations::{ChangedFile, GitHubReview, InlineComment};
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
@@ -18,6 +18,8 @@ use crate::verify::{demoted, verification_line};
 pub(crate) struct RenderSettings {
     /// Signature that ends the review body and every inline comment.
     pub(crate) ai_signature: String,
+    /// Name of the hidden markers that start the review body.
+    pub(crate) marker: MarkerName,
     /// Largest body and largest inline comment, in bytes, that GitHub accepts.
     pub(crate) github_body_max_bytes: i64,
     /// Character limit of the human review signal text in the body and the notification.
@@ -48,7 +50,13 @@ pub(crate) fn render_review(
     let pull_request = &input.pull_request;
     let (blocking, notes) = input.split_findings(&artifact.findings);
     let open = artifact.open_prior();
-    let marker = publication_marker(pull_request, &plan.decision, &blocking, &open);
+    let marker = publication_marker(
+        settings.marker,
+        pull_request,
+        &plan.decision,
+        &blocking,
+        &open,
+    );
     let mut sections = vec![
         marker.clone(),
         "## Automated code review".to_owned(),
@@ -551,7 +559,7 @@ mod tests {
     };
     use crate::publish::neutralize::{closes_fence, opening_fence};
     use crate::publish::plan::{PublicationPlan, plan_publication};
-    use crate::publish::publication_marker;
+    use crate::publish::{MarkerName, publication_marker};
     use crate::verify::VERDICT_REFUTED;
 
     fn sha(character: char) -> String {
@@ -620,6 +628,7 @@ mod tests {
     fn test_settings() -> RenderSettings {
         RenderSettings {
             ai_signature: "🤖 Written by AI: test reviewer".to_owned(),
+            marker: MarkerName::HermesPrReview,
             github_body_max_bytes: 60_000,
             excerpt_characters: 200,
         }
@@ -670,7 +679,13 @@ mod tests {
     fn render_review_keeps_code_intact_and_defuses_mentions_and_comments() {
         let rule = test_rule(OnFindings::RequestChanges, OnClean::Approve);
         let input = test_input(rule, test_pull_request(5));
-        let forged = publication_marker(&input.pull_request, &Decision::Approve, &[], &[]);
+        let forged = publication_marker(
+            MarkerName::HermesPrReview,
+            &input.pull_request,
+            &Decision::Approve,
+            &[],
+            &[],
+        );
         let body = concat!(
             "Call `$client->send(@payload)` here:\n```php\n",
             "$map = ['a' => $b->c()]; // @param int $x\n```\n",
