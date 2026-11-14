@@ -470,6 +470,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `github_search_limit_exceeded` | A search returned more than `schedule.poll_limit`; narrow the rules or raise the limit |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request (`github_request_failed`, retried), or rejected it as invalid with HTTP 422 (`github_request_rejected`, not retried); HTTP 401 is `credential_invalid` |
 | `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message |
+| `webhook_unavailable`, `webhook_request_rejected`, `webhook_request_invalid` | A webhook did not accept a message, or its URL does not parse |
 | `mcp_listen_failed` | `autoreview mcp` could not listen on `mcp.listen` |
 | `metrics_listen_failed` | `autoreview serve` could not listen on `metrics.listen` |
 | `review_not_found` | The MCP tool `review_detail` got a workflow ID that the store does not know |

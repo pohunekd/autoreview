@@ -162,7 +162,29 @@ notify:
 
 ## Webhook for Slack, Discord or JSON
 
-Planned in #29.
+```yaml
+notify:
+  backends:
+    - name: team-chat
+      type: webhook
+      url_env: AUTOREVIEW_WEBHOOK_URL
+      format: slack
+  routes:
+    action: [team-chat]
+    digest: [team-chat]
+    log: [team-chat]
+  review_queue:
+    backends: [team-chat]
+    max_items: 50
+```
+
+Put the incoming-webhook URL into the variable that `url_env` names, in the
+service environment or the `--env-file`; the URL is a secret and never appears
+in the logs. Use `slack` for Slack and Slack-compatible services such as
+Mattermost, `discord` for a Discord channel webhook, and `json` for your own
+receiver. A webhook never pings anyone; route `action` to Matrix when a person
+must be mentioned. See [configuration](../../configuration.md#backend-webhook)
+for the bodies and the error codes.
 
 ## Several backends for one level
 
@@ -209,8 +231,9 @@ the review key, the level, the code and `skipped_after_failure`. It is never
 resent, so the warning is the only record; discovery goes on.
 
 A broken action backend does not stop reviews, but nobody learns from it that
-a human is needed. Watch for `review notification dropped`, `matrix_unavailable`
-and `matrix_request_rejected` in the logs; the
+a human is needed. Watch for `review notification dropped`, `matrix_unavailable`,
+`matrix_request_rejected`, `webhook_unavailable` and `webhook_request_rejected`
+in the logs; the
 [CLI error codes](../../cli.md#error-codes) list them.
 
 `autoreview validate` checks the notification configuration, not whether a
