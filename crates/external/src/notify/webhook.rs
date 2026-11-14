@@ -217,3 +217,35 @@ pub(crate) async fn post_webhook(
         })?;
     response_result(response.status())
 }
+
+/// Maps the status of an answer: success, a failure that can pass, or a refusal.
+///
+/// Too many requests and server errors can succeed later. Every other failure cannot.
+fn response_result(status: StatusCode) -> Result<(), Error> {
+    if status.is_success() {
+        return Ok(());
+    }
+    if status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+        return Err(Error::workflow(UNAVAILABLE, false, None));
+    }
+    Err(Error::workflow(REJECTED, true, None))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use autoreview_engine::config::{WebhookBackend, WebhookFormat};
+    use autoreview_engine::error_code;
+    use serde_json::{Value, json};
+
+    use super::{Webhook, webhook_body};
+
+    /// A webhook of `format` with a synthetic URL and a message limit of `max_characters`.
+    fn webhook(format: WebhookFormat, max_characters: i64) -> Webhook {
+        let backend = WebhookBackend {
+            url: "https://hooks.example.org/placeholder".to_owned(),
+            format,
+        };
+        Webhook::new(&backend, max_characters, Duration::from_secs(30))
+    }
