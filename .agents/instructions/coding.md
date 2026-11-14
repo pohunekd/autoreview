@@ -392,9 +392,8 @@ What is not compatible, by decision:
   not load on Go. A rollback to a binary built before #33 needs a policy whose
   rules all say `trusted: any`, and one built before #32 needs no `authors`.
   `trusted: any` adds nothing to the digest, so the stored digests
-  hold. `testdata/review-policy.yaml` stays without the section for the digest tests;
-  the Rust tests add `trusted: any` to its rules before parsing, and the golden
-  case `fixture_via_load` loads such a copy from a temporary directory.
+  hold. Every rule of `testdata/review-policy.yaml` says `trusted: any`, so the
+  stored digests in `testdata/stored-formats/digest.json` hold for the fixture.
   Each pass stores the pull requests it skips in the `rejected` discovery entry
   under the keys `skipped:<repository#number>` with the reason `untrusted_author`,
   so `review` and the review queue report them (#226); Go's `reportRejected`

@@ -56,17 +56,21 @@ pipelines:
 repositories:
   # A clean review waits for a human when the author asks for it with the
   # label, or when the pull request deletes a test file.
-  - {match: example-org/example-repo, trigger: review-requested, pipeline: strict, on_findings: request_changes, on_clean: approve, human_review: {labels: [needs-human-review], deleted_tests: ["**/tests/**"]}}
+  - {match: example-org/example-repo, trigger: review-requested, pipeline: strict, on_findings: request_changes, on_clean: approve, human_review: {labels: [needs-human-review], deleted_tests: ["**/tests/**"]}, authors: {trusted: any}}
   - match: example-org/*
     trigger: review-requested
     pipeline: generic
     on_findings: request_changes
     on_clean: approve
+    authors:
+      trusted: any
   - match: example-owner/*
     trigger: label:ai:review
     pipeline: personal
     on_findings: request_changes
     on_clean: approve
+    authors:
+      trusted: any
 
 unmatched: skip
 
