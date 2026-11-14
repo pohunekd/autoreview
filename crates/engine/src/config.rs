@@ -21,7 +21,10 @@ mod notify;
 mod symbols;
 
 pub use credentials::{Credential, Credentials};
-pub use notify::{BackendKind, MatrixBackend, NotifyBackend, NotifyRoute, NotifySettings};
+pub use notify::{
+    BackendKind, MatrixBackend, NotifyBackend, NotifyRoute, NotifySettings, WebhookBackend,
+    WebhookFormat,
+};
 
 /// Code of a configuration that fails validation.
 const CONFIGURATION_INVALID: &str = "configuration_invalid";
@@ -400,12 +403,14 @@ impl Config {
     ///
     /// # Errors
     ///
-    /// Returns a configuration error when a Matrix backend is invalid or a route is empty or
-    /// names no backend.
+    /// Returns a configuration error when a Matrix or webhook backend is invalid or a route is
+    /// empty or names no backend.
     fn validate_notify(&self) -> Result<(), Error> {
         for backend in &self.notify.backends {
-            if let BackendKind::Matrix(matrix) = &backend.kind {
-                validate_matrix(&backend.name, matrix)?;
+            match &backend.kind {
+                BackendKind::None => {}
+                BackendKind::Matrix(matrix) => validate_matrix(&backend.name, matrix)?,
+                BackendKind::Webhook(webhook) => validate_webhook(&backend.name, webhook)?,
             }
         }
         let levels = [
@@ -637,6 +642,28 @@ fn validate_matrix(name: &str, matrix: &MatrixBackend) -> Result<(), Error> {
     }
     if !matrix_room_valid(&matrix.room) {
         return refused("room", "invalid Matrix room");
+    }
+    Ok(())
+}
+
+/// Validates the URL of the webhook backend `name`: HTTPS, or plain HTTP on the loopback address.
+///
+/// # Errors
+///
+/// Returns a configuration error that names the backend and `url_env`, never the URL, which is
+/// a secret.
+fn validate_webhook(name: &str, webhook: &WebhookBackend) -> Result<(), Error> {
+    let secure = parse_matrix_url(&webhook.url).is_some_and(|parsed| {
+        parsed.scheme == "https" || (parsed.scheme == "http" && parsed.hostname == LOOPBACK_HOST)
+    });
+    if !secure {
+        let key = format!("notify.backends.{name}.url_env");
+        let message = "webhook URL must use HTTPS or loopback HTTP";
+        return Err(Error::config(
+            CONFIGURATION_INVALID,
+            key,
+            Some(BoxError::from(message)),
+        ));
     }
     Ok(())
 }
@@ -1071,7 +1098,10 @@ mod tests {
 
     use autoreview_policy::Event;
 
-    use super::{BackendKind, Config, MarkerName, MatrixBackend, NotifySettings};
+    use super::{
+        BackendKind, Config, MarkerName, MatrixBackend, NotifyBackend, NotifySettings,
+        WebhookBackend, WebhookFormat,
+    };
 
     use crate::error::error_code;
 
@@ -1235,7 +1265,7 @@ mod tests {
         type Change = fn(&mut NotifySettings);
         /// One change of the only Matrix backend, `matrix`.
         type MatrixChange = fn(&mut MatrixBackend);
-        let routes: [(Change, &str); 3] = [
+        let routes: [(Change, &str); 4] = [
             (
                 |notify| notify.action.clear(),
                 "config: invalid notification route action",
@@ -1250,6 +1280,19 @@ mod tests {
                     notify.events.insert(Event::Approved, names);
                 },
                 "config: invalid notification route approved",
+            ),
+            (
+                |notify| {
+                    let url = "http://hooks.example.org/secret".to_owned();
+                    notify.backends.push(NotifyBackend {
+                        name: "hook".to_owned(),
+                        kind: BackendKind::Webhook(WebhookBackend {
+                            url,
+                            format: WebhookFormat::Json,
+                        }),
+                    });
+                },
+                "notify.backends.hook.url_env: webhook URL must use HTTPS or loopback HTTP",
             ),
         ];
         let backends: [(MatrixChange, &str); 5] = [

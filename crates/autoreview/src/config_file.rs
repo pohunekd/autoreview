@@ -14,7 +14,8 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::{
     BackendKind, Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules,
-    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, signature_text,
+    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, WebhookBackend, WebhookFormat,
+    signature_text,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
@@ -672,26 +673,17 @@ fn environment_secret(name: &str) -> Option<String> {
 /// # Errors
 ///
 /// Returns `configuration_missing` for an absent key, `configuration_invalid` for a key whose
-/// value
-/// is out of range or of the wrong kind or for a review queue without a Matrix backend, and the
-/// engine's validation error for a mapped value that the engine rejects.
+/// value is out of range or of the wrong kind, and the engine's validation error for a mapped
+/// value that the engine rejects.
 pub(crate) fn parse(
     text: &str,
     secret: impl Fn(&str) -> Option<String>,
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Result<Config, Error> {
     let file = parse_file(text)?;
-    let mapped = map_file(&file, &secret, load_policy)?;
-    // The queue posts only to Matrix until #29. The check follows the mapping, so a test can map
-    // a config whose queue names only `none` backends.
-    if !mapped.queue_on_matrix {
-        return Err(invalid(
-            "notify.review_queue.backends",
-            "none is not supported for the review queue",
-        ));
-    }
-    mapped.config.validate()?;
-    Ok(mapped.config)
+    let config = map_file(&file, &secret, load_policy)?;
+    config.validate()?;
+    Ok(config)
 }
 
 /// Reads the text of `config.yaml` into the file structs. Serde errors, such as an unknown key,
@@ -714,19 +706,18 @@ pub(crate) fn parse_file(text: &str) -> Result<FileConfig, Error> {
 
 /// Maps the file into the engine configuration without the engine's final validation.
 ///
-/// A review queue without a Matrix backend maps as it is. The tests use it to map configs that
-/// [`parse`] refuses.
+/// The tests use it to map configs that the engine's validation refuses.
 ///
 /// # Errors
 ///
-/// Returns the errors of [`parse`] except the queue check and the engine's validation error.
+/// Returns the errors of [`parse`] except the engine's validation error.
 #[cfg(test)]
 pub(crate) fn to_config(
     file: &FileConfig,
     secret: &impl Fn(&str) -> Option<String>,
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Result<Config, Error> {
-    map_file(file, secret, load_policy).map(|mapped| mapped.config)
+    map_file(file, secret, load_policy)
 }
 
 /// The engine configuration and the loader facts that [`parse`] checks after the mapping.
