@@ -198,11 +198,14 @@ for the bodies and the error codes.
     log: [matrix-digest]
 ```
 
-Each backend of a route gets the message once. A backend that fails does not
-stop the others: the failure is logged with the backend's name, and a message
-of a review counts as delivered only when every backend took it. A review that
-resumes after a shutdown sends an `action` message only to the backends that
-have not taken it. A discovery pass skips a failed backend for the rest of that route in
+Each backend of a route gets one attempt per message. A backend that fails does
+not stop the others: the failure is logged with the backend's name, and a message
+of a review counts as delivered only when every backend took it. When a shutdown
+cuts the attempts short, the resumed review sends an `action` message only to
+the backends that have not taken it, which includes a backend that refused it
+before the shutdown. A one-backend route sends it again after a shutdown, and a
+`digest` or `log` message also goes again to a backend that answered during the
+shutdown. A discovery pass skips a failed backend for the rest of that route in
 the pass and still sends to the route's other backends.
 
 ## Review queue

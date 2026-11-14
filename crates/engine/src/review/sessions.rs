@@ -461,19 +461,16 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             }
         };
         // Each backend of a route with several records its acceptance, so a resumed review
-        // never sends the message again to a backend that took it. An action message is never
-        // dropped, so its success is an acceptance also during a shutdown.
+        // never sends the message again to a backend that took it, also when the route has
+        // shrunk since. An action message is never dropped, so its success is an acceptance
+        // also during a shutdown. A one-backend route reads the step but never writes it.
         let several = backends.len() > 1;
         let accepted_on_shutdown = level == Level::Action;
         let mut delivered = true;
         for backend in backends {
             let backend_step = format!("{step_name}{BACKEND_STEP_SEPARATOR}{backend}");
             let store = &self.engine.store;
-            if several
-                && store
-                    .load_step::<bool>(&self.workflow_id, &backend_step)?
-                    .is_some()
-            {
+            if (store.load_step::<bool>(&self.workflow_id, &backend_step)?).is_some() {
                 continue;
             }
             let sent = (self.engine)

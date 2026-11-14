@@ -552,9 +552,10 @@ Check that the `*_env` variable is set without printing it:
 `test -n "$AUTOREVIEW_MATRIX_TOKEN" && echo set`. A `digest` or `log` message
 of a review that cannot be delivered is dropped with the warning
 `matrix notification dropped` (`webhook notification dropped` for a webhook). An `action` message of a review gets one
-attempt and is then dropped with the warning `review notification dropped`,
-which names the event, the review key, the level and the code (`shutdown` when
-the service stopped during the attempt). The review goes on and does not resend
+attempt on each backend of its route and is then dropped with the warning
+`review notification dropped`, which names the event, the review key, the
+level, the backend and the code (`shutdown` when the service stopped during the
+attempt). The review goes on and does not resend
 it; `autoreview awaiting` still lists a review that waits for approval. A message
 of a discovery pass, at any level, gets at most one attempt per backend (none
 on a backend after its earlier failure on the same route in the pass, none after a shutdown, which

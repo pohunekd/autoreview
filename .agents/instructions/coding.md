@@ -175,9 +175,10 @@ What is not compatible, by decision:
 - **Discovery notifications (#210):** a discovery pass collects its
   notifications and sends each once after it has saved its state and released
   the discovery lock. It sees a failure at every level, because it sends with
-  `Integrations::notify_unmuted`. After a failure, the later notifications of
-  the same route (#187) in that batch get no attempt, and after a shutdown none gets
-  one (logged with the code `shutdown`). Each one not delivered is logged as
+  `Integrations::notify_unmuted`, one attempt per backend of the route. After a
+  backend fails, the later notifications of the same route (#187) in that batch
+  get no attempt on that backend (#30: the skip is per route and backend), and
+  after a shutdown none gets one (logged with the code `shutdown`). Each one not delivered is logged as
   `discovery notification dropped` and never resent. Go sends them inside the pass under the step
   retry (`discovery.go:36-41`), so an unreachable `action` backend holds the
   lock for `step_retry_seconds`, fails the pass and repeats the message on the
@@ -198,6 +199,12 @@ What is not compatible, by decision:
   cancel, which stores nothing), and the `notify/...` step is stored as `false`,
   so the review goes on and a resumed review does not resend it. A `digest` or
   `log` failure that the notifier mutes is stored as `true`, as a sent message.
+  Each backend of the route gets one attempt and the step is `true` only when
+  every backend took it (#30). Only a route with several backends writes
+  `notify/<name>@<backend>` = `true` for each backend that took it; every route
+  reads those steps and skips such a backend on resume. During a shutdown only an
+  `action` success writes it, because a muted `digest`/`log` drop also returns
+  success. Older binaries ignore the extra rows.
   Go's `notify` reads any stored value as sent. `autoreview review-queue` posts
   its digest once, logs `review queue digest dropped` and fails with the code.
   Go retries both under the step retry (`review.go:212-216`,

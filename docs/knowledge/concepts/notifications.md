@@ -99,7 +99,8 @@ discovery pass waits for a backend; only the warning differs by level:
 | `action` | The message cannot be delivered | Dropped with a warning in the log. The review continues, see below. |
 
 A message of a review gets one attempt on each backend of its route, bounded by
-the notifier's request timeout (`notify.timeout_seconds`), and is never retried.
+the notifier's request timeout (`notify.timeout_seconds`), and is not retried
+unless a shutdown cuts the attempts short, see below.
 A failed attempt is logged as the warning `review notification dropped` with
 its event, review key, level, backend and error code; the other backends of the
 route still get theirs, and the message counts as delivered only when every
@@ -110,7 +111,9 @@ been sent, and a resumed review does not send it again. When the service shuts
 down during the attempt of an `action` message, the warning carries the code
 `shutdown`, and the resumed review makes one more attempt. On a route with
 several backends the resumed review sends an `action` message only to the
-backends that have not taken it, so no backend gets it twice. At the `digest` and
+backends that have not taken it, so no backend gets it twice; a backend that
+refused it before the shutdown is among them and gets one more attempt. Without
+a shutdown a refusal is final. At the `digest` and
 `log` levels the notifier logs `matrix notification dropped` with the code
 `matrix_unavailable` (`webhook notification dropped` with `webhook_unavailable`)
 instead, and the resumed review also sends the message again. A waiting review stays visible without

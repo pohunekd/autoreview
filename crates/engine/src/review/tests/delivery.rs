@@ -3,6 +3,7 @@
 // Rust guideline compliant 2026-11-14
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Semaphore;
 
@@ -144,6 +145,52 @@ async fn an_action_message_reaches_each_backend_once_across_two_restarts() {
         };
         assert_eq!(steps, expected, "steps with several = {several}");
     }
+}
+
+// A route that shrinks between a shutdown and the resume still skips the backend that took
+// the action message: `matrix` accepts it, the engine stops while `extra` holds it, and the
+// restarted engine routes the level to `matrix` alone (review of PR 388).
+#[tokio::test]
+async fn a_route_that_shrinks_across_a_restart_sends_no_action_message_twice() {
+    let shrunk = Arc::new(AtomicBool::new(false));
+    let switch = Arc::clone(&shrunk);
+    let mut h = start_harness(move |cfg| {
+        approved_as_action(cfg);
+        route_levels(cfg, "matrix", EXTRA);
+        if switch.load(Ordering::SeqCst) {
+            cfg.notify.action = vec!["matrix".to_owned()];
+        }
+    })
+    .await;
+    let first = h.fake.hold_notes(APPROVED_NOTE);
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    open(&h, &pr);
+    h.poll_until("the notice held on matrix", || {
+        sent(&h, "matrix", APPROVED_NOTE) == 1
+    })
+    .await;
+    // The next hold catches the notice on `extra` once `matrix` has returned.
+    let second = h.fake.hold_notes(APPROVED_NOTE);
+    first.add_permits(1);
+    h.wait_for("the notice held on extra", || {
+        sent(&h, EXTRA, APPROVED_NOTE) == 1
+    })
+    .await;
+    stop_while_held(&mut h, second).await;
+    h.fake.lock().held_notes = None;
+    shrunk.store(true, Ordering::SeqCst);
+    h.start();
+    h.poll_until("the stored notice", || {
+        step(&h, "notify/published").is_some()
+    })
+    .await;
+    h.stop_engine().await;
+    let counts = [
+        sent(&h, "matrix", APPROVED_NOTE),
+        sent(&h, EXTRA, APPROVED_NOTE),
+    ];
+    assert_eq!(counts, [1, 1], "notices per backend");
+    assert_eq!(step(&h, "notify/published@matrix"), Some(true));
 }
 
 // A backend that refuses a message leaves it stored as dropped, and the backend gets the next

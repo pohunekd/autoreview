@@ -413,10 +413,11 @@ Each message gets one attempt on each backend of its route, bounded by
 `timeout_seconds`. A backend that does not accept the message drops it with a
 warning, at every level; the other backends still get it, and neither the
 review nor discovery waits for it. A message of a review counts as delivered
-only when every backend took it, and a review resumed after a shutdown sends an
-`action` message only to the backends that have not; a `digest` or `log` message
-also goes again to a backend that answered during the shutdown, because a
-dropped failure looks the same. `autoreview review-queue` posts to every
+only when every backend took it. On a route with several backends a review
+resumed after a shutdown sends an `action` message only to the backends that
+have not taken it; a one-backend route sends it again after a shutdown, and a
+`digest` or `log` message also goes again to a backend that answered during the
+shutdown, because a dropped failure looks the same. `autoreview review-queue` posts to every
 queue backend and fails with the error code of the first one that rejects the
 message, so its timer shows the failure. A route or `review_queue.backends`
 that is empty or names a backend twice is refused at load. Each backend has its
