@@ -5,6 +5,7 @@
 mod approval;
 mod authors;
 mod core;
+mod delivery;
 mod mcp;
 mod memory;
 mod steps;

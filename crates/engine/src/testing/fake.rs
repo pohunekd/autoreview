@@ -65,6 +65,8 @@ pub(crate) struct Note {
 /// A queue digest the engine posted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct QueuedDigest {
+    /// Name of the backend that received the digest.
+    pub(crate) backend: String,
     /// Transaction ID of the post.
     pub(crate) transaction: String,
     /// Plain-text body of the digest.
@@ -160,6 +162,8 @@ pub(crate) struct FakeState {
     pub(crate) held_notes: Option<(String, Arc<Semaphore>)>,
     /// Error code that every notification fails with; `None` lets notifications succeed.
     pub(crate) notify_fail: Option<String>,
+    /// Error code that the notifications and queue posts of each backend fail with, by name.
+    pub(crate) backend_fail: BTreeMap<String, String>,
     /// Number of notification attempts, failed or not.
     pub(crate) notify_attempts: usize,
     /// Error code that the project list of each host fails with, keyed by host.
@@ -310,7 +314,8 @@ impl FakeIntegration {
 
     /// Records one notification attempt and answers as the Matrix notifier does.
     ///
-    /// A failure is `notify_fail`. With `muted`, a failure of a level other than action that
+    /// A failure is `notify_fail`, else the entry of `backend` in `backend_fail`. With `muted`,
+    /// a failure of a level other than action that
     /// the notifier mutes is dropped, as `notify` drops it, and the note is not recorded.
     fn send_note(
         &self,
@@ -322,7 +327,9 @@ impl FakeIntegration {
         let (outcome, gate) = {
             let mut state = self.lock();
             state.notify_attempts += 1;
-            let outcome = match state.notify_fail.clone() {
+            let failure =
+                (state.notify_fail.clone()).or_else(|| state.backend_fail.get(backend).cloned());
+            let outcome = match failure {
                 Some(code)
                     if muted && level != Level::Action && MUTED_CODES.contains(&code.as_str()) =>
                 {
@@ -874,7 +881,7 @@ impl Integrations for FakeIntegration {
     fn send_queue_digest(
         &self,
         _cancel: &CancellationToken,
-        _backend: &str,
+        backend: &str,
         transaction: &str,
         plain: &str,
         formatted: &str,
@@ -885,8 +892,11 @@ impl Integrations for FakeIntegration {
             state.queue_transactions.push(transaction.to_string());
             if state.queue_sends <= state.queue_failures {
                 Err(Error::workflow("matrix_unavailable", false, None))
+            } else if let Some(code) = state.backend_fail.get(backend).cloned() {
+                Err(Error::workflow(code, false, None))
             } else {
                 state.queued.push(QueuedDigest {
+                    backend: backend.to_owned(),
                     transaction: transaction.to_string(),
                     plain: plain.to_string(),
                     formatted: formatted.to_string(),

@@ -2632,19 +2632,36 @@ pub(crate) mod tests {
             let token = secret(token_env).expect("a synthetic token");
             assert_eq!(matrix.access_token, token, "token of {token_env}");
         }
+        let text = four_backends(shared_backends(), "[queue, queue]");
+        assert_eq!(
+            error_text(mapped(&text)),
+            "configuration_invalid: notify.review_queue.backends: names a backend twice"
+        );
+    }
+
+    #[test]
+    fn a_route_names_several_backends_each_once() {
+        let text = four_backends(shared_backends(), "[queue]").replacen(
+            "    action: [action]\n",
+            "    action: [action, digest]\n",
+            1,
+        );
+        let config = parse(&text, secret, example_policy).expect("two action backends load");
+        assert_eq!(config.notify.action, ["action", "digest"]);
         let refused = [
-            (
-                "[queue, log]",
-                "must name at most one Matrix or webhook backend until #30",
-            ),
-            ("[queue, queue]", "names a backend twice"),
+            ("[action, action]", "names a backend twice"),
+            ("[]", "must name at least one backend"),
         ];
-        for (queue, message) in refused {
-            let text = four_backends(shared_backends(), queue);
+        for (route, message) in refused {
+            let text = four_backends(shared_backends(), "[queue]").replacen(
+                "    action: [action]\n",
+                &format!("    action: {route}\n"),
+                1,
+            );
             assert_eq!(
                 error_text(mapped(&text)),
-                format!("configuration_invalid: notify.review_queue.backends: {message}"),
-                "{queue}"
+                format!("configuration_invalid: notify.routes.action: {message}"),
+                "{route}"
             );
         }
     }
@@ -2708,11 +2725,8 @@ pub(crate) mod tests {
                 "configuration_invalid: notify.routes.approved: names no configured backend",
             ),
             (
-                "    approved: [approved, digest]\n",
-                concat!(
-                    "configuration_invalid: notify.routes.approved: ",
-                    "must name exactly one backend until #30"
-                ),
+                "    approved: [approved, approved]\n",
+                "configuration_invalid: notify.routes.approved: names a backend twice",
             ),
         ];
         for (route, expected) in cases {
