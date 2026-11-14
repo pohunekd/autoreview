@@ -86,7 +86,7 @@ pub(crate) fn decision_text(decision: &Decision) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{base_marker, publication_marker, review_marker};
+    use super::{MarkerName, base_marker, marker_forms, publication_marker, review_marker};
     use crate::model::{Decision, Finding, PullRequest};
 
     fn sha(character: char) -> String {
@@ -119,8 +119,20 @@ mod tests {
     #[test]
     fn review_marker_depends_on_decision_and_findings() {
         let pr = test_pull_request(5);
-        let approve = review_marker(&pr, &Decision::Approve, &[], &[]);
-        let changes = review_marker(&pr, &Decision::RequestChanges, &[finding("O001")], &[]);
+        let approve = review_marker(
+            MarkerName::HermesPrReview,
+            &pr,
+            &Decision::Approve,
+            &[],
+            &[],
+        );
+        let changes = review_marker(
+            MarkerName::HermesPrReview,
+            &pr,
+            &Decision::RequestChanges,
+            &[finding("O001")],
+            &[],
+        );
         assert!(
             approve != changes && approve.starts_with("<!-- hermes-pr-review:v1:acme/widget#5@"),
             "markers {approve:?} and {changes:?}"
@@ -130,8 +142,15 @@ mod tests {
                 && changes.contains(":decision=REQUEST_CHANGES:findings=1:digest="),
             "markers must carry the decision and the finding count: {approve:?} and {changes:?}"
         );
-        let clean_comment = review_marker(&pr, &Decision::Comment, &[], &[]);
+        let clean_comment = review_marker(
+            MarkerName::HermesPrReview,
+            &pr,
+            &Decision::Comment,
+            &[],
+            &[],
+        );
         let comment_with_findings = review_marker(
+            MarkerName::HermesPrReview,
             &pr,
             &Decision::Comment,
             &[finding("O001"), finding("S001")],
@@ -174,10 +193,25 @@ mod tests {
         for (base, digest) in cases {
             let mut pr = test_pull_request(5);
             pr.base_branch = base.to_owned();
-            let legacy = review_marker(&pr, &Decision::Approve, &[], &[]);
-            let marker = publication_marker(&pr, &Decision::Approve, &[], &[]);
+            let legacy = review_marker(
+                MarkerName::HermesPrReview,
+                &pr,
+                &Decision::Approve,
+                &[],
+                &[],
+            );
+            let marker = publication_marker(
+                MarkerName::HermesPrReview,
+                &pr,
+                &Decision::Approve,
+                &[],
+                &[],
+            );
             assert_eq!(
-                (marker.clone(), base_marker(base).len()),
+                (
+                    marker.clone(),
+                    base_marker(MarkerName::HermesPrReview, base).len()
+                ),
                 (
                     format!("{legacy}<!-- hermes-pr-review-base:v1:{digest} -->"),
                     98
@@ -194,6 +228,89 @@ mod tests {
                     "a marker must find only its own base branch: {marker} in {found}"
                 );
             }
+        }
+    }
+
+    /// Each row is a marker name and the start of the publication marker it writes (#7).
+    #[test]
+    fn publication_marker_carries_the_configured_name() {
+        let pr = test_pull_request(5);
+        let digest = "0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605";
+        let cases = [
+            (
+                MarkerName::HermesPrReview,
+                "<!-- hermes-pr-review:v1:acme/widget#5@",
+                format!("<!-- hermes-pr-review-base:v1:{digest} -->"),
+            ),
+            (
+                MarkerName::Autoreview,
+                "<!-- autoreview:v1:acme/widget#5@",
+                format!("<!-- autoreview-base:v1:{digest} -->"),
+            ),
+        ];
+        for (name, start, base) in cases {
+            let review = review_marker(name, &pr, &Decision::Approve, &[], &[]);
+            let marker = publication_marker(name, &pr, &Decision::Approve, &[], &[]);
+            assert!(
+                review.starts_with(start) && marker == format!("{review}{base}"),
+                "marker of {name:?}: {marker}"
+            );
+            assert_eq!(MarkerName::from_name(name.as_str()), Some(name));
+        }
+        assert_eq!(MarkerName::from_name("Autoreview"), None);
+        assert_eq!(MarkerName::from_name(""), None);
+    }
+
+    /// Each row is a stored marker and the forms that reconcile it, the stored one first (#7).
+    #[test]
+    fn marker_forms_rename_both_markers_and_keep_the_rest() {
+        let pr = test_pull_request(5);
+        let new = publication_marker(MarkerName::Autoreview, &pr, &Decision::Approve, &[], &[]);
+        let legacy = publication_marker(
+            MarkerName::HermesPrReview,
+            &pr,
+            &Decision::Approve,
+            &[],
+            &[],
+        );
+        let new_alone = review_marker(MarkerName::Autoreview, &pr, &Decision::Approve, &[], &[]);
+        let legacy_alone = review_marker(
+            MarkerName::HermesPrReview,
+            &pr,
+            &Decision::Approve,
+            &[],
+            &[],
+        );
+        let cases: [(&str, String, Vec<String>); 6] = [
+            (
+                "written as autoreview",
+                new.clone(),
+                vec![new.clone(), legacy.clone()],
+            ),
+            (
+                "written as hermes-pr-review",
+                legacy.clone(),
+                vec![legacy.clone(), new.clone()],
+            ),
+            (
+                "review marker without a base marker",
+                legacy_alone.clone(),
+                vec![legacy_alone.clone(), new_alone.clone()],
+            ),
+            (
+                "unknown name",
+                "<!-- marker:v1 -->".to_owned(),
+                vec!["<!-- marker:v1 -->".to_owned()],
+            ),
+            (
+                "name not at the start",
+                format!(" {new}"),
+                vec![format!(" {new}")],
+            ),
+            ("empty", String::new(), vec![String::new()]),
+        ];
+        for (case, marker, want) in cases {
+            assert_eq!(marker_forms(&marker), want, "case {case}");
         }
     }
 }

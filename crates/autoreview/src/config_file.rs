@@ -2790,6 +2790,10 @@ pub(crate) mod tests {
         assert!(!paths.is_empty());
         for (path, index, indent) in &paths {
             let text = without_block(*index, *indent);
+            // `publish.marker` may be absent; `publish_marker_names_the_markers` covers it.
+            if path == "publish.marker" {
+                continue;
+            }
             // `cli` holds one key, so removing it leaves `cli:` null, which reads as the section.
             let named = if path == "cli.review_list_limit" {
                 "cli"
@@ -3121,6 +3125,40 @@ pub(crate) mod tests {
             assert_eq!(result, expected, "rule for {old:?}");
         }
     }
+    /// Each row is the `publish.marker` line of the example and what the loader makes of it (#7).
+    #[test]
+    fn publish_marker_names_the_markers() {
+        let line = "  marker: autoreview\n";
+        let cases: [(&str, Result<MarkerName, &str>); 6] = [
+            (line, Ok(MarkerName::Autoreview)),
+            (
+                "  marker: hermes-pr-review\n",
+                Ok(MarkerName::HermesPrReview),
+            ),
+            ("", Ok(MarkerName::HermesPrReview)),
+            ("  marker:\n", Err("configuration_missing: publish.marker")),
+            (
+                "  marker: Autoreview\n",
+                Err(concat!(
+                    "configuration_invalid: publish.marker: ",
+                    "must be autoreview or hermes-pr-review"
+                )),
+            ),
+            (
+                "  marker: 1\n",
+                Err("configuration_invalid: publish.marker: must be text"),
+            ),
+        ];
+        for (new, want) in cases {
+            let result = mapped(&mutated(line, new));
+            let got = match &result {
+                Ok(config) => Ok(config.review_marker),
+                Err(error) => Err(error.to_string()),
+            };
+            assert_eq!(got, want.map_err(str::to_owned), "line {new:?}");
+        }
+    }
+
     #[test]
     fn published_retention_must_exceed_the_handoff_reminder() {
         let text = mutated(
