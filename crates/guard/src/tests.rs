@@ -133,3 +133,66 @@ fn rows(corpus: &str) -> Vec<Row> {
     close(&mut rows, &mut text, repeat);
     rows
 }
+
+/// Parses `kind:code=count ...` or `none` into hits in report order.
+fn expected_hits(text: &str) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = text
+        .split_whitespace()
+        .filter(|item| *item != "none")
+        .map(|item| {
+            let (field, rest) = item.split_once(':').expect("kind:code=count");
+            let (code, count) = rest.split_once('=').expect("code=count");
+            let signal = *SIGNALS
+                .iter()
+                .find(|signal| signal.as_str() == code)
+                .expect("code");
+            Hit {
+                field: kind(field),
+                signal,
+                count: count.parse().expect("count"),
+            }
+        })
+        .collect();
+    hits.sort_by_key(|hit| (hit.field, hit.signal));
+    hits
+}
+
+/// Scans every row of a corpus file and compares the reports.
+fn table(corpus: &str) {
+    let lexicon = Lexicon::parse(include_str!("../testdata/phrases.txt")).expect("lexicon");
+    let rows = rows(corpus);
+    assert!(!rows.is_empty(), "corpus has rows");
+    for row in rows {
+        let fields: Vec<Field<'_>> = row
+            .fields
+            .iter()
+            .map(|(kind, text)| Field { kind: *kind, text })
+            .collect();
+        assert_eq!(scan(&fields, &lexicon), row.expected, "row {}", row.name);
+    }
+}
+
+#[test]
+fn character_scanners_report_hidden_character_shapes_and_spare_legitimate_use() {
+    table(include_str!("../testdata/characters.txt"));
+}
+
+#[test]
+fn hidden_markdown_reports_instructions_that_rendering_hides() {
+    table(include_str!("../testdata/markdown.txt"));
+}
+
+#[test]
+fn chat_template_tokens_are_counted_in_every_field() {
+    table(include_str!("../testdata/template.txt"));
+}
+
+#[test]
+fn lexicon_phrases_match_whole_normalized_words() {
+    table(include_str!("../testdata/lexicon.txt"));
+}
+
+#[test]
+fn score_counts_each_signal_and_lexicon_entry_once() {
+    table(include_str!("../testdata/scoring.txt"));
+}
