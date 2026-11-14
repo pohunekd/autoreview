@@ -1,4 +1,4 @@
-//! Notification backends: the registry by name, and Matrix messages and queue digests.
+//! Notification backends: the registry by name, delivery by type, and Matrix messages.
 //!
 //! Matrix requests are built by pure functions, so their room, transaction path and body are
 //! checked without a homeserver. Sending is one PUT.
@@ -13,11 +13,16 @@ use std::time::Duration;
 use autoreview_engine::config::{BackendKind, MatrixBackend, NotifySettings};
 use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
+use autoreview_engine::notify::Notification;
 use autoreview_policy::Level;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode, Url};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
+
+use self::webhook::{Webhook, post_webhook, webhook_body};
+
+mod webhook;
 
 /// Prefix of the transaction IDs that the engine generates for its messages.
 const TRANSACTION_PREFIX: &str = "notify-";
@@ -62,6 +67,8 @@ pub(crate) enum Backend {
     None,
     /// Posts to one Matrix room.
     Matrix(Matrix),
+    /// Posts to one incoming webhook.
+    Webhook(Webhook),
 }
 
 /// The backends of the configuration, by name.
@@ -76,6 +83,9 @@ impl Backends {
                 BackendKind::None => Backend::None,
                 BackendKind::Matrix(matrix) => {
                     Backend::Matrix(Matrix::new(matrix, max_characters, timeout))
+                }
+                BackendKind::Webhook(webhook) => {
+                    Backend::Webhook(Webhook::new(webhook, max_characters, timeout))
                 }
             };
             (backend.name.clone(), ready)
