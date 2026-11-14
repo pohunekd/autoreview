@@ -11,7 +11,9 @@
 # service user with the new binary before the binary or a unit is replaced and
 # before any restart. The secrets file is never read: only its owner and mode
 # are checked. With --root DIR every path is placed under DIR, and the steps
-# that need root (the user, ownership, validate, systemctl) are skipped.
+# that need root (the user, ownership, validate, systemctl) are skipped. DIR, and
+# the directories under it that hold the installed paths, must belong to the
+# caller or root, and neither group nor others may write to them.
 #
 # Exit codes: 1 usage, 2 a precondition (root, the binary), 3 the secrets file,
 # 4 validate, 5 a failed install step.
@@ -78,18 +80,34 @@ parse_arguments() {
 }
 
 # Refuses a symlink among the directories that hold the installed paths under
-# --root, so that no write lands outside DIR. Runs before any write.
+# --root, so that no write lands outside DIR. DIR and each of those directories
+# that exists must also be safe from other users (check_root_dir): no one else
+# can then swap a path for a symlink between this check and the writes. Runs
+# before any write.
 check_root_parents() {
     local dir prefix component
-    for dir in /etc /etc/autoreview /etc/systemd /etc/systemd/system /var /var/lib \
-        /var/lib/autoreview /usr /usr/local /usr/local/bin; do
+    check_root_dir "$root"
+    for dir in "$CONFIG_DIR" "$STATE_DIR" "${BIN%/*}" "$UNIT_DIR"; do
         prefix=$root
         for component in ${dir//\// }; do
             prefix=$prefix/$component
             [ ! -L "$prefix" ] \
                 || fail 1 "--root: $prefix is a symlink; DIR must hold real directories only"
+            [ ! -d "$prefix" ] || check_root_dir "$prefix"
         done
     done
+}
+
+# Refuses directory $1 when a user other than the caller or root owns it, or
+# when its group or others may write to it (an ACL entry shows as group write).
+check_root_dir() {
+    local owner_mode owner mode
+    owner_mode=$(stat -c '%u %a' -- "$1") || fail 1 "--root: cannot read the owner of $1"
+    owner=${owner_mode% *} mode=${owner_mode#* }
+    [ "$owner" = 0 ] || [ "$owner" = "$(id -u)" ] \
+        || fail 1 "--root: $1 is owned by another user; DIR must be yours or root's"
+    [ $((8#$mode & 8#022)) -eq 0 ] \
+        || fail 1 "--root: other users can write to $1; run chmod go-w on it"
 }
 
 # Checks that $binary is an autoreview release binary and prints its version.
