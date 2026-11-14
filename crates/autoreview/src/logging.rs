@@ -5,7 +5,7 @@
 use autoreview_engine::BoxError;
 use tracing::Level;
 
-/// Lowest level that is logged, as Go's default `slog` handler logs `INFO` and above.
+/// Lowest level that is logged: `INFO` and above.
 const LOG_LEVEL: Level = Level::INFO;
 
 /// Installs the JSON subscriber that writes every log line to stderr.

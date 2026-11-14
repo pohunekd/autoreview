@@ -53,7 +53,7 @@ const CONFIG_FLAG_WITH_VALUE: &str = "--config=";
 /// Prefix of the secrets file option written with its value, as `--env-file=PATH`.
 const ENV_FILE_FLAG_WITH_VALUE: &str = "--env-file=";
 
-/// The end-of-options marker of clap, which Go's argument reading does not know.
+/// The end-of-options marker of clap, which the command line refuses.
 const ESCAPE: &str = "--";
 
 /// Configuration key named when the configuration holds no policy.
@@ -158,7 +158,7 @@ enum EngineCommand {
     },
 }
 
-/// `--repository OWNER/REPO` and the positional arguments, read as Go reads them.
+/// `--repository OWNER/REPO` and the positional arguments, in the order given.
 #[derive(Debug, Args)]
 struct ReviewArguments {
     /// The arguments in their order; `--repository` takes the next one as its value.
@@ -238,7 +238,7 @@ async fn main() -> ExitCode {
     }
 }
 
-/// Parses the command line and refuses the `--` escape, which Go reads as an argument.
+/// Parses the command line and refuses the `--` escape, which no command takes.
 ///
 /// # Errors
 ///
@@ -274,7 +274,7 @@ fn print_display(display: &clap::Error) -> Result<(), Error> {
 /// Prints the JSON error object of `error` on stdout and logs the failure.
 fn report(error: &Error) {
     let response = error_response(error);
-    // A failed write leaves only the log line; Go ignores `fmt.Fprintln` errors.
+    // A failed write leaves only the log line; there is nowhere else to report it.
     if let Ok(text) = go_json(&response) {
         let mut stdout = io::stdout().lock();
         if writeln!(stdout, "{text}")
@@ -442,9 +442,9 @@ async fn validate(config: &Config, check: bool, cancel: &CancellationToken) -> R
 /// Runs the engine after checking the pohunek version and every credential's token with GitHub.
 ///
 /// With `metrics`, the endpoint is bound after the credential check and before the engine
-/// takes its lock, and it stops when the engine stops. A review panic ends the process, as a
-/// goroutine panic ends Go's. A signal during either check is a normal stop, as a signal while
-/// the engine runs: it logs the engine's stop line and returns `Ok`.
+/// takes its lock, and it stops when the engine stops. A review panic ends the process. A
+/// signal during either check is a normal stop, as a signal while the engine runs: it logs
+/// the engine's stop line and returns `Ok`.
 async fn serve(
     engine: &Arc<Engine<External, SystemClock>>,
     external: &External,
@@ -492,7 +492,7 @@ async fn serve(
     stopped.map_err(failed)
 }
 
-/// Cancels `cancel` on the first SIGINT or SIGTERM, as Go's `signal.NotifyContext` does.
+/// Cancels `cancel` on the first SIGINT or SIGTERM.
 ///
 /// # Errors
 ///
@@ -602,7 +602,7 @@ fn split_repository(arguments: &[String]) -> (String, Vec<&str>) {
     (repository, positional)
 }
 
-/// Parses a positive pull request number as Go's `strconv.Atoi` followed by `> 0`.
+/// Parses a positive pull request number: an optional sign and decimal digits, above 0.
 fn parse_number(text: &str) -> Option<i64> {
     text.parse::<i64>().ok().filter(|number| *number > 0)
 }
@@ -624,7 +624,9 @@ fn review_limit(limit: Option<&str>, maximum: i64) -> Result<i64, Error> {
     }
 }
 
-/// Prints `value` as Go's `json.Encoder` does: escaped as `json.Marshal`, then a newline.
+/// Prints `value` as JSON, then a newline.
+///
+/// `<`, `>`, `&`, U+2028 and U+2029 are escaped, as in every JSON output of the CLI.
 ///
 /// # Errors
 ///
@@ -655,7 +657,7 @@ fn command_invalid(cause: Option<BoxError>) -> Error {
     Error::workflow(COMMAND_INVALID, true, cause)
 }
 
-/// Wraps a failure that carries no engine code, which Go reports as `workflow_failed`.
+/// Wraps a failure that carries no engine code as `workflow_failed`.
 fn failed(cause: impl Into<BoxError>) -> Error {
     Error::workflow(WORKFLOW_FAILED, false, Some(cause.into()))
 }

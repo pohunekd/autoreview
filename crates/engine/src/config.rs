@@ -110,7 +110,7 @@ const MAX_CONCURRENT_REVIEWS_MAX: i64 = 32;
 /// Largest number of requests that one queue message lists.
 const QUEUE_MAX_ITEMS_MAX: i64 = 999;
 
-/// Largest duration that Go's `time.Duration` holds, in nanoseconds.
+/// Largest duration that a signed 64-bit count of nanoseconds holds.
 const DURATION_MAX: Duration = Duration::from_nanos(9_223_372_036_854_775_807);
 
 /// Routing override of one repository to a pohunek host and project.

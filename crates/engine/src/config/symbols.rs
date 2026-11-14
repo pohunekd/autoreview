@@ -1,8 +1,8 @@
-//! Unicode category So (other symbols), which Go's `unicode.So` lists for the AI signature rule.
+//! Unicode category So (other symbols), used by the AI signature rule.
 
 // Rust guideline compliant 2026-06-26
 
-/// Ranges of Go's `unicode.So` at Unicode 17.0.0 as (first, last, stride) triples.
+/// Ranges of Unicode category So at Unicode 17.0.0 as (first, last, stride) triples.
 const SO_RANGES: &[(u32, u32, u32)] = &[
     (0x00A6, 0x00A9, 3),
     (0x00AE, 0x00B0, 2),
@@ -182,7 +182,7 @@ const SO_RANGES: &[(u32, u32, u32)] = &[
     (0x1FBFA, 0x1FBFA, 1),
 ];
 
-/// Reports whether `symbol` is in Unicode category So, as Go's `unicode.Is(unicode.So, symbol)`.
+/// Reports whether `symbol` is in Unicode category So, using `SO_RANGES`.
 pub(crate) fn is_so(symbol: char) -> bool {
     let value = u32::from(symbol);
     SO_RANGES.iter().any(|&(first, last, stride)| {
