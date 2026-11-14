@@ -23,7 +23,7 @@ pub(crate) const APPROVAL_REQUESTED_TITLE: &str =
 /// Characters kept from the pull request title in the review header. A fixed size, not a tunable.
 const HEADER_TITLE_CHARACTERS: i64 = 200;
 
-/// Nanoseconds in one second, the unit of Go's `time.Duration`.
+/// Nanoseconds in one second.
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
 /// Nanoseconds in one hour, the unit of the handoff age.
@@ -287,7 +287,7 @@ pub(crate) fn approval_window(seconds: i64) -> String {
     }
 }
 
-/// Formats nanoseconds as Go's `time.Duration.String` does, such as `1h30m0s` or `1.5s`.
+/// Formats nanoseconds as `1h30m0s` or `1.5s`, the form that the notification text shows.
 fn go_duration(nanos: i64) -> String {
     if nanos == 0 {
         return "0s".to_owned();
@@ -302,7 +302,7 @@ fn go_duration(nanos: i64) -> String {
     if neg { format!("-{inner}") } else { inner }
 }
 
-/// Formats a non-negative duration below one second with the unit Go picks for it.
+/// Formats a non-negative duration below one second in ns, µs or ms, whichever fits.
 fn sub_second_duration(value: u64) -> String {
     if value == 0 {
         return "0s".to_owned();
@@ -456,8 +456,7 @@ pub(crate) fn handoff_age(record: &PublishedRecord, now: OffsetDateTime) -> Stri
     format!("{} h", go_hours(go_elapsed_nanos(now, record.published_at)))
 }
 
-/// Nanoseconds from `earlier` to `later`, saturated to the range of `time.Duration` as Go's
-/// `Time.Sub` saturates it.
+/// Nanoseconds from `earlier` to `later`, saturated to the `i64` range.
 pub(crate) fn go_elapsed_nanos(later: OffsetDateTime, earlier: OffsetDateTime) -> i64 {
     let diff = later.unix_timestamp_nanos() - earlier.unix_timestamp_nanos();
     if diff > i64::MAX as i128 {
@@ -469,7 +468,7 @@ pub(crate) fn go_elapsed_nanos(later: OffsetDateTime, earlier: OffsetDateTime) -
     }
 }
 
-/// Hours of a duration as Go's `Duration.Hours` computes them, truncated as Go's `int` does.
+/// Whole hours of a duration, computed as a float and truncated toward zero.
 fn go_hours(nanos: i64) -> i64 {
     let hours = nanos / NANOS_PER_HOUR;
     let rest = nanos % NANOS_PER_HOUR;

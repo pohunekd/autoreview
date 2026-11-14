@@ -61,7 +61,7 @@ impl PullRequest {
 
     /// Returns the notification and command handle of the review head.
     ///
-    /// The head SHA is cut to its first 12 characters, as Go's `%.12s` does.
+    /// The head SHA is cut to its first 12 characters.
     #[must_use]
     pub fn review_id(&self) -> String {
         let head: String = self.head_sha.chars().take(REVIEW_ID_HEAD_CHARS).collect();
@@ -120,7 +120,7 @@ pub fn repository_valid(repository: &str) -> bool {
 
 /// Reports whether a value is a full lowercase hex commit SHA.
 ///
-/// It matches Go's `^[0-9a-f]{40}$`.
+/// It matches `^[0-9a-f]{40}$`.
 #[must_use]
 pub fn sha_valid(value: &str) -> bool {
     value.len() == SHA_LEN && lower_hex(value)
