@@ -12,6 +12,7 @@ use std::time::Duration;
 use autoreview_engine::config::{WebhookBackend, WebhookFormat};
 use autoreview_engine::error::Error;
 use reqwest::header::CONTENT_TYPE;
+use reqwest::redirect::Policy;
 use reqwest::{Client, StatusCode, Url};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -50,16 +51,24 @@ pub(crate) struct Webhook {
     max_characters: i64,
     /// The timeout of one request.
     timeout: Duration,
+    /// The client of the requests, built by [`webhook_client`].
+    client: Client,
 }
 
 impl Webhook {
-    /// Creates the settings of `backend` with the message limit and the request timeout.
-    pub(crate) fn new(backend: &WebhookBackend, max_characters: i64, timeout: Duration) -> Self {
+    /// Creates the settings of `backend` with the message limit, the timeout and the client.
+    pub(crate) fn new(
+        backend: &WebhookBackend,
+        max_characters: i64,
+        timeout: Duration,
+        client: Client,
+    ) -> Self {
         Self {
             url: backend.url.clone(),
             format: backend.format,
             max_characters,
             timeout,
+            client,
         }
     }
 }
@@ -72,6 +81,7 @@ impl fmt::Debug for Webhook {
             .field("format", &self.format)
             .field("max_characters", &self.max_characters)
             .field("timeout", &self.timeout)
+            .field("client", &self.client)
             .finish_non_exhaustive()
     }
 }
@@ -186,19 +196,36 @@ fn invalid(cause: &'static str) -> Error {
     )
 }
 
-/// Posts `body` to the URL of `webhook` and maps the answer to an error code.
+/// Returns the client of every webhook request: it follows no redirect and sends no `Referer`.
+///
+/// The URL is the webhook's secret, so a redirect must not carry it, or the body, to another
+/// host. A `3xx` answer is then refused like any other non-success status.
+///
+/// # Errors
+///
+/// Returns `webhook_unavailable` when the client cannot be built.
+pub(crate) fn webhook_client(timeout: Duration) -> Result<Client, Error> {
+    Client::builder()
+        .timeout(timeout)
+        .redirect(Policy::none())
+        .referer(false)
+        .build()
+        .map_err(|error| Error::workflow(UNAVAILABLE, false, Some(Box::new(error))))
+}
+
+/// Posts `body` to the URL of `webhook` with its own client and maps the answer to an error
+/// code.
 ///
 /// The response body is not read. A transport failure keeps only a fixed cause, and a URL that
 /// does not parse has no cause, so the URL never reaches an error. A cancelled `cancel` is a
 /// transport failure: the request is not sent, or it is dropped in flight.
 pub(crate) async fn post_webhook(
-    client: &Client,
     webhook: &Webhook,
     cancel: &CancellationToken,
     body: Vec<u8>,
 ) -> Result<(), Error> {
     let url = Url::parse(&webhook.url).map_err(|_| Error::workflow(REQUEST_INVALID, true, None))?;
-    let sent = client
+    let sent = (webhook.client)
         .post(url)
         .timeout(webhook.timeout)
         .header(CONTENT_TYPE, "application/json")
@@ -237,6 +264,7 @@ mod tests {
 
     use autoreview_engine::config::{WebhookBackend, WebhookFormat};
     use autoreview_engine::error_code;
+    use reqwest::Client;
     use serde_json::{Value, json};
 
     use super::{Webhook, webhook_body};
@@ -247,7 +275,12 @@ mod tests {
             url: "https://hooks.example.org/placeholder".to_owned(),
             format,
         };
-        Webhook::new(&backend, max_characters, Duration::from_secs(30))
+        Webhook::new(
+            &backend,
+            max_characters,
+            Duration::from_secs(30),
+            Client::new(),
+        )
     }
 
     #[test]

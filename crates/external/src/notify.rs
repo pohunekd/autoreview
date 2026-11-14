@@ -20,7 +20,7 @@ use reqwest::{Client, StatusCode, Url};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
-use self::webhook::{Webhook, post_webhook, webhook_body};
+use self::webhook::{Webhook, post_webhook, webhook_body, webhook_client};
 
 mod webhook;
 
@@ -77,7 +77,18 @@ pub(crate) struct Backends(BTreeMap<String, Backend>);
 
 impl Backends {
     /// Creates the backends of `notify`; every message is bounded by the two limits.
-    pub(crate) fn new(notify: &NotifySettings, max_characters: i64, timeout: Duration) -> Self {
+    ///
+    /// Every webhook shares one client from [`webhook_client`]; Matrix uses the caller's.
+    ///
+    /// # Errors
+    ///
+    /// Returns `webhook_unavailable` when the webhook client cannot be built.
+    pub(crate) fn new(
+        notify: &NotifySettings,
+        max_characters: i64,
+        timeout: Duration,
+    ) -> Result<Self, Error> {
+        let client = webhook_client(timeout)?;
         let backends = notify.backends.iter().map(|backend| {
             let ready = match &backend.kind {
                 BackendKind::None => Backend::None,
@@ -85,12 +96,13 @@ impl Backends {
                     Backend::Matrix(Matrix::new(matrix, max_characters, timeout))
                 }
                 BackendKind::Webhook(webhook) => {
-                    Backend::Webhook(Webhook::new(webhook, max_characters, timeout))
+                    let client = client.clone();
+                    Backend::Webhook(Webhook::new(webhook, max_characters, timeout, client))
                 }
             };
             (backend.name.clone(), ready)
         });
-        Self(backends.collect())
+        Ok(Self(backends.collect()))
     }
 
     /// Returns the backend called `name`.
@@ -485,7 +497,7 @@ pub(crate) async fn deliver(
         Backend::Webhook(webhook) => {
             let event = notification.event.as_str();
             let body = webhook_body(webhook, event, Some(level_name(&level)), text)?;
-            let sent = post_webhook(client, webhook, cancel, body).await;
+            let sent = post_webhook(webhook, cancel, body).await;
             match sent {
                 Err(error) if muted => drop_webhook_if_muted(level, error),
                 sent => sent,
@@ -512,7 +524,7 @@ pub(crate) async fn deliver_queue(
         }
         Backend::Webhook(webhook) => {
             let body = webhook_body(webhook, QUEUE_EVENT, None, plain)?;
-            post_webhook(client, webhook, cancel, body).await
+            post_webhook(webhook, cancel, body).await
         }
     }
 }
@@ -647,6 +659,35 @@ mod tests {
         text
     }
 
+    // A redirect could carry the secret URL as `Referer`, or the body, to another host
+    // (review of PR 386). reqwest's client `Debug` shows a redirect policy other than its
+    // default and a set `referer` flag, so the client of a built webhook is checked without
+    // a request.
+    #[test]
+    fn webhook_requests_follow_no_redirect_and_send_no_referer() {
+        let notify = NotifySettings {
+            backends: vec![NotifyBackend {
+                name: "hook".to_owned(),
+                kind: BackendKind::Webhook(WebhookBackend {
+                    url: "https://hooks.example.org/placeholder".to_owned(),
+                    format: WebhookFormat::Json,
+                }),
+            }],
+            action: Vec::new(),
+            digest: Vec::new(),
+            log: Vec::new(),
+            events: BTreeMap::new(),
+            queue: Vec::new(),
+        };
+        let backends = Backends::new(&notify, 32_000, Duration::from_secs(30));
+        let settings = format!("{:?}", backends.expect("the backends build"));
+        assert!(
+            settings.contains(r#"redirect_policy: "Policy(None)""#),
+            "{settings}"
+        );
+        assert!(!settings.contains("referer"), "{settings}");
+    }
+
     #[tokio::test]
     async fn webhook_url_never_reaches_errors_logs_or_debug() {
         const SECRET: &str = "secret-path-marker";
@@ -662,6 +703,11 @@ mod tests {
                     WebhookFormat::Slack,
                 ),
                 webhook("broken", format!("{SECRET} is no URL"), WebhookFormat::Json),
+                webhook(
+                    "refused",
+                    format!("https://127.0.0.1:1/{SECRET}"),
+                    WebhookFormat::Discord,
+                ),
                 NotifyBackend {
                     name: "quiet".to_owned(),
                     kind: BackendKind::None,
@@ -674,6 +720,7 @@ mod tests {
             queue: Vec::new(),
         };
         let backends = Backends::new(&notify, 32_000, Duration::from_secs(30));
+        let backends = backends.expect("the backends build");
         let captured = Captured::default();
         let subscriber = tracing_subscriber::fmt()
             .json()
@@ -709,6 +756,19 @@ mod tests {
         let queue = queue.await.expect_err("the queue post fails");
         codes.push(error_code(&queue).to_owned());
         texts.push(chain(&queue));
+        // A live token reaches the transport: port 1 on the host refuses the connection, so the
+        // request fails in reqwest without leaving the host.
+        let refused = backends.get("refused").expect("the refused backend");
+        let notification = Notification {
+            event: Event::Approved,
+            level: Level::Action,
+            text: "Approved".to_owned(),
+        };
+        let live = CancellationToken::new();
+        let sent = deliver(&client, "refused", refused, &live, &notification, true).await;
+        let sent = sent.expect_err("the connection is refused");
+        codes.push(error_code(&sent).to_owned());
+        texts.push(chain(&sent));
         let logs = captured
             .0
             .lock()
@@ -720,6 +780,7 @@ mod tests {
             [
                 "webhook_unavailable",
                 "webhook_request_invalid",
+                "webhook_unavailable",
                 "webhook_unavailable"
             ]
         );

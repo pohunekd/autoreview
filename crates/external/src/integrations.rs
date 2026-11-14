@@ -57,7 +57,8 @@ impl External {
     /// # Errors
     ///
     /// Returns `configuration_invalid` for `policy_file` when the configuration holds no
-    /// policy, and `matrix_unavailable` when the HTTP client cannot be built.
+    /// policy, `matrix_unavailable` when the HTTP client cannot be built, and
+    /// `webhook_unavailable` when the webhook client cannot be built.
     pub fn new(mut config: Config) -> Result<Self, Error> {
         let policy = config.policy.take().ok_or_else(|| {
             Error::config(
@@ -75,7 +76,7 @@ impl External {
             &config.notify,
             config.matrix_max_characters,
             config.matrix_timeout,
-        );
+        )?;
         Ok(Self {
             config,
             policy,
