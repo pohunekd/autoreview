@@ -49,6 +49,38 @@ reviewed head SHA. A report without `prior_findings`, or with a finding without
 `blocking`, comes from an older adapter and is refused with
 `review_adapter_outdated`, without a fresh session.
 
+### Wire names
+
+Between the engine and an adapter the protocols are named `autoreview-claude/v1`
+and `autoreview-codex/v1`. Each adapter answers in the name of the request it
+got, and the engine reads the legacy names too, so an engine and the adapters on
+a review host may come from different releases: neither an engine update nor a
+rollback needs `autoreview profiles install`. A later release removes the legacy
+names.
+
+- `autoreview-claude/v1` is the `protocol` field of the request and of the
+  result line. The adapter accepts a request of that name or of the legacy name
+  `claude-otel-noninteractive/request-v1`, and answers in `autoreview-claude/v1`
+  or in the legacy result name `claude-otel-noninteractive/v2`; a plain prompt
+  gets the legacy name. The engine reads a result line of either name with the
+  same checks. It sends its requests under the legacy name until every review
+  host runs an adapter that reads the new one, because an older adapter runs a
+  request of another name as a plain prompt.
+- `autoreview-codex/v1` is named in the trusted line
+  `- Trusted protocol: autoreview-codex/v1` of the request. The adapter then
+  writes `[autoreview-codex/v1 result:<base64>]`,
+  `[autoreview-codex/v1 reason:<base64>]`,
+  `[autoreview-codex/v1 refused:head_unavailable]` and
+  `[autoreview-codex/v1 exited with status N]`. A request without the line, from
+  an older engine, gets the legacy markers
+  `[pohunek-codex-review-result-v1:<base64>]`,
+  `[pohunek-codex-review-reason-v1:<base64>]`,
+  `[pohunek-codex-review-refused-v1:head_unavailable]` and
+  `[pohunek-codex-review exited with status N]`, which an older adapter always
+  writes. A second protocol line or another name stops the run with status 64
+  and the legacy exit line. The engine reads either set of markers, never a mix
+  of both in one output.
+
 ## What the adapter enforces
 
 Each protocol has an adapter: the wrapper that starts the run and turns its
@@ -140,8 +172,9 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   without a `refusal` whose exit code is not 0 as `review_wrapper_invalid` and
   logs the end of its stderr with it, when it has one (see
   [troubleshooting](../runbooks/troubleshooting.md#claude-code-failed)). A line
-  without a `refusal` whose protocol is `claude-otel-noninteractive/v2` and
-  whose `checked_checkout` is not the pipeline's checkout is
+  without a `refusal` whose protocol is `autoreview-claude/v1` or
+  `claude-otel-noninteractive/v2` and whose `checked_checkout` is not the
+  pipeline's checkout is
   `review_adapter_outdated` instead, whatever its exit code.
   Before and after the run it checks the review checkout against the trusted
   lines of the request (`- Trusted head SHA:`, `- Trusted base SHA:`,
@@ -211,9 +244,8 @@ executable. It runs the executable with the environment of a review run,
 without the variables listed above.
 
 The tests of the adapter are in `adapters/claude/tests` and run with
-`scripts/gates adapters`. They use fake executables only. The adapter keeps the
-result protocol name `claude-otel-noninteractive/v2`, which the engine reads; the
-rename is planned in #24.
+`scripts/gates adapters`. They use fake executables only. The protocol names
+are in [wire names](#wire-names).
 
 ### The Codex adapter
 
@@ -258,16 +290,18 @@ Python standard library (Python 3.11 or newer). It has two parts:
   `--ephemeral` and an output schema. It checks the report (status `completed`,
   the reviewed head, a blocking flag on every finding, well-formed prior
   findings, the result limit) and prints it as one frame,
-  `[pohunek-codex-review-result-v1:<base64>]`, followed by the line
-  `[pohunek-codex-review exited with status N]`. The Codex run gets the session
-  environment without the variables that the Claude adapter drops (see above).
+  `[autoreview-codex/v1 result:<base64>]`, followed by the line
+  `[autoreview-codex/v1 exited with status N]` (the legacy markers for a request
+  without the protocol line, see [wire names](#wire-names)). The Codex run gets
+  the session environment without the variables that the Claude adapter drops
+  (see above).
   The adapter then stays alive for the retention time, so that the coordinator
   can read the output before it removes the session. It exits with the status of
   Codex, or with status 64 when the request's trusted lines, the checkout check
   before or after the run, or the report fail. Codex's stderr goes on to the
   session output as it arrives; the adapter keeps its last 64 KiB. When Codex
   exits with a status other than 0, the line
-  `[pohunek-codex-review-reason-v1:<base64>]` comes right before the exit line,
+  `[autoreview-codex/v1 reason:<base64>]` comes right before the exit line,
   with the reason that the engine logs next to `review_result_invalid` (see
   [troubleshooting](../runbooks/troubleshooting.md#codex-program-failed)). A
   refusal after the run prints the same line with its own message,
@@ -281,7 +315,7 @@ Python standard library (Python 3.11 or newer). It has two parts:
   `review_result_invalid` (see
   [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)).
   When the head commit is not in the repository, the line
-  `[pohunek-codex-review-refused-v1:head_unavailable]` comes right before the
+  `[autoreview-codex/v1 refused:head_unavailable]` comes right before the
   exit line, and the engine stops the review with `review_head_unavailable`
   without a fresh session.
   An invalid argument, Codex path file or input frame stops the adapter before
@@ -337,9 +371,8 @@ the version line of that executable. It runs the executable with the environment
 of a review run, without the variables that the Claude adapter drops.
 
 The tests of the adapter are in `adapters/codex/tests` and run with
-`scripts/gates adapters`. They use fake executables only. The adapter keeps the
-frame and exit line texts above, which the engine reads; the rename is planned
-in #24.
+`scripts/gates adapters`. They use fake executables only. The marker names are
+in [wire names](#wire-names).
 
 The `agent_profile` key of a reviewer names the profile that its sessions start
 with. The profile must exist on every review host that runs the reviewer.

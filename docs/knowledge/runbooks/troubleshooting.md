@@ -211,7 +211,7 @@ request. See [the Codex adapter](../concepts/reviewers-and-adapters.md#the-codex
 
 A Codex review keeps failing with `review_result_invalid`, and the session
 output holds a `codex-adapter: ...` line and ends with
-`[pohunek-codex-review exited with status 64]` without a result frame. A
+`[autoreview-codex/v1 exited with status 64]` without a result frame. A
 refusal after the Codex run also puts that message on the reason line right
 before the exit line (see [Codex program failed](#codex-program-failed)), so
 the engine logs it. The engine reads that output at once, starts a fresh
@@ -242,8 +242,8 @@ writes the message, so no `autoreview profiles install` is needed for it.
 ### Codex program failed
 
 A Codex review keeps failing with `review_result_invalid`, and the session
-output ends with the lines `[pohunek-codex-review-reason-v1:<base64>]` and
-`[pohunek-codex-review exited with status N]`, N not 0, without a result frame:
+output ends with the lines `[autoreview-codex/v1 reason:<base64>]` and
+`[autoreview-codex/v1 exited with status N]`, N not 0, without a result frame:
 Codex itself failed, for example on a model that the account does not support
 or on an argument that its version does not know. The adapter prints the reason
 line whenever Codex exits with a status other than 0. Its reason is the last
@@ -302,7 +302,7 @@ so the head of a fork pull request, or of a branch pushed after the project
 repository last fetched, is missing. The adapter refuses the run before the
 reviewer starts: the Claude adapter with a result line whose `refusal` is
 `head_unavailable`, the Codex adapter with the line
-`[pohunek-codex-review-refused-v1:head_unavailable]` right before its exit
+`[autoreview-codex/v1 refused:head_unavailable]` right before its exit
 line. Neither a fresh session nor the scheduler tries again, because the next
 run would find the same repository. Fetch the head on the review host, then
 retry the pull request:
@@ -430,7 +430,7 @@ list):
   without a fresh session.
 - `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
   finding without `blocking`, or a Claude result line of protocol
-  `claude-otel-noninteractive/v2` without a `refusal` has no `checked_checkout`
+  `autoreview-claude/v1` (or legacy) without a `refusal` has no `checked_checkout`
   or names another checkout than the pipeline's. It comes from an adapter older
   than the one in `adapters/codex/` or `adapters/claude/`, so the review stops
   without a fresh session. Write the profile with `autoreview profiles install`
