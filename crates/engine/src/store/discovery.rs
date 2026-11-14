@@ -24,8 +24,9 @@ pub const STATE_REJECTED: &str = "rejected";
 
 /// Key prefix of an announced host outage in the `rejected` entry.
 ///
-/// The outages share the `rejected` map; no `owner/name#N` key starts with this prefix,
-/// because an owner has no `:`.
+/// The outages share the `rejected` entry: an unknown entry name is refused with
+/// `store_state_invalid`, so a new entry would not open on an earlier release.
+/// No `owner/name#N` key starts with this prefix, because an owner has no `:`.
 const HOST_OUTAGE_PREFIX: &str = "host:";
 
 /// Key prefix of a pull request that the last pass skipped, in the `rejected` entry.

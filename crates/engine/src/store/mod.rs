@@ -37,7 +37,7 @@ pub use steps::{ReviewStep, StepOutcome, StepRun};
 /// Schema version stored in `PRAGMA user_version`; a newer database is refused.
 const STORE_SCHEMA_VERSION: i64 = 1;
 
-/// Busy timeout of every connection, the `busy_timeout` of the Go DSN.
+/// Busy timeout of every connection, set with `busy_timeout`.
 const BUSY_TIMEOUT: Duration = Duration::from_millis(10_000);
 
 /// Mode of the database directory when `open` creates it.
@@ -104,7 +104,7 @@ const STORE_SCHEMA: &str = concat!(
 /// Writers serialize on the one connection. The discovery state also needs the discovery
 /// lock, because a poll reads it before slow GitHub calls and writes it afterwards.
 pub struct Store {
-    /// The one connection; its lock keeps transactions sequential, as Go's one pool connection.
+    /// The one connection; its lock keeps transactions sequential.
     connection: Mutex<Connection>,
     /// The discovery lock file, `<database path>.discovery.lock`.
     lock_path: PathBuf,
@@ -156,9 +156,9 @@ impl Store {
         Ok(store)
     }
 
-    /// Opens one connection with the pragmas of the Go DSN, in the Go order.
+    /// Opens one connection and applies its pragmas in a fixed order.
     ///
-    /// Read-only connections skip `journal_mode`, as the Go read-only DSN does. The flags
+    /// Read-only connections skip `journal_mode`, which writes to the file. The flags
     /// leave out `SQLITE_OPEN_URI`, so the path is a plain file path.
     fn open_connection(path: &Path, read_only: bool) -> Result<Connection, Error> {
         let flags = if read_only {
@@ -204,7 +204,7 @@ impl Store {
 
     /// Creates the schema and stamps the version, after refusing a newer database.
     ///
-    /// The step runs table is added without a new version, so the Go store still opens the file.
+    /// Adds the step runs table without a new version, so earlier releases still open the file.
     fn migrate(&self) -> Result<(), Error> {
         let connection = self.lock_connection()?;
         let version: i64 = connection
@@ -229,7 +229,7 @@ impl Store {
         Ok(())
     }
 
-    /// Returns the current time as RFC 3339 text with nanoseconds, in UTC, as Go writes it.
+    /// Returns the current time as RFC 3339 text with nanoseconds, in UTC, the stored form.
     pub fn timestamp(&self) -> String {
         format_rfc3339_nano((self.now)())
     }
@@ -362,7 +362,7 @@ fn store_error(code: &str, permanent: bool, cause: impl Into<BoxError>) -> Error
     Error::workflow(code, permanent, Some(cause.into()))
 }
 
-/// Encodes `value` as Go's `encoding/json` does, which escapes `<`, `>`, `&` and the two line
+/// Encodes `value` as JSON that escapes `<`, `>`, `&` and the two line
 /// separators, so the stored text is byte-identical to the existing rows.
 fn encode_go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let text = serde_json::to_string(value)?;
