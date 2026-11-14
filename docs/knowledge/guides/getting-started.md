@@ -9,10 +9,10 @@ intents: [setup, help]
 
 # Getting started
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0 and `scripts/setup`. The
-> script installs the autoreview release named by `AUTOREVIEW_VERSION` in the
-> script, which must know the `init` layout flags (after 0.2.0); parts marked
-> planned are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release and `scripts/setup`. The script installs the autoreview release
+> named by `AUTOREVIEW_VERSION` in the script, which must know the `init` layout
+> flags (0.3.0 or later). A part that is not available names its open issue.
 
 ## What autoreview does
 

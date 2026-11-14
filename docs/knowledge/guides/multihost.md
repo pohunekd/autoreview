@@ -9,8 +9,8 @@ intents: [setup, project, debug]
 
 # Several review hosts
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 One autoreview service can run its reviewers on several pohunek hosts. Each
 review starts a pohunek session on one host, so the host that runs a review
@@ -21,7 +21,7 @@ repository to a host by hand.
 A single host needs none of this: list it in `pohunek.hosts`, register each
 repository there, and skip the rest of the guide.
 [Getting started](getting-started.md) sets up such a machine with
-`scripts/setup` (after 0.2.0).
+`scripts/setup`.
 
 ## Deployment layout
 
@@ -37,7 +37,7 @@ review host by its pohunek name over an overlay network (see
 [below](#reach-a-remote-host-over-an-overlay-network)), and `pohunek.hosts`
 lists those names. autoreview itself opens no connection to a review host.
 
-`scripts/setup` (after 0.2.0) sets up one machine with both roles. On several machines its
+`scripts/setup` sets up one machine with both roles. On several machines its
 steps split like this:
 
 | Step of `scripts/setup` | Autoreview server | Review host |

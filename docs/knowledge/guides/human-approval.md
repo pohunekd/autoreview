@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Human approval
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 The reviewers do the reading; a person makes the decision. Two Claude reviewers
 review the core repository, a verifier re-checks blocking findings, and a clean
@@ -186,9 +186,9 @@ autoreview retry --repository zajca/pohunek 42 3f2a9c1d0b7e
 - **Notes to the author first.** Add `on_notes: comment` and
   `notes_handoff.reminder_hours`, as in [notes hand-off](notes-handoff.md). It
   requires `on_clean: await` and `review-requested`, which this rule already has.
-- **Approve from chat.** A chat integration that runs the same `resolve` and
-  `approve` commands is planned in #43; see
-  [approve from chat with Hermes](hermes-approval.md).
+- **Approve from chat.** A chat agent that is an MCP client with the `write`
+  scope calls the `resolve` and `approve` tools of `autoreview mcp`; see
+  [approve from chat](hermes-approval.md).
 
 ## Combine with
 
