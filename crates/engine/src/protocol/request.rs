@@ -298,9 +298,9 @@ pub(crate) fn request_invalid(cause: serde_json::Error) -> Error {
 
 /// Encodes `value` as JSON for the CLI and the reviewer requests.
 ///
-/// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029, the escaping of
-/// every JSON text the CLI prints or writes (command output, reviewer requests, the values
-/// `init` writes).
+/// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029. This escaping
+/// applies to the command output on stdout, the reviewer requests and the values `init`
+/// writes; the JSON log lines and the profile TOML values do not use it.
 pub fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let raw = serde_json::to_string(value)?;
     let mut output = String::with_capacity(raw.len());

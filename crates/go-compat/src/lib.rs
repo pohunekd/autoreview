@@ -20,7 +20,7 @@ pub enum Error {
         source: time::error::Parse,
     },
     /// The year is outside the range that the stored time JSON form accepts.
-    #[error("year {year} is outside 0..=9999, which Go's time JSON encoding rejects")]
+    #[error("year {year} is outside 0..=9999, the years the stored time JSON form holds")]
     YearOutOfRange {
         /// The UTC year that was rejected.
         year: i32,
