@@ -476,6 +476,19 @@ def trusted_base_sha(prompt: str) -> str:
     return matches[0]
 
 
+def result_markers(prompt: str) -> Markers:
+    """Returns the markers of the protocol that the trusted protocol line names.
+
+    A prompt without the line comes from an older engine, which reads only the legacy markers.
+    """
+    matches = TRUSTED_PROTOCOL_PATTERN.findall(prompt)
+    if not matches:
+        return LEGACY_MARKERS
+    if matches != [PROTOCOL]:
+        raise InputFrameError("trusted protocol is ambiguous or unknown")
+    return MARKERS
+
+
 def trusted_checkout(prompt: str) -> str:
     """Returns the checkout the engine started the worktree from, `base` or `head`."""
     matches = TRUSTED_CHECKOUT_PATTERN.findall(prompt)
@@ -691,9 +704,13 @@ def main() -> NoReturn:
         termios.tcsetattr(descriptor, termios.TCSANOW, original_attributes)
 
     try:
+        markers = result_markers(prompt)
+    except InputFrameError as error:
+        refuse(error, maximum_retention_seconds, after_run=False, markers=LEGACY_MARKERS)
+    try:
         expected_head_sha, checkout_sha = verify_review_checkout(prompt)
     except InputFrameError as error:
-        refuse(error, maximum_retention_seconds, after_run=False)
+        refuse(error, maximum_retention_seconds, after_run=False, markers=markers)
 
     with tempfile.TemporaryDirectory(prefix="codex-adapter-") as directory:
         temporary_directory = Path(directory)
@@ -717,14 +734,16 @@ def main() -> NoReturn:
             codex_environment(dict(os.environ)),
         )
         if status != 0:
-            exit_after_retention(status, maximum_retention_seconds, reason_marker(stderr_tail))
+            exit_after_retention(
+                status, maximum_retention_seconds, markers, reason_marker(stderr_tail, markers)
+            )
         try:
             verify_review_checkout_after_run(prompt, checkout_sha)
             result = encoded_result(result_path, maximum_result_bytes, expected_head_sha)
         except InputFrameError as error:
-            refuse(error, maximum_retention_seconds, after_run=True)
-        print(f"\n{RESULT_MARKER_PREFIX}{result}]", flush=True)
-        exit_after_retention(0, maximum_retention_seconds)
+            refuse(error, maximum_retention_seconds, after_run=True, markers=markers)
+        print(f"\n{markers.result_prefix}{result}]", flush=True)
+        exit_after_retention(0, maximum_retention_seconds, markers)
 
 
 if __name__ == "__main__":

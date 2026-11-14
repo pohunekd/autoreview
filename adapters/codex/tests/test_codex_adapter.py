@@ -169,30 +169,40 @@ class WrapperTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(wrapper.exit_reason(stderr), reason)
         self.assertEqual(
-            wrapper.reason_marker(b"ERROR: x\n"),
+            wrapper.reason_marker(b"ERROR: x\n", wrapper.LEGACY_MARKERS),
             "[pohunek-codex-review-reason-v1:RVJST1I6IHg=]",
         )
-        self.assertEqual(wrapper.reason_marker(b""), "[pohunek-codex-review-reason-v1:]")
+        self.assertEqual(
+            wrapper.reason_marker(b"ERROR: x\n", wrapper.MARKERS),
+            "[autoreview-codex/v1 reason:RVJST1I6IHg=]",
+        )
+        self.assertEqual(
+            wrapper.reason_marker(b"", wrapper.LEGACY_MARKERS), "[pohunek-codex-review-reason-v1:]"
+        )
 
     def test_refusal_after_the_run_names_its_message_on_a_reason_line(self) -> None:
         missing = wrapper.HeadUnavailableError("head is unavailable")
         unread = wrapper.InputFrameError("Codex did not produce a review result")
-        head_marker = "[pohunek-codex-review-refused-v1:head_unavailable]"
         reason = base64.b64encode(
             b"codex-adapter: Codex did not produce a review result"
         ).decode("ascii")
         missing_reason = base64.b64encode(b"codex-adapter: head is unavailable").decode("ascii")
-        cases = (
-            ("refusal before the run", unread, False, ""),
-            ("missing head before the run", missing, False, head_marker),
-            ("refusal after the run", unread, True,
-             f"[pohunek-codex-review-reason-v1:{reason}]"),
-            ("missing head after the run", missing, True,
-             f"[pohunek-codex-review-reason-v1:{missing_reason}]\n{head_marker}"),
-        )
-        for name, error, after_run, marker in cases:
-            with self.subTest(name=name):
-                self.assertEqual(wrapper.refusal_marker(error, after_run), marker)
+        for markers, head_marker, reason_prefix in (
+            (wrapper.LEGACY_MARKERS, "[pohunek-codex-review-refused-v1:head_unavailable]",
+             "[pohunek-codex-review-reason-v1:"),
+            (wrapper.MARKERS, "[autoreview-codex/v1 refused:head_unavailable]",
+             "[autoreview-codex/v1 reason:"),
+        ):
+            cases = (
+                ("refusal before the run", unread, False, ""),
+                ("missing head before the run", missing, False, head_marker),
+                ("refusal after the run", unread, True, f"{reason_prefix}{reason}]"),
+                ("missing head after the run", missing, True,
+                 f"{reason_prefix}{missing_reason}]\n{head_marker}"),
+            )
+            for name, error, after_run, marker in cases:
+                with self.subTest(name=name, markers=head_marker):
+                    self.assertEqual(wrapper.refusal_marker(error, after_run, markers), marker)
 
     def write_result(self, directory: str, value: object) -> Path:
         result = Path(directory) / "result.json"
@@ -295,6 +305,27 @@ class WrapperTests(unittest.TestCase):
             with self.subTest(prompt=prompt):
                 with self.assertRaisesRegex(wrapper.InputFrameError, "ambiguous or invalid"):
                     wrapper.trusted_checkout(prompt)
+
+    def test_trusted_protocol_line_selects_the_markers(self) -> None:
+        # A prompt of an older engine has no protocol line and gets the legacy markers (#24).
+        self.assertEqual(
+            wrapper.result_markers("- Trusted checkout: base").result_prefix,
+            "[pohunek-codex-review-result-v1:",
+        )
+        self.assertEqual(
+            wrapper.result_markers("- Trusted protocol: autoreview-codex/v1").result_prefix,
+            "[autoreview-codex/v1 result:",
+        )
+        for prompt in (
+            "- Trusted protocol: autoreview-codex/v1\n- Trusted protocol: autoreview-codex/v1",
+            "- Trusted protocol: autoreview-codex/v2",
+            "- Trusted protocol: autoreview-claude/v1",
+            "- Trusted protocol: autoreview-codex/v1 ",
+            "- Trusted protocol: ",
+        ):
+            with self.subTest(prompt=prompt):
+                with self.assertRaisesRegex(wrapper.InputFrameError, "ambiguous or unknown"):
+                    wrapper.result_markers(prompt)
 
     def test_checkout_head_must_match_trusted_pull_request_head(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
