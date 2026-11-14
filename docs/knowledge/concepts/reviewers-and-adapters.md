@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Reviewers and adapters
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 A **reviewer** is one coding agent run in its own pohunek session. The agent
 reads the pull request in a worktree, writes findings, and returns them in a
@@ -56,7 +56,7 @@ and `autoreview-codex/v1`. Each adapter answers in the name of the request it
 got, and the engine reads the legacy names too, so an engine and the adapters on
 a review host may come from different releases: neither an engine update nor a
 rollback needs `autoreview profiles install`. A later release removes the legacy
-names.
+names (#393).
 
 - `autoreview-claude/v1` is the `protocol` field of the request and of the
   result line. The adapter accepts a request of that name or of the legacy name
@@ -64,8 +64,8 @@ names.
   or in the legacy result name `claude-otel-noninteractive/v2`; a plain prompt
   gets the legacy name. The engine reads a result line of either name with the
   same checks. It sends its requests under the legacy name until every review
-  host runs an adapter that reads the new one, because an older adapter runs a
-  request of another name as a plain prompt.
+  host runs an adapter that reads the new one (#392), because an older adapter
+  runs a request of another name as a plain prompt.
 - `autoreview-codex/v1` is named in the trusted line
   `- Trusted protocol: autoreview-codex/v1` of the request. The adapter then
   writes `[autoreview-codex/v1 result:<base64>]`,
@@ -461,7 +461,7 @@ remain:
 
 ## Adding another agent later
 
-Not in v0.1. autoreview 0.2.0 ships exactly two protocols, and the policy
+autoreview ships exactly two protocols, and the policy
 validator accepts only those two names. A new agent would need a new protocol,
 and the design below is the outline that such a protocol would have to meet.
 
@@ -488,7 +488,7 @@ and the design below is the outline that such a protocol would have to meet.
    checked for it.
 
 The notifier design follows the same idea of a registry, see
-[notifications](notifications.md#adding-a-backend-design).
+[notifications](notifications.md#adding-a-backend).
 
 ## Related pages
 
