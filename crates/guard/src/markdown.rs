@@ -220,3 +220,103 @@ struct Pass<'a> {
     /// The last search of each `Find` class.
     cache: [Option<Cached>; FIND_CLASSES],
 }
+
+impl Pass<'_> {
+    /// Returns the first offset at or after `from` that matches `class`.
+    ///
+    /// A search that starts between an earlier start and its result has the same result, so
+    /// the pass, whose offsets only grow, reads each byte a bounded number of times.
+    fn find(&mut self, class: Find, from: usize) -> Option<usize> {
+        let slot = self.cache.get_mut(class as usize)?;
+        if let Some(last) = *slot
+            && last.from <= from
+            && last.found.is_none_or(|found| found >= from)
+        {
+            return last.found;
+        }
+        let bytes = self.bytes;
+        let found = (from..bytes.len()).find(|&at| {
+            let byte = bytes.get(at).copied().unwrap_or_default();
+            let escaped = at > 0 && bytes.get(at.saturating_sub(1)) == Some(&b'\\');
+            match class {
+                Find::TagEnd => byte == b'>',
+                Find::Bracket => byte == b']' && !escaped,
+                Find::Quote => byte == b'"' && !escaped,
+                Find::Apostrophe => byte == b'\'' && !escaped,
+                Find::Paren => byte == b')' && !escaped,
+                Find::Space => byte.is_ascii_whitespace(),
+                Find::NonSpace => !byte.is_ascii_whitespace(),
+            }
+        });
+        *slot = Some(Cached { from, found });
+        found
+    }
+
+    /// Returns the text between two offsets of the pass.
+    fn slice(&self, start: usize, end: usize) -> &str {
+        self.text.get(start..end).unwrap_or_default()
+    }
+
+    /// Reports whether the text at `at` starts with `prefix`, ignoring ASCII case.
+    fn starts_with(&self, at: usize, prefix: &str) -> bool {
+        self.bytes
+            .get(at..at.saturating_add(prefix.len()))
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+    }
+
+    /// Reports whether the tag name `name` starts at `at`.
+    fn tag_named(&self, at: usize, name: &str) -> bool {
+        self.starts_with(at, name)
+            && self
+                .bytes
+                .get(at.saturating_add(name.len()))
+                .is_none_or(|byte| byte.is_ascii_whitespace() || matches!(byte, b'>' | b'/'))
+    }
+
+    /// Returns the content range and the end of the comment at `at`.
+    fn comment(&self, at: usize) -> (usize, usize, usize) {
+        let open = at.saturating_add(4);
+        if self.starts_with(open, ">") {
+            return (open, open, open.saturating_add(1));
+        }
+        if self.starts_with(open, "->") {
+            return (open, open, open.saturating_add(2));
+        }
+        match self.slice(open, self.bytes.len()).find("-->") {
+            Some(close) => {
+                let close = open.saturating_add(close);
+                (open, close, close.saturating_add(3))
+            }
+            None => (open, self.bytes.len(), self.bytes.len()),
+        }
+    }
+
+    /// Returns the offset after the closing tag of the element `name`.
+    ///
+    /// Its content starts at `from`. Nested elements of the same name count, comments are
+    /// skipped, and an element that is never closed runs to the end of the text.
+    fn element_end(&self, from: usize, name: &str) -> usize {
+        let len = self.bytes.len();
+        let mut depth = 1_usize;
+        let mut at = from;
+        while let Some(found) = self.slice(at, len).find('<') {
+            at = at.saturating_add(found);
+            if self.starts_with(at, "<!--") {
+                at = self.comment(at).2;
+            } else if self.starts_with(at, "</") && self.tag_named(at.saturating_add(2), name) {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    let gt = self.slice(at, len).find('>');
+                    return gt.map_or(len, |gt| at.saturating_add(gt).saturating_add(1));
+                }
+                at = at.saturating_add(2);
+            } else {
+                if self.tag_named(at.saturating_add(1), name) {
+                    depth = depth.saturating_add(1);
+                }
+                at = at.saturating_add(1);
+            }
+        }
+        len
+    }
+}
