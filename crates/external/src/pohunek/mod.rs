@@ -331,7 +331,7 @@ fn has_case_variant_key(value: &Value) -> bool {
     }
 }
 
-/// Reports whether `key` is not a known field name but equals one under Go's case folding.
+/// Reports whether `key` is not a known field name but equals one under case folding.
 fn is_case_variant(key: &str) -> bool {
     if KNOWN_KEYS.contains(&key) {
         return false;
@@ -339,14 +339,14 @@ fn is_case_variant(key: &str) -> bool {
     KNOWN_KEYS.iter().any(|known| folds_to(known, key))
 }
 
-/// Reports whether `key` folds to the lower-case `known` name as Go's `encoding/json` folds it.
+/// Reports whether `key` folds to the lower-case `known` name.
 ///
 /// The Kelvin sign folds to `k` and the long s to `s`; every other non-ASCII character is kept.
 fn folds_to(known: &str, key: &str) -> bool {
     known.chars().eq(key.chars().map(fold_character))
 }
 
-/// Maps a key character to the lower-case ASCII letter that Go's case folding equates it with.
+/// Maps a key character to the lower-case ASCII letter it folds to, or to itself.
 fn fold_character(character: char) -> char {
     match character {
         '\u{212A}' => 'k',
@@ -526,7 +526,7 @@ pub(crate) fn canonical_repository(host: &str, raw: &str) -> String {
     }
 }
 
-/// Returns the decoded hostname and path of `raw` when Go's `url.Parse` accepts it and the
+/// Returns the decoded hostname and path of `raw` when it parses as a URL and the
 /// canonical check reads nothing but those two.
 ///
 /// It refuses, as the canonical check does, a fragment, a query, userinfo and an IP literal.
@@ -583,7 +583,7 @@ fn parse_url(raw: &str) -> Option<(String, String)> {
     Some((hostname, String::from_utf8_lossy(&path).into_owned()))
 }
 
-/// Splits the scheme off `raw` as Go's `getScheme` does, lowercasing it.
+/// Splits the scheme off `raw` and lowercases it.
 ///
 /// `None` is an error, which is a scheme that starts with a colon.
 fn get_scheme(raw: &str) -> Option<(String, &str)> {
@@ -610,7 +610,7 @@ fn get_scheme(raw: &str) -> Option<(String, &str)> {
     Some((String::new(), raw))
 }
 
-/// Returns the decoded host of `authority`, or `None` when it has userinfo or Go refuses it.
+/// Returns the decoded host of `authority`, or `None` when it has userinfo or its host is refused.
 fn parse_authority(scheme: &str, authority: &str) -> Option<String> {
     if authority.contains('@') {
         return None;
@@ -618,7 +618,7 @@ fn parse_authority(scheme: &str, authority: &str) -> Option<String> {
     parse_host(scheme, authority)
 }
 
-/// Returns the decoded host of `host`, checking its port as Go's `parseHost` does.
+/// Returns the decoded host of `host`, checking its port.
 ///
 /// A host with `[` is refused: an IP literal never equals the GitHub host, which has no colon.
 fn parse_host(scheme: &str, host: &str) -> Option<String> {
@@ -645,7 +645,7 @@ fn parse_host(scheme: &str, host: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&decoded).into_owned())
 }
 
-/// Returns the hostname of a decoded host: the host without a valid port, as Go's `Hostname`.
+/// Returns the hostname of a decoded host: the host without a valid port.
 fn go_hostname(host: &str) -> String {
     if let Some(colon) = host.rfind(':') {
         let port = host.split_at(colon).1;
@@ -657,8 +657,7 @@ fn go_hostname(host: &str) -> String {
     host.to_owned()
 }
 
-/// Reports whether `port` is empty or a colon followed by decimal digits, as Go's
-/// `validOptionalPort`.
+/// Reports whether `port` is empty or a colon followed by decimal digits.
 fn valid_optional_port(port: &str) -> bool {
     if port.is_empty() {
         return true;
@@ -683,7 +682,7 @@ enum Mode {
     Path,
 }
 
-/// Decodes the percent escapes of `text` as Go's `unescape` does for `mode`.
+/// Decodes the percent escapes of `text` for `mode`.
 ///
 /// `None` is an error: a malformed escape, or in host mode an escape of an ASCII byte or an ASCII
 /// byte that a host may not hold.
@@ -726,7 +725,7 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-/// Reports whether an ASCII byte may appear unescaped in a host, as Go's host table allows.
+/// Reports whether an ASCII byte may appear unescaped in a host.
 fn is_host_byte(byte: u8) -> bool {
     if byte.is_ascii_alphanumeric() {
         return true;
@@ -756,7 +755,7 @@ fn is_host_byte(byte: u8) -> bool {
     )
 }
 
-/// Lowercases `text` as Go's `strings.ToLower` does: U+0130 becomes `i`.
+/// Lowercases `text` character by character; U+0130 becomes a plain `i`.
 fn go_lowercase(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for character in text.chars() {
@@ -777,7 +776,7 @@ fn go_lowercase(text: &str) -> String {
     out
 }
 
-/// Reports whether `text` matches Go's `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
+/// Reports whether `text` matches `^[A-Za-z0-9][A-Za-z0-9._-]*$`.
 pub(crate) fn is_identifier(text: &str) -> bool {
     let bytes = text.as_bytes();
     let Some((first, rest)) = bytes.split_first() else {
@@ -795,7 +794,7 @@ pub(crate) fn is_identifier(text: &str) -> bool {
     true
 }
 
-/// Reports whether `text` matches Go's `^[a-z][a-z0-9_]{0,63}$`.
+/// Reports whether `text` matches `^[a-z][a-z0-9_]{0,63}$`.
 fn is_error_code(text: &str) -> bool {
     let bytes = text.as_bytes();
     if bytes.len() > 64 {
