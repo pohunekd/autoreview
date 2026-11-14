@@ -257,8 +257,8 @@ pub(crate) mod fixtures {
             "prior_findings": []
         });
         let encoded = STANDARD.encode(report.to_string().as_bytes());
-        let header = "[pohunek-codex-review-result-v1:";
-        let footer = format!("[pohunek-codex-review exited with status {status}]");
+        let header = "[autoreview-codex/v1 result:";
+        let footer = format!("[autoreview-codex/v1 exited with status {status}]");
         format!("{header}{encoded}]\n{footer}\n")
     }
 
@@ -279,8 +279,8 @@ pub(crate) mod fixtures {
         }
         let encoded = STANDARD.encode(report.to_string().as_bytes());
         format!(
-            "[pohunek-codex-review-result-v1:{encoded}]\n\
-[pohunek-codex-review exited with status 0]\n"
+            "[autoreview-codex/v1 result:{encoded}]\n\
+[autoreview-codex/v1 exited with status 0]\n"
         )
     }
 }

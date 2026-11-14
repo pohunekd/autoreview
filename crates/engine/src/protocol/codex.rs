@@ -274,7 +274,7 @@ fn envelope_payload<'a>(markers: &Markers, raw: &'a str) -> Option<&'a str> {
     }
     let payload = before.get(run_start..)?;
     let marker_part = before.get(..run_start)?;
-    if payload.is_empty() || !marker_part.ends_with(ENVELOPE_MARKER) {
+    if payload.is_empty() || !marker_part.ends_with(markers.envelope) {
         return None;
     }
     Some(payload)
@@ -285,7 +285,7 @@ fn envelope_payload<'a>(markers: &Markers, raw: &'a str) -> Option<&'a str> {
 /// The reason quotes the output, which is untrusted, so it is bounded and neutralized. It only
 /// goes into the log line of the refused output: the recorded failure keeps only the code.
 fn exit_without_result(raw: &str) -> Error {
-    match exit_reason(raw) {
+    match MARKERS.iter().find_map(|markers| exit_reason(markers, raw)) {
         Some(reason) => Error::workflow(
             "review_result_invalid",
             true,
@@ -297,16 +297,16 @@ fn exit_without_result(raw: &str) -> Error {
     }
 }
 
-/// Returns the reason right before a failed exit line at the end of `raw`.
+/// Returns the reason right before a failed exit line at the end of `raw`, both of `markers`.
 ///
 /// The line must come right before the exit line, separated by one of `SEPARATORS`, as the
 /// adapter writes both at once. An empty or invalid base64 text, or an empty reason, is `None`.
-fn exit_reason(raw: &str) -> Option<String> {
+fn exit_reason(markers: &Markers, raw: &str) -> Option<String> {
     let encoded = ENDINGS
         .iter()
         .filter_map(|ending| raw.strip_suffix(ending))
         .find_map(|rest| {
-            let (head, status) = rest.rsplit_once(EXIT_LINE_PREFIX)?;
+            let (head, status) = rest.rsplit_once(markers.exit_line_prefix)?;
             if !failed_status(status.strip_suffix(']')?) {
                 return None;
             }
@@ -317,7 +317,7 @@ fn exit_reason(raw: &str) -> Option<String> {
                     let start = before.rfind(['\n', '\r']).map_or(0, |index| index + 1);
                     before
                         .get(start..)?
-                        .strip_prefix(REASON_MARKER)?
+                        .strip_prefix(markers.reason)?
                         .strip_suffix(']')
                 })
         })?;
@@ -591,6 +591,71 @@ checkout";
                 code == "review_result_invalid",
                 "{name}"
             );
+        }
+    }
+
+    // An output is read with the markers of `autoreview-codex/v1` or with the legacy markers
+    // that older adapters write, never with a mix of both (#24).
+    #[test]
+    fn codex_output_is_read_under_either_marker_name_but_not_a_mix() {
+        let pr = test_pull_request(3);
+        let report = STANDARD.encode(
+            json!({
+                "findings": [],
+                "summary": "Full review of the pull request diff; details follow.",
+                "tests": [],
+                "status": "completed",
+                "reviewed_head_sha": pr.head_sha,
+                "prior_findings": []
+            })
+            .to_string(),
+        );
+        let reason = STANDARD.encode("ERROR: model-x is not supported");
+        // The result, head and reason markers, then the exit line prefix, of each name.
+        let new = [
+            "[autoreview-codex/v1 result:",
+            "[autoreview-codex/v1 refused:head_unavailable]",
+            "[autoreview-codex/v1 reason:",
+            "[autoreview-codex/v1 exited with status ",
+        ];
+        let legacy = [
+            "[pohunek-codex-review-result-v1:",
+            "[pohunek-codex-review-refused-v1:head_unavailable]",
+            "[pohunek-codex-review-reason-v1:",
+            "[pohunek-codex-review exited with status ",
+        ];
+        for (markers, [.., exit], same) in [
+            (new, new, true),
+            (legacy, legacy, true),
+            (new, legacy, false),
+            (legacy, new, false),
+        ] {
+            let [result, head, reason_marker, _] = markers;
+            let output = format!("{result}{report}]\n{exit}0]\n");
+            match parse_codex_output(&test_config(), &pr, &output) {
+                Ok(_) => assert!(same, "{output}"),
+                Err(err) => {
+                    assert!(!same, "{output}: {err}");
+                    assert_eq!(err.to_string(), "review_result_invalid", "{output}");
+                }
+            }
+            let output = format!("{head}\n{exit}64]\n");
+            let err = parse_codex_output(&test_config(), &pr, &output).expect_err(&output);
+            let code = if same {
+                "review_head_unavailable"
+            } else {
+                "review_result_invalid"
+            };
+            assert_eq!(err.to_string(), code, "{output}");
+            let output = format!("{reason_marker}{reason}]\n{exit}1]\n");
+            let err = parse_codex_output(&test_config(), &pr, &output).expect_err(&output);
+            let message = if same {
+                "review_result_invalid: Codex exited without a result: ERROR: model-x is not \
+supported"
+            } else {
+                "review_result_invalid"
+            };
+            assert_eq!(err.to_string(), message, "{output}");
         }
     }
 }
