@@ -1,4 +1,4 @@
-//! Go's `time.Time` text forms: RFC 3339 in UTC with Go's fraction rules.
+//! Stored time text: RFC 3339 in UTC, with up to nine fraction digits.
 
 // Rust guideline compliant 2026-06-26
 
@@ -10,13 +10,13 @@ use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOf
 
 use crate::Error;
 
-/// Largest year that Go's `time.Time` JSON encoding accepts.
+/// Largest year that the time JSON form accepts.
 ///
-/// Go's JSON encoder rejects years outside `0..=GO_MAX_JSON_YEAR` and only
+/// The form rejects years outside `0..=GO_MAX_JSON_YEAR`, and only
 /// `serialize` applies the bound.
 const GO_MAX_JSON_YEAR: i32 = 9999;
 
-/// Largest year that the parser reads: Go's layout takes exactly four digits.
+/// Largest year that the parser reads: the stored form has exactly four year digits.
 const MAX_YEAR: u32 = 9999;
 /// Largest month of a calendar date.
 const MAX_MONTH: u32 = 12;
@@ -24,24 +24,24 @@ const MAX_MONTH: u32 = 12;
 const MAX_DAY: u32 = 31;
 /// Largest hour of a clock time.
 const MAX_HOUR: u32 = 23;
-/// Largest minute or second of a clock time; Go refuses leap seconds.
+/// Largest minute or second of a clock time; leap seconds are refused.
 const MAX_MINUTE_OR_SECOND: u32 = 59;
 /// Digits in the year field.
 const YEAR_DIGITS: usize = 4;
 /// Digits in a two-digit field.
 const TWO_DIGITS: usize = 2;
-/// Fraction digits kept; Go truncates longer fractions to nanoseconds.
+/// Fraction digits kept; longer fractions are truncated to nanoseconds.
 const NANOSECOND_DIGITS: usize = 9;
-/// Largest hour of a numeric offset; Go's `time.Parse` refuses only hours above it.
+/// Largest hour of a numeric offset that the parser accepts.
 const GO_MAX_OFFSET_HOUR: u32 = 24;
-/// Largest minute of a numeric offset; Go's `time.Parse` refuses only minutes above it.
+/// Largest minute of a numeric offset that the parser accepts.
 const GO_MAX_OFFSET_MINUTE: u32 = 60;
 /// Seconds in a minute, for offset arithmetic.
 const SECONDS_PER_MINUTE: i64 = 60;
 /// Minutes in an hour, for offset arithmetic.
 const MINUTES_PER_HOUR: i64 = 60;
 
-/// Formats `value` as Go's `time.RFC3339Nano` in UTC.
+/// Formats `value` in UTC with a fraction of up to nine digits, trailing zeros dropped.
 pub fn format_rfc3339_nano(value: OffsetDateTime) -> String {
     let utc = value.to_offset(UtcOffset::UTC);
     let base = format_date_time(&utc);
@@ -56,7 +56,7 @@ pub fn format_rfc3339_nano(value: OffsetDateTime) -> String {
     }
 }
 
-/// Formats `value` as Go's `time.RFC3339` in UTC, dropping the fraction.
+/// Formats `value` in UTC as whole-second RFC 3339 text, dropping the fraction.
 pub fn format_rfc3339_seconds(value: OffsetDateTime) -> String {
     let utc = value.to_offset(UtcOffset::UTC);
     let base = format_date_time(&utc);
@@ -65,14 +65,13 @@ pub fn format_rfc3339_seconds(value: OffsetDateTime) -> String {
 
 /// Parses RFC 3339 text with an offset and returns the instant in UTC.
 ///
-/// The accepted texts are the ones Go's `time.Time` JSON decoding accepts: it
-/// reads the layout `2006-01-02T15:04:05Z07:00` with `time.Parse`, so a
-/// one-digit hour and a comma fraction are valid, and a lower-case `t` or `z`,
-/// a space separator and a leap second are refused.
+/// The accepted texts use the layout `YYYY-MM-DDThh:mm:ss`, then a fraction and
+/// a zone. A one-digit hour and a comma fraction are valid, while a lower-case
+/// `t` or `z`, a space separator and a leap second are refused.
 ///
 /// # Errors
 ///
-/// Returns `Error::Parse` when `text` is not accepted by Go, or when its instant
+/// Returns `Error::Parse` when `text` is not in that form, or when its instant
 /// lies outside the years that `OffsetDateTime` represents.
 pub fn parse_rfc3339(text: &str) -> Result<OffsetDateTime, Error> {
     match parse_go_layout(text.as_bytes()) {
@@ -84,7 +83,7 @@ pub fn parse_rfc3339(text: &str) -> Result<OffsetDateTime, Error> {
     }
 }
 
-/// Parses `text` the way Go's `time.Parse` reads `2006-01-02T15:04:05Z07:00`.
+/// Parses `text` in the layout `YYYY-MM-DDThh:mm:ss` with a fraction and a zone.
 fn parse_go_layout(text: &[u8]) -> Result<OffsetDateTime, time::error::Parse> {
     let mut cursor = Cursor { rest: text };
     let year = cursor.digits(YEAR_DIGITS, 0..=MAX_YEAR, "year")?;
@@ -117,7 +116,7 @@ fn parse_go_layout(text: &[u8]) -> Result<OffsetDateTime, time::error::Parse> {
     Ok(utc_primitive.assume_utc())
 }
 
-/// Builds the error for a field that Go's layout parser refuses.
+/// Builds the error for a field that the layout parser refuses.
 fn invalid(component: &'static str) -> time::error::Parse {
     time::error::Parse::ParseFromDescription(ParseFromDescription::InvalidComponent(component))
 }
@@ -157,7 +156,7 @@ impl Cursor<'_> {
         Ok(value)
     }
 
-    /// Reads the hour, which Go's `15` field reads as one digit or two.
+    /// Reads the hour, which the layout accepts as one digit or two.
     fn hour(&mut self) -> Result<u32, time::error::Parse> {
         let width = match self.rest.get(1) {
             Some(b) if b.is_ascii_digit() => 2,

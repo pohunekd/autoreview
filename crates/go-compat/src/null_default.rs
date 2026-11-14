@@ -1,4 +1,4 @@
-//! Reads JSON `null` as the default value, for fields that Go writes as nil collections.
+//! Reads JSON `null` as the default value, for collections that earlier releases write as `null`.
 
 // Rust guideline compliant 2026-06-26
 
