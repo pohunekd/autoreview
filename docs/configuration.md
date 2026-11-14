@@ -128,6 +128,9 @@ publish:
   ai_signed_pattern: "Written by AI:"
   # GitHub accepts at most 65536 characters per review body or comment.
   github_body_max_bytes: 60000
+  # Name of the hidden review markers: autoreview, or hermes-pr-review for merge
+  # gates that read that name. Without the key, hermes-pr-review.
+  marker: autoreview
 
 notify:
   timeout_seconds: 30
@@ -386,8 +389,9 @@ summary is too short or too long.
 | Key | Meaning |
 |---|---|
 | `signature` | Last line of every review body and inline comment, published as written for every credential. Reviews are posted from a GitHub account, so readers must be told they are machine-written |
-| `ai_signed_pattern` | Text that marks a comment as machine-written. Such a comment is never treated as a human decision on an earlier finding |
+| `ai_signed_pattern` | Text that marks a comment as machine-written: the last line of the comment starts with it, leading symbols such as an emoji ignored on both sides. Such a comment is never treated as a human decision on an earlier finding |
 | `github_body_max_bytes` | Bound of one review body or comment |
+| `marker` | Name of the two hidden markers that start every review body, `<!-- NAME:v1:...-->` and `<!-- NAME-base:v1:...-->`: `autoreview`, or `hermes-pr-review` for merge gates that read that name. Optional: without the key, `hermes-pr-review`. A retry finds a review published under either name, so the name can change while reviews run |
 
 ## notify
 
@@ -546,6 +550,8 @@ Besides each key's own range, `validate` enforces:
 - `publish.github_body_max_bytes` is at most 65536.
 - `publish.signature` is one line that starts with `publish.ai_signed_pattern`
   and cannot mention anyone, embed HTML or imitate the review marker.
+- `publish.marker` is `autoreview` or `hermes-pr-review`; `marker:` without a
+  value is refused as missing.
 
 ## Environment variables
 

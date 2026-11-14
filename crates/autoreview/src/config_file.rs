@@ -18,6 +18,7 @@ use autoreview_engine::config::{
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
+use autoreview_engine::publish::MarkerName;
 use autoreview_policy::{EVENTS, Event, OPTIONAL_EVENTS, Policy, user_login_valid};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -67,6 +68,8 @@ const EXCERPT_DIVISOR: i64 = 4;
 const PORT_MAX: u32 = 65_535;
 /// Largest GitHub review body or comment, in bytes.
 const GITHUB_BODY_MAX_BYTES_LIMIT: i64 = 65_536;
+/// Marker name without `publish.marker`: the one that existing merge gates read.
+const MARKER_NAME_ABSENT: MarkerName = MarkerName::HermesPrReview;
 /// Largest value of `pohunek.host_state.min_battery_percent`.
 const BATTERY_PERCENT_MAX: i64 = 100;
 /// Largest command time limit that the pohunek daemon honours, in seconds.
@@ -458,6 +461,9 @@ struct PublishFile {
     ai_signed_pattern: Option<Value>,
     /// Bound of one review body or comment, in bytes.
     github_body_max_bytes: Option<Value>,
+    /// Name of the hidden review markers; `None` when the key is absent.
+    #[serde(default, deserialize_with = "present_section")]
+    marker: Option<Option<Value>>,
 }
 
 /// The `notify` section.
@@ -908,11 +914,12 @@ fn map_file(
     let review_list_limit = positive(&cli.review_list_limit, "cli.review_list_limit")?;
     let publish = section(&file.publish, "publish")?;
     let ai_signature = text(&publish.signature, "publish.signature")?;
-    let _ = text(&publish.ai_signed_pattern, "publish.ai_signed_pattern")?;
+    let ai_signed_pattern = text(&publish.ai_signed_pattern, "publish.ai_signed_pattern")?;
     let github_body_max_bytes = positive(
         &publish.github_body_max_bytes,
         "publish.github_body_max_bytes",
     )?;
+    let review_marker = marker_name(publish.marker.as_ref())?;
     let notify = section(&file.notify, "notify")?;
     let matrix_timeout = seconds(&notify.timeout_seconds, "notify.timeout_seconds")?;
     let matrix_max_characters = positive(&notify.max_characters, "notify.max_characters")?;
@@ -986,6 +993,7 @@ fn map_file(
         max_test_characters,
         github_body_max_bytes,
         ai_signature,
+        ai_signed_pattern,
         matrix_max_characters,
         excerpt_characters,
         terminal_cols,
@@ -993,6 +1001,7 @@ fn map_file(
         session_group,
         session_name_prefix,
         session_branch_prefix,
+        review_marker,
     };
     cross_key_rules(file, &config)?;
     Ok(Mapped {
@@ -1736,6 +1745,25 @@ fn name_prefix(value: &Option<Value>) -> Result<String, Error> {
         return Err(invalid(key, "must not contain a control character"));
     }
     Ok(prefix)
+}
+
+/// Reads `publish.marker`, the name of the hidden review markers.
+///
+/// An absent key is [`MARKER_NAME_ABSENT`], the name that the markers of existing deployments
+/// carry; a key without a value is missing.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for a key without a value and `configuration_invalid` for
+/// any text other than `autoreview` or `hermes-pr-review`.
+fn marker_name(value: Option<&Option<Value>>) -> Result<MarkerName, Error> {
+    let key = "publish.marker";
+    let Some(value) = value else {
+        return Ok(MARKER_NAME_ABSENT);
+    };
+    let name = text(value, key)?;
+    MarkerName::from_name(&name)
+        .ok_or_else(|| invalid(key, "must be autoreview or hermes-pr-review"))
 }
 
 /// Builds a `configuration_invalid` error that names `key`.
@@ -2790,6 +2818,10 @@ pub(crate) mod tests {
         assert!(!paths.is_empty());
         for (path, index, indent) in &paths {
             let text = without_block(*index, *indent);
+            // `publish.marker` may be absent; `publish_marker_names_the_markers` covers it.
+            if path == "publish.marker" {
+                continue;
+            }
             // `cli` holds one key, so removing it leaves `cli:` null, which reads as the section.
             let named = if path == "cli.review_list_limit" {
                 "cli"
@@ -3121,6 +3153,40 @@ pub(crate) mod tests {
             assert_eq!(result, expected, "rule for {old:?}");
         }
     }
+    /// Each row is the `publish.marker` line of the example and what the loader makes of it (#7).
+    #[test]
+    fn publish_marker_names_the_markers() {
+        let line = "  marker: autoreview\n";
+        let cases: [(&str, Result<MarkerName, &str>); 6] = [
+            (line, Ok(MarkerName::Autoreview)),
+            (
+                "  marker: hermes-pr-review\n",
+                Ok(MarkerName::HermesPrReview),
+            ),
+            ("", Ok(MarkerName::HermesPrReview)),
+            ("  marker:\n", Err("configuration_missing: publish.marker")),
+            (
+                "  marker: Autoreview\n",
+                Err(concat!(
+                    "configuration_invalid: publish.marker: ",
+                    "must be autoreview or hermes-pr-review"
+                )),
+            ),
+            (
+                "  marker: 1\n",
+                Err("configuration_invalid: publish.marker: must be text"),
+            ),
+        ];
+        for (new, want) in cases {
+            let result = mapped(&mutated(line, new));
+            let got = match &result {
+                Ok(config) => Ok(config.review_marker),
+                Err(error) => Err(error.to_string()),
+            };
+            assert_eq!(got, want.map_err(str::to_owned), "line {new:?}");
+        }
+    }
+
     #[test]
     fn published_retention_must_exceed_the_handoff_reminder() {
         let text = mutated(
