@@ -2,19 +2,18 @@
 type: Reference
 id: reference/install
 title: Install autoreview
-description: Prerequisites, the three install paths (release archive with checksum and attestation, systemd units with their installer, container image planned in #40), building from source, first configuration, the first review and where to go for upgrades.
+description: Prerequisites, the two install paths (release archive with checksum and attestation, systemd units with their installer), building from source, first configuration, the first review and where to go for upgrades.
 source_kind: manual
 intents: [setup, help]
 ---
 
 # Install autoreview
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0. The release archives are
-> published from `v0.1.0` on; the release workflow builds and attests them.
-> The systemd units and their installer of path b come in the archive after
-> 0.3.0. The container image `ghcr.io/pohunekd/autoreview`
-> is not in 0.2.0 and is planned in #40.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue. The release
+> archives are published from `v0.1.0` on; the release workflow builds and
+> attests them. The systemd units and their installer of path b come in the
+> archive after 0.3.0. A container image is not available (#40).
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
 agents run as reviewers in pohunek sessions on the **review hosts**, where a
@@ -38,7 +37,7 @@ pohunek daemon runs and the repositories are registered.
 - **Repositories registered** with `pohunek project add` on a review host. The first
   host of `pohunek.hosts` that has the repository runs its reviews, unless
   `pohunek.route_overrides` pins it ([multiple hosts](knowledge/guides/multihost.md)).
-- **GitHub CLI (`gh`)** on the autoreview host (the planned container image bundles it).
+- **GitHub CLI (`gh`)** on the autoreview host.
 - **GitHub token** of the account autoreview acts as, held in the variable named
   by the `token_env` of the one credential (`AUTOREVIEW_GH_TOKEN` in the
   example). It belongs to the credential's `login`; a token per owner or
@@ -52,7 +51,7 @@ pohunek daemon runs and the repositories are registered.
 ## Choose an install path
 
 To run autoreview and the pohunek daemon together on one Linux machine as your
-own user, run `scripts/setup` (after 0.2.0) from a checkout of the repository: it installs
+own user, run `scripts/setup` from a checkout of the repository: it installs
 both from their release archives, writes the configuration and the user
 service, and asks before every change. See
 [getting started](knowledge/guides/getting-started.md). The paths below are for
@@ -62,9 +61,9 @@ a dedicated server user.
 |---|---|---|
 | a. Release binary (default) | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
 | b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `deploy/install.sh`, which installs `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
-| c. Container | You run containers | `ghcr.io/pohunekd/autoreview:<version>`, planned in #40 |
 
-Paths a and b need the `autoreview` system user that path b creates.
+Paths a and b need the `autoreview` system user that path b creates. A
+container image is not available (#40).
 
 ## a. Release binary
 
@@ -77,7 +76,7 @@ provenance attestation. The binary needs no system library.
 Download the archive and its checksum file, then check the checksum:
 
 ```sh
-version=0.2.0                        # the release to install, without the v
+version=0.3.0                        # the release to install, without the v
 target=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
 archive="autoreview-$version-$target.tar.gz"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"
@@ -159,6 +158,11 @@ changed or when it is not running. Its exit codes: 1 usage, 2 not root or not
 an autoreview binary, 3 the secrets file, 4 `validate`, 5 a failed install
 step.
 
+With `--root DIR` the installer places every path under `DIR` and skips the
+steps that need root: the user, the ownership, `validate` and `systemctl`.
+`DIR` and the directories under it that hold the installed paths must belong to
+the caller or root, and neither group nor others may write to them.
+
 The secrets file holds the variable of the credential's `token_env` and the
 backend secrets as `NAME=value` lines. Write the values with an editor, never
 on a command line, for example with `sudoedit /etc/autoreview/autoreview.env`.
@@ -181,41 +185,6 @@ directories, with a private `/tmp` and a system call filter. Both units set
 The `autoreview` user needs a route to each review host (for example NetBird) and
 the pohunek client access the CLI needs. That setup is not in the reference pages yet.
 
-## c. Container
-
-The container image is not in 0.2.0 and is planned in #40; this section
-describes its design.
-
-The image bundles `gh` and the `pohunek` CLI at pinned versions. The config is
-mounted read-only, state goes to a volume, and the container must reach the review
-hosts. This example uses host networking to share the host's tunnel.
-
-`compose.yml`:
-
-```yaml
-services:
-  autoreview:
-    image: ghcr.io/pohunekd/autoreview:<version>   # planned, not published yet
-    command: ["--config", "/etc/autoreview/config.yaml", "serve"]
-    env_file: ./autoreview.env                     # mode 0600, holds the AUTOREVIEW_GH_TOKEN* variables and other AUTOREVIEW_* secrets
-    volumes:
-      - ./config:/etc/autoreview:ro
-      - autoreview-state:/var/lib/autoreview
-    tmpfs:
-      - /run/autoreview
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    network_mode: host
-    restart: unless-stopped
-
-volumes:
-  autoreview-state:
-```
-
-Set `github.gh_bin` and `pohunek.bin` to the paths of the bundled tools inside
-the image. The image layout is not documented yet.
-
 ## First configuration
 
 Write the configuration, a policy from the [examples](../examples/README.md)
@@ -231,8 +200,8 @@ The written `config.yaml` is the complete file of the
 [configuration reference](configuration.md#complete-file), with the `login`
 of the credential and `pohunek.hosts` set. Its paths are the ones of path b.
 Set the homeserver, room and mentioned user of its placeholder `matrix` backend
-in `notify` (see [notifiers](knowledge/guides/notifiers.md)), or, after 0.2.0,
-pass them and the other paths with the optional
+in `notify` (see [notifiers](knowledge/guides/notifiers.md)), or pass them and
+the other paths with the optional
 [layout flags of `init`](cli.md#autoreview-init).
 
 The agent profile named as `reviewers.<id>.agent_profile` in `policy.yaml` must
