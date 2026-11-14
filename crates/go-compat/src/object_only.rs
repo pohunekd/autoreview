@@ -1,4 +1,4 @@
-//! Reads a persisted struct from a JSON object only, as Go's `encoding/json` does.
+//! Reads a persisted struct from a JSON object only; arrays and `null` are refused.
 
 // Rust guideline compliant 2026-06-26
 

@@ -1,4 +1,4 @@
-//! Reads JSON `null` list entries as the default value, as Go decodes them into a slice.
+//! Reads JSON `null` list entries as the default value, which stored lists may contain.
 
 // Rust guideline compliant 2026-06-26
 
@@ -18,7 +18,7 @@ where
     Ok(zero_entries(entries.unwrap_or_default()))
 }
 
-/// Replaces each `None` entry with `T::default()`, as Go reads a `null` slice element.
+/// Replaces each `None` entry with `T::default()`, so a stored `null` element reads as default.
 #[must_use]
 pub fn zero_entries<T: Default>(entries: Vec<Option<T>>) -> Vec<T> {
     entries.into_iter().map(Option::unwrap_or_default).collect()
