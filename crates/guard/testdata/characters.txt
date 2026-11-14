@@ -1,0 +1,145 @@
+# Character scanners: tag characters, zero-width runs, variation-selector runs, bidi controls.
+# Rows that must stay clean model legitimate use: emoji, flags, joining scripts, RTL prose.
+== tag_payload_in_body
+expect: body:unicode_tags=1
+score: 100
+--- body
+Fix the parser.<U+E0041><U+E0070><U+E0070><U+E0072><U+E006F><U+E0076><U+E0065>
+== tag_payload_in_commit_message
+expect: commit_message:unicode_tags=1
+score: 100
+--- commit_message
+Bump version<U+E0001><U+E0020>
+== subdivision_flag_stays_clean
+expect: none
+--- body
+Team <U+1F3F4><U+E0067><U+E0062><U+E0073><U+E0063><U+E0074><U+E007F> wins.
+== flag_with_too_long_tag_spec
+expect: body:unicode_tags=1
+score: 100
+--- body
+<U+1F3F4><U+E0061><U+E0062><U+E0063><U+E0064><U+E0065><U+E0066><U+E0067><U+E0068><U+E007F>
+== flag_followed_by_payload
+expect: body:unicode_tags=1
+score: 100
+--- body
+<U+1F3F4><U+E0067><U+E0062><U+E0065><U+E006E><U+E0067><U+E007F><U+E0068><U+E0069>
+== flag_without_tag_letters
+expect: body:unicode_tags=1
+score: 100
+--- body
+<U+1F3F4><U+E007F>
+== flag_without_cancel_tag
+expect: body:unicode_tags=1
+score: 100
+--- body
+<U+1F3F4><U+E0067><U+E0062> end
+== tags_after_another_emoji
+expect: body:unicode_tags=1
+score: 100
+--- body
+<U+1F600><U+E0067><U+E0062><U+E007F>
+== two_tag_runs
+expect: title:unicode_tags=2
+score: 100
+--- title
+a<U+E0041>b<U+E0042>
+== zero_width_run
+expect: body:zero_width_run=1
+score: 100
+--- body
+start<U+200B><U+200C><U+200B><U+200D>end
+== two_zero_width_runs
+expect: review_thread:zero_width_run=2
+score: 100
+--- review_thread
+a<U+200B><U+200B>b<U+2060><U+FEFF>c
+== soft_hyphen_and_filler_runs
+expect: comment:zero_width_run=2
+score: 100
+--- comment
+co<U+00AD><U+00AD>de <U+3164><U+3164>
+== single_zero_width_characters_stay_clean
+expect: none
+--- comment
+@<U+200B>octocat and example/repo#<U+200B>12 and ex<U+00AD>ample
+== emoji_zwj_sequence_stays_clean
+expect: none
+--- body
+Family <U+1F468><U+200D><U+1F469><U+200D><U+1F467> and <U+2764><U+FE0F><U+200D><U+1F525>
+== joining_scripts_stay_clean
+expect: none
+--- body
+<U+0645><U+06CC><U+200C><U+062E><U+0648><U+0627><U+0647><U+0645> and <U+0915><U+094D><U+200D><U+0937>
+== single_variation_selectors_stay_clean
+expect: none
+--- body
+Done <U+2705><U+FE0F> keycap 1<U+FE0F><U+20E3> text <U+263A><U+FE0E> ideograph <U+845B><U+E0100>
+== variation_selector_run
+expect: body:variation_selector_run=1
+score: 100
+--- body
+<U+1F600><U+FE01><U+FE02><U+E0100><U+E01EF>
+== bidi_override_in_title
+expect: title:bidi_override=1
+score: 100
+--- title
+Add invoice<U+202E>fdp.exe
+== rtl_prose_with_marks_embeddings_and_isolates_stays_clean
+expect: none
+--- body
+<U+05E9><U+05DC><U+05D5><U+05DD> <U+200F>(v2)<U+200F> <U+2067>example/repo<U+2069> <U+202B><U+05E9><U+202C> <U+061C>
+== isolates_in_added_patch_lines
+expect: patch:bidi_control_in_patch=3
+score: 40
+--- patch
+@@ -1,3 +1,3 @@
+ fn check(admin: bool) {
+-    if admin {
++    if admin <U+2067>/* user */<U+2069> {
++    let label = "<U+202B>x";
+== override_in_patch_is_an_override
+expect: patch:bidi_override=1 patch:bidi_control_in_patch=2
+score: 140
+--- patch
+@@ -0,0 +1 @@
++// check<U+202E> }<U+2066>if (admin)<U+2069> {
+== hidden_characters_on_removed_and_context_lines_stay_clean
+expect: none
+--- patch
+@@ -1,2 +1,2 @@
+-old<U+E0041><U+200B><U+200B><U+202E>
+ same<U+2067><U+FE01><U+FE02>
++new
+== byte_order_mark_on_an_added_line_stays_clean
+expect: none
+--- patch
+@@ -0,0 +1 @@
++<U+FEFF>package main
+== mixed_scripts_stay_clean
+expect: none
+--- body
+R<U+00E9>sum<U+00E9> <U+65E5><U+672C><U+8A9E> <U+0627><U+0644><U+0639><U+0631><U+0628><U+064A><U+0629> <U+0395><U+03BB><U+03BB><U+03B7><U+03BD> <U+1F642> <U+0130>stanbul
+== huge_tag_run
+expect: body:unicode_tags=1
+score: 100
+--- body x200000
+<U+E0041>
+== huge_zero_width_run
+expect: comment:zero_width_run=1
+score: 100
+--- comment x200000
+<U+200B>
+== huge_variation_selector_run
+expect: body:variation_selector_run=1
+score: 100
+--- body x200000
+<U+FE0F>
+== huge_alternation_of_letters_and_single_zero_width_stays_clean
+expect: none
+--- body x100000
+a<U+200C>
+== huge_run_of_flags_stays_clean
+expect: none
+--- body x20000
+<U+1F3F4><U+E0067><U+E0062><U+E0077><U+E006C><U+E0073><U+E007F>
