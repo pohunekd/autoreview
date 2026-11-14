@@ -13,7 +13,7 @@ use super::Store;
 use super::reviews::{time_key, unavailable};
 use crate::Error;
 
-/// The DDL of the step runs, run after the Go schema; a store that predates it gains the table.
+/// The DDL of the step runs, run after `STORE_SCHEMA`; a store that predates it gains the table.
 pub(super) const STEP_RUNS_SCHEMA: &str = concat!(
     "\n",
     "CREATE TABLE IF NOT EXISTS review_step_runs (\n",
