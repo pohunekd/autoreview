@@ -174,9 +174,24 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 plain,
                 formatted,
             );
-            sent.await?;
+            let Err(err) = sent.await else {
+                continue;
+            };
+            // The notifier fails at once on a cancelled token, so the shutdown is the cause.
+            let shutdown = cancel.is_cancelled();
+            let code = if shutdown { SHUTDOWN } else { error_code(&err) };
+            tracing::warn!(
+                count = rendered.shown,
+                backend = backend.as_str(),
+                error_code = code,
+                "review queue digest dropped"
+            );
+            first.get_or_insert(err);
+            if shutdown {
+                break;
+            }
         }
-        Ok(())
+        first.map_or(Ok(()), Err)
     }
 
     /// Returns the queue entries in digest order, at most `queue_max_items` of them.
@@ -1260,6 +1275,47 @@ notifications:
         assert!(
             queued.len() == 1 && queued[0].transaction != first,
             "queued {queued:?}"
+        );
+    }
+
+    // Every queue backend gets the post; the run fails with the first failure in queue
+    // order (#30).
+    #[tokio::test]
+    async fn review_queue_posts_to_every_backend_and_fails_with_the_first_failure() {
+        let fake = Arc::new(FakeIntegration::new());
+        fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
+        let failing = [
+            ("first", "webhook_unavailable"),
+            ("second", "matrix_unavailable"),
+        ];
+        fake.lock().backend_fail = failing
+            .iter()
+            .map(|(name, code)| ((*name).to_owned(), (*code).to_owned()))
+            .collect();
+        let mut cfg = queue_config();
+        for name in ["first", "second"] {
+            let mut backend = cfg.notify.backends[0].clone();
+            backend.name = name.to_owned();
+            cfg.notify.backends.push(backend);
+        }
+        cfg.notify.queue = ["first", "matrix", "second"].map(str::to_owned).to_vec();
+        let (engine, _dir) = new_queue_engine(cfg, &fake, datetime!(2026-10-19 14:35 UTC));
+        let result = engine.review_queue(&CancellationToken::new()).await;
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|err| error_code(err) == "webhook_unavailable"),
+            "error {result:?}"
+        );
+        let state = fake.lock();
+        let posted: Vec<&str> = state
+            .queued
+            .iter()
+            .map(|digest| digest.backend.as_str())
+            .collect();
+        assert!(
+            state.queue_sends == 3 && posted == ["matrix"],
+            "posted {posted:?}"
         );
     }
 
