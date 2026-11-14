@@ -413,9 +413,10 @@ Each message gets one attempt, bounded by `timeout_seconds`. A message that
 its backend does not accept is dropped with a warning, at every level, and
 neither the review nor discovery waits for it. `autoreview review-queue` fails with the backend's
 error code when a queue backend rejects the message, so its timer shows the
-failure. `review_queue.backends` must name one `matrix` backend; a list of
-`none` backends only, or an empty list, is refused at load. Several backends
-per level are planned in #27.
+failure. `review_queue.backends` must name one `matrix` backend and may add
+`none` backends; a list of `none` backends only, an empty list, or a name
+given twice is refused at load. Several backends per level are planned in #30.
+Each `matrix` backend has its own homeserver, token and mentioned user.
 
 ### Event routes
 
@@ -434,8 +435,7 @@ An event with its own route goes only to the backends of that route; every
 other event goes to the route of its level. The level still decides the rest:
 an `action` event mentions `mention_user` on its own route too, and a failed
 `digest` or `log` message is dropped as on its level route. The value follows
-the level rules: exactly one `matrix` backend until M3, with the same
-`homeserver_url`, `access_token_env` and `mention_user`. A key that names no
+the level rules: exactly one `matrix` backend until #30. A key that names no
 event is refused with `configuration_invalid: notify.routes.<key>: names no
 notification event`, and a backend name that `backends` does not define with
 `configuration_invalid: notify.routes.<key>: names no configured backend`.
@@ -445,8 +445,8 @@ Without event keys, routing is by level only.
 
 A `none` backend writes nothing but the structured log. It is accepted only in
 `review_queue.backends` next to a `matrix` backend. A route that names it is
-refused at load with `configuration_invalid: config: invalid Matrix <level> room`
-(`<event>` for an event route).
+refused at load with `configuration_invalid: notify.routes.<key>: none backends
+are not routed until #29`.
 Running without notifications is planned in #29.
 
 ### Backend `matrix`

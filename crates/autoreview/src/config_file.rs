@@ -2674,7 +2674,7 @@ pub(crate) mod tests {
             config.notify.events,
             BTreeMap::from([(Event::Approved, vec!["approved".to_owned()])])
         );
-        assert_eq!(config.matrix_rooms.digest, "!digest:example.org");
+        assert_eq!(config.notify.digest, ["digest"]);
         assert_eq!(
             config.notify_route(&Event::Approved, Level::Digest),
             NotifyRoute::Event(Event::Approved)
@@ -2700,12 +2700,15 @@ pub(crate) mod tests {
                 "    approved: [approved, digest]\n",
                 concat!(
                     "configuration_invalid: notify.routes.approved: ",
-                    "must name exactly one backend until M3"
+                    "must name exactly one backend until #30"
                 ),
             ),
             (
                 "    approved: [quiet]\n",
-                "configuration_invalid: config: invalid Matrix approved room",
+                concat!(
+                    "configuration_invalid: notify.routes.approved: ",
+                    "none backends are not routed until #29"
+                ),
             ),
         ];
         for (route, expected) in cases {
