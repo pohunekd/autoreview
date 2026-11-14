@@ -192,3 +192,108 @@ async fn a_refused_message_stays_dropped_and_a_held_digest_is_sent_again() {
         assert_eq!(step(&h, name), expected, "{name}");
     }
 }
+
+// A review that stops after its retries reaches the working backend behind a failing one, and
+// so does its successful retry by hand.
+#[tokio::test]
+async fn a_stopped_review_and_its_retry_reach_the_working_backend() {
+    let mut h = failing_extra_first(|_| {}).await;
+    h.set_output(|_: &SessionRequest| "{\"protocol\":\"broken\"}\n".to_owned());
+    let pr = integration_pull_request("claude/base", &sha("a"));
+    open(&h, &pr);
+    h.poll_until("the stop", || sent(&h, "matrix", STOPPED_NOTE) == 1)
+        .await;
+    h.set_output(reviewer_output(Vec::new()));
+    h.retry(&pr).await.expect("the stopped review is retried");
+    h.poll_until("the retried review", || h.publications() == 1)
+        .await;
+    h.settle().await;
+    let counts = [
+        sent(&h, "matrix", STOPPED_NOTE),
+        sent(&h, "matrix", APPROVED_NOTE),
+        sent(&h, EXTRA, ""),
+    ];
+    assert_eq!(
+        counts,
+        [1, 1, 0],
+        "stop, approval, notes on the failing backend"
+    );
+    h.stop_engine().await;
+}
+
+// A review that stops at its route, before any run exists, is announced once on the working
+// backend behind a failing one, whatever the route code.
+#[tokio::test]
+async fn a_review_stopped_at_its_route_reaches_the_working_backend() {
+    for code in ["project_route_not_found", "project_route_ambiguous"] {
+        let mut h = failing_extra_first(|_| {}).await;
+        let failing = ("example-host".to_owned(), code.to_owned());
+        h.fake.lock().host_fail.extend([failing]);
+        let pr = integration_pull_request("claude/base", &sha("a"));
+        open(&h, &pr);
+        h.poll_until("the stop at the route", || {
+            sent(&h, "matrix", STOPPED_NOTE) == 1
+        })
+        .await;
+        h.settle().await;
+        let runs = h.started_count();
+        assert_eq!(
+            (sent(&h, "matrix", STOPPED_NOTE), runs),
+            (1, 0),
+            "{code}: stop notices, reviewer sessions"
+        );
+        h.stop_engine().await;
+    }
+}
+
+// An outage of every review host is announced once on the working backend behind a failing
+// one, also across a restart, and the review runs when a host answers.
+#[tokio::test]
+async fn a_host_outage_is_announced_once_on_the_working_backend() {
+    let mut h = failing_extra_first(|cfg| {
+        cfg.pohunek_hosts = vec!["host-a".to_owned(), "host-b".to_owned()];
+    })
+    .await;
+    for host in ["host-a", "host-b"] {
+        let failing = (host.to_owned(), "pohunek_request_failed".to_owned());
+        h.fake.lock().host_fail.extend([failing]);
+    }
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    open(&h, &pr);
+    h.settle().await;
+    h.stop_engine().await;
+    h.start();
+    h.settle().await;
+    h.fake.lock().host_fail.remove("host-b");
+    h.poll_until("the review on the host that answers", || {
+        h.publications() == 1
+    })
+    .await;
+    assert_eq!(sent(&h, "matrix", HOST_WAIT_NOTE), 1, "notices of the wait");
+    h.stop_engine().await;
+}
+
+// A waiting review superseded by a newer head, and the review of that head, reach the working
+// backend behind a failing one: one request per head and one superseded notice.
+#[tokio::test]
+async fn a_superseded_wait_and_its_successor_reach_the_working_backend() {
+    let mut h = failing_extra_first(|_| {}).await;
+    let title = APPROVAL_REQUESTED_TITLE;
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    open(&h, &pr);
+    h.poll_until("the first request", || sent(&h, "matrix", title) == 1)
+        .await;
+    let mut next = pr.clone();
+    next.head_sha = sha("c");
+    open(&h, &next);
+    let superseded = format!("Review {} was superseded", pr.review_id());
+    h.poll_until("the request of the new head", || {
+        sent(&h, "matrix", title) == 2
+    })
+    .await;
+    h.settle().await;
+    let counts = [sent(&h, "matrix", title), sent(&h, "matrix", &superseded)];
+    assert_eq!(counts, [2, 1], "requests and superseded notices");
+    assert_eq!(h.publications(), 0, "nothing is posted without an approval");
+    h.stop_engine().await;
+}
