@@ -441,3 +441,103 @@ impl Pass<'_> {
         Some(eol)
     }
 }
+
+/// Reports whether the attributes of a tag hide its element: `hidden` or a hiding style.
+fn hides(attributes: &str) -> bool {
+    let mut rest = attributes;
+    loop {
+        rest = rest.trim_start_matches(|character: char| {
+            character.is_ascii_whitespace() || character == '/'
+        });
+        if rest.is_empty() {
+            return false;
+        }
+        let name_len = rest
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '=' | '/')
+            })
+            .unwrap_or(rest.len());
+        let name = rest.get(..name_len).unwrap_or_default();
+        let after = rest.get(name_len..).unwrap_or_default().trim_start();
+        let (value, next) = match after.strip_prefix('=') {
+            Some(value) => attribute_value(value.trim_start()),
+            None => ("", after),
+        };
+        if name.eq_ignore_ascii_case("hidden") {
+            return true;
+        }
+        if name.eq_ignore_ascii_case("style") {
+            let style: String = value
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>()
+                .to_ascii_lowercase();
+            if HIDING_STYLES.iter().any(|hiding| style.contains(hiding)) {
+                return true;
+            }
+        }
+        rest = next;
+    }
+}
+
+/// Splits an attribute value, quoted or not, from the attributes that follow it.
+fn attribute_value(text: &str) -> (&str, &str) {
+    match text.chars().next() {
+        Some(quote @ ('"' | '\'')) => {
+            let inner = text.get(1..).unwrap_or_default();
+            match inner.split_once(quote) {
+                Some((value, next)) => (value, next),
+                None => (inner, ""),
+            }
+        }
+        _ => {
+            let end = text
+                .find(|character: char| character.is_ascii_whitespace())
+                .unwrap_or(text.len());
+            (
+                text.get(..end).unwrap_or_default(),
+                text.get(end..).unwrap_or_default(),
+            )
+        }
+    }
+}
+
+/// Adds one `signal` when the hidden `text` instructs a reviewer.
+fn report(add: &mut impl FnMut(Signal, u32), signal: Signal, text: &str) {
+    if words::instructs(text) {
+        add(signal, 1);
+    }
+}
+
+/// Reports the hidden Markdown signals of a rendered field to `add`.
+pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) {
+    let mut code = code_ranges(text).into_iter().peekable();
+    let mut pass = Pass {
+        text,
+        bytes: text.as_bytes(),
+        cache: [None; FIND_CLASSES],
+    };
+    let mut at = 0_usize;
+    while let Some(&byte) = pass.bytes.get(at) {
+        if let Some(&(start, end)) = code.peek()
+            && at >= start
+        {
+            code.next();
+            at = at.max(end);
+            continue;
+        }
+        let line_start = at == 0 || pass.bytes.get(at.saturating_sub(1)) == Some(&b'\n');
+        let consumed = if line_start {
+            pass.reference_definition(at, add)
+        } else {
+            None
+        };
+        let next = consumed.or_else(|| match byte {
+            b'<' => pass.tag(at, add),
+            b'!' => pass.image_alt(at, add),
+            b']' => pass.link_title(at, add),
+            _ => None,
+        });
+        at = next.unwrap_or(at).max(at.saturating_add(1));
+    }
+}
