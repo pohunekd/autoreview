@@ -47,10 +47,10 @@ const REVIEW_ALREADY_COMPLETED: &str = "review_already_completed";
 /// Error code of a schedule time that the store cannot write.
 const STORE_STATE_INVALID: &str = "store_state_invalid";
 
-/// Error code of a store call that Go makes on a cancelled context.
+/// Error code of a store call that fails on a cancelled context.
 const STORE_UNAVAILABLE: &str = "store_unavailable";
 
-/// Cause text of a Go store call on a cancelled context, Go's `context.Canceled`.
+/// Cause text of a store call on a cancelled context.
 const CONTEXT_CANCELED: &str = "context canceled";
 
 /// Step name of the read of a pull request that left the search, in the retry log.
@@ -237,7 +237,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 continue;
             }
             let target = pr.target();
-            // A key without a record plans from Go's zero record, which `Record::default` is.
+            // A key without a record plans from the zero record, which `Record::default` is.
             let previous = state.schedule.get(key).cloned().unwrap_or_default();
             // A published review that covers the head gets here when it names another base
             // branch or when the head came back from one.
@@ -967,9 +967,9 @@ fn skippable_candidate_error(err: &Error) -> bool {
     SKIPPABLE_CANDIDATE_CODES.contains(&error_code(err))
 }
 
-/// Fails as Go's store does on a cancelled context, so a cancelled pass writes nothing.
+/// Fails as a store call does on a cancelled context, so a cancelled pass writes nothing.
 ///
-/// The Rust store ignores `cancel`; Go's `database/sql` refuses every call once the context ends.
+/// The store does not take `cancel`, so callers run this check before each store call.
 pub(crate) fn live(cancel: &CancellationToken) -> Result<(), Error> {
     if cancel.is_cancelled() {
         return Err(Error::workflow(
@@ -981,7 +981,7 @@ pub(crate) fn live(cancel: &CancellationToken) -> Result<(), Error> {
     Ok(())
 }
 
-/// Wraps a schedule time outside the range of `time`; Go fails writing it as JSON.
+/// Wraps a schedule time that the JSON time format cannot write, such as an out-of-range year.
 fn schedule_error(err: autoreview_schedule::Error) -> Error {
     Error::workflow(STORE_STATE_INVALID, true, Some(Box::new(err)))
 }

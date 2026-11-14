@@ -150,7 +150,7 @@ pub struct ReviewRequestList {
 /// The side effects of the review engine: GitHub, pohunek and Matrix.
 ///
 /// Each method returns a `Send` future, so any executor can await it. Each method takes the
-/// caller's cancellation token, as each Go method takes the caller's context.
+/// caller's cancellation token.
 pub trait Integrations {
     /// Returns the pull requests the policy covers and the ones whose data was refused.
     ///
@@ -250,7 +250,7 @@ pub trait Integrations {
 
     /// Returns the output of a finished reviewer session, read with `protocol`.
     ///
-    /// `None` means that the reviewer still runs, as Go's `nil` does. The bytes are unconverted.
+    /// `None` means that the reviewer still runs. The bytes are unconverted.
     fn session_output(
         &self,
         cancel: &CancellationToken,

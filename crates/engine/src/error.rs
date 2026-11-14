@@ -9,7 +9,7 @@ use std::error::Error as StdError;
 
 /// Boxed error that can be the cause of an engine error.
 ///
-/// Go's `error` fields hold any error, so a cause may come from outside the engine.
+/// A cause may be any error, so it can come from outside the engine.
 pub type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 
 /// Code of a workflow failure that carries no code of its own.

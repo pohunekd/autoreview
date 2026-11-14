@@ -181,7 +181,7 @@ where
         while let Some(joined) = tasks.join_next().await {
             resume_panic(joined);
         }
-        // The flock is released only after every review stopped, as Go's deferred close.
+        // The flock is released only after every review stopped.
         drop(lock);
         result
     }
@@ -392,16 +392,16 @@ where
     }
 }
 
-/// Returns a ticker whose first tick comes one `period` from now, as Go's `time.NewTicker`.
+/// Returns a ticker whose first tick comes one `period` from now.
 ///
-/// A late tick is skipped instead of firing in a burst, as Go's ticker drops ticks.
+/// A late tick is skipped instead of firing in a burst.
 fn ticker(period: Duration) -> Interval {
     let mut ticker = interval_at(tokio::time::Instant::now() + period, period);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     ticker
 }
 
-/// Re-raises the panic of a review task, as a panicking Go goroutine stops the process.
+/// Re-raises the panic of a review task, so that the panic is not dropped.
 fn resume_panic(joined: Result<(), tokio::task::JoinError>) {
     if let Err(err) = joined
         && err.is_panic()
@@ -462,8 +462,7 @@ where
 
 /// Reports whether the first workflow failure in the chain of `err` is marked permanent.
 ///
-/// The chain is searched, not only its top, because Go's `errors.As` reads the first workflow
-/// failure.
+/// The chain is searched, not only its top, and the first workflow failure in it decides.
 pub(crate) fn is_permanent(err: &Error) -> bool {
     let mut current: Option<&dyn std::error::Error> = Some(err);
     while let Some(error) = current {
