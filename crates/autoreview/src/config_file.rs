@@ -1395,97 +1395,29 @@ fn secret_value(
     }
 }
 
-/// The Matrix values of the engine configuration.
-struct MatrixShape {
-    /// Homeserver base URL, empty when no route and no queue reaches Matrix.
-    homeserver_url: String,
-    /// Access token, empty when no route and no queue reaches Matrix.
-    access_token: String,
-    /// Mentioned user, empty when no route and no queue reaches Matrix.
-    mention_user: String,
-    /// The level and event rooms; empty for a `none` backend.
-    rooms: MatrixRooms,
-    /// The review queue room; `None` when the queue names no Matrix backend.
-    queue_room: Option<String>,
-}
-
-/// Maps the routes and the review queue onto Matrix backends that share one identity.
-///
-/// The levels are checked first, then the event routes in key order, then the queue.
-///
-/// # Errors
-///
-/// Returns `configuration_invalid` when a route key is neither a level nor an event, when a
-/// route names other than one backend, names a webhook, or names a Matrix backend with another
-/// identity, or when the queue names two Matrix backends.
-fn matrix_shape(
-    backends: &[Backend],
-    routes: &BTreeMap<String, Option<Value>>,
-    queue_backends: &[String],
-) -> Result<MatrixShape, Error> {
-    let mut matrix: Option<&Backend> = None;
-    let action = level_room(
-        backends,
-        &routes.get("action").cloned().flatten(),
-        "notify.routes.action",
-        &mut matrix,
-    )?;
-    let digest = level_room(
-        backends,
-        &routes.get("digest").cloned().flatten(),
-        "notify.routes.digest",
-        &mut matrix,
-    )?;
-    let log = level_room(
-        backends,
-        &routes.get("log").cloned().flatten(),
-        "notify.routes.log",
-        &mut matrix,
-    )?;
-    let events = event_rooms(backends, routes, &mut matrix)?;
-    let queue_room = queue_room(backends, queue_backends, &mut matrix)?;
-    let (homeserver_url, access_token, mention_user) = match matrix {
-        Some(Backend::Matrix {
-            homeserver_url,
-            access_token,
-            mention_user,
-            ..
-        }) => (
-            homeserver_url.clone(),
-            access_token.clone(),
-            mention_user.clone(),
-        ),
-        _ => (String::new(), String::new(), String::new()),
-    };
-    Ok(MatrixShape {
-        homeserver_url,
-        access_token,
-        mention_user,
-        rooms: MatrixRooms {
-            action,
-            digest,
-            log,
-            events,
-        },
-        queue_room,
-    })
-}
-
 /// The keys of `notify.routes` that name a level; every other key names an event.
 const LEVEL_ROUTES: [&str; 3] = ["action", "digest", "log"];
 
-/// Resolves every event route of `notify.routes` to its room, in key order.
+/// Maps the backends, the routes and the review queue into the engine's settings.
+///
+/// The levels are checked first, then the event routes in key order, then the queue. A
+/// `webhook` backend is left out, because nothing routes to it.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming `notify.routes.<key>` when the key names no event,
-/// and the errors of [`level_room`] for its backends.
-fn event_rooms<'a>(
-    backends: &'a [Backend],
+/// Returns `configuration_invalid` naming the route key when a key is neither a level nor an
+/// event, and the errors of [`route_backends`] and [`queue_backends`].
+fn notify_settings(
+    backends: &[Backend],
     routes: &BTreeMap<String, Option<Value>>,
-    matrix: &mut Option<&'a Backend>,
-) -> Result<BTreeMap<Event, String>, Error> {
-    let mut rooms = BTreeMap::new();
+    queue: Vec<String>,
+) -> Result<NotifySettings, Error> {
+    let level = |name: &str| {
+        let key = format!("notify.routes.{name}");
+        route_backends(backends, &routes.get(name).cloned().flatten(), &key)
+    };
+    let (action, digest, log) = (level("action")?, level("digest")?, level("log")?);
+    let mut events = BTreeMap::new();
     for (name, names) in routes {
         if LEVEL_ROUTES.contains(&name.as_str()) {
             continue;
@@ -1496,50 +1428,58 @@ fn event_rooms<'a>(
         else {
             return Err(invalid(&key, "names no notification event"));
         };
-        let room = level_room(backends, names, &key, matrix)?;
-        rooms.insert(event.clone(), room);
+        events.insert(event.clone(), route_backends(backends, names, &key)?);
     }
-    Ok(rooms)
+    queue_backends(backends, &queue)?;
+    let engine_backends = backends.iter().filter_map(|backend| match backend {
+        Backend::None { name } => Some((name, BackendKind::None)),
+        Backend::Matrix { name, settings } => Some((name, BackendKind::Matrix(settings.clone()))),
+        Backend::Webhook { .. } => None,
+    });
+    Ok(NotifySettings {
+        backends: (engine_backends)
+            .map(|(name, kind)| NotifyBackend {
+                name: name.clone(),
+                kind,
+            })
+            .collect(),
+        action,
+        digest,
+        log,
+        events,
+        queue,
+    })
 }
 
-/// Resolves one level or event route to its room and checks its backend.
+/// Reads the backend names of one level or event route.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` when the route does not name exactly one backend, the
-/// backend is a webhook, or its identity differs from the Matrix backend chosen before.
-fn level_room<'a>(
-    backends: &'a [Backend],
+/// Returns `configuration_invalid` naming `key` when the route does not name exactly one
+/// backend, or names a backend that is not configured or not of type `matrix`.
+fn route_backends(
+    backends: &[Backend],
     names: &Option<Value>,
     key: &str,
-    matrix: &mut Option<&'a Backend>,
-) -> Result<String, Error> {
+) -> Result<Vec<String>, Error> {
     let names = text_list(names, key)?;
     let [name] = names.as_slice() else {
-        return Err(invalid(key, "must name exactly one backend until M3"));
+        return Err(invalid(key, "must name exactly one backend until #30"));
     };
-    let backend = find_backend(backends, name, key)?;
-    match backend {
-        Backend::None { .. } => Ok(String::new()),
-        Backend::Matrix { room, .. } => {
-            share_identity(backend, key, matrix)?;
-            Ok(room.clone())
-        }
-        Backend::Webhook { .. } => Err(invalid(key, "webhook backends are not routed until M3")),
+    match find_backend(backends, name, key)? {
+        Backend::Matrix { .. } => Ok(names),
+        Backend::None { .. } => Err(invalid(key, "none backends are not routed until #29")),
+        Backend::Webhook { .. } => Err(invalid(key, "webhook backends are not routed until #29")),
     }
 }
 
-/// Resolves the review queue to its Matrix room, or to `None` without a Matrix backend.
+/// Checks the backend names of the review queue.
 ///
 /// # Errors
 ///
 /// Returns `configuration_invalid` naming `notify.review_queue.backends` for an empty list, a
-/// webhook, a second Matrix backend, or a Matrix backend whose identity differs from the routes.
-fn queue_room<'a>(
-    backends: &'a [Backend],
-    names: &[String],
-    matrix: &mut Option<&'a Backend>,
-) -> Result<Option<String>, Error> {
+/// name given twice or not configured, a webhook, or a second Matrix backend.
+fn queue_backends(backends: &[Backend], names: &[String]) -> Result<(), Error> {
     let key = "notify.review_queue.backends";
     if names.is_empty() {
         return Err(invalid(key, "must name at least one backend"));
