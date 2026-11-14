@@ -1,15 +1,16 @@
-//! Matrix notifications: messages of each level and the review queue digest.
+//! Notification backends: the registry by name, and Matrix messages and queue digests.
 //!
-//! Requests are built by pure functions, so their room, transaction path and body are checked
-//! without a homeserver. Sending is one PUT.
+//! Matrix requests are built by pure functions, so their room, transaction path and body are
+//! checked without a homeserver. Sending is one PUT.
 
 // Rust guideline compliant 2026-06-26
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io;
 use std::time::Duration;
 
-use autoreview_engine::config::{MatrixRooms, NotifyRoute};
+use autoreview_engine::config::{BackendKind, MatrixBackend, NotifySettings};
 use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
 use autoreview_policy::Level;
@@ -51,18 +52,57 @@ const LIMIT_CAUSE: &str = "matrix_max_characters must be at least 1";
 /// Cause of a dot-segment path, which the URL parser would resolve.
 const DOT_SEGMENT_CAUSE: &str = "path segment is a dot segment";
 
-/// The Matrix settings of the notifications, read from the engine configuration.
+/// Code of a backend name that no configured backend has.
+const BACKEND_UNKNOWN: &str = "notify_backend_unknown";
+
+/// One configured backend, ready to deliver.
+#[derive(Debug)]
+pub(crate) enum Backend {
+    /// Delivers nothing.
+    None,
+    /// Posts to one Matrix room.
+    Matrix(Matrix),
+}
+
+/// The backends of the configuration, by name.
+#[derive(Debug)]
+pub(crate) struct Backends(BTreeMap<String, Backend>);
+
+impl Backends {
+    /// Creates the backends of `notify`; every message is bounded by the two limits.
+    pub(crate) fn new(notify: &NotifySettings, max_characters: i64, timeout: Duration) -> Self {
+        let backends = notify.backends.iter().map(|backend| {
+            let ready = match &backend.kind {
+                BackendKind::None => Backend::None,
+                BackendKind::Matrix(matrix) => {
+                    Backend::Matrix(Matrix::new(matrix, max_characters, timeout))
+                }
+            };
+            (backend.name.clone(), ready)
+        });
+        Self(backends.collect())
+    }
+
+    /// Returns the backend called `name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `notify_backend_unknown` when no backend has that name.
+    pub(crate) fn get(&self, name: &str) -> Result<&Backend, Error> {
+        (self.0.get(name)).ok_or_else(|| Error::workflow(BACKEND_UNKNOWN, true, None))
+    }
+}
+
+/// The settings of one Matrix backend.
 pub(crate) struct Matrix {
     /// The homeserver URL; its trailing slashes are trimmed before the request path is joined.
     homeserver_url: String,
-    /// The access token of the engine. It is sent as a bearer credential and never printed.
+    /// The access token of the backend. It is sent as a bearer credential and never printed.
     access_token: String,
     /// The user that action messages mention.
     mention_user: String,
-    /// The rooms of the levels and of the event routes.
-    rooms: MatrixRooms,
-    /// The room that receives the review queue digest.
-    queue_room: String,
+    /// The room that receives every message and the review queue digest.
+    room: String,
     /// The largest message, in characters.
     max_characters: i64,
     /// The timeout of one request.
@@ -70,22 +110,13 @@ pub(crate) struct Matrix {
 }
 
 impl Matrix {
-    /// Creates the settings from the Matrix fields of the configuration.
-    pub(crate) fn new(
-        homeserver_url: String,
-        access_token: String,
-        mention_user: String,
-        rooms: MatrixRooms,
-        queue_room: String,
-        max_characters: i64,
-        timeout: Duration,
-    ) -> Self {
+    /// Creates the settings of `backend` with the message limit and the request timeout.
+    pub(crate) fn new(backend: &MatrixBackend, max_characters: i64, timeout: Duration) -> Self {
         Self {
-            homeserver_url,
-            access_token,
-            mention_user,
-            rooms,
-            queue_room,
+            homeserver_url: backend.homeserver_url.clone(),
+            access_token: backend.access_token.clone(),
+            mention_user: backend.mention_user.clone(),
+            room: backend.room.clone(),
             max_characters,
             timeout,
         }
@@ -99,8 +130,7 @@ impl fmt::Debug for Matrix {
             .debug_struct("Matrix")
             .field("homeserver_url", &self.homeserver_url)
             .field("mention_user", &self.mention_user)
-            .field("rooms", &self.rooms)
-            .field("queue_room", &self.queue_room)
+            .field("room", &self.room)
             .field("max_characters", &self.max_characters)
             .field("timeout", &self.timeout)
             .finish_non_exhaustive()
@@ -164,21 +194,17 @@ pub(crate) fn matrix_transaction_id() -> Result<String, Error> {
     Ok(format!("{TRANSACTION_PREFIX}{}", hex::encode(random)))
 }
 
-/// Builds the request that sends a message of `level` to the room of `route`.
+/// Builds the request that sends a message of `level` to the room of `matrix`.
 ///
 /// It is built as Go's `sendMatrix` builds it. Only action messages mention the user. A message
 /// longer than the limit is cut to the limit minus one character, followed by
 /// [`TRUNCATION_MARK`].
 pub(crate) fn matrix_request(
     matrix: &Matrix,
-    route: &NotifyRoute,
     level: Level,
     message: &str,
     transaction: &str,
 ) -> Result<MatrixRequest, Error> {
-    let Some(room) = room_of(matrix, route) else {
-        return Err(Error::workflow("matrix_level_invalid", true, None));
-    };
     if message.trim().is_empty() {
         return Err(Error::workflow("matrix_message_invalid", true, None));
     }
@@ -195,12 +221,12 @@ pub(crate) fn matrix_request(
         mentions,
         msgtype: TEXT_MESSAGE_TYPE,
     };
-    build_request(room, transaction, &content)
+    build_request(&matrix.room, transaction, &content)
 }
 
 /// Builds the request that posts the review queue digest, as Go's `SendQueueDigest` builds it.
 ///
-/// The digest goes to the queue room and mentions nobody. The caller chooses `transaction`.
+/// The digest goes to the room of `matrix` and mentions nobody. The caller chooses `transaction`.
 pub(crate) fn queue_digest_request(
     matrix: &Matrix,
     transaction: &str,
@@ -214,20 +240,7 @@ pub(crate) fn queue_digest_request(
         mentions: Mentions { user_ids: None },
         msgtype: NOTICE_MESSAGE_TYPE,
     };
-    build_request(&matrix.queue_room, transaction, &content)
-}
-
-/// Returns the room of `route`, or `None` for a route without a room.
-///
-/// An event route without a configured room has none; it never falls back to a level room.
-fn room_of<'a>(matrix: &'a Matrix, route: &NotifyRoute) -> Option<&'a str> {
-    match route {
-        NotifyRoute::Level(Level::Action) => Some(&matrix.rooms.action),
-        NotifyRoute::Level(Level::Digest) => Some(&matrix.rooms.digest),
-        NotifyRoute::Level(Level::Log) => Some(&matrix.rooms.log),
-        NotifyRoute::Level(Level::Other(_)) => None,
-        NotifyRoute::Event(event) => matrix.rooms.events.get(event).map(String::as_str),
-    }
+    build_request(&matrix.room, transaction, &content)
 }
 
 /// Returns `message` cut to `max_characters` as Go's `sendMatrix` cuts it.
@@ -316,19 +329,18 @@ fn encode<T: Serialize + ?Sized>(content: &T) -> Result<Vec<u8>, Error> {
         .into_bytes())
 }
 
-/// Sends one message to the room of `route`, as Go's `sendMatrix` does.
+/// Sends one message to the room of `matrix`, as Go's `sendMatrix` does.
 ///
 /// Every failure is returned, at every level; [`notify`] drops the muted ones.
 pub(crate) async fn send_matrix(
     client: &Client,
     matrix: &Matrix,
     cancel: &CancellationToken,
-    route: &NotifyRoute,
     level: Level,
     message: &str,
 ) -> Result<(), Error> {
     let transaction = matrix_transaction_id()?;
-    let request = matrix_request(matrix, route, level, message, &transaction)?;
+    let request = matrix_request(matrix, level, message, &transaction)?;
     put_matrix_message(client, matrix, cancel, request).await
 }
 
@@ -384,7 +396,7 @@ fn response_result(status: StatusCode) -> Result<(), Error> {
     Err(Error::workflow("matrix_request_rejected", true, None))
 }
 
-/// Notifies the room of `route` at `level`, as Go's `Notify` does.
+/// Notifies the room of `matrix` at `level`, as Go's `Notify` does.
 ///
 /// A level other than action drops a message the homeserver cannot take, whatever its route.
 /// The drop is logged, so a muted notification never fails a review.
@@ -392,11 +404,10 @@ pub(crate) async fn notify(
     client: &Client,
     matrix: &Matrix,
     cancel: &CancellationToken,
-    route: &NotifyRoute,
     level: Level,
     message: &str,
 ) -> Result<(), Error> {
-    match send_matrix(client, matrix, cancel, route, level.clone(), message).await {
+    match send_matrix(client, matrix, cancel, level.clone(), message).await {
         Ok(()) => Ok(()),
         Err(error) => drop_if_muted(level, error),
     }
@@ -445,31 +456,23 @@ fn level_name(level: &Level) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use autoreview_engine::config::{MatrixRooms, NotifyRoute};
+    use autoreview_engine::config::MatrixBackend;
     use autoreview_policy::Level;
     use serde_json::{Value, json};
 
     use super::{Matrix, matrix_request, queue_digest_request};
 
-    /// Settings with synthetic values only.
+    /// Settings of one backend with synthetic values only.
     fn matrix() -> Matrix {
-        Matrix::new(
-            "https://matrix.example.org".to_owned(),
-            "placeholder-token".to_owned(),
-            "@example-user:example.org".to_owned(),
-            MatrixRooms {
-                action: "!action:example.org".to_owned(),
-                digest: "!digest:example.org".to_owned(),
-                log: "!log:example.org".to_owned(),
-                events: BTreeMap::new(),
-            },
-            "!queue:example.org".to_owned(),
-            32_000,
-            Duration::from_secs(30),
-        )
+        let backend = MatrixBackend {
+            homeserver_url: "https://matrix.example.org".to_owned(),
+            access_token: "placeholder-token".to_owned(),
+            room: "!queue:example.org".to_owned(),
+            mention_user: "@example-user:example.org".to_owned(),
+        };
+        Matrix::new(&backend, 32_000, Duration::from_secs(30))
     }
 
     #[test]
@@ -493,26 +496,12 @@ mod tests {
     #[test]
     fn send_matrix_still_mentions_only_on_action_level() {
         let matrix = matrix();
-        let action_route = NotifyRoute::Level(Level::Action);
-        let digest_route = NotifyRoute::Level(Level::Digest);
-        let action = matrix_request(
-            &matrix,
-            &action_route,
-            Level::Action,
-            "action",
-            "notify-test",
-        )
-        .expect("action request");
-        let digest = matrix_request(
-            &matrix,
-            &digest_route,
-            Level::Digest,
-            "digest",
-            "notify-test",
-        )
-        .expect("digest request");
-        assert_eq!(action.room, "!action:example.org");
-        assert_eq!(digest.room, "!digest:example.org");
+        let action = matrix_request(&matrix, Level::Action, "action", "notify-test")
+            .expect("action request");
+        let digest = matrix_request(&matrix, Level::Digest, "digest", "notify-test")
+            .expect("digest request");
+        assert_eq!(action.room, "!queue:example.org");
+        assert_eq!(digest.room, "!queue:example.org");
         let action_payload: Value =
             serde_json::from_slice(&action.content).expect("action JSON content");
         let digest_payload: Value =

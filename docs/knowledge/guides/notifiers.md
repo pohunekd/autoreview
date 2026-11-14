@@ -47,7 +47,7 @@ notify:
 - `backends` defines named endpoints. Names are used in the routes, and the
   same type may appear several times under different names.
 - `routes` maps each level to a list of exactly one backend name. Several
-  backends per level are planned in #27. An event name as a key gives that
+  backends per level are planned in #30. An event name as a key gives that
   event its own route, see [one event in its own room](#one-event-in-its-own-room).
 - `review_queue.backends` lists the backends of the review queue, which is a
   separate message and not an event.
@@ -60,8 +60,8 @@ backends when they must not share a room.
 
 Planned in #29. Until then every route and the review queue need a `matrix`
 backend. A route to a `none` backend is refused at load with
-`configuration_invalid: config: invalid Matrix <level> room` (`<event>` for an
-event route). A
+`configuration_invalid: notify.routes.<key>: none backends are not routed until
+#29`. A
 `review_queue.backends` list of `none` backends only is refused too, see
 [configuration](../../configuration.md#backend-none).
 
@@ -135,7 +135,8 @@ notify:
 
 - The key is an event of the [policy notifications](../../policy.md#notifications),
   and the value follows the rules of a level route: exactly one `matrix`
-  backend with the shared identity until M3.
+  backend until #30. That backend may use another homeserver, token or
+  mentioned user than the level backends.
 - The level of the event still decides the rest: an `action` event mentions
   `mention_user` in its own room, and a failed `digest` or `log` message is
   dropped with a warning, as on its level route.
@@ -150,7 +151,7 @@ Planned in #29.
 
 ## Several backends for one level
 
-Planned in #27.
+Planned in #30.
 
 ## Review queue
 

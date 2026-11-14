@@ -273,7 +273,7 @@ pub(crate) mod tests {
 
     use autoreview_schedule::scheduler;
 
-    use crate::config::{Config, MatrixRooms};
+    use crate::config::{Config, NotifySettings};
     use crate::discussion::{DISCUSSION_ROLE_AUTHOR, DISCUSSION_ROLE_REVIEWER};
     use crate::error::error_code;
     use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN, prior_key};
@@ -302,17 +302,8 @@ pub(crate) mod tests {
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
             host_state: None,
-            matrix_homeserver_url: "https://matrix.example.org".to_owned(),
-            matrix_access_token: "placeholder-token".to_owned(),
+            notify: NotifySettings::single_for_tests(),
             secret_variables: std::collections::BTreeSet::new(),
-            matrix_mention_user: "@example-user:example.org".to_owned(),
-            matrix_rooms: MatrixRooms {
-                action: "!action:example.org".to_owned(),
-                digest: "!digest:example.org".to_owned(),
-                log: "!log:example.org".to_owned(),
-                events: std::collections::BTreeMap::new(),
-            },
-            queue_matrix_room: "!queue:example.org".to_owned(),
             queue_max_items: 10,
             state_db_path: "/var/lib/autoreview/state.db".to_owned(),
             gh_timeout: Duration::from_secs(30),

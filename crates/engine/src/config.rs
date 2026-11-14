@@ -17,9 +17,11 @@ use crate::model::{RunLimits, repository_valid};
 use crate::publish::MarkerName;
 
 mod credentials;
+mod notify;
 mod symbols;
 
 pub use credentials::{Credential, Credentials};
+pub use notify::{BackendKind, MatrixBackend, NotifyBackend, NotifyRoute, NotifySettings};
 
 /// Code of a configuration that fails validation.
 const CONFIGURATION_INVALID: &str = "configuration_invalid";
@@ -158,30 +160,6 @@ pub struct HostStateRules {
     pub outside_window: HostStateChoice,
 }
 
-/// The Matrix rooms of each level and of each event with its own route.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MatrixRooms {
-    /// The room of action messages, which mention the user.
-    pub action: String,
-    /// The room of digest messages.
-    pub digest: String,
-    /// The room of log messages.
-    pub log: String,
-    /// The rooms of the event routes, by event; empty without event routes.
-    pub events: BTreeMap<Event, String>,
-}
-
-/// The route that carries one notification to its backends.
-///
-/// The level of a notification still decides its mention and whether a failure is dropped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NotifyRoute {
-    /// The route of the level, `notify.routes.<level>`.
-    Level(Level),
-    /// The event's own route, `notify.routes.<event>`.
-    Event(Event),
-}
-
 /// The technical settings of the engine. What is reviewed and how it is published lives in the
 /// review policy.
 ///
@@ -210,20 +188,12 @@ pub struct Config {
     pub route_overrides: BTreeMap<String, RouteOverride>,
     /// The host-state rules, or `None` when hosts are tried in configured order only.
     pub host_state: Option<HostStateRules>,
-    /// The Matrix homeserver URL; HTTPS, or plain HTTP on the loopback address.
-    pub matrix_homeserver_url: String,
-    /// The Matrix access token; it never appears in debug output.
-    pub matrix_access_token: String,
+    /// The notification backends, their routes and the backends of the review queue.
+    pub notify: NotifySettings,
     /// Names of the variables that hold the configured secrets.
     ///
     /// No child process inherits them; the `gh` child gets its token as `GH_TOKEN`.
     pub secret_variables: BTreeSet<String>,
-    /// The Matrix user that action messages mention.
-    pub matrix_mention_user: String,
-    /// The Matrix rooms of the three notification levels.
-    pub matrix_rooms: MatrixRooms,
-    /// The Matrix room that receives the hourly review queue.
-    pub queue_matrix_room: String,
     /// The largest number of requests that one queue message lists.
     pub queue_max_items: i64,
     /// The SQLite database of discovery state and reviews; a clean absolute path.
@@ -351,9 +321,9 @@ impl fmt::Debug for Config {
 impl Config {
     /// Returns the route of a notification of `event` at `level`.
     ///
-    /// An event with its own room takes its own route; every other event takes its level's.
+    /// An event with its own route takes it; every other event takes its level's.
     pub fn notify_route(&self, event: &Event, level: Level) -> NotifyRoute {
-        if self.matrix_rooms.events.contains_key(event) {
+        if self.notify.events.contains_key(event) {
             NotifyRoute::Event(event.clone())
         } else {
             NotifyRoute::Level(level)
@@ -409,7 +379,7 @@ impl Config {
         if !is_valid_session_group(&self.session_group) {
             return Err(invalid("invalid review session group"));
         }
-        self.validate_matrix()?;
+        self.validate_notify()?;
         if !state_db_path_valid(&self.state_db_path) {
             return Err(invalid("state database path must be a clean absolute path"));
         }
@@ -426,46 +396,31 @@ impl Config {
         Ok(())
     }
 
-    /// Validates Matrix fields.
+    /// Validates the notification backends and the backend names of every route.
     ///
     /// # Errors
     ///
-    /// Returns a configuration error when a Matrix field is invalid.
-    fn validate_matrix(&self) -> Result<(), Error> {
-        let parsed = match parse_matrix_url(&self.matrix_homeserver_url) {
-            Some(value) => value,
-            None => return Err(invalid("invalid Matrix URL")),
-        };
-        if parsed.scheme != "https"
-            && !(parsed.scheme == "http" && parsed.hostname == LOOPBACK_HOST)
-        {
-            return Err(invalid("matrix URL must use HTTPS or loopback HTTP"));
-        }
-        if !matrix_user_valid(&self.matrix_mention_user)
-            || self.matrix_access_token.contains('\r')
-            || self.matrix_access_token.contains('\n')
-            || self.matrix_access_token.contains(' ')
-        {
-            return Err(invalid("invalid Matrix identity"));
-        }
-        for (level, room) in [
-            ("action", self.matrix_rooms.action.as_str()),
-            ("digest", self.matrix_rooms.digest.as_str()),
-            ("log", self.matrix_rooms.log.as_str()),
-        ] {
-            if !matrix_room_valid(room) {
-                let message = format!("invalid Matrix {level} room");
-                return Err(invalid(message));
+    /// Returns a configuration error when a Matrix backend is invalid or a route is empty or
+    /// names no backend.
+    fn validate_notify(&self) -> Result<(), Error> {
+        for backend in &self.notify.backends {
+            if let BackendKind::Matrix(matrix) = &backend.kind {
+                validate_matrix(&backend.name, matrix)?;
             }
         }
-        for (event, room) in &self.matrix_rooms.events {
-            if !matrix_room_valid(room) {
-                let message = format!("invalid Matrix {} room", event.as_str());
+        let levels = [
+            ("action", &self.notify.action),
+            ("digest", &self.notify.digest),
+            ("log", &self.notify.log),
+            ("queue", &self.notify.queue),
+        ];
+        let events = (self.notify.events.iter()).map(|(event, names)| (event.as_str(), names));
+        for (route, names) in levels.into_iter().chain(events) {
+            let known = |name: &String| self.notify.backend(name).is_some();
+            if names.is_empty() || !names.iter().all(known) {
+                let message = format!("invalid notification route {route}");
                 return Err(invalid(message));
             }
-        }
-        if !matrix_room_valid(&self.queue_matrix_room) {
-            return Err(invalid("invalid Matrix queue room"));
         }
         Ok(())
     }
@@ -648,6 +603,42 @@ pub fn identifier_valid(value: &str) -> bool {
         }
     }
     true
+}
+
+/// Validates the homeserver, the identity and the room of the Matrix backend `name`.
+///
+/// # Errors
+///
+/// Returns a configuration error that names the backend and the key of the invalid field.
+fn validate_matrix(name: &str, matrix: &MatrixBackend) -> Result<(), Error> {
+    let refused = |key: &str, message: &str| {
+        let key = format!("notify.backends.{name}.{key}");
+        Err(Error::config(
+            CONFIGURATION_INVALID,
+            key,
+            Some(BoxError::from(message)),
+        ))
+    };
+    let Some(parsed) = parse_matrix_url(&matrix.homeserver_url) else {
+        return refused("homeserver_url", "invalid Matrix URL");
+    };
+    if parsed.scheme != "https" && !(parsed.scheme == "http" && parsed.hostname == LOOPBACK_HOST) {
+        return refused(
+            "homeserver_url",
+            "matrix URL must use HTTPS or loopback HTTP",
+        );
+    }
+    if !matrix_user_valid(&matrix.mention_user) {
+        return refused("mention_user", "invalid Matrix user");
+    }
+    // The token is never shown; the key names the variable that holds it.
+    if matrix.access_token.contains(['\r', '\n', ' ']) {
+        return refused("access_token_env", "invalid Matrix token");
+    }
+    if !matrix_room_valid(&matrix.room) {
+        return refused("room", "invalid Matrix room");
+    }
+    Ok(())
 }
 
 /// Reports whether `room` is a valid Matrix room.
@@ -1078,7 +1069,9 @@ mod tests {
 
     use autoreview_schedule::scheduler;
 
-    use super::{Config, MarkerName, MatrixRooms};
+    use autoreview_policy::Event;
+
+    use super::{BackendKind, Config, MarkerName, MatrixBackend, NotifySettings};
 
     use crate::error::error_code;
 
@@ -1099,17 +1092,8 @@ mod tests {
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
             host_state: None,
-            matrix_homeserver_url: "https://matrix.example.org".to_owned(),
-            matrix_access_token: "placeholder-token".to_owned(),
+            notify: NotifySettings::single_for_tests(),
             secret_variables: std::collections::BTreeSet::new(),
-            matrix_mention_user: "@example-user:example.org".to_owned(),
-            matrix_rooms: MatrixRooms {
-                action: "!action:example.org".to_owned(),
-                digest: "!digest:example.org".to_owned(),
-                log: "!log:example.org".to_owned(),
-                events: std::collections::BTreeMap::new(),
-            },
-            queue_matrix_room: "!queue:example.org".to_owned(),
             queue_max_items: 10,
             state_db_path: "/var/lib/autoreview/state.db".to_owned(),
             gh_timeout: Duration::from_secs(30),
@@ -1247,15 +1231,70 @@ mod tests {
                 "{login}"
             );
         }
-        let mut config = valid_config();
-        config.matrix_rooms.action = String::new();
-        let error = config
-            .validate()
-            .expect_err("an empty action room is refused");
-        assert_eq!(
-            error.to_string(),
-            "configuration_invalid: config: invalid Matrix action room"
-        );
+        /// One change of the notification settings.
+        type Change = fn(&mut NotifySettings);
+        /// One change of the only Matrix backend, `matrix`.
+        type MatrixChange = fn(&mut MatrixBackend);
+        let routes: [(Change, &str); 3] = [
+            (
+                |notify| notify.action.clear(),
+                "config: invalid notification route action",
+            ),
+            (
+                |notify| notify.queue = vec!["missing".to_owned()],
+                "config: invalid notification route queue",
+            ),
+            (
+                |notify| {
+                    let names = vec!["missing".to_owned()];
+                    notify.events.insert(Event::Approved, names);
+                },
+                "config: invalid notification route approved",
+            ),
+        ];
+        let backends: [(MatrixChange, &str); 5] = [
+            (
+                |matrix| matrix.homeserver_url = "matrix.example.org".to_owned(),
+                "homeserver_url: invalid Matrix URL",
+            ),
+            (
+                |matrix| matrix.homeserver_url = "http://matrix.example.org".to_owned(),
+                "homeserver_url: matrix URL must use HTTPS or loopback HTTP",
+            ),
+            (
+                |matrix| matrix.mention_user = "example-user".to_owned(),
+                "mention_user: invalid Matrix user",
+            ),
+            (
+                |matrix| matrix.access_token = "two words".to_owned(),
+                "access_token_env: invalid Matrix token",
+            ),
+            (
+                |matrix| matrix.room = String::new(),
+                "room: invalid Matrix room",
+            ),
+        ];
+        for (change, message) in routes {
+            let mut config = valid_config();
+            change(&mut config.notify);
+            let error = config.validate().expect_err("the route is refused");
+            assert_eq!(
+                error.to_string(),
+                format!("configuration_invalid: {message}")
+            );
+        }
+        for (change, message) in backends {
+            let mut config = valid_config();
+            let first = config.notify.backends.first_mut();
+            if let Some(BackendKind::Matrix(matrix)) = first.map(|backend| &mut backend.kind) {
+                change(matrix);
+            }
+            let error = config.validate().expect_err("the backend is refused");
+            assert_eq!(
+                error.to_string(),
+                format!("configuration_invalid: notify.backends.matrix.{message}")
+            );
+        }
     }
 
     #[test]

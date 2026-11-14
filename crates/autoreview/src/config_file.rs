@@ -13,13 +13,13 @@ use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{
-    Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules, MatrixRooms,
-    RouteOverride, signature_text,
+    BackendKind, Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules,
+    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, signature_text,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::publish::MarkerName;
-use autoreview_policy::{EVENTS, Event, OPTIONAL_EVENTS, Policy, user_login_valid};
+use autoreview_policy::{EVENTS, OPTIONAL_EVENTS, Policy, user_login_valid};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -682,7 +682,7 @@ pub(crate) fn parse(
 ) -> Result<Config, Error> {
     let file = parse_file(text)?;
     let mapped = map_file(&file, &secret, load_policy)?;
-    // The queue posts only to Matrix until M3. The check follows the mapping, so a test can map
+    // The queue posts only to Matrix until #29. The check follows the mapping, so a test can map
     // a config whose queue names only `none` backends.
     if !mapped.queue_on_matrix {
         return Err(invalid(
@@ -714,8 +714,8 @@ pub(crate) fn parse_file(text: &str) -> Result<FileConfig, Error> {
 
 /// Maps the file into the engine configuration without the engine's final validation.
 ///
-/// A review queue without a Matrix backend maps to an empty `queue_matrix_room`. The tests use
-/// it to map configs that [`parse`] refuses.
+/// A review queue without a Matrix backend maps as it is. The tests use it to map configs that
+/// [`parse`] refuses.
 ///
 /// # Errors
 ///
@@ -928,8 +928,11 @@ fn map_file(
     let review_queue = section(&notify.review_queue, "notify.review_queue")?;
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
     let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
-    let shape = matrix_shape(&backends, routes, &queue_backends)?;
-    let queue_on_matrix = shape.queue_room.is_some();
+    let notify = notify_settings(&backends, routes, queue_backends)?;
+    let queue_on_matrix = (notify.queue.iter()).any(|name| {
+        let backend = notify.backend(name).map(|backend| &backend.kind);
+        matches!(backend, Some(BackendKind::Matrix(_)))
+    });
     let config = Config {
         policy: Some(policy),
         schedule,
@@ -942,12 +945,8 @@ fn map_file(
         pohunek_hosts,
         route_overrides,
         host_state,
-        matrix_homeserver_url: shape.homeserver_url,
-        matrix_access_token: shape.access_token,
+        notify,
         secret_variables: secret_variables.take(),
-        matrix_mention_user: shape.mention_user,
-        matrix_rooms: shape.rooms,
-        queue_matrix_room: shape.queue_room.unwrap_or_default(),
         queue_max_items,
         state_db_path,
         gh_timeout,
@@ -1229,18 +1228,10 @@ enum Backend {
     Matrix {
         /// Name the routes refer to.
         name: String,
-        /// Homeserver base URL.
-        homeserver_url: String,
-        /// Environment variable that holds the access token.
-        access_token_env: String,
-        /// The access token, read from the environment variable named by the key.
-        access_token: String,
-        /// Room identifier.
-        room: String,
-        /// Matrix user mentioned in action messages.
-        mention_user: String,
+        /// The homeserver, the access token read from `access_token_env`, the room and the user.
+        settings: MatrixBackend,
     },
-    /// The `webhook` type; parsed and validated, but routes to it are refused until M3.
+    /// The `webhook` type; parsed and validated, but routes to it are refused until #29.
     Webhook {
         /// Name the routes refer to.
         name: String,
@@ -1254,19 +1245,6 @@ impl Backend {
             Backend::None { name } => name,
             Backend::Matrix { name, .. } => name,
             Backend::Webhook { name } => name,
-        }
-    }
-
-    /// Returns the homeserver, token variable and mentioned user of a Matrix backend.
-    fn matrix_identity(&self) -> Option<(&str, &str, &str)> {
-        match self {
-            Backend::Matrix {
-                homeserver_url,
-                access_token_env,
-                mention_user,
-                ..
-            } => Some((homeserver_url, access_token_env, mention_user)),
-            Backend::None { .. } | Backend::Webhook { .. } => None,
         }
     }
 }
@@ -1322,14 +1300,13 @@ fn notify_backends(
                 )?;
                 let room = text(room, "notify.backends.room")?;
                 let mention_user = text(mention_user, "notify.backends.mention_user")?;
-                out.push(Backend::Matrix {
-                    name,
+                let settings = MatrixBackend {
                     homeserver_url,
-                    access_token_env: variable,
                     access_token,
                     room,
                     mention_user,
-                });
+                };
+                out.push(Backend::Matrix { name, settings });
             }
             BackendFile::Webhook {
                 name,
@@ -1418,97 +1395,29 @@ fn secret_value(
     }
 }
 
-/// The Matrix values of the engine configuration.
-struct MatrixShape {
-    /// Homeserver base URL, empty when no route and no queue reaches Matrix.
-    homeserver_url: String,
-    /// Access token, empty when no route and no queue reaches Matrix.
-    access_token: String,
-    /// Mentioned user, empty when no route and no queue reaches Matrix.
-    mention_user: String,
-    /// The level and event rooms; empty for a `none` backend.
-    rooms: MatrixRooms,
-    /// The review queue room; `None` when the queue names no Matrix backend.
-    queue_room: Option<String>,
-}
-
-/// Maps the routes and the review queue onto Matrix backends that share one identity.
-///
-/// The levels are checked first, then the event routes in key order, then the queue.
-///
-/// # Errors
-///
-/// Returns `configuration_invalid` when a route key is neither a level nor an event, when a
-/// route names other than one backend, names a webhook, or names a Matrix backend with another
-/// identity, or when the queue names two Matrix backends.
-fn matrix_shape(
-    backends: &[Backend],
-    routes: &BTreeMap<String, Option<Value>>,
-    queue_backends: &[String],
-) -> Result<MatrixShape, Error> {
-    let mut matrix: Option<&Backend> = None;
-    let action = level_room(
-        backends,
-        &routes.get("action").cloned().flatten(),
-        "notify.routes.action",
-        &mut matrix,
-    )?;
-    let digest = level_room(
-        backends,
-        &routes.get("digest").cloned().flatten(),
-        "notify.routes.digest",
-        &mut matrix,
-    )?;
-    let log = level_room(
-        backends,
-        &routes.get("log").cloned().flatten(),
-        "notify.routes.log",
-        &mut matrix,
-    )?;
-    let events = event_rooms(backends, routes, &mut matrix)?;
-    let queue_room = queue_room(backends, queue_backends, &mut matrix)?;
-    let (homeserver_url, access_token, mention_user) = match matrix {
-        Some(Backend::Matrix {
-            homeserver_url,
-            access_token,
-            mention_user,
-            ..
-        }) => (
-            homeserver_url.clone(),
-            access_token.clone(),
-            mention_user.clone(),
-        ),
-        _ => (String::new(), String::new(), String::new()),
-    };
-    Ok(MatrixShape {
-        homeserver_url,
-        access_token,
-        mention_user,
-        rooms: MatrixRooms {
-            action,
-            digest,
-            log,
-            events,
-        },
-        queue_room,
-    })
-}
-
 /// The keys of `notify.routes` that name a level; every other key names an event.
 const LEVEL_ROUTES: [&str; 3] = ["action", "digest", "log"];
 
-/// Resolves every event route of `notify.routes` to its room, in key order.
+/// Maps the backends, the routes and the review queue into the engine's settings.
+///
+/// The levels are checked first, then the event routes in key order, then the queue. A
+/// `webhook` backend is left out, because nothing routes to it.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming `notify.routes.<key>` when the key names no event,
-/// and the errors of [`level_room`] for its backends.
-fn event_rooms<'a>(
-    backends: &'a [Backend],
+/// Returns `configuration_invalid` naming the route key when a key is neither a level nor an
+/// event, and the errors of [`route_backends`] and [`queue_backends`].
+fn notify_settings(
+    backends: &[Backend],
     routes: &BTreeMap<String, Option<Value>>,
-    matrix: &mut Option<&'a Backend>,
-) -> Result<BTreeMap<Event, String>, Error> {
-    let mut rooms = BTreeMap::new();
+    queue: Vec<String>,
+) -> Result<NotifySettings, Error> {
+    let level = |name: &str| {
+        let key = format!("notify.routes.{name}");
+        route_backends(backends, &routes.get(name).cloned().flatten(), &key)
+    };
+    let (action, digest, log) = (level("action")?, level("digest")?, level("log")?);
+    let mut events = BTreeMap::new();
     for (name, names) in routes {
         if LEVEL_ROUTES.contains(&name.as_str()) {
             continue;
@@ -1519,102 +1428,82 @@ fn event_rooms<'a>(
         else {
             return Err(invalid(&key, "names no notification event"));
         };
-        let room = level_room(backends, names, &key, matrix)?;
-        rooms.insert(event.clone(), room);
+        events.insert(event.clone(), route_backends(backends, names, &key)?);
     }
-    Ok(rooms)
+    queue_backends(backends, &queue)?;
+    let engine_backends = backends.iter().filter_map(|backend| match backend {
+        Backend::None { name } => Some((name, BackendKind::None)),
+        Backend::Matrix { name, settings } => Some((name, BackendKind::Matrix(settings.clone()))),
+        Backend::Webhook { .. } => None,
+    });
+    Ok(NotifySettings {
+        backends: (engine_backends)
+            .map(|(name, kind)| NotifyBackend {
+                name: name.clone(),
+                kind,
+            })
+            .collect(),
+        action,
+        digest,
+        log,
+        events,
+        queue,
+    })
 }
 
-/// Resolves one level or event route to its room and checks its backend.
+/// Reads the backend names of one level or event route.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` when the route does not name exactly one backend, the
-/// backend is a webhook, or its identity differs from the Matrix backend chosen before.
-fn level_room<'a>(
-    backends: &'a [Backend],
+/// Returns `configuration_invalid` naming `key` when the route does not name exactly one
+/// backend, or names a backend that is not configured or not of type `matrix`.
+fn route_backends(
+    backends: &[Backend],
     names: &Option<Value>,
     key: &str,
-    matrix: &mut Option<&'a Backend>,
-) -> Result<String, Error> {
+) -> Result<Vec<String>, Error> {
     let names = text_list(names, key)?;
     let [name] = names.as_slice() else {
-        return Err(invalid(key, "must name exactly one backend until M3"));
+        return Err(invalid(key, "must name exactly one backend until #30"));
     };
-    let backend = find_backend(backends, name, key)?;
-    match backend {
-        Backend::None { .. } => Ok(String::new()),
-        Backend::Matrix { room, .. } => {
-            share_identity(backend, key, matrix)?;
-            Ok(room.clone())
-        }
-        Backend::Webhook { .. } => Err(invalid(key, "webhook backends are not routed until M3")),
+    match find_backend(backends, name, key)? {
+        Backend::Matrix { .. } => Ok(names),
+        Backend::None { .. } => Err(invalid(key, "none backends are not routed until #29")),
+        Backend::Webhook { .. } => Err(invalid(key, "webhook backends are not routed until #29")),
     }
 }
 
-/// Resolves the review queue to its Matrix room, or to `None` without a Matrix backend.
+/// Checks the backend names of the review queue.
 ///
 /// # Errors
 ///
 /// Returns `configuration_invalid` naming `notify.review_queue.backends` for an empty list, a
-/// webhook, a second Matrix backend, or a Matrix backend whose identity differs from the routes.
-fn queue_room<'a>(
-    backends: &'a [Backend],
-    names: &[String],
-    matrix: &mut Option<&'a Backend>,
-) -> Result<Option<String>, Error> {
+/// name given twice or not configured, a webhook, or a second Matrix backend.
+fn queue_backends(backends: &[Backend], names: &[String]) -> Result<(), Error> {
     let key = "notify.review_queue.backends";
     if names.is_empty() {
         return Err(invalid(key, "must name at least one backend"));
     }
-    let mut queue: Option<&Backend> = None;
-    for name in names {
-        let backend = find_backend(backends, name, key)?;
-        match backend {
+    let mut matrix: Option<&str> = None;
+    for (index, name) in names.iter().enumerate() {
+        if names.iter().take(index).any(|earlier| earlier == name) {
+            return Err(invalid(key, "names a backend twice"));
+        }
+        match find_backend(backends, name, key)? {
             Backend::None { .. } => {}
-            Backend::Matrix { .. } => {
-                if queue.is_some_and(|chosen| !std::ptr::eq(chosen, backend)) {
+            Backend::Matrix { name, .. } => {
+                if matrix.is_some_and(|chosen| chosen != name) {
                     return Err(invalid(
                         key,
-                        "must name at most one Matrix backend until M3",
+                        "must name at most one Matrix backend until #30",
                     ));
                 }
-                share_identity(backend, key, matrix)?;
-                queue = Some(backend);
+                matrix = Some(name);
             }
             Backend::Webhook { .. } => {
-                return Err(invalid(key, "webhook backends are not routed until M3"));
+                return Err(invalid(key, "webhook backends are not routed until #29"));
             }
         }
-    }
-    match queue {
-        Some(Backend::Matrix { room, .. }) => Ok(Some(room.clone())),
-        _ => Ok(None),
-    }
-}
-
-/// Records `backend` as the Matrix identity, or checks it against the identity chosen before.
-///
-/// # Errors
-///
-/// Returns `configuration_invalid` naming `key` when `homeserver_url`, `access_token_env` or
-/// `mention_user` differs from the Matrix backend chosen before.
-fn share_identity<'a>(
-    backend: &'a Backend,
-    key: &str,
-    matrix: &mut Option<&'a Backend>,
-) -> Result<(), Error> {
-    match matrix {
-        Some(chosen) => {
-            if chosen.matrix_identity() != backend.matrix_identity() {
-                return Err(invalid(
-                    key,
-                    "Matrix backends must share homeserver_url, access_token_env and \
-                     mention_user until M3",
-                ));
-            }
-        }
-        None => *matrix = Some(backend),
     }
     Ok(())
 }
@@ -1997,7 +1886,7 @@ pub(crate) mod tests {
     use super::*;
     use autoreview_engine::config::NotifyRoute;
     use autoreview_engine::go_json;
-    use autoreview_policy::Level;
+    use autoreview_policy::{Event, Level};
 
     /// The example config, read by the loader tests so that they cover the shipped file.
     const EXAMPLE: &str = include_str!("../../../examples/config.yaml");
@@ -2021,9 +1910,8 @@ pub(crate) mod tests {
     pub(crate) fn secret(name: &str) -> Option<String> {
         match name {
             "AUTOREVIEW_GH_TOKEN" => Some("synthetic-token".to_owned()),
-            "AUTOREVIEW_MATRIX_TOKEN" | "AUTOREVIEW_MATRIX_TOKEN_OTHER" => {
-                Some("synthetic-matrix-token".to_owned())
-            }
+            "AUTOREVIEW_MATRIX_TOKEN" => Some("synthetic-matrix-token".to_owned()),
+            "AUTOREVIEW_MATRIX_TOKEN_OTHER" => Some("synthetic-matrix-token-other".to_owned()),
             "AUTOREVIEW_WEBHOOK_URL" => Some("https://hooks.example.org/synthetic".to_owned()),
             _ => None,
         }
@@ -2160,12 +2048,14 @@ pub(crate) mod tests {
     #[test]
     fn example_passes_the_loader_and_the_engine_validation() {
         let config = parse(EXAMPLE, secret, example_policy).expect("the example loads");
-        assert_eq!(config.matrix_rooms.action, "!roomid:example.org");
-        assert_eq!(config.matrix_rooms.log, "!roomid:example.org");
-        assert_eq!(config.queue_matrix_room, "!roomid:example.org");
-        assert_eq!(config.matrix_homeserver_url, "https://matrix.example.org");
-        assert_eq!(config.matrix_access_token, "synthetic-matrix-token");
-        assert_eq!(config.matrix_mention_user, "@you:example.org");
+        let matrix = vec!["matrix".to_owned()];
+        assert_eq!(config.notify.action, matrix);
+        assert_eq!(config.notify.log, matrix);
+        assert_eq!(config.notify.queue, matrix);
+        assert_eq!(
+            config.notify.backends,
+            [example_matrix("matrix", "!roomid:example.org")]
+        );
         let file = parse_file(EXAMPLE).expect("the example parses");
         assert!(
             mcp_section(&file).is_ok_and(|mcp| mcp.is_none()),
@@ -2588,13 +2478,34 @@ pub(crate) mod tests {
         let text = four_backends(shared_backends(), "[queue]");
         let config = parse(&text, secret, example_policy)
             .expect("four Matrix backends with one identity pass validation");
-        assert_eq!(config.matrix_rooms.action, "!action:example.org");
-        assert_eq!(config.matrix_rooms.digest, "!digest:example.org");
-        assert_eq!(config.matrix_rooms.log, "!log:example.org");
-        assert_eq!(config.queue_matrix_room, "!queue:example.org");
-        assert_eq!(config.matrix_homeserver_url, "https://matrix.example.org");
-        assert_eq!(config.matrix_access_token, "synthetic-matrix-token");
-        assert_eq!(config.matrix_mention_user, "@you:example.org");
+        assert_eq!(config.notify.action, ["action"]);
+        assert_eq!(config.notify.digest, ["digest"]);
+        assert_eq!(config.notify.log, ["log"]);
+        assert_eq!(config.notify.queue, ["queue"]);
+        for (level, name) in [
+            (Level::Action, "action"),
+            (Level::Digest, "digest"),
+            (Level::Log, "log"),
+        ] {
+            let route = NotifyRoute::Level(level);
+            assert_eq!(config.notify.backends_of(&route), [name], "{route:?}");
+        }
+        let rooms = ["action", "digest", "log", "queue"]
+            .map(|name| example_matrix(name, &format!("!{name}:example.org")));
+        assert_eq!(config.notify.backends, rooms);
+    }
+
+    /// Returns the engine backend of a Matrix entry with the example identity.
+    fn example_matrix(name: &str, room: &str) -> NotifyBackend {
+        NotifyBackend {
+            name: name.to_owned(),
+            kind: BackendKind::Matrix(MatrixBackend {
+                homeserver_url: "https://matrix.example.org".to_owned(),
+                access_token: "synthetic-matrix-token".to_owned(),
+                room: room.to_owned(),
+                mention_user: "@you:example.org".to_owned(),
+            }),
+        }
     }
 
     #[test]
@@ -2633,7 +2544,7 @@ pub(crate) mod tests {
         );
         let text = four_backends(entries, "[quiet, queue]");
         let config = parse(&text, secret, example_policy).expect("none next to Matrix loads");
-        assert_eq!(config.queue_matrix_room, "!queue:example.org");
+        assert_eq!(config.notify.queue, ["quiet", "queue"]);
         let text = four_backends(shared_backends(), "[queue]")
             .replace("room: \"!queue:example.org\"", "room: \"\"");
         assert_eq!(
@@ -2661,76 +2572,79 @@ pub(crate) mod tests {
             let text = four_backends(entries, "[queue]");
             assert_eq!(
                 error_text(parse(&text, secret, example_policy)),
-                format!("configuration_invalid: config: invalid Matrix {level} room"),
+                format!(
+                    "configuration_invalid: notify.routes.{level}: \
+                     none backends are not routed until #29"
+                ),
                 "{level} routed to none"
             );
         }
     }
 
     #[test]
-    fn a_matrix_backend_with_another_identity_names_its_route_key() {
-        let shared = concat!(
-            "Matrix backends must share homeserver_url, access_token_env and ",
-            "mention_user until M3"
-        );
+    fn matrix_backends_keep_their_own_identity() {
         let cases = [
             (
                 0,
                 "https://other.example.org",
                 "AUTOREVIEW_MATRIX_TOKEN",
                 "@you:example.org",
-                "notify.routes.digest",
-            ),
-            (
-                1,
-                "https://other.example.org",
-                "AUTOREVIEW_MATRIX_TOKEN",
-                "@you:example.org",
-                "notify.routes.digest",
             ),
             (
                 2,
                 "https://matrix.example.org",
                 "AUTOREVIEW_MATRIX_TOKEN_OTHER",
                 "@you:example.org",
-                "notify.routes.log",
             ),
             (
                 1,
                 "https://matrix.example.org",
                 "AUTOREVIEW_MATRIX_TOKEN",
                 "@other:example.org",
-                "notify.routes.digest",
             ),
             (
                 3,
                 "https://other.example.org",
                 "AUTOREVIEW_MATRIX_TOKEN",
                 "@you:example.org",
-                "notify.review_queue.backends",
             ),
         ];
-        for (index, homeserver, token_env, mention, key) in cases {
+        let names = ["action", "digest", "log", "queue"];
+        for (index, homeserver, token_env, mention) in cases {
             let mut entries = shared_backends();
-            let names = ["action", "digest", "log", "queue"];
             if let (Some(entry), Some(name)) = (entries.get_mut(index), names.get(index)) {
                 *entry = matrix_backend(name, homeserver, token_env, mention);
             }
             let text = four_backends(entries, "[queue]");
+            let config = parse(&text, secret, example_policy).expect("own identities load");
+            let backend = config
+                .notify
+                .backends
+                .get(index)
+                .map(|backend| &backend.kind);
+            let Some(BackendKind::Matrix(matrix)) = backend else {
+                panic!("backend {index} is not Matrix: {backend:?}");
+            };
+            assert_eq!(matrix.homeserver_url, homeserver);
+            assert_eq!(matrix.mention_user, mention);
+            let token = secret(token_env).expect("a synthetic token");
+            assert_eq!(matrix.access_token, token, "token of {token_env}");
+        }
+        let refused = [
+            (
+                "[queue, log]",
+                "must name at most one Matrix backend until #30",
+            ),
+            ("[queue, queue]", "names a backend twice"),
+        ];
+        for (queue, message) in refused {
+            let text = four_backends(shared_backends(), queue);
             assert_eq!(
                 error_text(mapped(&text)),
-                format!("configuration_invalid: {key}: {shared}"),
-                "{key} with {homeserver}, {token_env}, {mention}"
+                format!("configuration_invalid: notify.review_queue.backends: {message}"),
+                "{queue}"
             );
         }
-        let text = four_backends(shared_backends(), "[queue, log]");
-        assert_eq!(
-            error_text(mapped(&text)),
-            concat!(
-                "configuration_invalid: notify.review_queue.backends: ",
-                "must name at most one Matrix backend until M3"
-            )
-        );
     }
 
     /// Returns the four shared backends plus `approved`, with `route` added to
@@ -2758,7 +2672,7 @@ pub(crate) mod tests {
             example_policy,
         )
         .expect("level routes alone load");
-        assert!(config.matrix_rooms.events.is_empty());
+        assert!(config.notify.events.is_empty());
         assert_eq!(
             config.notify_route(&Event::Approved, Level::Digest),
             NotifyRoute::Level(Level::Digest)
@@ -2766,10 +2680,10 @@ pub(crate) mod tests {
         let text = with_event_route("    approved: [approved]\n");
         let config = parse(&text, secret, example_policy).expect("an event route loads");
         assert_eq!(
-            config.matrix_rooms.events,
-            BTreeMap::from([(Event::Approved, "!approved:example.org".to_owned())])
+            config.notify.events,
+            BTreeMap::from([(Event::Approved, vec!["approved".to_owned()])])
         );
-        assert_eq!(config.matrix_rooms.digest, "!digest:example.org");
+        assert_eq!(config.notify.digest, ["digest"]);
         assert_eq!(
             config.notify_route(&Event::Approved, Level::Digest),
             NotifyRoute::Event(Event::Approved)
@@ -2795,12 +2709,15 @@ pub(crate) mod tests {
                 "    approved: [approved, digest]\n",
                 concat!(
                     "configuration_invalid: notify.routes.approved: ",
-                    "must name exactly one backend until M3"
+                    "must name exactly one backend until #30"
                 ),
             ),
             (
                 "    approved: [quiet]\n",
-                "configuration_invalid: config: invalid Matrix approved room",
+                concat!(
+                    "configuration_invalid: notify.routes.approved: ",
+                    "none backends are not routed until #29"
+                ),
             ),
         ];
         for (route, expected) in cases {

@@ -17,6 +17,7 @@ use crate::config::{Credential, Credentials};
 use crate::engine::{Clock, Engine};
 use crate::error::{Error, error_code};
 use crate::integrations::{Integrations, TokenAnswer};
+use crate::notify::Notification;
 
 /// Code of a token that GitHub refuses.
 const INVALID: &str = "credential_invalid";
@@ -277,9 +278,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
         };
         let route = self.config.notify_route(&event, level.clone());
-        let sent = (self.integration)
-            .notify_unmuted(cancel, route, level.clone(), message)
-            .await;
+        let notification = Notification {
+            event: event.clone(),
+            level: level.clone(),
+            text: message.to_owned(),
+        };
+        let sent = self.deliver(cancel, &route, &notification, false).await;
         if let Err(err) = sent
             && !cancel.is_cancelled()
         {

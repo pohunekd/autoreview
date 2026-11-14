@@ -8,17 +8,18 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
 
-use autoreview_policy::{Checkout, Level, Permission, Protocol, Reviewer, Trigger};
+use autoreview_policy::{Checkout, Permission, Protocol, Reviewer, Trigger};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Credential, NotifyRoute};
+use crate::config::Credential;
 use crate::error::Error;
 use crate::model::{
     CandidateList, Decision, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
     PullRequest, SessionIdentity,
 };
+use crate::notify::Notification;
 
 /// A draft that discovery marked ready for review.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -328,26 +329,24 @@ pub trait Integrations {
         review: &GitHubReview,
     ) -> impl Future<Output = Result<Option<PublishResult>, Error>> + Send;
 
-    /// Sends a notification of `level` to the backends of `route`.
+    /// Sends `notification` to the backend called `backend`.
     ///
-    /// The level decides the mention and whether a failure is dropped.
+    /// The level decides the mention and whether the backend drops a failure.
     fn notify(
         &self,
         cancel: &CancellationToken,
-        route: NotifyRoute,
-        level: Level,
-        message: &str,
+        backend: &str,
+        notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    /// Sends a notification of `level` along `route` and returns every failure.
+    /// Sends `notification` to the backend called `backend` and returns every failure.
     ///
     /// Unlike [`Integrations::notify`], a `digest` or `log` message is never dropped silently.
     fn notify_unmuted(
         &self,
         cancel: &CancellationToken,
-        route: NotifyRoute,
-        level: Level,
-        message: &str,
+        backend: &str,
+        notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// Returns the open review requests of `credential`'s login, at most `max` of them.
@@ -360,10 +359,11 @@ pub trait Integrations {
         max: i64,
     ) -> impl Future<Output = Result<ReviewRequestList, Error>> + Send;
 
-    /// Posts a digest of the queue under the transaction ID.
+    /// Posts a digest of the queue to the backend called `backend` under the transaction ID.
     fn send_queue_digest(
         &self,
         cancel: &CancellationToken,
+        backend: &str,
         transaction: &str,
         plain: &str,
         formatted: &str,

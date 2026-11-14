@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Credential, NotifyRoute};
+use crate::config::Credential;
 use crate::error::{Error, WORKFLOW_FAILED};
 use crate::integrations::{
     ChangedFile, ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState,
@@ -33,6 +33,7 @@ use crate::model::{
     Candidate, CandidateList, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
     PullRequest, RejectedCandidate, SessionIdentity,
 };
+use crate::notify::Notification;
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
 use crate::protocol::request::{checkout_name, go_json};
 use crate::publish::marker_forms;
@@ -55,8 +56,8 @@ type StartFailFn = Arc<dyn Fn(&SessionRequest) -> Result<(), Error> + Send + Syn
 pub(crate) struct Note {
     /// Level of the notification.
     pub(crate) level: Level,
-    /// Route the notification took.
-    pub(crate) route: NotifyRoute,
+    /// Name of the backend that received the notification.
+    pub(crate) backend: String,
     /// Text of the notification.
     pub(crate) message: String,
 }
@@ -313,11 +314,11 @@ impl FakeIntegration {
     /// the notifier mutes is dropped, as `notify` drops it, and the note is not recorded.
     fn send_note(
         &self,
-        route: NotifyRoute,
-        level: Level,
-        message: &str,
+        backend: &str,
+        notification: &Notification,
         muted: bool,
     ) -> impl Future<Output = Result<(), Error>> + Send + use<> {
+        let (level, message) = (notification.level.clone(), notification.text.as_str());
         let (outcome, gate) = {
             let mut state = self.lock();
             state.notify_attempts += 1;
@@ -333,7 +334,7 @@ impl FakeIntegration {
             if outcome.is_none() {
                 state.notes.push(Note {
                     level,
-                    route,
+                    backend: backend.to_owned(),
                     message: message.to_string(),
                 });
             }
@@ -868,6 +869,7 @@ impl Integrations for FakeIntegration {
     fn send_queue_digest(
         &self,
         _cancel: &CancellationToken,
+        _backend: &str,
         transaction: &str,
         plain: &str,
         formatted: &str,
@@ -893,21 +895,19 @@ impl Integrations for FakeIntegration {
     fn notify(
         &self,
         _cancel: &CancellationToken,
-        route: NotifyRoute,
-        level: Level,
-        message: &str,
+        backend: &str,
+        notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.send_note(route, level, message, true)
+        self.send_note(backend, notification, true)
     }
 
     fn notify_unmuted(
         &self,
         _cancel: &CancellationToken,
-        route: NotifyRoute,
-        level: Level,
-        message: &str,
+        backend: &str,
+        notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.send_note(route, level, message, false)
+        self.send_note(backend, notification, false)
     }
 }
 

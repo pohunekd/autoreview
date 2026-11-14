@@ -38,7 +38,7 @@ example shows the manual copy instead, which also needs `policy_file`, the
 ## Shared choices
 
 - Every example lists all notification events. Levels follow the reference
-  defaults. Every route and the review queue need a `matrix` backend until M3,
+  defaults. Every route and the review queue need a `matrix` backend until #29,
   so `config.yaml` routes them to one backend with placeholder values.
 - CI loads every example policy with `config.yaml` through the same loader as
   `validate` (`every_example_policy_validates_with_the_example_config`), with

@@ -1,4 +1,4 @@
-//! Side effects of the review engine: the `gh` and pohunek CLIs and Matrix.
+//! Side effects of the review engine: the `gh` and pohunek CLIs and the notifiers.
 
 // Rust guideline compliant 2026-06-26
 
