@@ -466,7 +466,7 @@ text is not logged. A review queue with only `none` backends sends nothing, and
   mention_user: "@you:example.org"
 ```
 
-The homeserver URL must use HTTPS (plain HTTP only on loopback). Messages are
+The homeserver URL must use HTTPS (plain HTTP only on `127.0.0.1`). Messages are
 `m.text`; the review queue is an `m.notice` with empty mentions, so it never
 notifies anyone.
 
@@ -481,7 +481,7 @@ notifies anyone.
 ```
 
 One HTTP `POST` with a JSON body per message, `Content-Type: application/json`.
-The URL must use HTTPS (plain HTTP only on loopback) and is read only from the
+The URL must use HTTPS (plain HTTP only on `127.0.0.1`) and is read only from the
 variable that `url_env` names. It never appears in errors, logs or `validate`
 output: a refused URL fails with `configuration_invalid:
 notify.backends.<name>.url_env: webhook URL must use HTTPS or loopback HTTP`.
@@ -496,7 +496,9 @@ The text is the plain text of the message, cut to `max_characters`. A webhook
 mentions nobody, also at the `action` level. The review queue sends its plain
 text. Any `2xx` answer is a delivery; `429` and `5xx` fail with
 `webhook_unavailable`, every other answer with `webhook_request_rejected`, and a
-URL that does not parse with `webhook_request_invalid`. At the `digest` and
+URL that does not parse with `webhook_request_invalid`. A redirect (`3xx`) is not
+followed and fails with `webhook_request_rejected`, and no request carries a `Referer`,
+so the URL and the text never reach another host. At the `digest` and
 `log` levels a review message that fails is dropped with the warning `webhook
 notification dropped`.
 
