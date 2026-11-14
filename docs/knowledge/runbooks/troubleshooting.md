@@ -50,6 +50,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `engine_already_running` | Another `serve` uses the same database | Stop the other process |
 | `metrics_listen_failed` | A second `serve` or another process holds `metrics.listen` | Stop it |
 | `matrix_unavailable`, `matrix_request_rejected` | The Matrix homeserver did not accept a message | [Notifier failures](#notifier-failures) |
+| `webhook_unavailable`, `webhook_request_rejected`, `webhook_request_invalid` | A webhook did not accept a message | [Notifier failures](#notifier-failures) |
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a human | [Approval errors](#approval-errors) |
 | `review_superseded`, `approval_expired` | The wait ended and nothing was posted | [Approval errors](#approval-errors) |
 | `head_changed` | The head SHA given is no longer the pull request head | [Approval errors](#approval-errors) |
@@ -543,11 +544,14 @@ pull request appears.
 |---|---|
 | `matrix_unavailable` | The homeserver could not be reached. Check the URL and the network path from the autoreview host. Matrix URLs must use HTTPS (plain HTTP only on loopback). |
 | `matrix_request_rejected` | The homeserver refused the message. Check the room and the token. |
+| `webhook_unavailable` | The webhook could not be reached, rate limited the message (`429`) or failed (`5xx`). Check the network path; the URL must use HTTPS (plain HTTP only on loopback). |
+| `webhook_request_rejected` | The service refused the message, for example a revoked webhook. Create a new webhook and put its URL into the `url_env` variable. |
+| `webhook_request_invalid` | The URL in the `url_env` variable does not parse. |
 
 Check that the `*_env` variable is set without printing it:
 `test -n "$AUTOREVIEW_MATRIX_TOKEN" && echo set`. A `digest` or `log` message
 of a review that cannot be delivered is dropped with the warning
-`matrix notification dropped`. An `action` message of a review gets one
+`matrix notification dropped` (`webhook notification dropped` for a webhook). An `action` message of a review gets one
 attempt and is then dropped with the warning `review notification dropped`,
 which names the event, the review key, the level and the code (`shutdown` when
 the service stopped during the attempt). The review goes on and does not resend

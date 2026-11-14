@@ -23,6 +23,8 @@ pub enum BackendKind {
     None,
     /// Posts to one Matrix room.
     Matrix(MatrixBackend),
+    /// Posts one JSON body per message to an incoming webhook.
+    Webhook(WebhookBackend),
 }
 
 /// The settings of a `matrix` backend.
@@ -48,6 +50,36 @@ impl fmt::Debug for MatrixBackend {
             .field("mention_user", &self.mention_user)
             .finish_non_exhaustive()
     }
+}
+
+/// The settings of a `webhook` backend.
+#[derive(Clone, PartialEq, Eq)]
+pub struct WebhookBackend {
+    /// The webhook URL, read from the variable that `url_env` names; it is a secret.
+    pub url: String,
+    /// The body format that the receiving service accepts.
+    pub format: WebhookFormat,
+}
+
+impl fmt::Debug for WebhookBackend {
+    /// Renders the settings without the URL, which carries the webhook's credential.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WebhookBackend")
+            .field("format", &self.format)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The body format of a `webhook` backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebhookFormat {
+    /// The engine's own JSON object with the event, the level and the text.
+    Json,
+    /// A Slack incoming webhook, or a service that accepts its `text` body.
+    Slack,
+    /// A Discord channel webhook.
+    Discord,
 }
 
 /// The route that carries one notification to its backends.

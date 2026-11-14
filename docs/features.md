@@ -71,8 +71,8 @@ from the base checkout and are never approved automatically.
 [Untrusted authors](knowledge/safety/untrusted-authors.md)
 
 **Tells the right person.** Events have three levels (act now, digest, log)
-routed to Matrix rooms, and a single event can have its own room; `none` and
-webhook backends are planned in #29. An hourly queue
+routed to Matrix rooms or webhooks (Slack, Discord, JSON), or only to the log,
+and a single event can have its own route. An hourly queue
 lists every pull request waiting on you or on its author.
 [Notifications](knowledge/concepts/notifications.md)
 

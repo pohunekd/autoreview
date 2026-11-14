@@ -30,9 +30,9 @@ one GitHub review with inline comments.
   reviewers alike.
 - **Durable state** - SQLite store, retries with backoff, approval deadlines,
   session cleanup, an hourly review-queue digest.
-- **Notifications** - action / digest / log levels routed to Matrix rooms per
-  level, single events optionally to their own room, plus the review queue;
-  `none` and webhook backends are planned in #29.
+- **Notifications** - action / digest / log levels routed per level to Matrix
+  rooms, webhooks (Slack, Discord, JSON) or only the log, single events
+  optionally to their own route, plus the review queue.
 
 ## Documentation
 

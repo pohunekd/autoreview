@@ -14,7 +14,8 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::{
     BackendKind, Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules,
-    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, signature_text,
+    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, WebhookBackend, WebhookFormat,
+    signature_text,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
@@ -672,26 +673,17 @@ fn environment_secret(name: &str) -> Option<String> {
 /// # Errors
 ///
 /// Returns `configuration_missing` for an absent key, `configuration_invalid` for a key whose
-/// value
-/// is out of range or of the wrong kind or for a review queue without a Matrix backend, and the
-/// engine's validation error for a mapped value that the engine rejects.
+/// value is out of range or of the wrong kind, and the engine's validation error for a mapped
+/// value that the engine rejects.
 pub(crate) fn parse(
     text: &str,
     secret: impl Fn(&str) -> Option<String>,
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Result<Config, Error> {
     let file = parse_file(text)?;
-    let mapped = map_file(&file, &secret, load_policy)?;
-    // The queue posts only to Matrix until #29. The check follows the mapping, so a test can map
-    // a config whose queue names only `none` backends.
-    if !mapped.queue_on_matrix {
-        return Err(invalid(
-            "notify.review_queue.backends",
-            "none is not supported for the review queue",
-        ));
-    }
-    mapped.config.validate()?;
-    Ok(mapped.config)
+    let config = map_file(&file, &secret, load_policy)?;
+    config.validate()?;
+    Ok(config)
 }
 
 /// Reads the text of `config.yaml` into the file structs. Serde errors, such as an unknown key,
@@ -714,39 +706,30 @@ pub(crate) fn parse_file(text: &str) -> Result<FileConfig, Error> {
 
 /// Maps the file into the engine configuration without the engine's final validation.
 ///
-/// A review queue without a Matrix backend maps as it is. The tests use it to map configs that
-/// [`parse`] refuses.
+/// The tests use it to map configs that the engine's validation refuses.
 ///
 /// # Errors
 ///
-/// Returns the errors of [`parse`] except the queue check and the engine's validation error.
+/// Returns the errors of [`parse`] except the engine's validation error.
 #[cfg(test)]
 pub(crate) fn to_config(
     file: &FileConfig,
     secret: &impl Fn(&str) -> Option<String>,
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
 ) -> Result<Config, Error> {
-    map_file(file, secret, load_policy).map(|mapped| mapped.config)
+    map_file(file, secret, load_policy)
 }
 
-/// The engine configuration and the loader facts that [`parse`] checks after the mapping.
-struct Mapped {
-    /// The engine configuration.
-    config: Config,
-    /// Whether `notify.review_queue.backends` names a Matrix backend.
-    queue_on_matrix: bool,
-}
-
-/// Maps the file into the engine configuration with the loader facts, without the checks.
+/// Maps the file into the engine configuration, without the engine's final validation.
 ///
 /// # Errors
 ///
-/// Returns the errors of [`parse`] except the queue check and the engine's validation error.
+/// Returns the errors of [`parse`] except the engine's validation error.
 fn map_file(
     file: &FileConfig,
     secret: &impl Fn(&str) -> Option<String>,
     load_policy: impl FnOnce(&Path) -> Result<Policy, Box<dyn std::error::Error + Send + Sync>>,
-) -> Result<Mapped, Error> {
+) -> Result<Config, Error> {
     let version = integer(present(&file.version, "version")?, "version")?;
     if version != CONFIG_VERSION {
         return Err(invalid("version", "must be 1"));
@@ -929,10 +912,6 @@ fn map_file(
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
     let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
     let notify = notify_settings(&backends, routes, queue_backends)?;
-    let queue_on_matrix = (notify.queue.iter()).any(|name| {
-        let backend = notify.backend(name).map(|backend| &backend.kind);
-        matches!(backend, Some(BackendKind::Matrix(_)))
-    });
     let config = Config {
         policy: Some(policy),
         schedule,
@@ -1003,10 +982,7 @@ fn map_file(
         review_marker,
     };
     cross_key_rules(file, &config)?;
-    Ok(Mapped {
-        config,
-        queue_on_matrix,
-    })
+    Ok(config)
 }
 
 /// Validates every entry of `github.credentials` and reads its token.
@@ -1231,10 +1207,12 @@ enum Backend {
         /// The homeserver, the access token read from `access_token_env`, the room and the user.
         settings: MatrixBackend,
     },
-    /// The `webhook` type; parsed and validated, but routes to it are refused until #29.
+    /// The `webhook` type.
     Webhook {
         /// Name the routes refer to.
         name: String,
+        /// The URL read from `url_env` and the body format.
+        settings: WebhookBackend,
     },
 }
 
@@ -1244,7 +1222,7 @@ impl Backend {
         match self {
             Backend::None { name } => name,
             Backend::Matrix { name, .. } => name,
-            Backend::Webhook { name } => name,
+            Backend::Webhook { name, .. } => name,
         }
     }
 }
@@ -1321,15 +1299,20 @@ fn notify_backends(
                     ));
                 }
                 let variable = text(url_env, "notify.backends.url_env")?;
-                let _ = secret_value(variable.as_str(), secret, "notify.backends.url_env")?;
-                let format = text(format, "notify.backends.format")?;
-                if format != "json" && format != "slack" && format != "discord" {
-                    return Err(invalid(
-                        "notify.backends.format",
-                        "must be json, slack or discord",
-                    ));
-                }
-                out.push(Backend::Webhook { name });
+                let url = secret_value(variable.as_str(), secret, "notify.backends.url_env")?;
+                let format = match text(format, "notify.backends.format")?.as_str() {
+                    "json" => WebhookFormat::Json,
+                    "slack" => WebhookFormat::Slack,
+                    "discord" => WebhookFormat::Discord,
+                    _ => {
+                        return Err(invalid(
+                            "notify.backends.format",
+                            "must be json, slack or discord",
+                        ));
+                    }
+                };
+                let settings = WebhookBackend { url, format };
+                out.push(Backend::Webhook { name, settings });
             }
         }
     }
@@ -1400,8 +1383,7 @@ const LEVEL_ROUTES: [&str; 3] = ["action", "digest", "log"];
 
 /// Maps the backends, the routes and the review queue into the engine's settings.
 ///
-/// The levels are checked first, then the event routes in key order, then the queue. A
-/// `webhook` backend is left out, because nothing routes to it.
+/// The levels are checked first, then the event routes in key order, then the queue.
 ///
 /// # Errors
 ///
@@ -1431,10 +1413,10 @@ fn notify_settings(
         events.insert(event.clone(), route_backends(backends, names, &key)?);
     }
     queue_backends(backends, &queue)?;
-    let engine_backends = backends.iter().filter_map(|backend| match backend {
-        Backend::None { name } => Some((name, BackendKind::None)),
-        Backend::Matrix { name, settings } => Some((name, BackendKind::Matrix(settings.clone()))),
-        Backend::Webhook { .. } => None,
+    let engine_backends = backends.iter().map(|backend| match backend {
+        Backend::None { name } => (name, BackendKind::None),
+        Backend::Matrix { name, settings } => (name, BackendKind::Matrix(settings.clone())),
+        Backend::Webhook { name, settings } => (name, BackendKind::Webhook(settings.clone())),
     });
     Ok(NotifySettings {
         backends: (engine_backends)
@@ -1456,7 +1438,7 @@ fn notify_settings(
 /// # Errors
 ///
 /// Returns `configuration_invalid` naming `key` when the route does not name exactly one
-/// backend, or names a backend that is not configured or not of type `matrix`.
+/// backend, or names a backend that is not configured.
 fn route_backends(
     backends: &[Backend],
     names: &Option<Value>,
@@ -1466,11 +1448,8 @@ fn route_backends(
     let [name] = names.as_slice() else {
         return Err(invalid(key, "must name exactly one backend until #30"));
     };
-    match find_backend(backends, name, key)? {
-        Backend::Matrix { .. } => Ok(names),
-        Backend::None { .. } => Err(invalid(key, "none backends are not routed until #29")),
-        Backend::Webhook { .. } => Err(invalid(key, "webhook backends are not routed until #29")),
-    }
+    find_backend(backends, name, key)?;
+    Ok(names)
 }
 
 /// Checks the backend names of the review queue.
@@ -1478,30 +1457,27 @@ fn route_backends(
 /// # Errors
 ///
 /// Returns `configuration_invalid` naming `notify.review_queue.backends` for an empty list, a
-/// name given twice or not configured, a webhook, or a second Matrix backend.
+/// name given twice or not configured, or a second Matrix or webhook backend.
 fn queue_backends(backends: &[Backend], names: &[String]) -> Result<(), Error> {
     let key = "notify.review_queue.backends";
     if names.is_empty() {
         return Err(invalid(key, "must name at least one backend"));
     }
-    let mut matrix: Option<&str> = None;
+    let mut delivering = false;
     for (index, name) in names.iter().enumerate() {
         if names.iter().take(index).any(|earlier| earlier == name) {
             return Err(invalid(key, "names a backend twice"));
         }
         match find_backend(backends, name, key)? {
             Backend::None { .. } => {}
-            Backend::Matrix { name, .. } => {
-                if matrix.is_some_and(|chosen| chosen != name) {
+            Backend::Matrix { .. } | Backend::Webhook { .. } => {
+                if delivering {
                     return Err(invalid(
                         key,
-                        "must name at most one Matrix backend until #30",
+                        "must name at most one Matrix or webhook backend until #30",
                     ));
                 }
-                matrix = Some(name);
-            }
-            Backend::Webhook { .. } => {
-                return Err(invalid(key, "webhook backends are not routed until #29"));
+                delivering = true;
             }
         }
     }
@@ -1913,6 +1889,7 @@ pub(crate) mod tests {
             "AUTOREVIEW_MATRIX_TOKEN" => Some("synthetic-matrix-token".to_owned()),
             "AUTOREVIEW_MATRIX_TOKEN_OTHER" => Some("synthetic-matrix-token-other".to_owned()),
             "AUTOREVIEW_WEBHOOK_URL" => Some("https://hooks.example.org/synthetic".to_owned()),
+            "AUTOREVIEW_PLAIN_URL" => Some("http://hooks.example.org/synthetic".to_owned()),
             _ => None,
         }
     }
@@ -2531,20 +2508,30 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_queue_routed_only_to_none_is_refused() {
+    fn a_queue_routed_to_none_or_a_webhook_loads() {
         let mut entries = shared_backends();
-        entries[3].push_str("    - name: quiet\n      type: none\n");
-        let text = four_backends(entries.clone(), "[quiet]");
+        entries[3].push_str(concat!(
+            "    - name: quiet\n      type: none\n",
+            "    - name: hook\n      type: webhook\n",
+            "      url_env: AUTOREVIEW_WEBHOOK_URL\n      format: discord\n",
+        ));
+        for queue in [
+            ["quiet"].as_slice(),
+            &["quiet", "queue"],
+            &["hook", "quiet"],
+        ] {
+            let text = four_backends(entries.clone(), &format!("[{}]", queue.join(", ")));
+            let config = parse(&text, secret, example_policy).expect("the queue loads");
+            assert_eq!(config.notify.queue, queue);
+        }
+        let text = four_backends(entries, "[queue, hook]");
         assert_eq!(
             error_text(parse(&text, secret, example_policy)),
             concat!(
                 "configuration_invalid: notify.review_queue.backends: ",
-                "none is not supported for the review queue"
+                "must name at most one Matrix or webhook backend until #30"
             )
         );
-        let text = four_backends(entries, "[quiet, queue]");
-        let config = parse(&text, secret, example_policy).expect("none next to Matrix loads");
-        assert_eq!(config.notify.queue, ["quiet", "queue"]);
         let text = four_backends(shared_backends(), "[queue]")
             .replace("room: \"!queue:example.org\"", "room: \"\"");
         assert_eq!(
@@ -2563,20 +2550,45 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_level_routed_to_none_is_refused() {
+    fn a_level_routed_to_none_or_a_webhook_loads() {
+        let formats = [
+            ("json", WebhookFormat::Json),
+            ("slack", WebhookFormat::Slack),
+            ("discord", WebhookFormat::Discord),
+        ];
         for (index, level) in ["action", "digest", "log"].into_iter().enumerate() {
             let mut entries = shared_backends();
             if let Some(entry) = entries.get_mut(index) {
                 *entry = format!("    - name: {level}\n      type: none\n");
             }
             let text = four_backends(entries, "[queue]");
+            let config = parse(&text, secret, example_policy).expect("a none route loads");
+            let kind = config.notify.backend(level).map(|backend| &backend.kind);
+            assert_eq!(kind, Some(&BackendKind::None), "{level} routed to none");
+            let (name, format) = formats[index];
+            let mut entries = shared_backends();
+            if let Some(entry) = entries.get_mut(index) {
+                *entry = format!(
+                    "    - name: {level}\n      type: webhook\n      \
+                     url_env: AUTOREVIEW_WEBHOOK_URL\n      format: {name}\n"
+                );
+            }
+            let text = four_backends(entries, "[queue]");
+            let config = parse(&text, secret, example_policy).expect("a webhook route loads");
+            let kind = config.notify.backend(level).map(|backend| &backend.kind);
+            let Some(BackendKind::Webhook(webhook)) = kind else {
+                panic!("{level} is no webhook: {kind:?}");
+            };
+            assert_eq!(webhook.format, format, "{level}");
+            assert_eq!(webhook.url, "https://hooks.example.org/synthetic");
+            let text = text.replace("AUTOREVIEW_WEBHOOK_URL", "AUTOREVIEW_PLAIN_URL");
             assert_eq!(
                 error_text(parse(&text, secret, example_policy)),
                 format!(
-                    "configuration_invalid: notify.routes.{level}: \
-                     none backends are not routed until #29"
+                    "configuration_invalid: notify.backends.{level}.url_env: \
+                     webhook URL must use HTTPS or loopback HTTP"
                 ),
-                "{level} routed to none"
+                "{level}"
             );
         }
     }
@@ -2633,7 +2645,7 @@ pub(crate) mod tests {
         let refused = [
             (
                 "[queue, log]",
-                "must name at most one Matrix backend until #30",
+                "must name at most one Matrix or webhook backend until #30",
             ),
             ("[queue, queue]", "names a backend twice"),
         ];
@@ -2710,13 +2722,6 @@ pub(crate) mod tests {
                 concat!(
                     "configuration_invalid: notify.routes.approved: ",
                     "must name exactly one backend until #30"
-                ),
-            ),
-            (
-                "    approved: [quiet]\n",
-                concat!(
-                    "configuration_invalid: notify.routes.approved: ",
-                    "none backends are not routed until #29"
                 ),
             ),
         ];

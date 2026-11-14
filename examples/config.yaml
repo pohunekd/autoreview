@@ -109,7 +109,8 @@ publish:
   # gates that read that name. Without the key, hermes-pr-review.
   marker: autoreview
 
-# Every level and the review queue need a matrix backend until #29. Replace the
+# Matrix backend for every level and the review queue; none and webhook backends
+# are in the guide below. Replace the
 # homeserver, the room and the mentioned user with your own; the token is read
 # from the variable named by access_token_env. See
 # docs/knowledge/guides/notifiers.md.

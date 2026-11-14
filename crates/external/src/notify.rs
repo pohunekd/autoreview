@@ -1,4 +1,4 @@
-//! Notification backends: the registry by name, and Matrix messages and queue digests.
+//! Notification backends: the registry by name, delivery by type, and Matrix messages.
 //!
 //! Matrix requests are built by pure functions, so their room, transaction path and body are
 //! checked without a homeserver. Sending is one PUT.
@@ -13,11 +13,16 @@ use std::time::Duration;
 use autoreview_engine::config::{BackendKind, MatrixBackend, NotifySettings};
 use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
+use autoreview_engine::notify::Notification;
 use autoreview_policy::Level;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, StatusCode, Url};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
+
+use self::webhook::{Webhook, post_webhook, webhook_body, webhook_client};
+
+mod webhook;
 
 /// Prefix of the transaction IDs that the engine generates for its messages.
 const TRANSACTION_PREFIX: &str = "notify-";
@@ -62,6 +67,8 @@ pub(crate) enum Backend {
     None,
     /// Posts to one Matrix room.
     Matrix(Matrix),
+    /// Posts to one incoming webhook.
+    Webhook(Webhook),
 }
 
 /// The backends of the configuration, by name.
@@ -70,17 +77,32 @@ pub(crate) struct Backends(BTreeMap<String, Backend>);
 
 impl Backends {
     /// Creates the backends of `notify`; every message is bounded by the two limits.
-    pub(crate) fn new(notify: &NotifySettings, max_characters: i64, timeout: Duration) -> Self {
+    ///
+    /// Every webhook shares one client from [`webhook_client`]; Matrix uses the caller's.
+    ///
+    /// # Errors
+    ///
+    /// Returns `webhook_unavailable` when the webhook client cannot be built.
+    pub(crate) fn new(
+        notify: &NotifySettings,
+        max_characters: i64,
+        timeout: Duration,
+    ) -> Result<Self, Error> {
+        let client = webhook_client(timeout)?;
         let backends = notify.backends.iter().map(|backend| {
             let ready = match &backend.kind {
                 BackendKind::None => Backend::None,
                 BackendKind::Matrix(matrix) => {
                     Backend::Matrix(Matrix::new(matrix, max_characters, timeout))
                 }
+                BackendKind::Webhook(webhook) => {
+                    let client = client.clone();
+                    Backend::Webhook(Webhook::new(webhook, max_characters, timeout, client))
+                }
             };
             (backend.name.clone(), ready)
         });
-        Self(backends.collect())
+        Ok(Self(backends.collect()))
     }
 
     /// Returns the backend called `name`.
@@ -444,6 +466,84 @@ pub(crate) async fn send_queue_digest(
     put_matrix_message(client, matrix, cancel, request).await
 }
 
+/// Event name of the review queue in a webhook body.
+const QUEUE_EVENT: &str = "review_queue";
+
+/// Delivers `notification` to `backend`, which the routes call `name`.
+///
+/// A `none` backend only logs the message's event and level. With `muted`, a backend drops a
+/// failure of a level other than action and logs the drop, as [`notify`] does for Matrix.
+pub(crate) async fn deliver(
+    client: &Client,
+    name: &str,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    notification: &Notification,
+    muted: bool,
+) -> Result<(), Error> {
+    let (level, text) = (notification.level.clone(), notification.text.as_str());
+    match backend {
+        Backend::None => {
+            tracing::info!(
+                backend = name,
+                event = notification.event.as_str(),
+                level = level_name(&level),
+                "notification logged only"
+            );
+            Ok(())
+        }
+        Backend::Matrix(matrix) if muted => notify(client, matrix, cancel, level, text).await,
+        Backend::Matrix(matrix) => send_matrix(client, matrix, cancel, level, text).await,
+        Backend::Webhook(webhook) => {
+            let event = notification.event.as_str();
+            let body = webhook_body(webhook, event, Some(level_name(&level)), text)?;
+            let sent = post_webhook(webhook, cancel, body).await;
+            match sent {
+                Err(error) if muted => drop_webhook_if_muted(level, error),
+                sent => sent,
+            }
+        }
+    }
+}
+
+/// Posts the review queue digest to `backend`; a `none` backend posts nothing.
+///
+/// Matrix takes both bodies under `transaction`; a webhook takes the plain body.
+pub(crate) async fn deliver_queue(
+    client: &Client,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    transaction: &str,
+    plain: &str,
+    formatted: &str,
+) -> Result<(), Error> {
+    match backend {
+        Backend::None => Ok(()),
+        Backend::Matrix(matrix) => {
+            send_queue_digest(client, matrix, cancel, transaction, plain, formatted).await
+        }
+        Backend::Webhook(webhook) => {
+            let body = webhook_body(webhook, QUEUE_EVENT, None, plain)?;
+            post_webhook(webhook, cancel, body).await
+        }
+    }
+}
+
+/// Drops a webhook failure of a level other than action, as [`drop_if_muted`] does for Matrix.
+fn drop_webhook_if_muted(level: Level, error: Error) -> Result<(), Error> {
+    let code = error_code(&error);
+    let muted = code == webhook::UNAVAILABLE || code == webhook::REJECTED;
+    if level == Level::Action || !muted {
+        return Err(error);
+    }
+    tracing::warn!(
+        level = level_name(&level),
+        error_code = code,
+        "webhook notification dropped"
+    );
+    Ok(())
+}
+
 /// Returns the name of `level` as the log line carries it.
 fn level_name(level: &Level) -> &str {
     match level {
@@ -458,11 +558,22 @@ fn level_name(level: &Level) -> &str {
 mod tests {
     use std::time::Duration;
 
-    use autoreview_engine::config::MatrixBackend;
-    use autoreview_policy::Level;
-    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+    use std::io;
+    use std::sync::{Arc, Mutex, PoisonError};
 
-    use super::{Matrix, matrix_request, queue_digest_request};
+    use autoreview_engine::config::{
+        BackendKind, MatrixBackend, NotifyBackend, NotifySettings, WebhookBackend, WebhookFormat,
+    };
+    use autoreview_engine::error_code;
+    use autoreview_engine::notify::Notification;
+    use autoreview_policy::{Event, Level};
+    use reqwest::Client;
+    use serde_json::{Value, json};
+    use tokio_util::sync::CancellationToken;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    use super::{Backends, Matrix, deliver, deliver_queue, matrix_request, queue_digest_request};
 
     /// Settings of one backend with synthetic values only.
     fn matrix() -> Matrix {
@@ -511,5 +622,173 @@ mod tests {
             json!(["@example-user:example.org"])
         );
         assert_eq!(digest_payload["m.mentions"], json!({}));
+    }
+
+    /// A log writer that keeps every line in memory.
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Captured {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut lines = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            lines.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Captured {
+        type Writer = Captured;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Returns the error's text, its debug form and every cause.
+    fn chain(error: &(dyn std::error::Error + 'static)) -> String {
+        let mut text = format!("{error} {error:?}");
+        let mut cause = error.source();
+        while let Some(next) = cause {
+            text.push_str(&format!(" {next} {next:?}"));
+            cause = next.source();
+        }
+        text
+    }
+
+    // A redirect could carry the secret URL as `Referer`, or the body, to another host
+    // (review of PR 386). reqwest's client `Debug` shows a redirect policy other than its
+    // default and a set `referer` flag, so the client of a built webhook is checked without
+    // a request.
+    #[test]
+    fn webhook_requests_follow_no_redirect_and_send_no_referer() {
+        let notify = NotifySettings {
+            backends: vec![NotifyBackend {
+                name: "hook".to_owned(),
+                kind: BackendKind::Webhook(WebhookBackend {
+                    url: "https://hooks.example.org/placeholder".to_owned(),
+                    format: WebhookFormat::Json,
+                }),
+            }],
+            action: Vec::new(),
+            digest: Vec::new(),
+            log: Vec::new(),
+            events: BTreeMap::new(),
+            queue: Vec::new(),
+        };
+        let backends = Backends::new(&notify, 32_000, Duration::from_secs(30));
+        let settings = format!("{:?}", backends.expect("the backends build"));
+        assert!(
+            settings.contains(r#"redirect_policy: "Policy(None)""#),
+            "{settings}"
+        );
+        assert!(!settings.contains("referer"), "{settings}");
+    }
+
+    #[tokio::test]
+    async fn webhook_url_never_reaches_errors_logs_or_debug() {
+        const SECRET: &str = "secret-path-marker";
+        let webhook = |name: &str, url: String, format| NotifyBackend {
+            name: name.to_owned(),
+            kind: BackendKind::Webhook(WebhookBackend { url, format }),
+        };
+        let notify = NotifySettings {
+            backends: vec![
+                webhook(
+                    "hook",
+                    format!("https://hooks.example.org/{SECRET}"),
+                    WebhookFormat::Slack,
+                ),
+                webhook("broken", format!("{SECRET} is no URL"), WebhookFormat::Json),
+                webhook(
+                    "refused",
+                    format!("https://127.0.0.1:1/{SECRET}"),
+                    WebhookFormat::Discord,
+                ),
+                NotifyBackend {
+                    name: "quiet".to_owned(),
+                    kind: BackendKind::None,
+                },
+            ],
+            action: Vec::new(),
+            digest: Vec::new(),
+            log: Vec::new(),
+            events: BTreeMap::new(),
+            queue: Vec::new(),
+        };
+        let backends = Backends::new(&notify, 32_000, Duration::from_secs(30));
+        let backends = backends.expect("the backends build");
+        let captured = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(captured.clone())
+            .finish();
+        let _logs = tracing::subscriber::set_default(subscriber);
+        // A cancelled token stops every request before it is sent, so nothing leaves the host.
+        let (client, cancel) = (Client::new(), CancellationToken::new());
+        cancel.cancel();
+        let mut texts = vec![format!("{backends:?} {notify:?}")];
+        let mut codes = Vec::new();
+        let sends = [
+            ("hook", Level::Action),
+            ("hook", Level::Digest),
+            ("broken", Level::Action),
+            ("quiet", Level::Log),
+        ];
+        for (name, level) in sends {
+            let backend = backends.get(name).expect("a configured backend");
+            let notification = Notification {
+                event: Event::Approved,
+                level,
+                text: "Approved".to_owned(),
+            };
+            let sent = deliver(&client, name, backend, &cancel, &notification, true).await;
+            if let Err(error) = sent {
+                codes.push(error_code(&error).to_owned());
+                texts.push(chain(&error));
+            }
+        }
+        let hook = backends.get("hook").expect("the hook backend");
+        let queue = deliver_queue(&client, hook, &cancel, "queue-txn", "plain", "<p>plain</p>");
+        let queue = queue.await.expect_err("the queue post fails");
+        codes.push(error_code(&queue).to_owned());
+        texts.push(chain(&queue));
+        // A live token reaches the transport: port 1 on the host refuses the connection, so the
+        // request fails in reqwest without leaving the host.
+        let refused = backends.get("refused").expect("the refused backend");
+        let notification = Notification {
+            event: Event::Approved,
+            level: Level::Action,
+            text: "Approved".to_owned(),
+        };
+        let live = CancellationToken::new();
+        let sent = deliver(&client, "refused", refused, &live, &notification, true).await;
+        let sent = sent.expect_err("the connection is refused");
+        codes.push(error_code(&sent).to_owned());
+        texts.push(chain(&sent));
+        let logs = captured
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let logs = String::from_utf8(logs).expect("UTF-8 logs");
+        assert_eq!(
+            codes,
+            [
+                "webhook_unavailable",
+                "webhook_request_invalid",
+                "webhook_unavailable",
+                "webhook_unavailable"
+            ]
+        );
+        assert!(logs.contains("webhook notification dropped"), "{logs}");
+        assert!(logs.contains("notification logged only"), "{logs}");
+        texts.push(logs);
+        for text in texts {
+            assert!(!text.contains(SECRET), "the URL leaked: {text}");
+        }
     }
 }

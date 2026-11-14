@@ -58,11 +58,26 @@ backends when they must not share a room.
 
 ## No notifier
 
-Planned in #29. Until then every route and the review queue need a `matrix`
-backend. A route to a `none` backend is refused at load with
-`configuration_invalid: notify.routes.<key>: none backends are not routed until
-#29`. A
-`review_queue.backends` list of `none` backends only is refused too, see
+Route every level and the review queue to a `none` backend:
+
+```yaml
+notify:
+  timeout_seconds: 30
+  max_characters: 8000
+  backends:
+    - name: quiet
+      type: none
+  routes:
+    action: [quiet]
+    digest: [quiet]
+    log: [quiet]
+  review_queue:
+    backends: [quiet]
+    max_items: 50
+```
+
+Nothing is sent. Each message is logged as `notification logged only` with its
+event and level, and `autoreview review-queue` prints the queue. See
 [configuration](../../configuration.md#backend-none).
 
 ## Matrix, one room per level
@@ -102,7 +117,7 @@ notify:
   the first route key whose backend differs from an earlier one.
 - `mention_user` is used only in `action` messages, because digests never
   mention anyone.
-- The homeserver URL must use HTTPS. Plain HTTP is accepted only on loopback.
+- The homeserver URL must use HTTPS. Plain HTTP is accepted only on `127.0.0.1`.
 - Messages are `m.text`. The review queue is an `m.notice` with empty
   mentions, so it never notifies anyone, even in the action room.
 - The token is read from the variable named in `access_token_env`. The name
@@ -147,7 +162,31 @@ notify:
 
 ## Webhook for Slack, Discord or JSON
 
-Planned in #29.
+```yaml
+notify:
+  backends:
+    - name: team-chat
+      type: webhook
+      url_env: AUTOREVIEW_WEBHOOK_URL
+      format: slack
+  routes:
+    action: [team-chat]
+    digest: [team-chat]
+    log: [team-chat]
+  review_queue:
+    backends: [team-chat]
+    max_items: 50
+```
+
+Put the incoming-webhook URL into the variable that `url_env` names, in the
+service environment or the `--env-file`; the URL is a secret and never appears
+in the logs. The URL must use HTTPS (plain HTTP only on `127.0.0.1`), and a webhook
+that answers with a redirect fails with `webhook_request_rejected`; use the final URL.
+Use `slack` for Slack and Slack-compatible services such as
+Mattermost, `discord` for a Discord channel webhook, and `json` for your own
+receiver. A webhook never pings anyone; route `action` to Matrix when a person
+must be mentioned. See [configuration](../../configuration.md#backend-webhook)
+for the bodies and the error codes.
 
 ## Several backends for one level
 
@@ -194,8 +233,9 @@ the review key, the level, the code and `skipped_after_failure`. It is never
 resent, so the warning is the only record; discovery goes on.
 
 A broken action backend does not stop reviews, but nobody learns from it that
-a human is needed. Watch for `review notification dropped`, `matrix_unavailable`
-and `matrix_request_rejected` in the logs; the
+a human is needed. Watch for `review notification dropped`, `matrix_unavailable`,
+`matrix_request_rejected`, `webhook_unavailable` and `webhook_request_rejected`
+in the logs; the
 [CLI error codes](../../cli.md#error-codes) list them.
 
 `autoreview validate` checks the notification configuration, not whether a

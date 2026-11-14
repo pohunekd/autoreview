@@ -57,8 +57,8 @@ An event can have its own route next to the levels, for example
 route; its level still decides whether the person is mentioned and whether a
 failed delivery is dropped. Every other event goes to the route of its level.
 
-Routes reach `matrix` backends; `none` and `webhook` backends are planned in
-#29. See [notifiers](../guides/notifiers.md) for the setup.
+Routes reach `matrix`, `webhook` and `none` backends. See
+[notifiers](../guides/notifiers.md) for the setup.
 
 ## Events
 
@@ -102,14 +102,14 @@ A message of a review gets one attempt, bounded by the notifier's request
 timeout (`notify.timeout_seconds`), and is never retried. A failed message is
 logged as the warning `review notification dropped` with its event, review key,
 level and error code. At the `digest` and `log` levels the notifier itself drops
-a message the homeserver does not take and logs `matrix notification dropped`
-instead. The review then goes on as if the message had
+a message the homeserver or the webhook does not take and logs `matrix
+notification dropped` or `webhook notification dropped` instead. The review then goes on as if the message had
 been sent, and a resumed review does not send it again. When the service shuts
 down during the attempt of an `action` message, the warning carries the code
 `shutdown`, and the resumed review makes one more attempt. At the `digest` and
 `log` levels the notifier logs `matrix notification dropped` with the code
-`matrix_unavailable` instead, and the resumed review also sends the message
-again. A waiting review stays visible without
+`matrix_unavailable` (`webhook notification dropped` with `webhook_unavailable`)
+instead, and the resumed review also sends the message again. A waiting review stays visible without
 its `approval_requested` message: `autoreview awaiting` and the review queue
 list the wait until it is approved or its deadline passes.
 
