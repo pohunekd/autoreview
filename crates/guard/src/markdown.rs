@@ -320,3 +320,124 @@ impl Pass<'_> {
         len
     }
 }
+
+impl Pass<'_> {
+    /// Handles the `<` at `at` and returns the offset after what it consumed.
+    ///
+    /// A name followed by `:` is an autolink such as `<https://...>`, shown as a link.
+    fn tag(&mut self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
+        if self.starts_with(at, "<!--") {
+            let (open, close, end) = self.comment(at);
+            report(
+                add,
+                Signal::HiddenCommentInstruction,
+                self.slice(open, close),
+            );
+            return Some(end);
+        }
+        let name_start = at.saturating_add(1);
+        let name_len = self
+            .bytes
+            .get(name_start..)
+            .unwrap_or_default()
+            .iter()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || **byte == b'-')
+            .count();
+        if !self
+            .bytes
+            .get(name_start)
+            .is_some_and(u8::is_ascii_alphabetic)
+        {
+            return None;
+        }
+        let name_end = name_start.saturating_add(name_len);
+        if self.bytes.get(name_end) == Some(&b':') {
+            return None;
+        }
+        let gt = self.find(Find::TagEnd, name_end)?;
+        let name = self.slice(name_start, name_end);
+        let attributes = self.slice(name_end, gt);
+        let signal = if name.eq_ignore_ascii_case("details") {
+            Signal::CollapsedBlockInstruction
+        } else if hides(attributes) {
+            Signal::HiddenElementInstruction
+        } else {
+            report(add, Signal::LinkMetadataInstruction, attributes);
+            return Some(gt.saturating_add(1));
+        };
+        let end = self.element_end(gt.saturating_add(1), name);
+        report(add, signal, self.slice(at, end));
+        Some(end)
+    }
+
+    /// Handles `![` at `at`: an image alt text, reported when it instructs.
+    fn image_alt(&mut self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
+        if !self.starts_with(at, "![") {
+            return None;
+        }
+        let close = self.find(Find::Bracket, at.saturating_add(2))?;
+        let after = self.bytes.get(close.saturating_add(1));
+        if !matches!(after, Some(b'(' | b'[')) {
+            return None;
+        }
+        report(
+            add,
+            Signal::LinkMetadataInstruction,
+            self.slice(at.saturating_add(2), close),
+        );
+        Some(close)
+    }
+
+    /// Handles `](` at `at`: the title of an inline link or image, reported when it instructs.
+    ///
+    /// The destination is the run up to the next whitespace and is not shown either, so it is
+    /// checked with the title. A title counts only when `)` follows it; a failed parse consumes
+    /// nothing.
+    fn link_title(&mut self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
+        if !self.starts_with(at, "](") {
+            return None;
+        }
+        let destination = self.find(Find::NonSpace, at.saturating_add(2))?;
+        let after_destination = self.find(Find::Space, destination)?;
+        let open = self.find(Find::NonSpace, after_destination)?;
+        let closer = match self.bytes.get(open) {
+            Some(b'"') => Find::Quote,
+            Some(b'\'') => Find::Apostrophe,
+            Some(b'(') => Find::Paren,
+            _ => return None,
+        };
+        let close = self.find(closer, open.saturating_add(1))?;
+        let end = self.find(Find::NonSpace, close.saturating_add(1))?;
+        if self.bytes.get(end) != Some(&b')') {
+            return None;
+        }
+        report(
+            add,
+            Signal::LinkMetadataInstruction,
+            self.slice(destination, close),
+        );
+        Some(end.saturating_add(1))
+    }
+
+    /// Handles a line that starts at `at` with a reference definition `[label]: ...`.
+    ///
+    /// GitHub shows nothing of it. A footnote `[^label]:` is shown and does not count.
+    fn reference_definition(&self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
+        let len = self.bytes.len();
+        let eol = self
+            .slice(at, len)
+            .find('\n')
+            .map_or(len, |found| at.saturating_add(found));
+        let line = self.slice(at, eol);
+        let rest = indented(line)?;
+        let label = rest
+            .strip_prefix('[')
+            .filter(|label| !label.starts_with('^'))?;
+        let (name, after) = label.split_once(']')?;
+        if name.trim().is_empty() || !after.starts_with(':') {
+            return None;
+        }
+        report(add, Signal::ReferenceDefinitionInstruction, rest);
+        Some(eol)
+    }
+}
