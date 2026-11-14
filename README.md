@@ -2,12 +2,12 @@
 
 Policy-driven AI pull request review on top of [pohunek](https://github.com/zajca/pohunek) sessions.
 
-> **Status: 0.2.0.** autoreview 0.2.0 is the current release. It ships static
+> **Status: 0.3.0.** autoreview 0.3.0 is the current release. It ships static
 > Linux binaries for `x86_64` and `aarch64` as release archives, each with a
 > `.sha256` file and a build provenance attestation; see [install](docs/install.md).
-> It does not implement the whole v0.1 design yet. The [Rough plan](#rough-plan)
-> table is the roadmap and its open items are tracked in GitHub issues; every
-> other part that is still planned names its open issue.
+> The `main` branch holds changes after 0.3.0, and the documentation describes it.
+> The [Rough plan](#rough-plan) table is the roadmap; a part that is not available
+> names its open issue.
 
 ## What it does
 
@@ -36,12 +36,12 @@ one GitHub review with inline comments.
 
 ## Documentation
 
-The documentation describes autoreview 0.2.0; parts marked planned are not in
-0.2.0.
+The documentation describes autoreview on `main` after the 0.3.0 release; a
+part that is not available names its open issue.
 
 - [Features](docs/features.md) - what it does and a map of every page
 - [Getting started](docs/knowledge/guides/getting-started.md): `scripts/setup`
-  (after 0.2.0) sets up one Linux machine
+  sets up one Linux machine
 - [Quickstart](docs/knowledge/guides/quickstart.md) and
   [use cases](docs/knowledge/guides/index.md), each with a complete policy in
   [examples/](examples/)
@@ -99,10 +99,10 @@ scenarios are guides without a policy of their own:
 - pohunek daemon on one or more review hosts with the repositories registered
 - `gh` CLI and one GitHub token, or one per owner or repository
 - Claude Code and/or Codex CLI on the review hosts
-- Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` (after 0.2.0)
-  writes user units ([getting started](docs/knowledge/guides/getting-started.md)), and the
+- Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` writes user
+  units ([getting started](docs/knowledge/guides/getting-started.md)), and the
   installer of the install page writes the system units of a server user (after
-  0.3.0; the container image is planned in #40)
+  0.3.0; a container image is not available, see #40)
 
 ## Security model
 
@@ -123,12 +123,11 @@ keeps untrusted authors behind a maintainer label.
   repositories.
 - Claude Code and Codex reviewers share one result contract, with the blocking
   flag of each finding and the verdicts on prior findings.
-- Clean reviews that wait for a human are approved through the CLI, with an
-  optional Hermes Agent integration (planned in #43); approval by GitHub comment and a GitHub
-  App identity come after v1 (#46, #47).
+- Clean reviews that wait for a human are approved through the CLI or by an
+  MCP client with the `write` scope (`autoreview mcp`); approval by GitHub
+  comment and a GitHub App identity come after v1 (#46, #47).
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
 - Distributed as static Linux release archives from 0.1.0 on, with systemd
-  units and an installer after 0.3.0; a container image (planned in #40)
-  follows.
+  units and an installer after 0.3.0; a container image is not available (#40).
 - MIT license.
