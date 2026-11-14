@@ -1495,13 +1495,12 @@ fn find_backend<'a>(backends: &'a [Backend], name: &str, key: &str) -> Result<&'
     Err(invalid(key, "names no configured backend"))
 }
 
-/// Ports Go's `schedule.LoadPolicy`: the debounce is checked before the retry delays.
+/// Reads the scheduler policy; the debounce is checked before the retry delays.
 ///
 /// # Errors
 ///
 /// Returns `configuration_missing` for an absent key and `configuration_invalid` for a value
-/// outside
-/// the bounds, with the Go message as cause.
+/// outside the bounds, with `invalid or missing configuration` as cause.
 pub(crate) fn scheduler_policy(
     debounce: &Option<Value>,
     retry_delays: &Option<Value>,
@@ -1638,8 +1637,9 @@ fn missing(key: &str) -> Error {
     Error::config(CONFIGURATION_MISSING, key, None)
 }
 
-/// Returns the value of `key`, which must be present and not blank. Go's `required` treats
-/// whitespace-only text as missing, and so does this.
+/// Returns the value of `key`, which must be present and not blank.
+///
+/// Whitespace-only text counts as missing.
 fn present<'a>(value: &'a Option<Value>, key: &str) -> Result<&'a Value, Error> {
     match value {
         Some(Value::Text(text)) if text.trim().is_empty() => Err(missing(key)),
@@ -1664,7 +1664,7 @@ fn integer(value: &Value, key: &str) -> Result<i64, Error> {
     }
 }
 
-/// Reads a positive integer, as Go's `positive` does.
+/// Reads a positive integer.
 fn positive(value: &Option<Value>, key: &str) -> Result<i64, Error> {
     let number = integer(present(value, key)?, key)?;
     if number <= 0 {
@@ -1910,27 +1910,9 @@ pub(crate) mod tests {
         policy_from(&deployed_policy_document())
     }
 
-    /// Returns `testdata/review-policy.yaml` with `trusted: any` on every rule.
-    ///
-    /// @TODO remove after #111 and write the sections into the fixture.
+    /// Returns `testdata/review-policy.yaml`, whose rules all say `trusted: any`.
     fn deployed_policy_document() -> String {
-        const FLOW_RULE_END: &str = "deleted_tests: [\"**/tests/**\"]}}";
-        const BLOCK_RULE_LINE: &str = "    on_clean: approve\n";
-        let document = include_str!("../../../testdata/review-policy.yaml");
-        assert!(
-            document.contains(FLOW_RULE_END) && document.contains(BLOCK_RULE_LINE),
-            "the policy fixture changed; update the authors injection"
-        );
-        document
-            .replacen(
-                FLOW_RULE_END,
-                "deleted_tests: [\"**/tests/**\"]}, authors: {trusted: any}}",
-                1,
-            )
-            .replace(
-                BLOCK_RULE_LINE,
-                "    on_clean: approve\n    authors:\n      trusted: any\n",
-            )
+        include_str!("../../../testdata/review-policy.yaml").to_owned()
     }
 
     /// Maps `text` through the same path as [`parse`], without the engine's final validation.
@@ -2908,7 +2890,7 @@ pub(crate) mod tests {
     #[test]
     fn go_load_policy_bounds_are_ported_to_file_keys() {
         let policy = scheduler_policy(&scalar("120"), &scalar("[60, 300, 900]"))
-            .expect("the Go test's valid values load");
+            .expect("the valid bounds load");
         assert_eq!(policy.debounce, time::Duration::seconds(120));
         assert_eq!(
             policy.retry_delays,
