@@ -18,7 +18,16 @@ import time
 import tty
 import unicodedata
 from pathlib import Path
-from typing import BinaryIO, NoReturn
+from typing import BinaryIO, NamedTuple, NoReturn
+
+
+class Markers(NamedTuple):
+    """The marker lines of one name of the result protocol."""
+
+    result_prefix: str
+    exit_line_format: str
+    refusal_format: str
+    reason_format: str
 
 
 BRACKETED_PASTE_START = b"\x1b[200~"
@@ -26,17 +35,27 @@ BRACKETED_PASTE_END = b"\x1b[201~"
 SUBMIT = b"\r"
 EXIT_USAGE = 64
 PROGRAM_NAME = "codex-adapter"
-# The engine reads the result frame and the exit line below by these exact texts.
-RESULT_MARKER_PREFIX = "[pohunek-codex-review-result-v1:"
-EXIT_LINE_FORMAT = "[pohunek-codex-review exited with status {}]"
-# Right before the exit line with status 64, it names the reason of a refusal that the
-# engine does not retry.
-REFUSAL_MARKER_FORMAT = "[pohunek-codex-review-refused-v1:{}]"
+# The engine reads the result frame and the exit line by these exact texts. Right before
+# the exit line with status 64, the refusal marker names the reason of a refusal that the
+# engine does not retry. Right before the exit line of a failed Codex run, the reason marker
+# holds the base64 of the reason that `exit_reason` takes from Codex's stderr; empty when
+# stderr has no line. A refusal after the run puts the adapter's own message there, before
+# any head marker.
+PROTOCOL = "autoreview-codex/v1"
+MARKERS = Markers(
+    result_prefix="[autoreview-codex/v1 result:",
+    exit_line_format="[autoreview-codex/v1 exited with status {}]",
+    refusal_format="[autoreview-codex/v1 refused:{}]",
+    reason_format="[autoreview-codex/v1 reason:{}]",
+)
+# An older engine reads only these markers, and its prompt has no trusted protocol line.
+LEGACY_MARKERS = Markers(
+    result_prefix="[pohunek-codex-review-result-v1:",
+    exit_line_format="[pohunek-codex-review exited with status {}]",
+    refusal_format="[pohunek-codex-review-refused-v1:{}]",
+    reason_format="[pohunek-codex-review-reason-v1:{}]",
+)
 REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
-# Right before the exit line of a failed Codex run, it holds the base64 of the reason
-# that `exit_reason` takes from Codex's stderr; empty when stderr has no line. A refusal
-# after the run puts the adapter's own message there, before any head marker.
-REASON_MARKER_FORMAT = "[pohunek-codex-review-reason-v1:{}]"
 # Most UTF-8 bytes of a reason, as the engine's bound; a longer one is cut at a character.
 REASON_MAX_BYTES = 512
 # Codex prints a failed turn as `ERROR: ...`; its argument parser prints `error: ...`.
@@ -88,6 +107,7 @@ PRIOR_VERDICT_KEYS = frozenset({"key", "status", "note", "relies_on"})
 TRUSTED_HEAD_PATTERN = re.compile(r"(?m)^- Trusted head SHA: ([0-9a-f]{40})$")
 TRUSTED_BASE_PATTERN = re.compile(r"(?m)^- Trusted base SHA: ([0-9a-f]{40})$")
 TRUSTED_CHECKOUT_PATTERN = re.compile(r"(?m)^- Trusted checkout: (.*)$")
+TRUSTED_PROTOCOL_PATTERN = re.compile(r"(?m)^- Trusted protocol: (.*)$")
 CHECKOUT_BASE = "base"
 CHECKOUT_HEAD = "head"
 RESULT_SCHEMA = {
@@ -252,24 +272,30 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(EXIT_USAGE)
 
 
-def exit_after_retention(exit_status: int, retention_seconds: int, marker: str = "") -> NoReturn:
-    """Prints the exit line that ends the output for the engine, then keeps it readable.
+def exit_after_retention(
+    exit_status: int, retention_seconds: int, markers: Markers, marker: str = ""
+) -> NoReturn:
+    """Prints the exit line of `markers` that ends the output, then keeps it readable.
 
     A `marker` line goes into the same write, on the line right before the exit line.
     """
     marker_line = f"\n{marker}" if marker else ""
-    print(f"{marker_line}\n{EXIT_LINE_FORMAT.format(exit_status)}", flush=True)
+    print(f"{marker_line}\n{markers.exit_line_format.format(exit_status)}", flush=True)
     time.sleep(retention_seconds)
     raise SystemExit(exit_status)
 
 
-def refuse(error: InputFrameError, retention_seconds: int, after_run: bool) -> NoReturn:
+def refuse(
+    error: InputFrameError, retention_seconds: int, after_run: bool, markers: Markers
+) -> NoReturn:
     """Ends a run whose request, checkout or result the adapter refuses, with the exit line."""
     print(f"{PROGRAM_NAME}: {error}", file=sys.stderr, flush=True)
-    exit_after_retention(EXIT_USAGE, retention_seconds, refusal_marker(error, after_run))
+    exit_after_retention(
+        EXIT_USAGE, retention_seconds, markers, refusal_marker(error, after_run, markers)
+    )
 
 
-def refusal_marker(error: InputFrameError, after_run: bool) -> str:
+def refusal_marker(error: InputFrameError, after_run: bool, markers: Markers) -> str:
     """Returns the lines a refusal prints right before its exit line; empty for none.
 
     After the Codex run, the message that `refuse` prints goes on a reason line, as Codex's
@@ -277,9 +303,9 @@ def refusal_marker(error: InputFrameError, after_run: bool) -> str:
     """
     lines = []
     if after_run:
-        lines.append(reason_marker(f"{PROGRAM_NAME}: {error}".encode("utf-8")))
+        lines.append(reason_marker(f"{PROGRAM_NAME}: {error}".encode("utf-8"), markers))
     if isinstance(error, HeadUnavailableError):
-        lines.append(REFUSAL_MARKER_FORMAT.format(REFUSAL_HEAD_UNAVAILABLE))
+        lines.append(markers.refusal_format.format(REFUSAL_HEAD_UNAVAILABLE))
     return "\n".join(lines)
 
 
@@ -306,10 +332,10 @@ def exit_reason(stderr: bytes) -> str:
     return neutralized.encode("utf-8")[:REASON_MAX_BYTES].decode("utf-8", errors="ignore")
 
 
-def reason_marker(stderr: bytes) -> str:
+def reason_marker(stderr: bytes, markers: Markers) -> str:
     """Returns the marker line that carries the reason of a failed run to the engine."""
     reason = exit_reason(stderr).encode("utf-8")
-    return REASON_MARKER_FORMAT.format(base64.b64encode(reason).decode("ascii"))
+    return markers.reason_format.format(base64.b64encode(reason).decode("ascii"))
 
 
 def write_prompt(stream: BinaryIO, prompt: bytes) -> None:
