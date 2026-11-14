@@ -57,6 +57,9 @@ pub(crate) const SLOT_STATE_PREFIX: &str = "slot/";
 /// Prefix of the steps that record a sent notification.
 pub(crate) const NOTIFY_STEP_PREFIX: &str = "notify/";
 
+/// Separator between a notification step and a backend name in the step of one backend.
+pub(crate) const BACKEND_STEP_SEPARATOR: &str = "@";
+
 /// Checks that a stored review input is complete and consistent.
 ///
 /// The checks run in Go's order, so the first failing one names the error.

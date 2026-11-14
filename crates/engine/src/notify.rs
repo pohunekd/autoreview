@@ -1,4 +1,4 @@
-//! The channel-neutral notification and its delivery to the backends of a route.
+//! The channel-neutral notification, the backends of a route and delivery to one backend.
 
 // Rust guideline compliant 2026-11-14
 
@@ -25,38 +25,41 @@ pub struct Notification {
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
-    /// Sends `notification` to the backends of `route`, in route order.
-    ///
-    /// The first failure stops the delivery and is returned. With `muted`, each backend drops
-    /// the failures that its level allows, see [`Integrations::notify`].
+    /// Returns the backend names of `route`, in route order.
     ///
     /// # Errors
     ///
-    /// Returns `notify_route_invalid` when the route names no backend, and the error of the
-    /// backend that failed.
-    pub(crate) async fn deliver(
-        &self,
-        cancel: &CancellationToken,
-        route: &NotifyRoute,
-        notification: &Notification,
-        muted: bool,
-    ) -> Result<(), Error> {
+    /// Returns `notify_route_invalid` when the route names no backend.
+    pub(crate) fn route_backends(&self, route: &NotifyRoute) -> Result<&[String], Error> {
         let backends = self.config.notify.backends_of(route);
         if backends.is_empty() {
             return Err(Error::workflow(ROUTE_INVALID, true, None));
         }
-        for backend in backends {
-            if muted {
-                self.integration
-                    .notify(cancel, backend, notification)
-                    .await?;
-            } else {
-                let sent = self
-                    .integration
-                    .notify_unmuted(cancel, backend, notification);
-                sent.await?;
-            }
+        Ok(backends)
+    }
+
+    /// Sends `notification` to the backend called `backend`.
+    ///
+    /// With `muted`, the backend drops the failures that its level allows, see
+    /// [`Integrations::notify`]; a dropped failure counts as delivered.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the backend.
+    pub(crate) async fn deliver_to(
+        &self,
+        cancel: &CancellationToken,
+        backend: &str,
+        notification: &Notification,
+        muted: bool,
+    ) -> Result<(), Error> {
+        if muted {
+            self.integration.notify(cancel, backend, notification).await
+        } else {
+            let sent = self
+                .integration
+                .notify_unmuted(cancel, backend, notification);
+            sent.await
         }
-        Ok(())
     }
 }
