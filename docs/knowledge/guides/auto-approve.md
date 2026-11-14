@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Automatic approval
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 A clean review is approved by the review account without a person. This is
 acceptable only where a wrong approval is cheap: a website whose changes are

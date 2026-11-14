@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Use cases
 
-> **Status: 0.2.0.** These pages describe autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** These pages describe autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 Every scenario below is a policy file plus a config file. Start from the
 closest scenario, copy its example, and change the repository names. The
@@ -94,14 +94,14 @@ Two dimensions are not in a policy: the GitHub account (the `login` of the crede
 ## Where to go next
 
 - [Getting started](getting-started.md) sets up one Linux machine with
-  `scripts/setup` (after 0.2.0).
+  `scripts/setup`.
 - [Quickstart](quickstart.md) runs the first review on one repository.
 - [Combining patterns](combining.md) lists recipes and the rules that
   interact when two scenarios share one policy.
 - [Notifiers](notifiers.md) explains the notification backends.
 - [Writing prompts](writing-prompts.md) explains what a prompt must and must
   not do.
-- [Hermes approval](hermes-approval.md) is an optional chat integration for
-  the approval step, planned in #43.
+- [Approve from chat](hermes-approval.md) lets a chat agent approve a waiting
+  review through the MCP server.
 - [MCP server](mcp-server.md) lets any MCP client list, read, approve and
   retry reviews.

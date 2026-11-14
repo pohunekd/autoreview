@@ -2,15 +2,15 @@
 type: Guide
 id: guide/notifiers
 title: Notifiers
-description: Configure where autoreview messages go - Matrix rooms per level or per event, the review queue and delivery-failure semantics; no notifier, webhooks and several backends per level are planned.
+description: Configure where autoreview messages go - no notifier, Matrix rooms per level or per event, webhooks for Slack, Discord or JSON, several backends for one level, the review queue and delivery-failure semantics.
 source_kind: manual
 intents: [setup, help, debug]
 ---
 
 # Notifiers
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 Every event in the policy has one of three levels: `action`, `digest` or
 `log`. The notification section of `config.yaml` says where each level goes.

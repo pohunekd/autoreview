@@ -9,8 +9,8 @@ intents: [debug, help]
 
 # Troubleshooting
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 Start with two commands. `autoreview candidates` shows what the next discovery
 pass would consider, per rule and trigger. `autoreview review --repository
@@ -53,7 +53,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `webhook_unavailable`, `webhook_request_rejected`, `webhook_request_invalid` | A webhook did not accept a message | [Notifier failures](#notifier-failures) |
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a human | [Approval errors](#approval-errors) |
 | `review_superseded`, `approval_expired` | The wait ended and nothing was posted | [Approval errors](#approval-errors) |
-| `head_changed` | The head SHA given is no longer the pull request head | [Approval errors](#approval-errors) |
+| `head_changed` | The head given to `retry` is no longer the pull request head | [Approval errors](#approval-errors) |
 | `head_prefix_invalid`, `head_sha_invalid` | The head argument of `retry`, `resolve` or `approve` has the wrong form | [Approval errors](#approval-errors) |
 | `stats_range_invalid`, `stats_range_too_long` | The range of `stats` or `review_stats` is not `YYYY-MM-DD` days in order up to today (UTC), or covers more than 366 days | [Review statistics](../../stats.md#the-range) |
 | `review_already_running`, `review_retry_not_dispatched` | A retry is not needed or not possible now | [Retry and recovery](retry-and-recovery.md) |
@@ -576,11 +576,11 @@ resolve it first: `autoreview resolve --repository <owner/repo> <number> <prefix
 
 | Code | Meaning and fix |
 |---|---|
-| `review_not_awaiting_approval` | The review is not waiting for a human. It was already published, or its rule does not use `on_clean: await`. |
+| `review_not_awaiting_approval` | The review is not waiting for a human. It was already published, its rule does not use `on_clean: await`, or its wait ended (a newer commit, a stopped trigger, the deadline) and discovery cleared it. Nothing was posted. |
 | `approval_not_required` | The rule approves without a human. Nothing to approve. |
 | `review_superseded` | A newer commit replaced the review, or the pull request stopped asking for one (review request or label removed, closed, back to draft). Nothing was posted. The new head is reviewed. |
 | `approval_expired` | `approval.timeout_hours` passed. Nothing was posted. See [retry and recovery](retry-and-recovery.md#expired-waits) for the open question about a fresh review. |
-| `head_changed` | The HEAD_SHA given is not the pull request head any more. Resolve the current head and check the diff before you approve it. |
+| `head_changed` | `retry` was given a head that is not the pull request head any more; `resolve` and `approve` never return it. The new head is reviewed on its own. |
 | `head_prefix_invalid` | The head prefix of `retry` or `resolve` is not 12 to 40 lowercase hexadecimal characters. Copy at least the 12 characters after `@` of the Review ID. |
 | `head_sha_invalid` | The HEAD_SHA of `approve` is not the full head, 40 lowercase hexadecimal characters. Run `autoreview resolve` with the prefix and approve the `head_sha` it prints. |
 

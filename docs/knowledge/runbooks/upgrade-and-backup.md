@@ -2,19 +2,19 @@
 type: Runbook
 id: runbook/upgrade-and-backup
 title: Upgrade and backup
-description: Back up the SQLite store, upgrade the binary or the container image (planned in #40), validate before the restart, and roll back, with the pohunek version compatibility rules.
+description: Back up the SQLite store, upgrade the binary, validate before the restart, and roll back, with the pohunek version compatibility rules.
 source_kind: manual
 intents: [update, help]
 ---
 
 # Upgrade and backup
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0. The container image this page
-> mentions is not in 0.2.0 and is planned in #40.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue. A container
+> image is not available (#40).
 
-Back up first, validate before every restart, and keep the previous binary or
-image until the new version has published a review.
+Back up first, validate before every restart, and keep the previous binary
+until the new version has published a review.
 
 ## Back up the store
 
@@ -92,24 +92,6 @@ Its line `autoreview.service restarted` is the restart of step 4's window. When
 fix the configuration and run it again. It also installs the units of the new
 archive. Check the state as in step 5.
 
-## Upgrade the container
-
-The container image is not in 0.2.0 and is planned in #40; this section
-describes its design.
-
-Change the image tag in the compose file, pull, and validate with the same
-mounts and environment file as the service:
-
-```sh
-docker compose pull
-docker compose run --rm autoreview --config /etc/autoreview/config.yaml validate
-docker compose up -d
-```
-
-The `validate` run uses the new image, so the pohunek version it checks is the
-one bundled in that image. A tag pins the version; do not use `latest` for a
-service that reviews code.
-
 ## Store migrations
 
 The reference pages do not describe store migrations. It is not documented
@@ -124,8 +106,7 @@ the service works.
 Roll back only with a backup taken before the upgrade:
 
 1. Stop the service: `sudo systemctl stop autoreview.service`.
-2. Restore the old binary (`/usr/local/bin/autoreview.previous`) or set the
-   previous image tag in the compose file.
+2. Restore the old binary (`/usr/local/bin/autoreview.previous`).
 3. If the new version may have changed the store, restore the backup over
    `store.path` while the service is stopped. Reviews published after the backup
    are not in the restored store; check them on GitHub before you retry.

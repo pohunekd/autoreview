@@ -3,8 +3,8 @@
 Hand-written documentation for autoreview, in the same layout as the pohunek
 knowledge bundle so pohunek.dev can render both.
 
-> **Status: 0.2.0.** These pages describe autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** These pages describe autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 - **Concepts** explain how a review works:
   [how it works](concepts/how-it-works.md),
@@ -16,7 +16,7 @@ knowledge bundle so pohunek.dev can render both.
   [GitHub identity](concepts/github-identity.md) and
   [state and recovery](concepts/state-and-recovery.md).
 - **Guides** are use cases with a complete policy each. Start with
-  [getting started](guides/getting-started.md) (after 0.2.0), the
+  [getting started](guides/getting-started.md), the
   [quickstart](guides/quickstart.md) and the [use case chooser](guides/index.md);
   [combining patterns](guides/combining.md) layers them in one policy.
 - **Runbooks** fix things in operation:

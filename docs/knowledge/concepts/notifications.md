@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # Notifications
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 autoreview tells people about reviews that need them, and it records the rest.
 Each **event** has a **level**. Each level goes to one or more **backends**. The
@@ -236,10 +236,11 @@ and each bidi control or zero-width character is shown as `<U+XXXX>`, such as
 `<U+202E>`. An excerpt counts the shown text and never cuts a `<U+XXXX>` in half.
 The review queue shows titles and authors the same way.
 
-## Adding a backend (design)
+## Adding a backend
 
-Not in v0.1. The design below keeps any later channel out of the rest of the
-engine.
+autoreview ships the `none`, `matrix` and `webhook` backend types. Another type
+is a code change that follows these rules, which keep the channel out of the
+rest of the engine.
 
 1. **One channel-neutral message.** Every event produces the same message object:
    level, event, title, text, Review ID and links. The backend decides how to

@@ -9,14 +9,14 @@ intents: [setup, help]
 
 # Threat model
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 autoreview reads pull requests written by people it may not trust, sends them
 to coding agents, and then posts a review under a GitHub account. Its threats
 come from that combination. This page lists the assets and actors, shows where
 each part runs, and gives the attacks with their mitigations. The mitigations
-are design commitments of v0.1; the residual risks at the end are not solved by
+are what autoreview does; the residual risks at the end are not solved by
 autoreview.
 
 Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-injection.md), [secrets](secrets.md).
@@ -80,9 +80,9 @@ the engine publishes.
 | 7 | Wrong account posts reviews | `serve` refuses to start when the token's login differs from the credential's login; a review reads and publishes only with the credential and login it was dispatched with; a check while running that finds another account suspends the credential | Engine behaviour |
 | 8 | Own pull request gets approved or changes requested | GitHub forbids it, so the engine always posts a comment and raises `findings_on_own_pr` | Policy behaviour |
 | 9 | Approval satisfies branch protection for a head nobody read | An approval binds to the exact head SHA; a new commit or changed request supersedes it | Policy behaviour |
-| 10 | Approval spoofed by a comment | Approval is the `approve` CLI command or the `approve` tool of an MCP client with the `write` scope, never a comment; both check the exact head. Comment-based approval is post-v1 | Not in v0.1 |
+| 10 | Approval spoofed by a comment | Approval is the `approve` CLI command or the `approve` tool of an MCP client with the `write` scope, never a comment; both check the exact head. Comment-based approval is post-v1 (#46) | Engine behaviour |
 | 11 | Human comment reused to close a finding on an auto-approve rule | Comments marked by `publish.ai_signed_pattern` are never a human decision; on auto-approve rules a finding closes as answered only when it rests on the reviewing account's own comment that is not AI-signed | Engine behaviour |
-| 12 | Anyone with triage rights triggers a costly run | Use `review-requested` or a label that only maintainers can add; untrusted authors are skipped or reviewed with `comment` | Policy choice; per-author rate limit not in v0.1 |
+| 12 | Anyone with triage rights triggers a costly run | Use `review-requested` or a label that only maintainers can add; untrusted authors are skipped or reviewed with `comment` | Policy choice; autoreview has no per-author rate limit (#401) |
 | 13 | Discovery hides pull requests when a search is truncated | Truncated search is an error (`github_search_limit_exceeded`), never a silent drop | Engine behaviour |
 | 14 | A reviewer returns oversized or malformed output | Schema-validated result, `limits` bounds, `session.output_max_bytes`; the reviewer gets a fresh session, or the review fails at once for an output over the bound (`review_output_too_large`) and a Claude Code result message that is unusable (`claude_result_invalid`, `claude_result_mismatch`) | Engine behaviour |
 | 15 | Two engines process one database | `serve` refuses a second process on the same database (`engine_already_running`) | Engine behaviour |
@@ -97,8 +97,8 @@ These are not solved by autoreview. Operators must accept or mitigate them.
 - **pohunek project setup and hooks run on the worktree.** They run in every
   session's worktree. With `checkout: head`, that worktree holds the pull
   request's code, so its hooks are code the author controls. Run reviews on a
-  dedicated review host with a project that has no setup hooks. Planned: an
-  option to require a hook-free project, not in v0.1.
+  dedicated review host with a project that has no setup hooks. autoreview has
+  no option that requires a hook-free project (#399).
 - **The head checkout runs nothing by itself, but the agent reads it.** For
   `checkout: head`, the agent reads untrusted files. Use `checkout: base` for
   every rule that accepts outside authors.
@@ -125,5 +125,5 @@ These are not solved by autoreview. Operators must accept or mitigate them.
 - Give each review host only the repositories it reviews, and register them with
   `pohunek project add` only on the hosts that should see them.
 - Run untrusted-author reviews on a review host without secrets in its
-  environment, as far as the host allows. v0.1 chooses the host per repository
+  environment, as far as the host allows. autoreview chooses the host per repository
   with `route_overrides`; see [untrusted authors](untrusted-authors.md#separate-review-host).

@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Untrusted authors
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 Every repository rule must say who it trusts. The `authors` block splits pull
 request authors into two classes. A trusted author gets the rule's normal
@@ -188,8 +188,8 @@ replace `skip` with the mapping from the previous example, and keep
 
 ## Separate review host
 
-Untrusted reviews should run on a review host that holds no other secrets. v0.1
-selects the host per repository, not per author:
+Untrusted reviews should run on a review host that holds no other secrets.
+autoreview selects the host per repository, not per author:
 
 - `pohunek.route_overrides` pins one repository (`owner/repo`) to one host. All
   its pull requests, from trusted and untrusted authors, run there.
@@ -200,7 +200,7 @@ selects the host per repository, not per author:
   project that pohunek discovered on a host without `pohunek project add`. Pin
   the repository with `route_overrides`, or keep `auto` out of `project_sources`
   for untrusted pipelines.
-- Choosing a host per author is not in v0.1. Do not split one repository's
+- autoreview cannot choose a host per author (#400). Do not split one repository's
   authors across two autoreview instances; the two would process the same pull
   requests.
 

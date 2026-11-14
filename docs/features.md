@@ -9,9 +9,8 @@ intents: [setup, help]
 
 # Features
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0. The container image this page
-> mentions is not in 0.2.0 and is planned in #40.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 autoreview is a small service that reviews GitHub pull requests with coding
 agents you already run. It finds pull requests that ask for a review, runs one
@@ -99,15 +98,14 @@ one versioned JSON document for a dashboard of your own.
   runtime packages installed.
 - The GitHub CLI and one token, of your own account or a machine user, or one
   token per owner or repository. [GitHub identity](knowledge/concepts/github-identity.md)
-- Linux with systemd, or a container runtime for the container image that comes
-  planned in #40.
+- Linux with systemd. A container image is not available (#40).
 
 ## Documentation map
 
 | Start here | |
 |---|---|
-| [Install](install.md) | Binary, container (planned in #40), first configuration, first review |
-| [Getting started](knowledge/guides/getting-started.md) | One Linux machine set up by `scripts/setup` (after 0.2.0) |
+| [Install](install.md) | Release binary, systemd units, first configuration, first review |
+| [Getting started](knowledge/guides/getting-started.md) | One Linux machine set up by `scripts/setup` |
 | [Quickstart](knowledge/guides/quickstart.md) | One repository, one reviewer, comments only |
 | [Use cases](knowledge/guides/index.md) | Pick a scenario and combine them |
 
@@ -143,7 +141,7 @@ one versioned JSON document for a dashboard of your own.
 | [Notifiers](knowledge/guides/notifiers.md) | Matrix rooms per level or per event, the review queue |
 | [Combining patterns](knowledge/guides/combining.md) | Recipes that layer the above |
 | [Writing prompts](knowledge/guides/writing-prompts.md) | Review and verifier prompts |
-| [Approve from chat with Hermes](knowledge/guides/hermes-approval.md) | Optional Hermes Agent integration, planned in #43 |
+| [Approve from chat](knowledge/guides/hermes-approval.md) | A chat agent approves a waiting review through the MCP server |
 | [MCP server](knowledge/guides/mcp-server.md) | Reviews as MCP tools for any agent |
 
 | Operate | |

@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Human approval
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 The reviewers do the reading; a person makes the decision. Two Claude reviewers
 review the core repository, a verifier re-checks blocking findings, and a clean
@@ -159,10 +159,8 @@ Repeating an approval is safe. The errors you can meet:
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `review_superseded` | A newer commit replaced the review, or the pull request stopped asking for one | Review the new head, then approve it |
-| `approval_expired` | The wait passed `approval.timeout_hours` | Nothing was published; the head needs a new review before it can be approved |
-| `head_changed` | The head you passed is not the pull request head | Resolve the current head and approve that |
-| `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a person | Nothing to approve |
+| `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a person, or its wait ended (a newer commit, a stopped trigger, `approval.timeout_hours`) and was cleared | Nothing to approve; a new head is reviewed on its own |
+| `review_superseded`, `approval_expired` | The wait ended as above and is not cleared yet | Nothing was published; approve the review of the new head when it waits |
 
 If a review stopped after its retries, the `review_stopped` action event is
 raised. Retry the head it stopped on:
@@ -186,9 +184,9 @@ autoreview retry --repository zajca/pohunek 42 3f2a9c1d0b7e
 - **Notes to the author first.** Add `on_notes: comment` and
   `notes_handoff.reminder_hours`, as in [notes hand-off](notes-handoff.md). It
   requires `on_clean: await` and `review-requested`, which this rule already has.
-- **Approve from chat.** A chat integration that runs the same `resolve` and
-  `approve` commands is planned in #43; see
-  [approve from chat with Hermes](hermes-approval.md).
+- **Approve from chat.** A chat agent that is an MCP client with the `write`
+  scope calls the `resolve` and `approve` tools of `autoreview mcp`; see
+  [approve from chat](hermes-approval.md).
 
 ## Combine with
 
