@@ -281,6 +281,7 @@ pub(crate) mod tests {
         Discussion, DiscussionComment, DiscussionThread, PriorFinding, PriorVerdict,
     };
     use crate::protocol::fixtures::sha;
+    use crate::publish::MarkerName;
 
     use super::{reviewer_output_retryable, validate_prior_verdicts};
 
@@ -364,6 +365,7 @@ pub(crate) mod tests {
             session_group: "autoreview".to_owned(),
             session_name_prefix: "github-review-".to_owned(),
             session_branch_prefix: "autoreview/review/".to_owned(),
+            review_marker: MarkerName::HermesPrReview,
         }
     }
 

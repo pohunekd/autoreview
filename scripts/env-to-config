@@ -537,6 +537,8 @@ def render(out):
         "",
         "publish:",
         *keys("publish", ("signature", "ai_signed_pattern", "github_body_max_bytes")),
+        # The name that the markers of the converted deployment carry.
+        '  marker: "hermes-pr-review"',
         "",
         "notify:",
         *keys("notify", ("timeout_seconds", "max_characters")),

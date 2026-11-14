@@ -18,6 +18,7 @@ use autoreview_engine::config::{
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
+use autoreview_engine::publish::MarkerName;
 use autoreview_policy::{EVENTS, Event, OPTIONAL_EVENTS, Policy, user_login_valid};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -67,6 +68,8 @@ const EXCERPT_DIVISOR: i64 = 4;
 const PORT_MAX: u32 = 65_535;
 /// Largest GitHub review body or comment, in bytes.
 const GITHUB_BODY_MAX_BYTES_LIMIT: i64 = 65_536;
+/// Marker name without `publish.marker`: the one that existing merge gates read.
+const MARKER_NAME_ABSENT: MarkerName = MarkerName::HermesPrReview;
 /// Largest value of `pohunek.host_state.min_battery_percent`.
 const BATTERY_PERCENT_MAX: i64 = 100;
 /// Largest command time limit that the pohunek daemon honours, in seconds.
@@ -458,6 +461,9 @@ struct PublishFile {
     ai_signed_pattern: Option<Value>,
     /// Bound of one review body or comment, in bytes.
     github_body_max_bytes: Option<Value>,
+    /// Name of the hidden review markers; `None` when the key is absent.
+    #[serde(default, deserialize_with = "present_section")]
+    marker: Option<Option<Value>>,
 }
 
 /// The `notify` section.
@@ -913,6 +919,7 @@ fn map_file(
         &publish.github_body_max_bytes,
         "publish.github_body_max_bytes",
     )?;
+    let review_marker = marker_name(publish.marker.as_ref())?;
     let notify = section(&file.notify, "notify")?;
     let matrix_timeout = seconds(&notify.timeout_seconds, "notify.timeout_seconds")?;
     let matrix_max_characters = positive(&notify.max_characters, "notify.max_characters")?;
@@ -993,6 +1000,7 @@ fn map_file(
         session_group,
         session_name_prefix,
         session_branch_prefix,
+        review_marker,
     };
     cross_key_rules(file, &config)?;
     Ok(Mapped {
@@ -1736,6 +1744,25 @@ fn name_prefix(value: &Option<Value>) -> Result<String, Error> {
         return Err(invalid(key, "must not contain a control character"));
     }
     Ok(prefix)
+}
+
+/// Reads `publish.marker`, the name of the hidden review markers.
+///
+/// An absent key is [`MARKER_NAME_ABSENT`], the name that the markers of existing deployments
+/// carry; a key without a value is missing.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for a key without a value and `configuration_invalid` for
+/// any text other than `autoreview` or `hermes-pr-review`.
+fn marker_name(value: Option<&Option<Value>>) -> Result<MarkerName, Error> {
+    let key = "publish.marker";
+    let Some(value) = value else {
+        return Ok(MARKER_NAME_ABSENT);
+    };
+    let name = text(value, key)?;
+    MarkerName::from_name(&name)
+        .ok_or_else(|| invalid(key, "must be autoreview or hermes-pr-review"))
 }
 
 /// Builds a `configuration_invalid` error that names `key`.

@@ -128,6 +128,9 @@ publish:
   ai_signed_pattern: "Written by AI:"
   # GitHub accepts at most 65536 characters per review body or comment.
   github_body_max_bytes: 60000
+  # Name of the hidden review markers: autoreview, or hermes-pr-review for merge
+  # gates that read that name. Without the key, hermes-pr-review.
+  marker: autoreview
 
 notify:
   timeout_seconds: 30

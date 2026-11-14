@@ -14,6 +14,7 @@ use time::Duration as SignedDuration;
 
 use crate::error::{BoxError, Error};
 use crate::model::{RunLimits, repository_valid};
+use crate::publish::MarkerName;
 
 mod credentials;
 mod symbols;
@@ -331,6 +332,8 @@ pub struct Config {
     pub session_name_prefix: String,
     /// Prefix of every reviewer branch on the review host.
     pub session_branch_prefix: String,
+    /// Name of the hidden markers of every publication.
+    pub review_marker: MarkerName,
 }
 
 impl fmt::Debug for Config {
@@ -1068,7 +1071,7 @@ mod tests {
 
     use autoreview_schedule::scheduler;
 
-    use super::{Config, MatrixRooms};
+    use super::{Config, MarkerName, MatrixRooms};
 
     use crate::error::error_code;
 
@@ -1152,6 +1155,7 @@ mod tests {
             session_group: "autoreview".to_owned(),
             session_name_prefix: "github-review-".to_owned(),
             session_branch_prefix: "autoreview/review/".to_owned(),
+            review_marker: MarkerName::HermesPrReview,
         }
     }
 
