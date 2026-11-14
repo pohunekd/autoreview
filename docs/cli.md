@@ -388,9 +388,10 @@ head. The engine publishes on its next tick:
 ```
 
 Run it again to see `published` with `github_review_id`. Repeating an approval is
-safe. `review_superseded` means a newer commit or a changed review request
-replaced the review; `approval_expired` means `approval.timeout_hours` passed.
-In both cases nothing is posted.
+safe. After a newer commit, a changed review request or `approval.timeout_hours`
+the wait is cleared and the command answers `review_not_awaiting_approval`;
+`review_superseded` or `approval_expired` come only while the ended wait is not
+cleared yet. In every case nothing is posted.
 
 ### `autoreview resolve`
 
@@ -442,9 +443,9 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `repository_not_allowed`, `review_identity_invalid` | Malformed repository or pull request number, or an approval whose identity differs from the stored review |
 | `head_prefix_invalid` | `HEAD_PREFIX` of `retry` or `resolve` (`head_prefix` of the MCP tools) is not 12 to 40 lowercase hexadecimal characters |
 | `head_sha_invalid` | `HEAD_SHA` of `approve` (`head_sha` of the MCP tool) is not the full head commit, 40 lowercase hexadecimal characters |
-| `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for an approval |
-| `review_superseded`, `approval_expired` | The wait ended without a publication |
-| `head_changed` | The pull request has a newer head than the one given |
+| `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for an approval, or its wait ended (a newer commit, a changed review request, the deadline) and was cleared |
+| `review_superseded`, `approval_expired` | The wait ended without a publication and is not cleared yet |
+| `head_changed` | `retry` got a head that is no longer the pull request head, or a running review saw a new head (it ends as `superseded`) |
 | `review_already_running`, `review_retry_not_dispatched` | A retry is not needed or not possible right now |
 | `review_already_completed` | `retry` found a completed review of this head (it succeeded or went on to wait for an approval) against the current base branch and no later failed review of it, or one whose base branch is no longer known; nothing to do when that review is current, approve it if it still waits, or push a new commit for a fresh review |
 | `engine_already_running` | Another `serve` uses the same database |
@@ -480,13 +481,14 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `review_history_limit_exceeded` | The store holds more reviews than `schedule.state_entry_limit`; the discovery pass dispatches nothing rather than over a review it cannot see |
 | `review_request_event_missing` | GitHub lists no review request event for a pull request that asks for a review; `candidates` shows it as rejected with this code |
 | `pohunek_session_not_found`, `pohunek_response_invalid` | A pohunek call named a session that the review host does not have, or its answer did not read; a route lookup that fails this way waits for a review host, as after `pohunek_request_failed` |
-| `session_identity_ambiguous`, `session_identity_invalid` | The review host lists two sessions of the review's name, or the session of that name has another profile, project or branch; not retried |
+| `session_identity_ambiguous`, `session_identity_invalid` | The review host lists two sessions of the review's name, or the session of that name has another profile, project or branch, reports malformed IDs or runtime generation, or is not running live in a linked worktree; not retried |
 | `host_state_invalid`, `host_state_stale`, `host_state_unavailable` | The state read of a host did not read as `HostCapacity` v1, was older than `max_age_seconds`, or could not run; `pohunek.host_state.unknown_state` decides whether the host is used, see [configuration](configuration.md#pohunek) |
 | `handoff_review_not_stored`, `handoff_review_mismatch` | A notes hand-off found no stored review of its head, or one of another pull request or head; not retried |
 | `github_review_too_large` | The review body or an inline comment is longer than `publish.github_body_max_bytes`; not retried |
 | `github_review_state_conflict` | GitHub holds a review of this head with the review marker but another decision; not retried |
-| `matrix_message_invalid`, `matrix_request_invalid`, `notify_backend_unknown`, `notify_route_invalid`, `review_queue_too_long` | A message was not sent: it is empty, a Matrix transaction ID could not be drawn, a route names no configured backend, or the review queue has no room for one entry within `notify.max_characters` |
-| `artifact_invalid`, `embedded_asset_invalid`, `github_request_invalid`, `github_review_invalid`, `review_incomplete`, `review_input_invalid`, `review_protocol_invalid`, `review_request_invalid`, `review_trigger_invalid`, `store_state_invalid` | A stored review, a request that the engine built or a schema embedded in the binary is not usable; not retried; a defect or a damaged store to report |
+| `matrix_message_invalid`, `matrix_request_invalid`, `notify_backend_unknown`, `notify_route_invalid`, `review_queue_too_long` | A message was not sent: it is empty; the Matrix request could not be built (no transaction ID could be drawn, `notify.max_characters` is below 1, the room or transaction is a dot segment, the content did not encode, or the URL does not parse); a route names no configured backend; or the review queue has no room for one entry within `notify.max_characters` |
+| `artifact_invalid` | The merged findings of several reviewers exceed `limits.max_findings`, although each result alone is within it: raise `limits.max_findings`, restart `serve` and `retry` the pull request. Also the defect of results that do not match the reviewers; not retried automatically |
+| `embedded_asset_invalid`, `github_request_invalid`, `github_review_invalid`, `review_incomplete`, `review_input_invalid`, `review_protocol_invalid`, `review_request_invalid`, `review_trigger_invalid`, `store_state_invalid` | A stored review, a request that the engine built or a schema embedded in the binary is not usable; not retried; a defect or a damaged store to report |
 | `workflow_failed` | A failure without a more specific code: a review whose stored state misses a part it needs, an error that carries no code, or a command whose standard output is closed; a review that fails with it is not retried |
 
 The [troubleshooting runbook](knowledge/runbooks/troubleshooting.md) maps codes

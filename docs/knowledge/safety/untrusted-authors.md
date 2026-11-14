@@ -200,7 +200,7 @@ autoreview selects the host per repository, not per author:
   project that pohunek discovered on a host without `pohunek project add`. Pin
   the repository with `route_overrides`, or keep `auto` out of `project_sources`
   for untrusted pipelines.
-- autoreview cannot choose a host per author. Do not split one repository's
+- autoreview cannot choose a host per author (#400). Do not split one repository's
   authors across two autoreview instances; the two would process the same pull
   requests.
 

@@ -159,10 +159,8 @@ Repeating an approval is safe. The errors you can meet:
 
 | Code | Meaning | What to do |
 |---|---|---|
-| `review_superseded` | A newer commit replaced the review, or the pull request stopped asking for one | Review the new head, then approve it |
-| `approval_expired` | The wait passed `approval.timeout_hours` | Nothing was published; the head needs a new review before it can be approved |
-| `head_changed` | The head you passed is not the pull request head | Resolve the current head and approve that |
-| `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a person | Nothing to approve |
+| `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for a person, or its wait ended (a newer commit, a stopped trigger, `approval.timeout_hours`) and was cleared | Nothing to approve; a new head is reviewed on its own |
+| `review_superseded`, `approval_expired` | The wait ended as above and is not cleared yet | Nothing was published; approve the review of the new head when it waits |
 
 If a review stopped after its retries, the `review_stopped` action event is
 raised. Retry the head it stopped on:

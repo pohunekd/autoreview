@@ -66,16 +66,16 @@ The tool `list_awaiting` lists every waiting review, for a person who asks what
 waits instead of replying to one notification.
 
 The tools return the stable errors of the [CLI commands](../../cli.md):
-`review_not_awaiting_approval`, `approval_not_required`, `review_superseded`,
-`approval_expired` and `head_changed` each mean that nothing was posted. The
-agent reports the error and stops; it never retries with another SHA.
+`review_not_awaiting_approval`, `approval_not_required`, `review_superseded`
+and `approval_expired` each mean that nothing was posted. The agent reports
+the error and stops; it never retries with another SHA.
 
 ## The approval is bound to the head
 
 `approve` takes the full head SHA, and it applies only if that commit is still
 the head of the pull request. A commit pushed after the notification therefore
-supersedes the review (`review_superseded`), and the reply cannot approve code
-the reviewer never saw. A changed review request does the same.
+ends the wait, and the reply cannot approve code the reviewer never saw. A
+changed review request does the same.
 
 The notification also tells the person what they approve. Non-blocking notes do
 not prevent approval, and neither do blocking findings that the verifier
@@ -110,10 +110,10 @@ approval; give the `write` scope only to an agent that follows them.
   error and posts nothing.
 - A reply to a notification that has no Review ID, or a plain `approve` with no
   reply, is ignored by an agent that follows the rules.
-- A reply after a newer commit returns `review_superseded`. Ask for the new
-  review; it is reviewed by the engine on its own.
-- A reply after `approval.timeout_hours` returns `approval_expired`. Nothing
-  is posted, and the next commit starts a new review.
+- A reply after a newer commit or after `approval.timeout_hours` returns
+  `review_not_awaiting_approval` once discovery has cleared the wait, and
+  `review_superseded` or `approval_expired` before that. Nothing is posted. A
+  new commit is reviewed by the engine on its own.
 
 The `write` scope also allows the tool `retry`, which runs a whole discovery
 pass, see [tools](mcp-server.md#tools). An agent that should only approve gets

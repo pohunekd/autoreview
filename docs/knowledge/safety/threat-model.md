@@ -82,7 +82,7 @@ the engine publishes.
 | 9 | Approval satisfies branch protection for a head nobody read | An approval binds to the exact head SHA; a new commit or changed request supersedes it | Policy behaviour |
 | 10 | Approval spoofed by a comment | Approval is the `approve` CLI command or the `approve` tool of an MCP client with the `write` scope, never a comment; both check the exact head. Comment-based approval is post-v1 (#46) | Engine behaviour |
 | 11 | Human comment reused to close a finding on an auto-approve rule | Comments marked by `publish.ai_signed_pattern` are never a human decision; on auto-approve rules a finding closes as answered only when it rests on the reviewing account's own comment that is not AI-signed | Engine behaviour |
-| 12 | Anyone with triage rights triggers a costly run | Use `review-requested` or a label that only maintainers can add; untrusted authors are skipped or reviewed with `comment` | Policy choice; autoreview has no per-author rate limit |
+| 12 | Anyone with triage rights triggers a costly run | Use `review-requested` or a label that only maintainers can add; untrusted authors are skipped or reviewed with `comment` | Policy choice; autoreview has no per-author rate limit (#401) |
 | 13 | Discovery hides pull requests when a search is truncated | Truncated search is an error (`github_search_limit_exceeded`), never a silent drop | Engine behaviour |
 | 14 | A reviewer returns oversized or malformed output | Schema-validated result, `limits` bounds, `session.output_max_bytes`; the reviewer gets a fresh session, or the review fails at once for an output over the bound (`review_output_too_large`) and a Claude Code result message that is unusable (`claude_result_invalid`, `claude_result_mismatch`) | Engine behaviour |
 | 15 | Two engines process one database | `serve` refuses a second process on the same database (`engine_already_running`) | Engine behaviour |
@@ -98,7 +98,7 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   session's worktree. With `checkout: head`, that worktree holds the pull
   request's code, so its hooks are code the author controls. Run reviews on a
   dedicated review host with a project that has no setup hooks. autoreview has
-  no option that requires a hook-free project.
+  no option that requires a hook-free project (#399).
 - **The head checkout runs nothing by itself, but the agent reads it.** For
   `checkout: head`, the agent reads untrusted files. Use `checkout: base` for
   every rule that accepts outside authors.

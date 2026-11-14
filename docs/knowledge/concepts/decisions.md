@@ -141,9 +141,10 @@ branch does not end the wait, but an approval after it publishes nothing: the
 review ends as `superseded` (`base_branch_changed`) and the pull request is
 reviewed again.
 
-When a head is no longer the pull request head, `approve` fails with
-`head_changed`. A wait that already ended answers `review_superseded` or
-`approval_expired`, and nothing is posted.
+When the wait ends, by a new head, a trigger that stopped asking or the
+deadline, discovery clears it, and `approve` answers
+`review_not_awaiting_approval`; before the clearing it answers
+`review_superseded` or `approval_expired`. Nothing is posted.
 
 If the approved review cannot be published, the wait ends with a failure. The
 engine raises `review_stopped` with a message that says the approved review could
