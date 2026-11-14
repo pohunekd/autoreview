@@ -58,11 +58,26 @@ backends when they must not share a room.
 
 ## No notifier
 
-Planned in #29. Until then every route and the review queue need a `matrix`
-backend. A route to a `none` backend is refused at load with
-`configuration_invalid: notify.routes.<key>: none backends are not routed until
-#29`. A
-`review_queue.backends` list of `none` backends only is refused too, see
+Route every level and the review queue to a `none` backend:
+
+```yaml
+notify:
+  timeout_seconds: 30
+  max_characters: 8000
+  backends:
+    - name: quiet
+      type: none
+  routes:
+    action: [quiet]
+    digest: [quiet]
+    log: [quiet]
+  review_queue:
+    backends: [quiet]
+    max_items: 50
+```
+
+Nothing is sent. Each message is logged as `notification logged only` with its
+event and level, and `autoreview review-queue` prints the queue. See
 [configuration](../../configuration.md#backend-none).
 
 ## Matrix, one room per level

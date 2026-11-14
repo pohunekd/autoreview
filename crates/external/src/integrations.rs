@@ -22,7 +22,7 @@ use reqwest::Client;
 use tokio_util::sync::CancellationToken;
 
 use crate::github::GitHub;
-use crate::notify::{self, Backend, Backends};
+use crate::notify::{self, Backends};
 use crate::pohunek::{self, output, sessions};
 
 /// Configuration key named when the configuration holds no policy.
@@ -308,13 +308,8 @@ impl Integrations for External {
         backend: &str,
         notification: &Notification,
     ) -> Result<(), Error> {
-        let (level, text) = (notification.level.clone(), &notification.text);
-        match self.backends.get(backend)? {
-            Backend::None => Ok(()),
-            Backend::Matrix(matrix) => {
-                notify::notify(&self.http, matrix, cancel, level, text).await
-            }
-        }
+        let found = self.backends.get(backend)?;
+        notify::deliver(&self.http, backend, found, cancel, notification, true).await
     }
 
     async fn notify_unmuted(
@@ -323,13 +318,8 @@ impl Integrations for External {
         backend: &str,
         notification: &Notification,
     ) -> Result<(), Error> {
-        let (level, text) = (notification.level.clone(), &notification.text);
-        match self.backends.get(backend)? {
-            Backend::None => Ok(()),
-            Backend::Matrix(matrix) => {
-                notify::send_matrix(&self.http, matrix, cancel, level, text).await
-            }
-        }
+        let found = self.backends.get(backend)?;
+        notify::deliver(&self.http, backend, found, cancel, notification, false).await
     }
 
     async fn list_review_requests(
@@ -351,14 +341,7 @@ impl Integrations for External {
         plain: &str,
         formatted: &str,
     ) -> Result<(), Error> {
-        match self.backends.get(backend)? {
-            Backend::None => Ok(()),
-            Backend::Matrix(matrix) => {
-                let http = &self.http;
-                let sent =
-                    notify::send_queue_digest(http, matrix, cancel, transaction, plain, formatted);
-                sent.await
-            }
-        }
+        let found = self.backends.get(backend)?;
+        notify::deliver_queue(&self.http, found, cancel, transaction, plain, formatted).await
     }
 }

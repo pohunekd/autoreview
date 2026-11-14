@@ -376,8 +376,13 @@ impl FakeIntegration {
     }
 }
 
-/// Error codes that the Matrix notifier drops for a level other than action.
-const MUTED_CODES: [&str; 2] = ["matrix_unavailable", "matrix_request_rejected"];
+/// Error codes that the Matrix and webhook notifiers drop for a level other than action.
+const MUTED_CODES: [&str; 4] = [
+    "matrix_unavailable",
+    "matrix_request_rejected",
+    "webhook_unavailable",
+    "webhook_request_rejected",
+];
 
 /// Counts notes of a level whose message contains a fragment.
 pub(crate) fn count_notes(notes: &[Note], level: Level, fragment: &str) -> usize {

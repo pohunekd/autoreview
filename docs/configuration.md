@@ -413,10 +413,11 @@ Each message gets one attempt, bounded by `timeout_seconds`. A message that
 its backend does not accept is dropped with a warning, at every level, and
 neither the review nor discovery waits for it. `autoreview review-queue` fails with the backend's
 error code when a queue backend rejects the message, so its timer shows the
-failure. `review_queue.backends` must name one `matrix` backend and may add
-`none` backends; a list of `none` backends only, an empty list, or a name
-given twice is refused at load. Several backends per level are planned in #30.
-Each `matrix` backend has its own homeserver, token and mentioned user.
+failure. `review_queue.backends` names at most one `matrix` or `webhook`
+backend and any number of `none` backends; an empty list or a name given twice
+is refused at load. Several backends per level are planned in #30. Each backend
+has its own settings, so two `matrix` backends may use different homeservers,
+tokens or mentioned users.
 
 ### Event routes
 
@@ -443,11 +444,15 @@ Without event keys, routing is by level only.
 
 ### Backend `none`
 
-A `none` backend writes nothing but the structured log. It is accepted only in
-`review_queue.backends` next to a `matrix` backend. A route that names it is
-refused at load with `configuration_invalid: notify.routes.<key>: none backends
-are not routed until #29`.
-Running without notifications is planned in #29.
+```yaml
+- name: quiet
+  type: none
+```
+
+A `none` backend delivers nothing. Each message routed to it is logged as
+`notification logged only` with the backend name, the event and the level; the
+text is not logged. A review queue with only `none` backends sends nothing, and
+`autoreview review-queue` still prints the queue.
 
 ### Backend `matrix`
 
@@ -467,7 +472,33 @@ notifies anyone.
 
 ### Backend `webhook`
 
-Planned in #29.
+```yaml
+- name: team-chat
+  type: webhook
+  # The variable holds the incoming-webhook URL; the URL is a secret.
+  url_env: AUTOREVIEW_WEBHOOK_URL
+  format: slack   # json, slack or discord
+```
+
+One HTTP `POST` with a JSON body per message, `Content-Type: application/json`.
+The URL must use HTTPS (plain HTTP only on loopback) and is read only from the
+variable that `url_env` names. It never appears in errors, logs or `validate`
+output: a refused URL fails with `configuration_invalid:
+notify.backends.<name>.url_env: webhook URL must use HTTPS or loopback HTTP`.
+
+| `format` | Body |
+|---|---|
+| `json` | `{"event": "<event>", "level": "<level>", "text": "<text>"}`; the review queue is `{"event": "review_queue", "text": "<text>"}` |
+| `slack` | `{"text": "<text>"}` with `&`, `<` and `>` escaped, so the text cannot form a mention or a link; Slack-compatible services such as Mattermost take it too |
+| `discord` | `{"content": "<text>", "allowed_mentions": {"parse": []}}`, cut to 2000 UTF-16 code units, so no `@everyone`, user or role is pinged |
+
+The text is the plain text of the message, cut to `max_characters`. A webhook
+mentions nobody, also at the `action` level. The review queue sends its plain
+text. Any `2xx` answer is a delivery; `429` and `5xx` fail with
+`webhook_unavailable`, every other answer with `webhook_request_rejected`, and a
+URL that does not parse with `webhook_request_invalid`. At the `digest` and
+`log` levels a review message that fails is dropped with the warning `webhook
+notification dropped`.
 
 Other channels can be added as backend types without changing the policy;
 see the [notifications concept](knowledge/concepts/notifications.md).
