@@ -110,3 +110,110 @@ struct AllowedMentions {
     /// The mention types to resolve, always empty.
     parse: [&'static str; 0],
 }
+
+/// Returns the body of one message of `event` at `level` in the format of `webhook`.
+///
+/// The text is cut to `max_characters` first, then to the format's own limit. No format
+/// mentions anyone.
+///
+/// # Errors
+///
+/// Returns `webhook_request_invalid` for a blank text or a limit below one character.
+pub(crate) fn webhook_body(
+    webhook: &Webhook,
+    event: &str,
+    level: Option<&str>,
+    text: &str,
+) -> Result<Vec<u8>, Error> {
+    if text.trim().is_empty() {
+        return Err(invalid(EMPTY_CAUSE));
+    }
+    let limit = usize::try_from(webhook.max_characters)
+        .ok()
+        .filter(|limit| *limit >= 1)
+        .ok_or_else(|| invalid(LIMIT_CAUSE))?;
+    let text = cut(text, limit, |_| 1);
+    let encoded = match webhook.format {
+        WebhookFormat::Json => serde_json::to_vec(&JsonBody {
+            event,
+            level,
+            text: &text,
+        }),
+        WebhookFormat::Slack => serde_json::to_vec(&SlackBody {
+            text: &slack_escaped(&text),
+        }),
+        WebhookFormat::Discord => serde_json::to_vec(&DiscordBody {
+            content: &cut(&text, DISCORD_CONTENT_MAX, char::len_utf16),
+            allowed_mentions: AllowedMentions { parse: [] },
+        }),
+    };
+    encoded.map_err(|error| Error::workflow(REQUEST_INVALID, true, Some(Box::new(error))))
+}
+
+/// Returns `text` cut to `limit` units, where `units` sizes each character.
+///
+/// A cut text keeps what fits with [`TRUNCATION_MARK`] and ends in it.
+fn cut(text: &str, limit: usize, units: fn(char) -> usize) -> String {
+    if text.chars().map(units).sum::<usize>() <= limit {
+        return text.to_owned();
+    }
+    let mut kept = String::new();
+    let mut used = units(TRUNCATION_MARK);
+    for character in text.chars() {
+        used += units(character);
+        if used > limit {
+            break;
+        }
+        kept.push(character);
+    }
+    kept.push(TRUNCATION_MARK);
+    kept
+}
+
+/// Escapes the three characters that Slack reads as markup: `&`, `<` and `>`.
+fn slack_escaped(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Returns `webhook_request_invalid` with a fixed cause.
+fn invalid(cause: &'static str) -> Error {
+    Error::workflow(
+        REQUEST_INVALID,
+        true,
+        Some(Box::new(io::Error::other(cause))),
+    )
+}
+
+/// Posts `body` to the URL of `webhook` and maps the answer to an error code.
+///
+/// The response body is not read. A transport failure keeps only a fixed cause, and a URL that
+/// does not parse has no cause, so the URL never reaches an error. A cancelled `cancel` is a
+/// transport failure: the request is not sent, or it is dropped in flight.
+pub(crate) async fn post_webhook(
+    client: &Client,
+    webhook: &Webhook,
+    cancel: &CancellationToken,
+    body: Vec<u8>,
+) -> Result<(), Error> {
+    let url = Url::parse(&webhook.url).map_err(|_| Error::workflow(REQUEST_INVALID, true, None))?;
+    let sent = client
+        .post(url)
+        .timeout(webhook.timeout)
+        .header(CONTENT_TYPE, "application/json")
+        .body(body)
+        .send();
+    let response = cancel
+        .run_until_cancelled(sent)
+        .await
+        .and_then(Result::ok)
+        .ok_or_else(|| {
+            Error::workflow(
+                UNAVAILABLE,
+                false,
+                Some(Box::new(io::Error::other(TRANSPORT_CAUSE))),
+            )
+        })?;
+    response_result(response.status())
+}
