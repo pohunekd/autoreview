@@ -9,9 +9,8 @@ intents: [setup, help]
 
 # Secrets
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0. The container image this page
-> mentions is not in 0.2.0 and is planned in #40.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 autoreview has two kinds of secrets: the GitHub token of the
 [credential](../concepts/github-identity.md) and the Matrix token of the
@@ -81,10 +80,6 @@ With the systemd units of install path b, the secrets sit in
 - Stays out of repositories, shared dotfiles and any backup that leaves the host
   unencrypted.
 
-With the container image, which is planned in #40, the same
-file is passed through `env_file`. Keep it on the host with mode `0600`,
-outside the mounted config directory, which is read-only and holds no secrets.
-
 Write the values into the file with an editor. Do not put them on a command
 line, in a shell history or in a script that prints them.
 
@@ -139,8 +134,11 @@ content. Keep the reviewer's environment free of secrets:
 - **Keep review hosts free of GitHub tokens.** The tokens belong to the
   autoreview host. The review host needs only the pohunek daemon and the
   runtime.
-- Planned: adapters refuse known secret variables before a run. Not in v0.1;
-  until then, the profile must not carry one.
+- The Claude and Codex adapters drop `GH_TOKEN`, `GITHUB_TOKEN`,
+  `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `MATRIX_ACCESS_TOKEN`, the
+  pohunek session identity and every `AUTOREVIEW_` variable from the agent's
+  environment, for a run and for its `--version` probe. Any other secret in the
+  profile reaches the agent, so the profile must not carry one.
 
 ## Check that a variable is set
 

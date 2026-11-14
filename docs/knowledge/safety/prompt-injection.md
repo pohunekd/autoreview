@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Prompt injection
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 A pull request is written by its author, and a reviewer model reads it. The
 author can put instructions into the diff, the description, a commit message, a
