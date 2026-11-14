@@ -9,8 +9,8 @@ intents: [setup, project, help]
 
 # Policy reference
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 The policy decides **what** is reviewed, **by whom**, and **what happens with
 the result**. It lives in its own file, `policy.yaml`, next to the prompt files

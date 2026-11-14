@@ -9,8 +9,8 @@ intents: [setup, debug, help]
 
 # CLI reference
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 ```
 autoreview [--config <path>] [--env-file <path>] <command> [arguments]
@@ -53,7 +53,7 @@ These flags are required:
 | `--pohunek-host` | The pohunek host that runs the reviewers |
 | `--example` | The example directory under `examples/`, for example `single-repo-comment` |
 
-The layout flags are optional and come after 0.2.0. Each one replaces one value of
+The layout flags are optional. Each one replaces one value of
 the reference file; without it the reference value is written:
 
 | Flag | Key | Reference value |
@@ -76,8 +76,8 @@ complete file of the [configuration reference](configuration.md#complete-file),
 with `policy_file`, the credential `login`, `pohunek.hosts` and the given layout
 flags set; every value it sets is written as a double-quoted string. Without the
 layout flags, edit its paths and its placeholder `matrix` backend before the
-first start. [`scripts/setup`](knowledge/guides/getting-started.md) (after 0.2.0)
-passes every layout flag.
+first start. [`scripts/setup`](knowledge/guides/getting-started.md) passes every
+layout flag.
 
 `init` loads the example's policy and checks every path before it writes
 anything, and never overwrites. `--dir` and `prompts/` must be real directories
@@ -476,6 +476,17 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `review_not_found` | The MCP tool `review_detail` got a workflow ID that the store does not know |
 | `mcp_scope_denied`, `mcp_tool_unknown` | An MCP client without the `write` scope called a write tool, or called a tool the server does not have |
 | `mcp_client_missing`, `mcp_result_invalid` | An MCP tool call reached the tools without an authenticated client, or its result could not be encoded; both are server defects to report |
+| `base_branch_changed` | The pull request's base branch changed while its review ran; the review ends as `superseded` and the pull request is reviewed again, see [incremental reviews](knowledge/concepts/incremental-reviews.md) |
+| `review_history_limit_exceeded` | The store holds more reviews than `schedule.state_entry_limit`; the discovery pass dispatches nothing rather than over a review it cannot see |
+| `review_request_event_missing` | GitHub lists no review request event for a pull request that asks for a review; `candidates` shows it as rejected with this code |
+| `pohunek_session_not_found`, `pohunek_response_invalid` | A pohunek call named a session that the review host does not have, or its answer did not read; a route lookup that fails this way waits for a review host, as after `pohunek_request_failed` |
+| `session_identity_ambiguous`, `session_identity_invalid` | The review host lists two sessions of the review's name, or the session of that name has another profile, project or branch; not retried |
+| `host_state_invalid`, `host_state_stale`, `host_state_unavailable` | The state read of a host did not read as `HostCapacity` v1, was older than `max_age_seconds`, or could not run; `pohunek.host_state.unknown_state` decides whether the host is used, see [configuration](configuration.md#pohunek) |
+| `handoff_review_not_stored`, `handoff_review_mismatch` | A notes hand-off found no stored review of its head, or one of another pull request or head; not retried |
+| `github_review_too_large` | The review body or an inline comment is longer than `publish.github_body_max_bytes`; not retried |
+| `github_review_state_conflict` | GitHub holds a review of this head with the review marker but another decision; not retried |
+| `matrix_message_invalid`, `matrix_request_invalid`, `notify_backend_unknown`, `notify_route_invalid`, `review_queue_too_long` | A message was not sent: it is empty, a Matrix transaction ID could not be drawn, a route names no configured backend, or the review queue has no room for one entry within `notify.max_characters` |
+| `artifact_invalid`, `embedded_asset_invalid`, `github_request_invalid`, `github_review_invalid`, `review_incomplete`, `review_input_invalid`, `review_protocol_invalid`, `review_request_invalid`, `review_trigger_invalid`, `store_state_invalid` | A stored review, a request that the engine built or a schema embedded in the binary is not usable; not retried; a defect or a damaged store to report |
 | `workflow_failed` | A failure without a more specific code: a review whose stored state misses a part it needs, an error that carries no code, or a command whose standard output is closed; a review that fails with it is not retried |
 
 The [troubleshooting runbook](knowledge/runbooks/troubleshooting.md) maps codes

@@ -9,8 +9,8 @@ intents: [setup, update, debug, help]
 
 # Configuration reference
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 `config.yaml` holds the technical settings of one autoreview service: which
 GitHub account it acts as, which pohunek hosts run the reviewers, how often it
@@ -343,8 +343,8 @@ How reviewer sessions are named, started, read and cleaned up.
 | `poll_interval_seconds` | Time between discovery passes |
 | `worker_tick_seconds` | How often the worker checks for reviews to start, resume or expire |
 | `max_concurrent_reviews` | Reviews running at once, across all review hosts of this service |
-| `debounce_seconds` | Quiet time after a push before a review starts, so a burst of pushes is reviewed once |
-| `retry_delays_seconds` | Delays between scheduler attempts of a failed review. A review that waits for a review host uses none of them |
+| `debounce_seconds` | Quiet time after a push before a review starts, so a burst of pushes is reviewed once. From 1 to 600 |
+| `retry_delays_seconds` | Delays between scheduler attempts of a failed review: 1 to 5 strictly increasing values, each at most 3600. A review that waits for a review host uses none of them |
 | `step_retry_seconds`, `step_retry_initial_seconds`, `step_retry_max_interval_seconds` | Total time and backoff of a review step that keeps failing transiently |
 | `discovery_lock_timeout_seconds`, `discovery_lock_poll_ms` | Concurrent discovery passes take turns on a lock |
 | `poll_limit`, `search_page_limit` | GitHub search bounds; a truncated search is an error, never a silent drop |
