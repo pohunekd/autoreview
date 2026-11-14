@@ -148,47 +148,47 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Sends each notice once, after the discovery lock is released.
     ///
-    /// A notice gets one attempt, bounded by the notifier's request timeout, and a failure is
-    /// seen at every level. After a failure, the later notices of the same route get no
-    /// attempt, because they reach the same backends. After `cancel`, no notice gets an
-    /// attempt. Every dropped notice is logged, so a notifier outage never fails a pass.
+    /// A notice gets one attempt per backend of its route, bounded by the notifier's request
+    /// timeout, and a failure is seen at every level. After a backend fails, the later notices
+    /// of the same route get no attempt on that backend; its other backends still get theirs.
+    /// After `cancel`, no notice gets an attempt. Every dropped notice is logged per backend,
+    /// so a notifier outage never fails a pass.
     pub(crate) async fn send_notices(&self, cancel: &CancellationToken, notices: Vec<Notice>) {
-        // The route and error code of each route whose notice failed in this batch.
-        let mut failed: Vec<(NotifyRoute, String)> = Vec::new();
+        // The route, backend and error code of each backend that failed in this batch.
+        let mut failed: Vec<(NotifyRoute, String, String)> = Vec::new();
         for notice in notices {
-            let earlier = failed
-                .iter()
-                .find(|(route, _)| *route == notice.route)
-                .map(|(_, code)| code.clone());
-            let (code, skipped) = match earlier {
-                Some(code) => (code, true),
-                // A shutdown is no notifier failure, so the notifier is not blamed for it.
-                None if cancel.is_cancelled() => (SHUTDOWN.to_owned(), false),
-                None => {
-                    let notification = Notification {
-                        event: notice.event.clone(),
-                        level: notice.level.clone(),
-                        text: notice.message.clone(),
-                    };
-                    let sent = self
-                        .deliver(cancel, &notice.route, &notification, false)
-                        .await;
-                    let Err(err) = sent else {
-                        continue;
-                    };
-                    let code = error_code(&err).to_owned();
-                    failed.push((notice.route.clone(), code.clone()));
-                    (code, false)
+            let notification = Notification {
+                event: notice.event.clone(),
+                level: notice.level.clone(),
+                text: notice.message.clone(),
+            };
+            let backends = match self.route_backends(&notice.route) {
+                Ok(backends) => backends,
+                Err(err) => {
+                    dropped_notice(&notice, "", error_code(&err), false);
+                    continue;
                 }
             };
-            tracing::warn!(
-                event = notice.event.as_str(),
-                review_key = %notice.review_key,
-                level = notice.level.as_str(),
-                error_code = %code,
-                skipped_after_failure = skipped,
-                "discovery notification dropped"
-            );
+            for backend in backends {
+                let earlier = (failed.iter())
+                    .find(|(route, name, _)| *route == notice.route && name == backend)
+                    .map(|(_, _, code)| code.clone());
+                let (code, skipped) = match earlier {
+                    Some(code) => (code, true),
+                    // A shutdown is no notifier failure, so the notifier is not blamed for it.
+                    None if cancel.is_cancelled() => (SHUTDOWN.to_owned(), false),
+                    None => {
+                        let sent = self.deliver_to(cancel, backend, &notification, false).await;
+                        let Err(err) = sent else {
+                            continue;
+                        };
+                        let code = error_code(&err).to_owned();
+                        failed.push((notice.route.clone(), backend.clone(), code.clone()));
+                        (code, false)
+                    }
+                };
+                dropped_notice(&notice, backend, &code, skipped);
+            }
         }
     }
 
@@ -292,6 +292,19 @@ pub(crate) fn notification_span(event: &Event, review_key: &str, level: &Level) 
         review_key,
         level = level.as_str()
     )
+}
+
+/// Logs the warning of a notice that `backend` did not deliver; empty without a backend.
+fn dropped_notice(notice: &Notice, backend: &str, code: &str, skipped: bool) {
+    tracing::warn!(
+        event = notice.event.as_str(),
+        review_key = %notice.review_key,
+        level = notice.level.as_str(),
+        backend,
+        error_code = code,
+        skipped_after_failure = skipped,
+        "discovery notification dropped"
+    );
 }
 
 /// Returns the notification of a pull request whose data the engine refuses.

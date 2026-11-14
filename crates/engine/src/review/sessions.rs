@@ -7,7 +7,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
-use autoreview_policy::{Event, Reviewer};
+use autoreview_policy::{Event, Level, Reviewer};
 use autoreview_schedule::diagnostic::{diagnostic, start_diagnostic};
 use autoreview_schedule::scheduler::superseded;
 use serde::de::DeserializeOwned;
@@ -16,7 +16,9 @@ use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-use super::input::{NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, SlotState, still_wanted};
+use super::input::{
+    BACKEND_STEP_SEPARATOR, NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, SlotState, still_wanted,
+};
 use crate::config::Credential;
 use crate::discovery::poll::live;
 use crate::discovery::{SHUTDOWN, notification_span};
@@ -407,10 +409,14 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// The message takes the route of `event` in the engine configuration, see
     /// [`Config::notify_route`](crate::config::Config::notify_route).
     ///
-    /// The message gets one attempt, bounded by the notifier's request timeout. A failure is
-    /// logged and stored as handled, so the review goes on and never sends the message again.
-    /// An event without a level fails with `review_input_invalid`. After a shutdown nothing is
-    /// stored, so the resumed review makes the attempt again.
+    /// The message gets one attempt per backend of its route, bounded by the notifier's request
+    /// timeout. A failure is logged per backend and the message is stored as handled, `true`
+    /// only when every backend accepted it, so the review goes on and never sends it again.
+    /// An event without a level fails with `review_input_invalid`. After a shutdown the message
+    /// is not stored, so the resumed review attempts it again, on a route with several
+    /// backends only on those that have not accepted it. A `digest` or `log` backend that
+    /// answered during the shutdown is attempted again, because its drop of a failure looks
+    /// like an acceptance.
     pub(crate) async fn notify(
         &self,
         name: &str,
@@ -437,29 +443,61 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             level: level.clone(),
             text: message.to_owned(),
         };
-        let sent = (self.engine)
-            .deliver(&self.cancel, &route, &notification, true)
-            .instrument(span)
-            .await;
-        let shutdown = self.cancel.is_cancelled();
-        if let Err(err) = &sent {
-            // The notifier fails at once on a cancelled token, so the shutdown is the cause.
-            let code = if shutdown { SHUTDOWN } else { error_code(err) };
+        let dropped = |backend: &str, code: &str| {
             tracing::warn!(
                 event = event.as_str(),
                 review_key = %review_key,
                 level = level.as_str(),
+                backend,
                 error_code = code,
                 "review notification dropped"
             );
+        };
+        let backends = match self.engine.route_backends(&route) {
+            Ok(backends) => backends,
+            Err(err) => {
+                dropped("", error_code(&err));
+                return (self.engine.store).save_step(&self.workflow_id, &step_name, &false);
+            }
+        };
+        // Each backend of a route with several records its acceptance, so a resumed review
+        // never sends the message again to a backend that took it, also when the route has
+        // shrunk since. An action message is never dropped, so its success is an acceptance
+        // also during a shutdown. A one-backend route reads the step but never writes it.
+        let several = backends.len() > 1;
+        let accepted_on_shutdown = level == Level::Action;
+        let mut delivered = true;
+        for backend in backends {
+            let backend_step = format!("{step_name}{BACKEND_STEP_SEPARATOR}{backend}");
+            let store = &self.engine.store;
+            if (store.load_step::<bool>(&self.workflow_id, &backend_step)?).is_some() {
+                continue;
+            }
+            let sent = (self.engine)
+                .deliver_to(&self.cancel, backend, &notification, true)
+                .instrument(span.clone())
+                .await;
+            let shutdown = self.cancel.is_cancelled();
+            match sent {
+                Ok(()) if several && (accepted_on_shutdown || !shutdown) => {
+                    store.save_step(&self.workflow_id, &backend_step, &true)?;
+                }
+                Ok(()) => {}
+                Err(err) => {
+                    // The notifier fails at once on a cancelled token, so the shutdown is the
+                    // cause.
+                    dropped(backend, if shutdown { SHUTDOWN } else { error_code(&err) });
+                    delivered = false;
+                }
+            }
+            if shutdown {
+                return Err(shutdown_error());
+            }
         }
-        if shutdown {
-            return Err(shutdown_error());
-        }
-        // `false` marks a dropped message; Go's `notify` reads any stored value as handled.
+        // `false` marks a message that a backend dropped; any stored value reads as handled.
         self.engine
             .store
-            .save_step(&self.workflow_id, &step_name, &sent.is_ok())
+            .save_step(&self.workflow_id, &step_name, &delivered)
     }
 
     /// Returns the slot that `id` names, or `None` when the review has no such slot.

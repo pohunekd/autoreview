@@ -262,7 +262,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Sends one notification of `event` about the credential `name` at the policy's level.
     ///
-    /// A failure is logged, never returned, so a notifier outage stops no check.
+    /// Every backend of the route gets one attempt. A failure is logged per backend, never
+    /// returned, so a notifier outage stops no check.
     async fn notify_credential(
         &self,
         cancel: &CancellationToken,
@@ -283,17 +284,33 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             level: level.clone(),
             text: message.to_owned(),
         };
-        let sent = self.deliver(cancel, &route, &notification, false).await;
-        if let Err(err) = sent
-            && !cancel.is_cancelled()
-        {
-            tracing::warn!(
-                event = event.as_str(),
-                credential = %name,
-                level = level.as_str(),
-                error_code = error_code(&err),
-                "credential notification dropped"
-            );
+        let backends = match self.route_backends(&route) {
+            Ok(backends) => backends,
+            Err(err) => {
+                tracing::warn!(
+                    event = event.as_str(),
+                    credential = %name,
+                    level = level.as_str(),
+                    error_code = error_code(&err),
+                    "credential notification dropped"
+                );
+                return;
+            }
+        };
+        for backend in backends {
+            let sent = self.deliver_to(cancel, backend, &notification, false).await;
+            if let Err(err) = sent
+                && !cancel.is_cancelled()
+            {
+                tracing::warn!(
+                    event = event.as_str(),
+                    credential = %name,
+                    level = level.as_str(),
+                    backend = backend.as_str(),
+                    error_code = error_code(&err),
+                    "credential notification dropped"
+                );
+            }
         }
     }
 }

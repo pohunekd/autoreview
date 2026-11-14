@@ -1437,51 +1437,48 @@ fn notify_settings(
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming `key` when the route does not name exactly one
-/// backend, or names a backend that is not configured.
+/// Returns `configuration_invalid` naming `key` when the route is empty, or names a backend
+/// twice or one that is not configured.
 fn route_backends(
     backends: &[Backend],
     names: &Option<Value>,
     key: &str,
 ) -> Result<Vec<String>, Error> {
     let names = text_list(names, key)?;
-    let [name] = names.as_slice() else {
-        return Err(invalid(key, "must name exactly one backend until #30"));
-    };
-    find_backend(backends, name, key)?;
+    if names.is_empty() {
+        return Err(invalid(key, "must name at least one backend"));
+    }
+    known_once(backends, &names, key)?;
     Ok(names)
+}
+
+/// Checks that `names` names configured backends, each once.
+///
+/// # Errors
+///
+/// Returns `configuration_invalid` naming `key` for a name given twice or not configured.
+fn known_once(backends: &[Backend], names: &[String], key: &str) -> Result<(), Error> {
+    for (index, name) in names.iter().enumerate() {
+        if names.iter().take(index).any(|earlier| earlier == name) {
+            return Err(invalid(key, "names a backend twice"));
+        }
+        find_backend(backends, name, key)?;
+    }
+    Ok(())
 }
 
 /// Checks the backend names of the review queue.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming `notify.review_queue.backends` for an empty list, a
-/// name given twice or not configured, or a second Matrix or webhook backend.
+/// Returns `configuration_invalid` naming `notify.review_queue.backends` for an empty list or
+/// a name given twice or not configured.
 fn queue_backends(backends: &[Backend], names: &[String]) -> Result<(), Error> {
     let key = "notify.review_queue.backends";
     if names.is_empty() {
         return Err(invalid(key, "must name at least one backend"));
     }
-    let mut delivering = false;
-    for (index, name) in names.iter().enumerate() {
-        if names.iter().take(index).any(|earlier| earlier == name) {
-            return Err(invalid(key, "names a backend twice"));
-        }
-        match find_backend(backends, name, key)? {
-            Backend::None { .. } => {}
-            Backend::Matrix { .. } | Backend::Webhook { .. } => {
-                if delivering {
-                    return Err(invalid(
-                        key,
-                        "must name at most one Matrix or webhook backend until #30",
-                    ));
-                }
-                delivering = true;
-            }
-        }
-    }
-    Ok(())
+    known_once(backends, names, key)
 }
 
 /// Finds the backend called `name`.
@@ -2519,19 +2516,12 @@ pub(crate) mod tests {
             ["quiet"].as_slice(),
             &["quiet", "queue"],
             &["hook", "quiet"],
+            &["queue", "hook", "log"],
         ] {
             let text = four_backends(entries.clone(), &format!("[{}]", queue.join(", ")));
             let config = parse(&text, secret, example_policy).expect("the queue loads");
             assert_eq!(config.notify.queue, queue);
         }
-        let text = four_backends(entries, "[queue, hook]");
-        assert_eq!(
-            error_text(parse(&text, secret, example_policy)),
-            concat!(
-                "configuration_invalid: notify.review_queue.backends: ",
-                "must name at most one Matrix or webhook backend until #30"
-            )
-        );
         let text = four_backends(shared_backends(), "[queue]")
             .replace("room: \"!queue:example.org\"", "room: \"\"");
         assert_eq!(
@@ -2642,19 +2632,36 @@ pub(crate) mod tests {
             let token = secret(token_env).expect("a synthetic token");
             assert_eq!(matrix.access_token, token, "token of {token_env}");
         }
+        let text = four_backends(shared_backends(), "[queue, queue]");
+        assert_eq!(
+            error_text(mapped(&text)),
+            "configuration_invalid: notify.review_queue.backends: names a backend twice"
+        );
+    }
+
+    #[test]
+    fn a_route_names_several_backends_each_once() {
+        let text = four_backends(shared_backends(), "[queue]").replacen(
+            "    action: [action]\n",
+            "    action: [action, digest]\n",
+            1,
+        );
+        let config = parse(&text, secret, example_policy).expect("two action backends load");
+        assert_eq!(config.notify.action, ["action", "digest"]);
         let refused = [
-            (
-                "[queue, log]",
-                "must name at most one Matrix or webhook backend until #30",
-            ),
-            ("[queue, queue]", "names a backend twice"),
+            ("[action, action]", "names a backend twice"),
+            ("[]", "must name at least one backend"),
         ];
-        for (queue, message) in refused {
-            let text = four_backends(shared_backends(), queue);
+        for (route, message) in refused {
+            let text = four_backends(shared_backends(), "[queue]").replacen(
+                "    action: [action]\n",
+                &format!("    action: {route}\n"),
+                1,
+            );
             assert_eq!(
                 error_text(mapped(&text)),
-                format!("configuration_invalid: notify.review_queue.backends: {message}"),
-                "{queue}"
+                format!("configuration_invalid: notify.routes.action: {message}"),
+                "{route}"
             );
         }
     }
@@ -2718,11 +2725,8 @@ pub(crate) mod tests {
                 "configuration_invalid: notify.routes.approved: names no configured backend",
             ),
             (
-                "    approved: [approved, digest]\n",
-                concat!(
-                    "configuration_invalid: notify.routes.approved: ",
-                    "must name exactly one backend until #30"
-                ),
+                "    approved: [approved, approved]\n",
+                "configuration_invalid: notify.routes.approved: names a backend twice",
             ),
         ];
         for (route, expected) in cases {

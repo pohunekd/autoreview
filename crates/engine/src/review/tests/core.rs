@@ -1087,6 +1087,60 @@ async fn failing_notification_backend_does_not_stall_discovery() {
         2,
         "the second notice of the failed log level was attempted"
     );
+    // A failed backend is skipped only on its own route; the route's other backend still gets
+    // every later notice of the pass (#30).
+    let mut cfg = h.config();
+    let mut extra = cfg.notify.backends[0].clone();
+    extra.name = "extra".to_owned();
+    cfg.notify.backends.push(extra);
+    cfg.notify.action = vec!["extra".to_owned(), "matrix".to_owned()];
+    let both = Engine::new(
+        cfg,
+        Arc::clone(&h.store),
+        Arc::clone(&h.fake),
+        FakeClock::new(),
+    );
+    let pair: Vec<_> = (0..2)
+        .map(|_| integration_pull_request("acme/widget", &sha("d")))
+        .collect();
+    {
+        let mut state = h.fake.lock();
+        state.notify_fail = None;
+        state.notify_attempts = 0;
+        state.backend_fail =
+            BTreeMap::from([("extra".to_owned(), "matrix_unavailable".to_owned())]);
+        state.rejected = pair
+            .iter()
+            .map(|pr| RejectedCandidate {
+                repository: pr.repository.clone(),
+                number: pr.number,
+                code: "github_response_invalid".to_owned(),
+                permission_login: None,
+            })
+            .collect();
+    }
+    both.poll(&cancel)
+        .await
+        .expect("the two-backend poll succeeds");
+    let (_, notes, _, _) = h.fake.snapshot();
+    let reached = pair
+        .iter()
+        .filter(|pr| {
+            let fragment = format!("{} is not started", pr.key());
+            notes
+                .iter()
+                .any(|note| note.backend == "matrix" && note.message.contains(&fragment))
+        })
+        .count();
+    assert_eq!(
+        reached, 2,
+        "matrix missed a notice after extra failed: {notes:?}"
+    );
+    assert_eq!(
+        h.fake.lock().notify_attempts,
+        3,
+        "extra got a second attempt in the pass, or matrix got none"
+    );
 }
 
 // A notification backend that always fails neither delays nor fails a review: each message

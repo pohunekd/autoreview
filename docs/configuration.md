@@ -396,8 +396,8 @@ summary is too short or too long.
 ## notify
 
 Notifications have three levels (see [policy notifications](policy.md#notifications)).
-`routes` sends each level to one named backend. Several backends of the same
-type are fine, for example one Matrix room per level. A single event can have
+`routes` sends each level to one or more named backends. Several backends of
+the same type are fine, for example one Matrix room per level. A single event can have
 its own route next to the levels, see [event routes](#event-routes).
 
 | Key | Meaning |
@@ -405,19 +405,24 @@ its own route next to the levels, see [event routes](#event-routes).
 | `timeout_seconds` | Timeout of one delivery |
 | `max_characters` | Longer messages are cut |
 | `backends` | List of named backends, see below |
-| `routes` | `action`, `digest` and `log`, each a list of exactly one backend name; optionally an event name with the same value |
+| `routes` | `action`, `digest` and `log`, each a list of one or more backend names; optionally an event name with the same value |
 | `review_queue.backends` | Backends that receive the hourly review queue |
 | `review_queue.max_items` | Most pull requests listed in one queue message |
 
-Each message gets one attempt, bounded by `timeout_seconds`. A message that
-its backend does not accept is dropped with a warning, at every level, and
-neither the review nor discovery waits for it. `autoreview review-queue` fails with the backend's
-error code when a queue backend rejects the message, so its timer shows the
-failure. `review_queue.backends` names at most one `matrix` or `webhook`
-backend and any number of `none` backends; an empty list or a name given twice
-is refused at load. Several backends per level are planned in #30. Each backend
-has its own settings, so two `matrix` backends may use different homeservers,
-tokens or mentioned users.
+Each message gets one attempt on each backend of its route, bounded by
+`timeout_seconds`. A backend that does not accept the message drops it with a
+warning, at every level; the other backends still get it, and neither the
+review nor discovery waits for it. A message of a review counts as delivered
+only when every backend took it. On a route with several backends a review
+resumed after a shutdown sends an `action` message only to the backends that
+have not taken it; a one-backend route sends it again after a shutdown, and a
+`digest` or `log` message also goes again to a backend that answered during the
+shutdown, because a dropped failure looks the same. `autoreview review-queue` posts to every
+queue backend and fails with the error code of the first one that rejects the
+message, so its timer shows the failure. A route or `review_queue.backends`
+that is empty or names a backend twice is refused at load. Each backend has its
+own settings, so two `matrix` backends may use different homeservers, tokens or
+mentioned users.
 
 ### Event routes
 
@@ -436,7 +441,7 @@ An event with its own route goes only to the backends of that route; every
 other event goes to the route of its level. The level still decides the rest:
 an `action` event mentions `mention_user` on its own route too, and a failed
 `digest` or `log` message is dropped as on its level route. The value follows
-the level rules: exactly one `matrix` backend until #30. A key that names no
+the level rules: one or more backends, each named once. A key that names no
 event is refused with `configuration_invalid: notify.routes.<key>: names no
 notification event`, and a backend name that `backends` does not define with
 `configuration_invalid: notify.routes.<key>: names no configured backend`.

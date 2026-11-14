@@ -14,7 +14,7 @@ intents: [setup, help, debug]
 
 Every event in the policy has one of three levels: `action`, `digest` or
 `log`. The notification section of `config.yaml` says where each level goes.
-A level is routed to one named backend, and a backend is one
+A level is routed to one or more named backends, and a backend is one
 endpoint of one type. The policy decides *what* is worth a message; this guide
 covers *where* the message goes.
 
@@ -36,7 +36,7 @@ notify:
       room: "!roomid:example.org"
       mention_user: "@you:example.org"
   routes:
-    action: [matrix]           # each level: a list of one backend name
+    action: [matrix]           # each level: a list of backend names
     digest: [matrix]
     log: [matrix]
   review_queue:
@@ -46,8 +46,9 @@ notify:
 
 - `backends` defines named endpoints. Names are used in the routes, and the
   same type may appear several times under different names.
-- `routes` maps each level to a list of exactly one backend name. Several
-  backends per level are planned in #30. An event name as a key gives that
+- `routes` maps each level to a list of one or more backend names, each named
+  once, see [several backends for one level](#several-backends-for-one-level).
+  An event name as a key gives that
   event its own route, see [one event in its own room](#one-event-in-its-own-room).
 - `review_queue.backends` lists the backends of the review queue, which is a
   separate message and not an event.
@@ -149,8 +150,8 @@ notify:
 ```
 
 - The key is an event of the [policy notifications](../../policy.md#notifications),
-  and the value follows the rules of a level route: exactly one `matrix`
-  backend until #30. That backend may use another homeserver, token or
+  and the value follows the rules of a level route: one or more backends, each
+  named once. A Matrix backend there may use another homeserver, token or
   mentioned user than the level backends.
 - The level of the event still decides the rest: an `action` event mentions
   `mention_user` in its own room, and a failed `digest` or `log` message is
@@ -190,7 +191,22 @@ for the bodies and the error codes.
 
 ## Several backends for one level
 
-Planned in #30.
+```yaml
+  routes:
+    action: [matrix-action, team-chat]   # both get every action message
+    digest: [matrix-digest]
+    log: [matrix-digest]
+```
+
+Each backend of a route gets one attempt per message. A backend that fails does
+not stop the others: the failure is logged with the backend's name, and a message
+of a review counts as delivered only when every backend took it. When a shutdown
+cuts the attempts short, the resumed review sends an `action` message only to
+the backends that have not taken it, which includes a backend that refused it
+before the shutdown. A one-backend route sends it again after a shutdown, and a
+`digest` or `log` message also goes again to a backend that answered during the
+shutdown. A discovery pass skips a failed backend for the rest of that route in
+the pass and still sends to the route's other backends.
 
 ## Review queue
 
@@ -218,7 +234,7 @@ Failure handling depends on the level of the event:
 | `log` | Dropped with a warning in the log | Nothing else changes. A message of a discovery pass follows the rule below |
 
 A message of a review gets one attempt, bounded by `notify.timeout_seconds`.
-The `action` warning names the event, the review key, the level and the code
+The `action` warning names the event, the review key, the level, the backend and the code
 (`shutdown` when the service stopped during the attempt; the resumed review then
 tries once more). A lost `approval_requested` message does not hide the wait:
 `autoreview awaiting` lists it, and the review queue shows it while the pull
@@ -226,10 +242,11 @@ request requests the review, until it is approved or its deadline passes.
 
 A discovery pass sends its messages (a rejected pull request, a stopped or
 retried review, a hand-off reminder) once, after it has saved its state. After
-one fails, at any level, the rest of that route in the pass get no attempt, and
+one backend fails, at any level, the rest of that route in the pass get no
+attempt on that backend (the route's other backends still get them), and
 after a shutdown no message gets an attempt (code `shutdown`). Each message that
 is not delivered is logged as `discovery notification dropped` with the event,
-the review key, the level, the code and `skipped_after_failure`. It is never
+the review key, the level, the backend, the code and `skipped_after_failure`. It is never
 resent, so the warning is the only record; discovery goes on.
 
 A broken action backend does not stop reviews, but nobody learns from it that
