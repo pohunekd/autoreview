@@ -252,11 +252,10 @@ struct DiscussionReader<'a> {
     conversation: Vec<Option<CommentNode>>,
 }
 
-/// Reports whether `left` and `right` match under Unicode simple case folding, as Go's
-/// `strings.EqualFold` reports.
+/// Reports whether `left` and `right` match under Unicode simple case folding.
 ///
-/// The bot filter drops comments before the budget counts them, so it must agree with Go on
-/// every login, or a later comment would take the budget that Go spends on this one.
+/// The bot filter drops comments before the budget counts them, so a login that folds
+/// differently would let a dropped comment spend the budget.
 fn go_equal_fold(left: &str, right: &str) -> bool {
     let mut left_chars = left.chars();
     let mut right_chars = right.chars();
@@ -417,7 +416,7 @@ impl<'a> DiscussionReader<'a> {
 
 /// Returns the `gh` arguments of one page of the discussion query, from `after` on.
 ///
-/// The cursor is sent only when it is not empty, as in Go.
+/// The cursor is sent only when it is not empty.
 fn discussion_args(pull_request: &PullRequest, after: &str) -> Vec<String> {
     let (owner, name) = match pull_request.repository.split_once('/') {
         Some((owner, name)) => (owner, name),
@@ -445,7 +444,7 @@ fn discussion_args(pull_request: &PullRequest, after: &str) -> Vec<String> {
 /// Reads the discussion of `pull_request`, fetching each page through `fetch`.
 ///
 /// `fetch` receives the `gh` arguments of one page and returns its output. Paging stops after
-/// the page that the search limit names, as in Go, and a limit of zero or less never stops it.
+/// the page that the search limit names, and a limit of zero or less never stops it.
 async fn read_discussion<F, Fut>(
     mut fetch: F,
     pull_request: &PullRequest,
