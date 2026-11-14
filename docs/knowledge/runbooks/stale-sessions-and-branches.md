@@ -9,8 +9,8 @@ intents: [debug, help]
 
 # Stale sessions and branches
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 Every reviewer run happens in a pohunek session on a review host, and each
 session works on its own review branch. Two upstream behaviours make these
@@ -28,7 +28,7 @@ pile up.
   review can leave several branches behind.
 
 autoreview removes a reviewer's session, not its branch, and no autoreview
-command removes review branches. A pruning command is planned in #42.
+command removes review branches.
 
 ## When a session cannot be removed
 
