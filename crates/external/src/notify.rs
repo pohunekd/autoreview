@@ -454,6 +454,84 @@ pub(crate) async fn send_queue_digest(
     put_matrix_message(client, matrix, cancel, request).await
 }
 
+/// Event name of the review queue in a webhook body.
+const QUEUE_EVENT: &str = "review_queue";
+
+/// Delivers `notification` to `backend`, which the routes call `name`.
+///
+/// A `none` backend only logs the message's event and level. With `muted`, a backend drops a
+/// failure of a level other than action and logs the drop, as [`notify`] does for Matrix.
+pub(crate) async fn deliver(
+    client: &Client,
+    name: &str,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    notification: &Notification,
+    muted: bool,
+) -> Result<(), Error> {
+    let (level, text) = (notification.level.clone(), notification.text.as_str());
+    match backend {
+        Backend::None => {
+            tracing::info!(
+                backend = name,
+                event = notification.event.as_str(),
+                level = level_name(&level),
+                "notification logged only"
+            );
+            Ok(())
+        }
+        Backend::Matrix(matrix) if muted => notify(client, matrix, cancel, level, text).await,
+        Backend::Matrix(matrix) => send_matrix(client, matrix, cancel, level, text).await,
+        Backend::Webhook(webhook) => {
+            let event = notification.event.as_str();
+            let body = webhook_body(webhook, event, Some(level_name(&level)), text)?;
+            let sent = post_webhook(client, webhook, cancel, body).await;
+            match sent {
+                Err(error) if muted => drop_webhook_if_muted(level, error),
+                sent => sent,
+            }
+        }
+    }
+}
+
+/// Posts the review queue digest to `backend`; a `none` backend posts nothing.
+///
+/// Matrix takes both bodies under `transaction`; a webhook takes the plain body.
+pub(crate) async fn deliver_queue(
+    client: &Client,
+    backend: &Backend,
+    cancel: &CancellationToken,
+    transaction: &str,
+    plain: &str,
+    formatted: &str,
+) -> Result<(), Error> {
+    match backend {
+        Backend::None => Ok(()),
+        Backend::Matrix(matrix) => {
+            send_queue_digest(client, matrix, cancel, transaction, plain, formatted).await
+        }
+        Backend::Webhook(webhook) => {
+            let body = webhook_body(webhook, QUEUE_EVENT, None, plain)?;
+            post_webhook(client, webhook, cancel, body).await
+        }
+    }
+}
+
+/// Drops a webhook failure of a level other than action, as [`drop_if_muted`] does for Matrix.
+fn drop_webhook_if_muted(level: Level, error: Error) -> Result<(), Error> {
+    let code = error_code(&error);
+    let muted = code == webhook::UNAVAILABLE || code == webhook::REJECTED;
+    if level == Level::Action || !muted {
+        return Err(error);
+    }
+    tracing::warn!(
+        level = level_name(&level),
+        error_code = code,
+        "webhook notification dropped"
+    );
+    Ok(())
+}
+
 /// Returns the name of `level` as the log line carries it.
 fn level_name(level: &Level) -> &str {
     match level {
@@ -468,11 +546,22 @@ fn level_name(level: &Level) -> &str {
 mod tests {
     use std::time::Duration;
 
-    use autoreview_engine::config::MatrixBackend;
-    use autoreview_policy::Level;
-    use serde_json::{Value, json};
+    use std::collections::BTreeMap;
+    use std::io;
+    use std::sync::{Arc, Mutex, PoisonError};
 
-    use super::{Matrix, matrix_request, queue_digest_request};
+    use autoreview_engine::config::{
+        BackendKind, MatrixBackend, NotifyBackend, NotifySettings, WebhookBackend, WebhookFormat,
+    };
+    use autoreview_engine::error_code;
+    use autoreview_engine::notify::Notification;
+    use autoreview_policy::{Event, Level};
+    use reqwest::Client;
+    use serde_json::{Value, json};
+    use tokio_util::sync::CancellationToken;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    use super::{Backends, Matrix, deliver, deliver_queue, matrix_request, queue_digest_request};
 
     /// Settings of one backend with synthetic values only.
     fn matrix() -> Matrix {
