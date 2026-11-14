@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # Decisions and outcomes
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 A finished review has a list of findings. The decision turns that list into
 exactly one GitHub review event: `REQUEST_CHANGES`, `COMMENT` or `APPROVE`. Or,
@@ -150,9 +150,9 @@ engine raises `review_stopped` with a message that says the approved review coul
 not be published, and the review can be retried with `autoreview retry`, see
 [retry and recovery](../runbooks/retry-and-recovery.md).
 
-Approvals from a chat integration (planned in #43) are to use the same CLI
-commands after `autoreview resolve` has found the head. See
-[approve from chat](../guides/hermes-approval.md) and
+An MCP client with the `write` scope approves through the `resolve` and
+`approve` tools of `autoreview mcp`, which run the same checks as the CLI
+commands. See [approve from chat](../guides/hermes-approval.md) and
 [human approval](../guides/human-approval.md).
 
 ## Notes hand-off

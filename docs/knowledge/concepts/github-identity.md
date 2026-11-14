@@ -2,15 +2,15 @@
 type: Concept
 id: concept/github-identity
 title: GitHub identity
-description: What a GitHub credential is (token and login), which credential serves a repository (first match), how triggers, own pull requests and approvals follow its login, the startup check of every token and its expiry, token kinds and organization approval, and the token permissions each GitHub call needs; a review keeps the credential it was dispatched with; checks while running and expiry warnings are planned.
+description: What a GitHub credential is (token and login), which credential serves a repository (first match), how triggers, own pull requests and approvals follow its login, the startup check of every token and its expiry, token kinds and organization approval, and the token permissions each GitHub call needs; a review keeps the credential it was dispatched with, and serve checks every token while it runs and warns before one expires.
 source_kind: manual
 intents: [setup, help, debug]
 ---
 
 # GitHub identity
 
-> **Status: 0.2.0.** This page describes autoreview 0.2.0. Parts
-> marked planned or "not in v0.1" are not in 0.2.0.
+> **Status: after 0.3.0.** This page describes autoreview on `main` after the
+> 0.3.0 release. A part that is not available names its open issue.
 
 autoreview acts on GitHub through **credentials**. A credential is one GitHub
 token, the account (its **login**) that the token belongs to, and the
@@ -239,8 +239,9 @@ The rule is therefore cited here as the engine's rule, not as a GitHub guarantee
 
 ## Why not a GitHub App yet
 
-The project decision for v0.1 is a personal token or a machine user (decision D5 of
-the project plan), with a GitHub App as a later phase. Two points are open:
+The project decision is a personal token or a machine user (decision D5 of the
+project plan); GitHub App installation tokens are not available (#47). Two
+points are open:
 
 - **Review requests.** The trigger `review-requested` asks whether the pull request
   requests a review from the credential's login. Review requests are made to users
@@ -251,8 +252,8 @@ the project plan), with a GitHub App as a later phase. Two points are open:
   pull request, so a GitHub App would support them without that question being
   answered.
 
-Until that question is answered, `review-requested` needs a user identity, and v0.1
-keeps tokens.
+Until that question is answered, `review-requested` needs a user identity, and
+autoreview keeps tokens.
 
 ## Handling the tokens
 
