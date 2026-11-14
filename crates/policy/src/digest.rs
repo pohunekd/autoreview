@@ -26,9 +26,9 @@ impl Policy {
 
 /// Returns the hex SHA-256 digest that identifies the effective policy.
 ///
-/// The bytes hashed match Go's `digestOf` exactly, because review inputs and logs store the digest.
-/// A rule with `trusted: any` adds nothing, so only a restricted authors section extends Go's
-/// bytes; `authors` holds the section of each rule, in the order of `rules`.
+/// The hashed bytes must not change, because review inputs and logs store the digest. A rule
+/// with `trusted: any` adds nothing, so only a restricted authors section extends the bytes;
+/// `authors` holds the section of each rule, in the order of `rules`.
 pub(crate) fn digest_of(
     rules: &[Rule],
     authors: &[Authors],
@@ -110,7 +110,7 @@ pub(crate) fn digest_of(
     hex::encode(hasher.finalize())
 }
 
-/// Hashes the reviewers, the prompt and the verifier of a pipeline, as Go's `digestOf` does.
+/// Hashes the reviewers, the prompt and the verifier of a pipeline.
 fn hash_pipeline_body(hasher: &mut Sha256, pipeline: &Pipeline) {
     for group in [&pipeline.reviewers, &pipeline.incremental_reviewers] {
         for reviewer in group {
@@ -159,13 +159,12 @@ mod tests {
 
     use serde::Deserialize;
 
-    use crate::testing::with_trusted_any;
     use crate::{load, parse};
 
     /// Stored policy digests that the digest of each fixture must reproduce.
     const GOLDEN: &str = include_str!("../../../testdata/stored-formats/digest.json");
 
-    /// One golden case: a policy built from the fixture and its Go digest.
+    /// One golden case: a policy built from the fixture and its stored digest.
     #[derive(Debug, Deserialize)]
     struct Case {
         name: String,
@@ -182,7 +181,7 @@ mod tests {
         prompt_overrides: Option<BTreeMap<String, String>>,
     }
 
-    /// The digest Go computed for the case.
+    /// The stored digest of the case.
     #[derive(Debug, Deserialize)]
     struct Output {
         digest: String,
@@ -193,32 +192,10 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    /// Loads the fixture with `trusted: any` on every rule from a copy in a temporary directory.
-    ///
-    /// The fixture itself has no authors sections, which Go refuses (#32).
-    fn load_with_trusted_any(policy_path: &Path) -> crate::Policy {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let source = std::fs::read_to_string(policy_path).expect("the fixture is readable");
-        let copy = directory.path().join("review-policy.yaml");
-        std::fs::write(&copy, with_trusted_any(&source)).expect("the fixture copy");
-        let prompts = policy_path.with_file_name("prompts");
-        std::fs::create_dir(directory.path().join("prompts")).expect("the prompts directory");
-        for entry in std::fs::read_dir(&prompts).expect("the prompts are readable") {
-            let path = entry.expect("a prompts entry").path();
-            let target = directory
-                .path()
-                .join("prompts")
-                .join(path.file_name().expect("a name"));
-            std::fs::copy(&path, target).expect("the prompt copy");
-        }
-        load(&copy).expect("the fixture loads")
-    }
-
     #[test]
     fn restricted_authors_change_the_digest() {
         let path = repository_root().join("testdata/review-policy.yaml");
-        let document =
-            with_trusted_any(&std::fs::read_to_string(&path).expect("the fixture is readable"));
+        let document = std::fs::read_to_string(&path).expect("the fixture is readable");
         let directory = path.parent().expect("the fixture has a directory");
         let digest = |document: &str| {
             parse(document.as_bytes(), |relative| {
@@ -250,7 +227,7 @@ mod tests {
         );
     }
 
-    // Every rule gets `trusted: any`, which adds nothing to the digest, so Go's digests hold.
+    // Every rule of the fixture says `trusted: any`, which adds nothing to the digest.
     #[test]
     fn digest_matches_go_golden() {
         let cases: Vec<Case> = serde_json::from_str(GOLDEN).expect("golden is JSON");
@@ -260,11 +237,10 @@ mod tests {
             let name = &case.name;
             let policy_path = root.join(&case.input.policy_file);
             let policy = if case.input.loader.as_deref() == Some("policy.Load") {
-                load_with_trusted_any(&policy_path)
+                load(&policy_path).expect("the fixture loads")
             } else {
-                let mut document = with_trusted_any(
-                    &std::fs::read_to_string(&policy_path).expect("the fixture is readable"),
-                );
+                let mut document =
+                    std::fs::read_to_string(&policy_path).expect("the fixture is readable");
                 for (target, replacement) in case.input.replacements.iter().flatten() {
                     assert!(
                         document.contains(target.as_str()),

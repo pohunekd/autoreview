@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::review::PriorVerdict;
 
-/// Reports whether a flag is unset, which Go omits from the JSON when `omitempty` is set.
+/// Reports whether a flag is unset; the JSON omits an unset flag.
 pub(crate) fn is_false(value: &bool) -> bool {
     !*value
 }

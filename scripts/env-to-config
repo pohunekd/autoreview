@@ -33,12 +33,13 @@ import sys
 PREFIX = "HERMES_PR_REVIEW_"
 LINE = re.compile(rb"([A-Za-z_][A-Za-z0-9_]*)=(.*)", re.DOTALL)
 INTEGER = re.compile(r"[+-]?[0-9]+")
-# Go's strconv.Atoi parses into a 64-bit int.
+# An integer of an environment file is a 64-bit int.
 INT64_MAX = (1 << 63) - 1
-# Go multiplies by time.Second or time.Millisecond into a 64-bit Duration, which wraps.
+# Seconds and milliseconds must fit a 64-bit count of nanoseconds; larger values are
+# refused.
 SECONDS_MAX = INT64_MAX // 1_000_000_000
 MILLISECONDS_MAX = INT64_MAX // 1_000_000
-# Go's strings.TrimSpace removes unicode.IsSpace runes.
+# The Unicode white space trimmed from each value of an environment file.
 GO_SPACE = frozenset("\t\n\v\f\r \x85\xa0     　") | frozenset(
     chr(code) for code in range(0x2000, 0x200B)
 )
@@ -138,7 +139,7 @@ class Finding(Exception):
 
 
 def variable_name(suffix):
-    """The environment variable of a VARIABLES entry; the unprefixed names are Go's own."""
+    """The environment variable of a VARIABLES entry; three names have no prefix."""
     if suffix in (GH_TOKEN, MATRIX_HOMESERVER, MATRIX_ACCESS_TOKEN):
         return suffix
     return PREFIX + suffix
@@ -248,18 +249,19 @@ def read_environment(files):
 
 
 def go_blank(value):
-    """Go's `required` treats a value that strings.TrimSpace empties as missing."""
+    """A value that is empty after trimming Unicode white space counts as missing."""
     return all(char in GO_SPACE for char in value)
 
 
 def atoi(name, value):
-    """Parses the way Go's strconv.Atoi does."""
+    """Parses a decimal integer with an optional sign in the 64-bit range."""
     if not INTEGER.fullmatch(value):
         raise Finding(f"{name}: must be an integer")
     try:
         number = int(value)
     except ValueError:
-        # Python refuses more than sys.get_int_max_str_digits() digits; Go's range is far less.
+        # Python refuses more than sys.get_int_max_str_digits() digits, far above the int64
+        # range checked below.
         raise Finding(f"{name}: must be an integer") from None
     if not -INT64_MAX - 1 <= number <= INT64_MAX:
         raise Finding(f"{name}: must be an integer")
@@ -267,7 +269,7 @@ def atoi(name, value):
 
 
 def positive(name, value, largest):
-    """Parses a positive integer, bounded so Go's Duration does not wrap."""
+    """Parses a positive integer, bounded so the duration fits 64-bit nanoseconds."""
     number = atoi(name, value)
     if number <= 0:
         raise Finding(f"{name}: must be a positive integer")
@@ -277,7 +279,7 @@ def positive(name, value, largest):
 
 
 def json_value(name, value):
-    """Parses JSON as Go's encoding/json does, refusing what Python would read differently."""
+    """Parses JSON, refusing text that JSON readers could read differently."""
 
     def refuse_constant(_):
         raise ValueError("NaN and Infinity are not JSON")
@@ -289,7 +291,7 @@ def json_value(name, value):
         return dict(items)
 
     def check_text(item):
-        # Go replaces a lone surrogate escape with U+FFFD; such text is refused here.
+        # A lone surrogate escape cannot be encoded as UTF-8; such text is refused.
         if isinstance(item, str):
             item.encode("utf-8")
         elif isinstance(item, list):
@@ -309,7 +311,7 @@ def json_value(name, value):
 
 
 def text_list(name, value):
-    """A JSON list of strings, for Go's []string."""
+    """A JSON list of strings."""
     parsed = json_value(name, value)
     if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
         raise Finding(f"{name}: must be a JSON list of strings")
@@ -317,7 +319,7 @@ def text_list(name, value):
 
 
 def delays(name, value):
-    """A JSON list of integers, for Go's []int in schedule.LoadPolicy."""
+    """A JSON list of integers, for the schedule retry delays."""
     parsed = json_value(name, value)
     if not isinstance(parsed, list):
         raise Finding(f"{name}: must be a JSON list of integers")
@@ -343,7 +345,7 @@ def routes(name, value):
 
 
 def convert(values, secrets):
-    """Maps the environment values to config.yaml keys, in Go's order of checks."""
+    """Maps the environment values to config.yaml keys, checked in a fixed order."""
     out = {}
     for suffix, kind, key in VARIABLES:
         name = variable_name(suffix)
@@ -446,7 +448,7 @@ def render(out):
         "",
         "github:",
         *keys("github", ("host", "gh_bin", "timeout_seconds")),
-        # Parsed by the Rust loader, not used by the engine; Go has no such setting.
+        # Fixed values: the environment files have no such settings.
         "  credential_check_hours: 24",
         "  expiry_warning_days: 14",
         "  credentials:",

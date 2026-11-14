@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::process::{GH_INHERITED, child_environment, run};
 
-/// Fields of a pull request in the GraphQL selection, in Go's order.
+/// Fields of a pull request in the GraphQL selection.
 const PULL_REQUEST_FIELDS: &str = concat!(
     "id number title url state isDraft isCrossRepository\n",
     "      headRefOid headRefName baseRefOid baseRefName\n",
@@ -195,7 +195,7 @@ autoreview_go_compat::object_only_serde!(Viewer);
 
 /// Returns the lower-case login of the viewer object that `output` holds.
 ///
-/// An empty login is refused, as Go refuses it.
+/// An empty login is refused.
 fn decode_viewer_login(output: &str) -> Result<String, Error> {
     let viewer: Viewer =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;

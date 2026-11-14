@@ -489,7 +489,7 @@ mod tests {
     use crate::protocol::validate::tests::test_config;
     use crate::publish::plan::{PublicationPlan, blocking_count, plan_publication};
 
-    /// Input version before the verifier gate, the Go `priorFindingsVersion`.
+    /// Input version before the verifier gate.
     const PRIOR_FINDINGS_INPUT_VERSION: i64 = 4;
 
     /// Input whose rule holds a verifier, with the given clean outcome.

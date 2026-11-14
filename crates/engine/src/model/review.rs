@@ -35,7 +35,7 @@ pub(crate) const APPROVAL_KIND_EXPIRED: &str = "expired";
 
 /// Returns the key of a prior finding, the head cut to 12 characters, a colon and the ID.
 ///
-/// Go's `%.12s` counts runes, so the cut is by `char`, not by byte.
+/// The cut counts `char`s, not bytes.
 pub fn prior_key(head: &str, id: &str) -> String {
     let short: String = head.chars().take(PRIOR_KEY_HEAD_CHARS).collect();
     format!("{short}:{id}")
@@ -43,7 +43,7 @@ pub fn prior_key(head: &str, id: &str) -> String {
 
 /// Returns a duration of `value` milliseconds.
 ///
-/// The product wraps on overflow, as Go's `int64` multiplication does.
+/// The product wraps on overflow (two's complement) instead of panicking.
 pub(crate) fn milliseconds(value: i64) -> Duration {
     Duration::nanoseconds(value.wrapping_mul(1_000_000))
 }
@@ -357,7 +357,7 @@ pub struct PublishedRecord {
     /// Marks that the author was reminded once.
     #[serde(skip_serializing_if = "is_false")]
     pub reminded: bool,
-    /// Base branch of the published review; empty when unknown, as in a Go record.
+    /// Base branch of the published review; empty when unknown, as older rows may leave it.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub base_branch: String,
 }
@@ -563,12 +563,12 @@ pub struct PollResult {
     pub superseded: i64,
 }
 
-/// Returns Go's zero `time.Time`, which Go writes for a record without a publication time.
+/// Returns the zero time, 0001-01-01 UTC, which unpublished records store.
 fn go_zero_time() -> OffsetDateTime {
     datetime!(0001-01-01 0:00 UTC)
 }
 
-/// Reports whether an integer is zero, which Go omits from the JSON when `omitempty` is set.
+/// Reports whether an integer is zero; the JSON omits a zero.
 fn is_zero(value: &i64) -> bool {
     *value == 0
 }

@@ -210,8 +210,8 @@ fn refused_for_missing_head(raw: &str) -> bool {
         })
 }
 
-/// Returns the base64 text of the envelope that ends `raw`, or `None` when Go's envelope pattern
-/// does not match.
+/// Returns the base64 text of the envelope that ends `raw`, or `None` when the envelope
+/// pattern does not match.
 ///
 /// The output ends with the exit line followed by one of `ENDINGS`. Before the exit line comes one
 /// of `SEPARATORS`, after the `]` that closes the report. The base64 text runs back from that `]`

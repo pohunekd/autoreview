@@ -340,7 +340,7 @@ fn listed_spans(values: &[&str], budget: usize) -> String {
     text
 }
 
-/// Returns the first twelve characters of a commit SHA, as Go's `%.12s` prints them.
+/// Returns the first twelve characters of a commit SHA, the short form that review bodies show.
 pub(crate) fn head_prefix(sha: &str) -> String {
     sha.chars().take(12).collect()
 }
@@ -515,10 +515,10 @@ pub(crate) fn human_review_text(signals: &[String], limit: i64) -> String {
     text
 }
 
-/// Compares a carried label with a configured label as Go's `strings.EqualFold` does.
+/// Compares a carried label with a configured label under Unicode simple case folding.
 ///
 /// The configured label is ASCII (policy `labelPattern`). Among the non-ASCII characters only the
-/// Kelvin sign and the long s fold to an ASCII letter in Go, so only those two are mapped.
+/// Kelvin sign and the long s fold to an ASCII letter, so only those two are mapped.
 fn labels_equal_fold(carried: &str, label: &str) -> bool {
     let carried: Vec<char> = carried.chars().collect();
     let label: Vec<char> = label.chars().collect();

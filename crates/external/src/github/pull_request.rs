@@ -25,9 +25,9 @@ const MAX_BRANCH_BYTES: usize = 255;
 /// Page size of the review events API.
 const EVENTS_PER_PAGE: usize = 100;
 
-/// Unix nanoseconds of Go's zero `time.Time`, 0001-01-01T00:00:00Z.
+/// Unix nanoseconds of 0001-01-01T00:00:00Z, the placeholder for an absent event time.
 ///
-/// Go reads an absent time as this value, and a review request event with it is refused.
+/// An absent event time reads as this value, and a review request event with it is refused.
 const GO_ZERO_TIME_NANOS: i128 = -62_135_596_800_000_000_000;
 
 /// The author type that marks an app, such as a coding agent.
@@ -75,7 +75,7 @@ autoreview_go_compat::object_only_serde!(GraphQlResponse);
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 pub(crate) struct GitHubPullRequest {
-    /// Node identifier, decoded so that a value of another type is refused as Go refuses it.
+    /// Node identifier; a value of another type is refused.
     #[serde(deserialize_with = "null_default::deserialize")]
     id: String,
     /// Pull request number.
@@ -260,8 +260,8 @@ pub(crate) struct ReviewRequestPage {
 
 /// Decodes one GraphQL response of a pull request query.
 ///
-/// A response with a GraphQL error, or a missing repository or pull request, is refused as Go
-/// refuses it; a missing pull request is `pull_request_not_open`.
+/// A response with a GraphQL error is refused as an invalid response. A missing repository or
+/// pull request is `pull_request_not_open`.
 pub(crate) fn decode_pull_request_response(output: &str) -> Result<GitHubPullRequest, Error> {
     let response: GraphQlResponse =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
@@ -359,12 +359,13 @@ pub(super) fn url_matches(url: &str, host: &str, repository: &str, number: i64) 
 /// Reports whether a lowercased author login is a GitHub login (`login_valid`).
 ///
 /// An empty login is a deleted account and passes. An Enterprise Managed User login
-/// (`handle_shortcode`) passes, which Go's `authorPattern` refuses.
+/// (`handle_shortcode`) passes too.
 fn author_valid(author: &str) -> bool {
     author.is_empty() || login_valid(author)
 }
 
-/// Reports whether a branch name passes Go's `branchPattern`.
+/// Reports whether a branch name is non-empty, at most `MAX_BRANCH_BYTES` bytes long, and
+/// made only of ASCII letters, digits, `.`, `_`, `/` and `-`.
 fn branch_valid(branch: &str) -> bool {
     if branch.is_empty() || branch.len() > MAX_BRANCH_BYTES {
         return false;
@@ -381,7 +382,7 @@ fn branch_valid(branch: &str) -> bool {
 /// Decodes and checks a pull request against the trigger of its rule (`decodePullRequest`).
 ///
 /// The result has `review_request_id` 0 for a `review-requested` trigger; the caller reads the
-/// request id after this check, as Go does.
+/// request id after this check.
 pub(crate) fn decode_pull_request(
     raw: &GitHubPullRequest,
     host: &str,
@@ -508,7 +509,7 @@ pub(crate) fn decode_pull_request_state(
 
 /// Decodes one page of the review events API (`latestReviewRequestID`, one page).
 ///
-/// Every element is decoded, and its time must parse, as Go decodes it. Only the events that
+/// Every element is decoded, and its time must parse. Only the events that
 /// request a review from `login` are checked for an id and a non-zero time.
 pub(crate) fn decode_review_request_page(
     output: &str,
@@ -552,7 +553,7 @@ pub(crate) fn decode_review_request_page(
 /// Returns the id of the newest review request, or `None` when there is none.
 ///
 /// The newest event has the latest time, and the larger id on a tie. An event at or before
-/// the zero time is never taken, as in Go's `After` and `Equal` test.
+/// the zero time is never taken.
 pub(crate) fn newest_review_request(events: &[ReviewRequestEvent]) -> Option<i64> {
     let mut latest_at = GO_ZERO_TIME_NANOS;
     let mut latest_id = 0;

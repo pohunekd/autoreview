@@ -159,7 +159,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Checks the complete output of the verifier and stores the result in `slot`.
     ///
-    /// The bytes become text as Go's `encoding/json` reads them: one U+FFFD per invalid byte.
+    /// The bytes become text with one U+FFFD per invalid byte.
     fn parse_verifier(
         &self,
         claims: &VerificationClaims,

@@ -324,12 +324,12 @@ pub(crate) fn is_unset_class(value: &AuthorClass) -> bool {
     *value == AuthorClass::Unset
 }
 
-/// Reports whether a flag is unset, which Go omits from the JSON.
+/// Reports whether a flag is unset; the JSON omits an unset flag.
 fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Writes an empty list as JSON null, which Go writes for the nil reviewer list.
+/// Writes an empty list as JSON null; rows written by earlier releases use this form.
 fn nil_when_empty<T: Serialize, S: Serializer>(
     value: &[T],
     serializer: S,

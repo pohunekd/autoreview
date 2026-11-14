@@ -26,7 +26,7 @@ const RETRYABLE_CODES: [&str; 4] = [
 
 /// Sorts findings by severity, then path, then line. Equal findings keep their order.
 ///
-/// A severity outside `SEVERITIES` ranks first, as the zero value of Go's map lookup does.
+/// A severity outside `SEVERITIES` ranks first, the zero rank of a missing map key.
 /// Validation refuses such a finding afterwards.
 pub(crate) fn sort_findings(findings: &mut [Finding]) {
     findings.sort_by(|left, right| {
@@ -65,7 +65,7 @@ pub(crate) fn bounded_text(value: &str, maximum: i64, multiline: bool) -> bool {
     true
 }
 
-/// Counts the characters of `value`, as Go's `utf8.RuneCountInString` does.
+/// Counts the characters of `value`, the unit of the summary length limits.
 ///
 /// The count saturates at `i64::MAX`, which no string reaches.
 fn char_count(value: &str) -> i64 {
@@ -80,7 +80,7 @@ pub(crate) fn count_over(len: usize, maximum: i64) -> bool {
     }
 }
 
-/// Reports whether `path` is already in the form that Go's `path.Clean` returns, and is relative.
+/// Reports whether `path` is relative and already clean.
 ///
 /// The current directory `.` is its own cleaned form and passes. Any other empty, `.` or `..`
 /// component is refused, so `../x`, `a/../b` and `./a` fail.

@@ -19,7 +19,7 @@ mod reason;
 pub(crate) mod request;
 pub(crate) mod validate;
 
-/// Replacement character that Go writes for each invalid byte.
+/// Replacement character written for each invalid byte of decoded text.
 const REPLACEMENT: char = '\u{FFFD}';
 
 /// Parses and validates the complete output of one reviewer session.
@@ -62,16 +62,17 @@ pub(crate) fn parse_reviewer_output(
     Ok(result)
 }
 
-/// Decodes standard base64 as Go's `StdEncoding.Strict()` does: line breaks are skipped, padding
+/// Decodes standard base64 strictly: line breaks are skipped, padding
 /// is required and the trailing bits must be zero.
 pub(crate) fn decode_go_base64(text: &str) -> Option<Vec<u8>> {
     let filtered: String = text.chars().filter(|c| *c != '\r' && *c != '\n').collect();
     STANDARD.decode(filtered).ok()
 }
 
-/// Decodes bytes as UTF-8 with the replacement of Go's `encoding/json`: every byte that starts no
-/// valid sequence becomes one U+FFFD. `String::from_utf8_lossy` replaces a whole invalid subpart
-/// with one U+FFFD, which gives fewer replacements for a truncated sequence.
+/// Decodes bytes as UTF-8 with one U+FFFD for each byte that starts no valid sequence.
+///
+/// `String::from_utf8_lossy` replaces a whole invalid subpart with one U+FFFD, which
+/// gives fewer replacements for a truncated sequence.
 pub(crate) fn go_utf8_lossy(bytes: &[u8]) -> String {
     let mut out = String::new();
     let mut rest = bytes;
@@ -93,7 +94,7 @@ pub(crate) fn go_utf8_lossy(bytes: &[u8]) -> String {
 
 /// Refuses text whose JSON objects hold two keys that differ only in ASCII case.
 ///
-/// Go matches keys case-insensitively and keeps the value of the last key, so such a pair decides
+/// Keys match case-insensitively and the last value wins, so such a pair decides
 /// the value by position. Text that is not JSON is left to the typed decode, which refuses it.
 pub(crate) fn refuse_case_variant_keys(text: &str, code: &str) -> Result<(), Error> {
     if let Ok(value) = serde_json::from_str::<Value>(text)

@@ -71,7 +71,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Checks the complete output of a reviewer and stores the result in `slot`.
     ///
-    /// The bytes become text as Go's `encoding/json` reads them: one U+FFFD per invalid byte.
+    /// The bytes become text with one U+FFFD per invalid byte.
     fn parse_reviewer(&self, slot: &mut ReviewerSlot, output: &[u8]) -> Result<(), Error> {
         let raw = go_utf8_lossy(output);
         let result = parse_reviewer_output(

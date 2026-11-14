@@ -18,7 +18,7 @@ const MAX_GLOB_BYTES: usize = 256;
 /// Byte that separates the segments of a glob and of a repository name.
 const SEPARATOR: u8 = b'/';
 
-/// Code point that Go's UTF-8 decoder returns for an invalid byte sequence.
+/// Code point returned for an invalid UTF-8 byte sequence.
 const RUNE_ERROR: u32 = 0xFFFD;
 
 /// Names the signals of a pull request that make a clean review of an auto-approving rule wait for
@@ -268,13 +268,13 @@ fn match_segments(pattern: &[&str], name: &[&str]) -> bool {
     name.is_empty()
 }
 
-/// Matches name against pattern with the rules of Go's path.Match. The error is BadPattern when the
-/// pattern is malformed, which Go reports even when the name does not match.
+/// Matches name against pattern with glob rules. The error is BadPattern when the
+/// pattern is malformed, even when the name does not match.
 fn path_match(pattern: &str, name: &str) -> Result<bool, Error> {
     match_bytes(pattern.as_bytes(), name.as_bytes())
 }
 
-/// Runs the path.Match loop over bytes, because Go's star search steps one byte at a time.
+/// Runs the glob loop over bytes; the star search steps one byte at a time.
 fn match_bytes(mut pattern: &[u8], mut name: &[u8]) -> Result<bool, Error> {
     'Pattern: while !pattern.is_empty() {
         let (star, chunk, rest) = scan_chunk(pattern);
@@ -438,8 +438,8 @@ fn escaped_rune(chunk: &[u8]) -> Result<(u32, &[u8]), Error> {
     Ok((value, remaining))
 }
 
-/// Decodes the first UTF-8 code point of bytes as Go's utf8.DecodeRuneInString does: an invalid or
-/// truncated sequence, including a continuation byte, yields RUNE_ERROR with width 1.
+/// Decodes the first UTF-8 code point of bytes. An invalid or truncated sequence,
+/// including a continuation byte, yields RUNE_ERROR with width 1.
 fn decode_rune(bytes: &[u8]) -> (u32, usize) {
     if bytes.is_empty() {
         return (RUNE_ERROR, 0);

@@ -26,7 +26,7 @@ const DIAGNOSTIC_CODES: [(&str, &str); 16] = [
     ("agent_not_found", "agent_not_found"),
 ];
 
-/// Capital I with dot above (U+0130), which Go's `strings.ToLower` maps to a plain `i`.
+/// Capital I with dot above (U+0130), which is replaced by a plain `i` before lowercasing.
 const CAPITAL_I_WITH_DOT: char = '\u{130}';
 
 /// Longest pohunek code that [`SessionLoss`] and [`start_diagnostic`] keep, in bytes.
@@ -127,7 +127,7 @@ fn classify(message: &str) -> &'static str {
     "unclassified_cli_failure"
 }
 
-/// Lowercases `text` as Go's `strings.ToLower` does for every ASCII substring match.
+/// Lowercases `text` for every ASCII substring match.
 ///
 /// Rust maps U+0130 to `i` plus a combining dot, so it is replaced by `i` first.
 fn go_lowercase(text: &str) -> String {

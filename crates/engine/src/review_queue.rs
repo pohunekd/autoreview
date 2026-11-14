@@ -267,7 +267,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the open pull requests whose notes wait for their author.
     ///
     /// The author has not requested the review again. A pull request that cannot be read is
-    /// left out of this digest with a warning, also after a cancel, as Go leaves it out. One
+    /// left out of this digest with a warning, also after a cancel. One
     /// that no credential serves is left out unread. The read uses the credential of the
     /// hand-off's review; one whose credential no longer fits or failed its search is left out.
     async fn waiting_on_author(
@@ -618,8 +618,8 @@ fn exceeds(text: &str, limit: i64) -> bool {
     (count as i64) > limit
 }
 
-/// Escapes the five characters that HTML gives meaning, with the escapes Go's `html.EscapeString`
-/// writes.
+/// Escapes the five characters that HTML gives meaning as `&amp;`, `&#39;`, `&lt;`, `&gt;`
+/// and `&#34;`.
 fn escape_html(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for character in value.chars() {
@@ -806,7 +806,7 @@ notifications:
                 "AI review queued",
                 QueuePriority::Other,
             ),
-            // Rust only (#247): Go keeps no `awaits_host` and lists the wait as queued.
+            // A retry wait with `awaits_host` set is listed as waiting for a review host (#247).
             (
                 "waiting for a review host",
                 connection,
@@ -889,7 +889,7 @@ notifications:
                 "AI review completed",
                 QueuePriority::Other,
             ),
-            // Rust only (#226): Go keeps no state of a pull request whose rule skips its author.
+            // A pull request whose rule skips its author is listed as skipped (#226).
             (
                 "skipped untrusted author",
                 connection,
@@ -1113,7 +1113,7 @@ notifications:
         assert_eq!(clean_text("ab\u{202e}cd", 10), "ab…");
     }
 
-    /// A clock frozen at one wall time; its waits end at once, as in Go's `newQueueEngine`.
+    /// A clock frozen at one wall time; its waits end at once.
     struct FrozenClock {
         /// The instant that every call of `now` returns.
         instant: Instant,

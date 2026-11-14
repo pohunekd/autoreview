@@ -108,7 +108,7 @@ struct SearchResult {
     /// Paging of the search.
     #[serde(rename = "pageInfo", deserialize_with = "null_default::deserialize")]
     page_info: PageInfo,
-    /// The pull requests of the page; a `null` list is refused, as Go refuses a nil list.
+    /// The pull requests of the page; a `null` list is refused.
     ///
     /// A `null` entry is an empty pull request, which no rule covers.
     nodes: Option<Vec<Option<GitHubPullRequest>>>,
@@ -188,7 +188,7 @@ struct LabelSearchPage {
     end_cursor: String,
 }
 
-/// Returns the repository that a search result names, as Go's `repositoryName` reads it.
+/// Returns the repository that a search result names.
 ///
 /// A value that is neither a string nor an object with a string `nameWithOwner` gives the empty
 /// name, which no later check accepts.
@@ -365,8 +365,8 @@ fn scope_args(scopes: &[String]) -> Vec<String> {
 /// Returns the argv of the search of requested reviews in the credential patterns `matches`
 /// without the negative qualifiers `exclusions` (`ListReviewRequests`).
 ///
-/// The search asks for one result more than `max`. `wrapping_add` keeps Go's `int` wrap at the
-/// largest value. With the pattern `*`, it searches every repository.
+/// The search asks for one result more than `max`. `wrapping_add` wraps `i64::MAX` to
+/// `i64::MIN` in every build profile. With the pattern `*`, it searches every repository.
 fn list_review_requests_args(max: i64, matches: &[String], exclusions: &[String]) -> Vec<String> {
     let mut args = vec![
         "search".to_owned(),
@@ -435,8 +435,8 @@ fn decode_review_request_search(
 /// Returns the search query of a label trigger in the match patterns `scopes`, without the
 /// negative qualifiers `exclusions`.
 ///
-/// The label is quoted as Go's `%q` quotes it. The policy parser admits only the label pattern,
-/// which contains nothing that `%q` escapes.
+/// The label is placed in double quotes without escaping. The policy parser admits only the
+/// label pattern, which contains nothing that would need escaping.
 fn label_search_query(label: &str, scopes: &[String], exclusions: &[String]) -> String {
     let mut qualifiers = Policy::search_qualifiers(scopes);
     qualifiers.extend(exclusions.iter().cloned());

@@ -267,7 +267,7 @@ where
     }
 }
 
-/// Reports whether `id` is `C` and at least three ASCII digits, as Go's `^C[0-9]{3,}$`.
+/// Reports whether `id` matches `^C[0-9]{3,}$`: `C` and at least three ASCII digits.
 fn is_source_id(id: &str) -> bool {
     if let Some(digits) = id.strip_prefix('C') {
         digits.len() >= 3 && digits.bytes().all(|b| b.is_ascii_digit())

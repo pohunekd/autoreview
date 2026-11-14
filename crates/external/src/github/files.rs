@@ -61,9 +61,10 @@ struct ChangedFileRecord {
 
 autoreview_go_compat::object_only_serde!(ChangedFileRecord);
 
-/// Returns Go's `path.Clean` of `path`, computed over bytes as Go computes it.
+/// Returns `path` cleaned lexically over its bytes: repeated slashes and `.` elements are
+/// removed and `..` elements are resolved.
 ///
-/// The empty path cleans to `.`. A path that Go leaves unchanged cleans to itself.
+/// The empty path cleans to `.`. A path that is already clean returns unchanged.
 fn go_path_clean(path: &[u8]) -> Vec<u8> {
     if path.is_empty() {
         return vec![b'.'];
@@ -155,7 +156,7 @@ fn go_path_clean(path: &[u8]) -> Vec<u8> {
 /// Reports whether a changed file name passes the path checks.
 ///
 /// The name must be unchanged by `path.Clean`, must not be absolute and must not start with `../`.
-/// The names `.` and `..` pass, as they do in Go.
+/// The names `.` and `..` pass, since cleaning leaves them unchanged.
 fn valid_changed_path(name: &str) -> bool {
     if name.starts_with('/') || name.starts_with("../") {
         return false;
@@ -185,7 +186,7 @@ fn take_digits(text: &str) -> Option<(&str, &str)> {
 ///
 /// The line must start with `@@ -<digits>[,<digits>] +<digits>[,<digits>] @@`; the text after
 /// the closing `@@` is not read. Returns the new-side start and count, where a missing count is 1.
-/// A number that does not fit in `i64` returns `None`, as Go's `strconv.Atoi` refuses it.
+/// A number that does not fit in `i64` returns `None`.
 fn parse_hunk_header(line: &str) -> Option<(i64, i64)> {
     let after_at = line.strip_prefix("@@ -")?;
     let (_, after_old_start) = take_digits(after_at)?;
@@ -213,7 +214,7 @@ fn parse_hunk_header(line: &str) -> Option<(i64, i64)> {
 ///
 /// Lines before the first hunk, empty lines and the no-newline marker are skipped. Every other
 /// line must start with `+`, ` `, `-` or `@@`, or the patch is refused. The line number wraps at
-/// `i64` overflow, as Go's `int` does.
+/// `i64` overflow.
 fn commentable_lines_from_patch(patch: &str) -> Result<Vec<i64>, Error> {
     let mut result: Vec<i64> = Vec::new();
     let mut line_number: i64 = 0;

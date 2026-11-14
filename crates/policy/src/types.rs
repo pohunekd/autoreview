@@ -66,7 +66,7 @@ pub enum Protocol {
     /// review wrapper.
     #[serde(rename = "codex-envelope")]
     CodexEnvelope,
-    /// The empty value Go writes for an unset field; parsing never produces it.
+    /// The empty wire value of an unset field; parsing never produces it.
     #[default]
     #[serde(rename = "")]
     Unset,
@@ -76,7 +76,7 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    /// Returns the text Go writes for this value.
+    /// Returns the wire text for this value.
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::ClaudeStructured => "claude-structured",
@@ -97,7 +97,7 @@ pub enum Checkout {
     /// Starts at refs/pull/<number>/head.
     #[serde(rename = "head")]
     Head,
-    /// The empty value Go writes for an unset field; parsing never produces it.
+    /// The empty wire value of an unset field; parsing never produces it.
     #[default]
     #[serde(rename = "")]
     Unset,
@@ -107,7 +107,7 @@ pub enum Checkout {
 }
 
 impl Checkout {
-    /// Returns the text Go writes for this value.
+    /// Returns the wire text for this value.
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Base => "base",
@@ -127,7 +127,7 @@ pub enum TriggerKind {
     /// A configured label was added to the pull request.
     #[serde(rename = "label")]
     Label,
-    /// The empty value Go writes for an unset field; parsing never produces it.
+    /// The empty wire value of an unset field; parsing never produces it.
     #[default]
     #[serde(rename = "")]
     Unset,
@@ -137,7 +137,7 @@ pub enum TriggerKind {
 }
 
 impl TriggerKind {
-    /// Returns the text Go writes for this kind.
+    /// Returns the wire text for this kind.
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::ReviewRequested => "review-requested",
@@ -157,7 +157,7 @@ pub enum OnFindings {
     /// Posts the findings as a comment.
     #[serde(rename = "comment")]
     Comment,
-    /// The empty value Go writes for an unset field; parsing never produces it.
+    /// The empty wire value of an unset field; parsing never produces it.
     #[default]
     #[serde(rename = "")]
     Unset,
@@ -167,7 +167,7 @@ pub enum OnFindings {
 }
 
 impl OnFindings {
-    /// Returns the text Go writes for this value.
+    /// Returns the wire text for this value.
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::RequestChanges => "request_changes",
@@ -190,7 +190,7 @@ pub enum OnClean {
     /// Posts a comment only.
     #[serde(rename = "comment")]
     Comment,
-    /// The empty value Go writes for an unset field; parsing never produces it.
+    /// The empty wire value of an unset field; parsing never produces it.
     #[default]
     #[serde(rename = "")]
     Unset,
@@ -200,7 +200,7 @@ pub enum OnClean {
 }
 
 impl OnClean {
-    /// Returns the text Go writes for this value.
+    /// Returns the wire text for this value.
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Approve => "approve",
@@ -229,7 +229,7 @@ pub enum OnNotes {
 }
 
 impl OnNotes {
-    /// Returns the text Go writes for this value.
+    /// Returns the wire text for this value.
     pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Comment => "comment",
@@ -257,7 +257,7 @@ pub enum Level {
 }
 
 impl Level {
-    /// Returns the text Go writes for this value.
+    /// Returns the wire text for this value.
     pub fn as_str(&self) -> &str {
         match self {
             Self::Action => "action",
@@ -268,7 +268,7 @@ impl Level {
     }
 }
 
-/// Notification event. Events order by their wire text, so map keys sort as Go sorts them.
+/// Notification event. Events order by their wire text, which sets the order of map keys.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Event {
     /// Approval expired event.
@@ -325,7 +325,7 @@ pub enum Event {
 }
 
 impl Event {
-    /// Returns the text Go writes for this value.
+    /// Returns the wire text for this value.
     pub fn as_str(&self) -> &str {
         match self {
             Self::ApprovalExpired => "approval_expired",
@@ -350,7 +350,7 @@ impl Event {
 }
 
 impl Ord for Event {
-    /// Compares the wire texts, as Go compares the string keys of a map.
+    /// Compares the wire texts, so map keys sort by their stored text.
     fn cmp(&self, other: &Self) -> Ordering {
         self.as_str().cmp(other.as_str())
     }
@@ -564,8 +564,8 @@ pub struct Policy {
     pub(crate) digest: String,
 }
 
-/// Writes an empty list as JSON null, which Go writes for a nil slice. Every list a parsed policy
-/// stores is non-empty, so null marks the absent list.
+/// Writes an empty list as JSON null, the stored form of an absent list. Every list a parsed
+/// policy stores is non-empty, so null marks the absent list.
 fn nil_when_empty<T: Serialize, S: Serializer>(
     value: &[T],
     serializer: S,
@@ -577,7 +577,7 @@ fn nil_when_empty<T: Serialize, S: Serializer>(
     }
 }
 
-/// Reports whether an on_notes value is unset, which Go omits from the JSON.
+/// Reports whether an on_notes value is unset, which the JSON form omits.
 fn is_unset_notes(value: &OnNotes) -> bool {
     *value == OnNotes::Unset
 }

@@ -10,8 +10,6 @@ mod digest;
 mod human_review;
 mod parse;
 mod query;
-#[cfg(test)]
-mod testing;
 mod types;
 
 pub use authors::{

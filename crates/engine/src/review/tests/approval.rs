@@ -24,7 +24,7 @@ use crate::store::discovery::save_discovery;
 use crate::testing::fake::{count_notes, reviewer_output};
 use crate::testing::harness::{HEAD_PREFIX_CHARS, integration_pull_request, start_harness};
 
-/// Output of a reviewer session that has not finished: Go's nil output.
+/// Output of a reviewer session that has not finished: an empty string.
 fn unfinished(_: &SessionRequest) -> String {
     String::new()
 }

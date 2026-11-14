@@ -56,7 +56,7 @@ pub enum ReviewFilter {
 
 /// One review row as the store returns it.
 ///
-/// The JSON keys are the Go field tags, and `author_class`, which Go does not have.
+/// The JSON keys are the stored field tags; `author_class` is omitted when unset.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct StoredReview {
     /// Workflow identifier of the review.
@@ -906,13 +906,13 @@ mod tests {
 
     use super::{RESULT_FAILURE, RESULT_SUCCESS, ReviewFilter, StoredReview};
 
-    /// Approval decision that approves a review, the Go `approvalKindApprove`.
+    /// Approval kind stored for an approved review.
     const APPROVAL_APPROVE: &str = "approve";
 
-    /// Approval decision that supersedes a review, the Go `approvalKindSuperseded`.
+    /// Approval kind stored for a superseded review.
     const APPROVAL_SUPERSEDED: &str = "superseded";
 
-    /// Approval decision that expires a wait, the Go `approvalKindExpired`.
+    /// Approval kind stored for a wait that expired.
     const APPROVAL_EXPIRED: &str = "expired";
 
     /// Opens a store in a new database file under `dir`.
@@ -935,7 +935,7 @@ mod tests {
         }
     }
 
-    /// A rule for `acme/*` with one reviewer on the base checkout, as the Go `testRule` builds.
+    /// A rule for `acme/*` with one reviewer on the base checkout.
     fn test_rule(on_findings: OnFindings, on_clean: OnClean) -> Rule {
         let reviewer = test_reviewer();
         Rule {
@@ -965,7 +965,7 @@ mod tests {
         character.to_string().repeat(40)
     }
 
-    /// The pull request of the Go `testPullRequest`.
+    /// A pull request in `acme/widget` with a base and a head SHA.
     fn test_pull_request(number: i64) -> PullRequest {
         PullRequest {
             repository: "acme/widget".to_owned(),
@@ -982,7 +982,7 @@ mod tests {
         }
     }
 
-    /// The review input of the Go `testInput`, limited to the fields these tests read.
+    /// Review input for `rule` and `pull_request`, limited to the fields these tests read.
     fn test_input(rule: Rule, pull_request: PullRequest) -> ReviewInput {
         ReviewInput {
             version: INPUT_VERSION,
@@ -993,7 +993,7 @@ mod tests {
         }
     }
 
-    /// Records a review in its own transaction, as the Go `enqueueTestReview` does.
+    /// Records a review in its own transaction.
     fn enqueue_test_review(store: &Store, workflow_id: &str, input: &ReviewInput) {
         store
             .in_tx(|transaction| store.enqueue_review(transaction, workflow_id, input))

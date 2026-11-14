@@ -73,7 +73,7 @@ impl StepFailure {
 
 /// Returns the error of a review interrupted by an engine shutdown.
 ///
-/// Its code is `workflow_failed` and it is not permanent, as Go's plain `errShutdown`.
+/// Its code is `workflow_failed` and it is not permanent.
 pub(crate) fn shutdown_error() -> Error {
     Error::workflow(WORKFLOW_FAILED, false, Some(Box::new(Shutdown)))
 }
@@ -134,12 +134,12 @@ fn first_workflow(err: &Error) -> Option<(&str, bool, Option<&BoxError>)> {
     None
 }
 
-/// Converts a Go duration to a wait; a negative one, which Go waits zero for, is zero.
+/// Converts a duration to a wait; a negative duration waits zero.
 pub(super) fn wait_of(value: time::Duration) -> Duration {
     Duration::try_from(value).unwrap_or(Duration::ZERO)
 }
 
-/// A persisted deadline, written as Go writes a `time.Time`.
+/// A persisted deadline, in the RFC 3339 UTC text form that stored rows use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 struct Deadline(#[serde(with = "autoreview_go_compat::go_time")] OffsetDateTime);
@@ -906,7 +906,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Returns the deadline stored under `key`, storing one on the first call.
     ///
     /// The first deadline is now plus the session timeout times the run attempts; the product
-    /// wraps as Go's `time.Duration` does.
+    /// wraps on overflow instead of panicking.
     pub(crate) fn deadline(&self, key: &str) -> Result<OffsetDateTime, Error> {
         let stored = live(&self.cancel).and_then(|()| {
             self.engine

@@ -42,7 +42,7 @@ use crate::verify::{apply_verification, claims_of, verifier_reviewer};
 /// Step name of the lookup of a review posted before a restart, in the retry log.
 const STEP_PUBLISHED_REVIEW: &str = "published_review";
 
-/// The stored time of a publication, written as Go writes a `time.Time`.
+/// The stored time of a publication, in the RFC 3339 UTC text form that stored rows use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 struct PublishedAt(#[serde(with = "autoreview_go_compat::go_time")] OffsetDateTime);

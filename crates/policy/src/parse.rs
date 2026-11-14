@@ -40,13 +40,13 @@ const LABEL_TRIGGER_PREFIX: &str = "label:";
 /// Severities a blocking finding can have, so the only ones a verifier can demote.
 const BLOCKING_SEVERITIES: &[&str] = &["critical", "high"];
 
-/// The only `%YAML` directive version Go's YAML decoder accepts, as major and minor.
+/// The only `%YAML` directive version a policy file may use, as major and minor.
 const GO_YAML_VERSION: (u32, u32) = (1, 1);
 
-/// Go's error for a `%YAML` directive of another version.
+/// Error for a `%YAML` directive of another version.
 const INCOMPATIBLE_DOCUMENT: &str = "yaml: found incompatible YAML document";
 
-/// Go's error for a merge value that is not a mapping or a sequence of mappings.
+/// Error for a merge value that is not a mapping or a sequence of mappings.
 const MERGE_NOT_MAPPING: &str = "yaml: map merge requires map or sequence of maps as the value";
 
 /// The YAML merge key.
@@ -206,8 +206,8 @@ struct FilePolicy {
 
 /// Reads an integer field; null reads as zero and quoted text is refused.
 ///
-/// Both match Go's YAML decoder. Go reads a leading-zero integer such as `030` as YAML 1.1 octal;
-/// serde_saphyr reads it as a float, which this reader refuses.
+/// A leading-zero integer such as `030` is refused: serde_saphyr reads it as a float, which
+/// this reader does not accept.
 fn go_int<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
     deserializer.deserialize_any(GoIntVisitor)
 }
@@ -264,8 +264,8 @@ pub fn load(path: &Path) -> Result<Policy, Error> {
         path: path.to_path_buf(),
         source,
     })?;
-    // A root or empty path has no parent. Go's filepath.Dir gives "/" and "." for them, and a
-    // prompt path joined onto "/" or "" names the same file.
+    // A root or empty path has no parent, so its directory is taken as "/" or ".". A prompt
+    // path joined onto "/" or "" names the same file.
     let directory = path.parent().unwrap_or(path);
     parse(&data, |relative| {
         read_bounded(&directory.join(relative), MAX_PROMPT_BYTES)
@@ -352,7 +352,7 @@ pub fn parse(
     })
 }
 
-/// What an alias names, as Go's merge check sees it.
+/// What an alias names, as the merge check classifies it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NodeKind {
     /// A mapping.
@@ -378,12 +378,13 @@ enum Frame {
     },
 }
 
-/// Returns Go's error for YAML that Go's decoder refuses and serde_saphyr reads.
+/// Returns the refusal for YAML that serde_saphyr reads but the policy rejects.
 ///
 /// These are a `%YAML` directive other than 1.1 and a merge value other than a mapping, an alias
-/// of a mapping or a sequence of those (yaml.v3 `decoder.merge`). Only the first document is
-/// walked. A parser error returns `None`, so serde_saphyr reports it: Go parses the whole document
-/// before it decodes a merge, while a directive fails before the document content is read.
+/// of a mapping or a sequence of those (the yaml.v3 `decoder.merge` rule). Only the first
+/// document is walked. A parser error returns `None`, so serde_saphyr reports it: the whole
+/// document is parsed before a merge is decoded, while a directive fails before the document
+/// content is read.
 fn go_yaml_refusal(text: &str) -> Option<&'static str> {
     let mut anchors: BTreeMap<usize, NodeKind> = BTreeMap::new();
     let mut stack: Vec<Frame> = Vec::new();
@@ -451,7 +452,7 @@ fn record_anchor(anchors: &mut BTreeMap<usize, NodeKind>, anchor: usize, kind: N
     }
 }
 
-/// Reports whether Go's merge accepts a node of kind at the position the stack names.
+/// Reports whether the merge accepts a node of kind at the position the stack names.
 ///
 /// A merge value may be a mapping or a sequence; an entry of that sequence must be a mapping.
 /// Nodes outside a merge value are always accepted.
@@ -474,7 +475,7 @@ fn finish_node(stack: &mut [Frame], merge_key: bool) {
     }
 }
 
-/// Reports whether a `<<` scalar is a merge key for Go: plain without a tag, `!` or `!!merge`.
+/// Reports whether a `<<` scalar is a merge key: plain without a tag, `!` or `!!merge`.
 fn is_merge_key_tag(style: ScalarStyle, tag: Option<&Tag>) -> bool {
     match tag {
         None => style == ScalarStyle::Plain,
@@ -487,7 +488,7 @@ fn is_merge_key_tag(style: ScalarStyle, tag: Option<&Tag>) -> bool {
 
 /// Maps a YAML reader error to the policy error.
 ///
-/// Unknown and repeated keys get Go's wording.
+/// Unknown and repeated keys keep the wording that earlier releases reported.
 fn yaml_error(error: &serde_saphyr::Error) -> Error {
     let without = error.without_snippet();
     match without {
@@ -785,13 +786,13 @@ fn load_prompt(
     Ok(text.trim().to_owned())
 }
 
-/// Reports whether path is relative, uses no backslash and equals its Go path.Clean form.
+/// Reports whether path is relative, uses no backslash and equals its `path.Clean` form.
 ///
-/// Go accepts a path when it is non-empty, equals path.Clean of itself, is not absolute, is not ..
-/// and does not start with ../, and holds no backslash. For a non-empty path without a leading
-/// slash that is the same as: the path is ., or every slash-separated segment is non-empty and
-/// neither . nor .. (path.Clean removes empty and . segments and resolves or keeps .. segments,
-/// and a kept leading .. is rejected by the other checks).
+/// A path is accepted when it is non-empty, equals path.Clean of itself, is not absolute,
+/// is not .. and does not start with ../, and holds no backslash. For a non-empty path without
+/// a leading slash, that is the same as: the path is ., or every slash-separated segment is
+/// non-empty and neither . nor .. (path.Clean removes empty and . segments and resolves or keeps
+/// .. segments, and a kept leading .. is rejected by the other checks).
 fn is_relative_clean_path(path: &str) -> bool {
     if path.is_empty() || path.contains('\\') {
         return false;
@@ -987,7 +988,7 @@ fn parse_notifications(
             Some("digest") => Level::Digest,
             Some("log") => Level::Log,
             _ => {
-                // A null level is Go's empty level, which no level matches.
+                // A null level is the empty level, which no level matches.
                 return Err(Error::EventLevel {
                     event: event.as_str(),
                 });
@@ -1047,7 +1048,7 @@ pub(crate) fn matches(pattern: &str, target: &str) -> bool {
     name == "*" && owner == target_owner
 }
 
-/// Splits value at its first slash, like Go's strings.Cut.
+/// Splits value at its first slash.
 ///
 /// Without a slash it returns the whole value and an empty string.
 pub(crate) fn cut(value: &str) -> (&str, &str) {

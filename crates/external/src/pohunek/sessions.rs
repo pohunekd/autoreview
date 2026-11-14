@@ -290,7 +290,7 @@ pub(crate) async fn find_session(
 /// `remove` removes a session and confirms that it is gone; it is called only on a session that
 /// this request owns and that cannot be used. The daemon may accept a start after the client
 /// timed out, so the session list is read again after every start. That read ignores `cancel`,
-/// as Go reads it with `context.WithoutCancel`, so a start the daemon accepted is still found.
+/// so a start the daemon accepted after a cancelled call is still found.
 pub(crate) async fn ensure_session<R, F>(
     config: &Config,
     cancel: &CancellationToken,
@@ -386,7 +386,7 @@ where
     }
 }
 
-/// A failed removal together with the failure it followed, as Go's `errors.Join` reports both.
+/// A failed removal together with the failure it followed. Both are shown, one per line.
 #[derive(Debug)]
 struct JoinedError {
     /// The failure that made the session unusable.

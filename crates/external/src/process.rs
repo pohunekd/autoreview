@@ -19,8 +19,8 @@ use tokio_util::sync::CancellationToken;
 /// Variables of the engine that a `gh` child inherits.
 ///
 /// gh finds its config, state, data and cache directories through `GH_CONFIG_DIR`, the `XDG_*`
-/// homes and `HOME`. Go reads the proxy and CA variables. `GH_TELEMETRY` and `DO_NOT_TRACK`
-/// keep the operator's telemetry choice.
+/// homes and `HOME`. The proxy and CA variables reach the HTTPS client of `gh`.
+/// `GH_TELEMETRY` and `DO_NOT_TRACK` keep the operator's telemetry choice.
 pub(crate) const GH_INHERITED: [&str; 18] = [
     "PATH",
     "HOME",
@@ -93,7 +93,7 @@ pub(crate) enum ProcessError {
     /// The child exited unsuccessfully.
     #[error("{status}: {stderr}")]
     Exit {
-        /// Go's text of the exit status, for example `exit status 1`.
+        /// The text of the exit status, for example `exit status 1`.
         status: String,
         /// The exit code, or `None` for a child ended by a signal.
         code: Option<i32>,
@@ -153,8 +153,7 @@ pub(crate) fn child_environment(
 /// Runs `binary` with `args` and returns its stdout.
 ///
 /// The child reads `input` on stdin and gets exactly `environment`. It is killed
-/// when `timeout` elapses or `cancel` is cancelled, and never started once `cancel` is cancelled,
-/// as Go's `exec.CommandContext` does.
+/// when `timeout` elapses or `cancel` is cancelled, and it is never started after `cancel`.
 pub(crate) async fn run(
     cancel: &CancellationToken,
     binary: &str,
@@ -236,7 +235,7 @@ pub(crate) async fn run(
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
         });
     }
-    // A child may exit without reading its input; Go ignores that broken pipe too.
+    // A child may exit without reading its input, so a broken pipe on stdin is ignored.
     if let Err(error) = written
         && error.kind() != io::ErrorKind::BrokenPipe
     {
@@ -256,7 +255,7 @@ async fn kill(child: &mut Child) -> io::Result<()> {
     Ok(())
 }
 
-/// Renders an unsuccessful `status`: Go's `exit status N` for an exit code.
+/// Renders an unsuccessful `status` as `exit status N` for an exit code.
 ///
 /// A child ended by a signal keeps Rust's text, for example `signal: 9 (SIGKILL)`.
 fn status_text(status: ExitStatus) -> String {

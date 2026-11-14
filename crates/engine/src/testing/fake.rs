@@ -677,7 +677,7 @@ impl Integrations for FakeIntegration {
         };
         let result = match outcome {
             Err(error) => Err(error),
-            // An empty output stands for Go's nil output: the session has not finished yet.
+            // An empty output means the session has not finished yet.
             Ok((request, output, refusal)) => {
                 let text = refusal.unwrap_or_else(|| output(&request));
                 Ok(Some(text.into_bytes()).filter(|bytes: &Vec<u8>| !bytes.is_empty()))

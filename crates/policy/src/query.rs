@@ -163,7 +163,6 @@ mod tests {
     use std::time::Duration;
 
     use crate::parse;
-    use crate::testing::with_trusted_any;
     use crate::types::{
         Checkout, Event, Level, OnClean, OnFindings, OnNotes, Policy, Protocol, Rule,
     };
@@ -195,7 +194,7 @@ mod tests {
         let path = deployed_policy_path();
         let document = std::fs::read_to_string(&path).expect("the deployed policy is readable");
         let directory = path.parent().expect("the fixture has a directory");
-        let loaded = parse(with_trusted_any(&document).as_bytes(), |relative| {
+        let loaded = parse(document.as_bytes(), |relative| {
             std::fs::read(directory.join(relative))
         })
         .expect("the deployed policy parses");

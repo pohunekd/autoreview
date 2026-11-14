@@ -200,7 +200,7 @@ pub(crate) fn output_complete(protocol: &Protocol, output: &[u8]) -> bool {
 /// Returns the `ok` payload of a `session output` envelope.
 ///
 /// A missing `ok` key is `pohunek_response_invalid`. Any other value that is not a payload, a
-/// `null` included, is `review_output_invalid`, as Go reports it.
+/// `null` included, is `review_output_invalid`.
 fn output_payload(output: &str) -> Result<OutputPayload, Error> {
     if !has_ok(output) {
         return Err(response_invalid());

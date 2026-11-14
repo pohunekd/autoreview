@@ -287,10 +287,11 @@ pub(crate) fn request_invalid(cause: serde_json::Error) -> Error {
     Error::workflow("review_request_invalid", true, Some(Box::new(cause)))
 }
 
-/// Encodes `value` as Go's `json.Marshal` does.
+/// Encodes `value` as JSON for the CLI and the reviewer requests.
 ///
-/// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029, which Go escapes
-/// inside strings.
+/// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029, the escaping of
+/// every JSON text the CLI prints or writes (command output, reviewer requests, the values
+/// `init` writes).
 pub fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let raw = serde_json::to_string(value)?;
     let mut output = String::with_capacity(raw.len());
@@ -300,7 +301,7 @@ pub fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::E
     Ok(output)
 }
 
-/// Appends `character`, or its `\u` escape when Go's JSON encoder escapes it inside strings.
+/// Appends `character`, or its `\u` escape when it must be escaped inside strings.
 fn push_escaped(output: &mut String, character: char) {
     match character {
         '<' => output.push_str("\\u003c"),
@@ -312,7 +313,7 @@ fn push_escaped(output: &mut String, character: char) {
     }
 }
 
-/// Compacts the schema as Go's `json.Marshal` compacts a `json.RawMessage`.
+/// Compacts the schema JSON that a request sends.
 ///
 /// Insignificant whitespace goes, the key order stays, and the string escapes follow
 /// `push_escaped`.
