@@ -13,6 +13,7 @@ pub mod mcp;
 pub(crate) mod messages;
 pub mod metrics;
 pub mod model;
+pub mod notify;
 pub(crate) mod prior;
 pub(crate) mod protocol;
 pub mod publish;
