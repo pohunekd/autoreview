@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/go-compat",
+    "crates/guard",
     "crates/policy",
     "crates/schedule",
     "crates/engine",

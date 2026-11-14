@@ -144,3 +144,124 @@ impl Signal {
         }
     }
 }
+
+/// One signal found in the fields of one kind, with how often it occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hit {
+    /// The kind of the fields the signal was found in.
+    pub field: FieldKind,
+    /// The signal.
+    pub signal: Signal,
+    /// Occurrences over all fields of that kind; distinct entries for `LexiconPhrase`.
+    pub count: u32,
+}
+
+/// The hits of a scan, ordered by field kind then signal, and their score.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// One hit per field kind and signal found, never with a zero count.
+    pub hits: Vec<Hit>,
+    /// The weights of the distinct signals plus those of the distinct lexicon entries found.
+    pub score: u32,
+}
+
+/// Errors of the guard crate: a lexicon that does not validate.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    /// A lexicon line does not start with a whole number from 1 to `LEXICON_MAX_WEIGHT`.
+    #[error("lexicon line {line}: the weight is not a number from 1 to {LEXICON_MAX_WEIGHT}")]
+    LexiconWeight {
+        /// The 1-based line number.
+        line: usize,
+    },
+    /// A lexicon line has no letter or digit after its weight.
+    #[error("lexicon line {line}: the phrase has no letter or digit")]
+    LexiconPhrase {
+        /// The 1-based line number.
+        line: usize,
+    },
+    /// A lexicon line holds the same phrase as an earlier line.
+    #[error("lexicon line {line}: the phrase repeats line {first}")]
+    LexiconDuplicate {
+        /// The 1-based line number of the repeat.
+        line: usize,
+        /// The 1-based line number of the first occurrence.
+        first: usize,
+    },
+    /// The lexicon has no entry.
+    #[error("the lexicon has no phrase")]
+    LexiconEmpty,
+}
+
+/// Scans the fields and scores what it found.
+///
+/// Signals found in several fields of one kind add up under that kind. The score counts each
+/// signal and each lexicon entry once, whatever the number of occurrences.
+#[must_use]
+pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
+    let mut counts: BTreeMap<(FieldKind, Signal), u32> = BTreeMap::new();
+    let mut entries_by_kind: BTreeMap<FieldKind, BTreeSet<usize>> = BTreeMap::new();
+    for field in fields {
+        let added;
+        let text = if field.kind == FieldKind::Patch {
+            added = added_lines(field.text);
+            added.as_str()
+        } else {
+            field.text
+        };
+        let mut add = |signal: Signal, count: u32| {
+            if count > 0 {
+                let total = counts.entry((field.kind, signal)).or_insert(0);
+                *total = total.saturating_add(count);
+            }
+        };
+        characters::scan(text, field.kind == FieldKind::Patch, &mut add);
+        if field.kind.renders_markdown() {
+            markdown::scan(text, &mut add);
+        }
+        add(Signal::ChatTemplateToken, template::count(text));
+        let normalized = words::normalize(text);
+        entries_by_kind
+            .entry(field.kind)
+            .or_default()
+            .extend(lexicon.found(&normalized));
+    }
+    let mut all_entries = BTreeSet::new();
+    for (kind, entries) in entries_by_kind {
+        let count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+        if count > 0 {
+            counts.insert((kind, Signal::LexiconPhrase), count);
+        }
+        all_entries.extend(entries);
+    }
+    let signals: BTreeSet<Signal> = counts.keys().map(|&(_, signal)| signal).collect();
+    let score = signals
+        .iter()
+        .map(|signal| signal.weight())
+        .chain(lexicon.weights(&all_entries))
+        .fold(0_u32, u32::saturating_add);
+    let hits = counts
+        .into_iter()
+        .map(|((field, signal), count)| Hit {
+            field,
+            signal,
+            count,
+        })
+        .collect();
+    Report { hits, score }
+}
+
+/// Returns the added lines of a unified diff, without `+`, one per line.
+///
+/// Removed lines are not in the head and context lines are base content, so only added lines
+/// can carry text the pull request brings in.
+fn added_lines(patch: &str) -> String {
+    let mut out = String::new();
+    for line in patch.split('\n') {
+        if let Some(added) = line.strip_prefix('+') {
+            out.push_str(added);
+            out.push('\n');
+        }
+    }
+    out
+}

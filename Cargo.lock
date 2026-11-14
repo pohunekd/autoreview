@@ -194,6 +194,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "autoreview-guard"
+version = "0.3.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "autoreview-policy"
 version = "0.3.0"
 dependencies = [
