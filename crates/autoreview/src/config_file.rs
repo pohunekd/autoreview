@@ -14,7 +14,7 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::{
     Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules, MatrixRooms,
-    RouteOverride,
+    RouteOverride, signature_text,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
@@ -1943,6 +1943,12 @@ fn cross_key_rules(file: &FileConfig, config: &Config) -> Result<(), Error> {
     let publish = section(&file.publish, "publish")?;
     let signature = text(&publish.signature, "publish.signature")?;
     let pattern = text(&publish.ai_signed_pattern, "publish.ai_signed_pattern")?;
+    if signature_text(&pattern).is_empty() {
+        return Err(invalid(
+            "publish.ai_signed_pattern",
+            "must hold text after its leading symbols",
+        ));
+    }
     if !signature_valid(signature.as_str(), pattern.as_str()) {
         return Err(invalid(
             "publish.signature",
@@ -1972,11 +1978,10 @@ pub(crate) fn clean_absolute(path: &str) -> bool {
     true
 }
 
-/// Reports whether a signature is one line that starts with `pattern` and mentions no one or
-/// embeds
-/// no HTML.
+/// Reports whether a signature is one line that starts with `pattern`, each without its leading
+/// signature symbols, and mentions no one or embeds no HTML.
 fn signature_valid(signature: &str, pattern: &str) -> bool {
-    if !signature.starts_with(pattern) {
+    if !signature_text(signature).starts_with(signature_text(pattern)) {
         return false;
     }
     for cell in signature.chars() {
@@ -3147,11 +3152,25 @@ pub(crate) mod tests {
                     "publish.ai_signed_pattern and mentions no one"
                 ),
             ),
+            (
+                "  ai_signed_pattern: \"Written by AI:\"",
+                "  ai_signed_pattern: \"🤖\"",
+                concat!(
+                    "configuration_invalid: publish.ai_signed_pattern: ",
+                    "must hold text after its leading symbols"
+                ),
+            ),
         ];
         for (old, new, expected) in cases {
             let result = error_text(mapped(&mutated(old, new)));
             assert_eq!(result, expected, "rule for {old:?}");
         }
+        // The loader compares as the engine does: leading symbols aside (#7).
+        let emoji = mutated(
+            "  ai_signed_pattern: \"Written by AI:\"",
+            "  ai_signed_pattern: \"🤖 Written by AI:\"",
+        );
+        assert!(mapped(&emoji).is_ok(), "a pattern with an emoji must load");
     }
     /// Each row is the `publish.marker` line of the example and what the loader makes of it (#7).
     #[test]

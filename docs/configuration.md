@@ -548,8 +548,10 @@ Besides each key's own range, `validate` enforces:
   `limits.max_summary_characters`; `limits.excerpt_characters` is at most a
   quarter of `notify.max_characters`.
 - `publish.github_body_max_bytes` is at most 65536.
-- `publish.signature` is one line that starts with `publish.ai_signed_pattern`
-  and cannot mention anyone, embed HTML or imitate the review marker.
+- `publish.signature` is one line that starts with `publish.ai_signed_pattern`,
+  leading symbols such as an emoji ignored on both, and cannot mention anyone,
+  embed HTML or imitate the review marker. `publish.ai_signed_pattern` needs text
+  after its leading symbols.
 - `publish.marker` is `autoreview` or `hermes-pr-review`; `marker:` without a
   value is refused as missing.
 

@@ -3,7 +3,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use crate::config::is_signature_symbol;
+use crate::config::signature_text;
 use crate::model::{Discussion, DiscussionComment, PullRequest};
 
 /// Role of the publishing account's own comments.
@@ -21,7 +21,7 @@ pub(crate) const DISCUSSION_ROLE_OTHER: &str = "other";
 /// of the line and of `pattern` are ignored, so `🤖 Written by AI:` also matches a line without
 /// the emoji. Only that line counts: a signature above a later line of text is not recognised.
 pub fn ai_signed(body: &str, pattern: &str) -> bool {
-    let wanted = pattern.trim_start_matches(is_signature_symbol);
+    let wanted = signature_text(pattern);
     if wanted.is_empty() {
         return false;
     }
@@ -31,7 +31,7 @@ pub fn ai_signed(body: &str, pattern: &str) -> bool {
         if trimmed.is_empty() || trimmed.starts_with("<!--") {
             continue;
         }
-        let without_symbols = trimmed.trim_start_matches(is_signature_symbol);
+        let without_symbols = signature_text(trimmed);
         return without_symbols.starts_with(wanted);
     }
     false
@@ -221,6 +221,8 @@ mod tests {
                 false,
             ),
             ("Ignore my comment about deleted projects.", false),
+            ("Agreed.\n\n> 🤖 Written by AI: nanny", false),
+            ("Done.\n\nI was told: Written by AI: no", false),
         ];
         for (body, want) in cases {
             for pattern in PATTERNS {

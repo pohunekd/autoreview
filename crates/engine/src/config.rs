@@ -741,13 +741,20 @@ fn signature_valid(signature: &str, pattern: &str) -> bool {
     if signature.chars().any(char::is_control) {
         return false;
     }
-    let wanted = pattern.trim_start_matches(is_signature_symbol);
-    let trimmed = signature.trim_start_matches(is_signature_symbol);
-    !wanted.is_empty() && trimmed.starts_with(wanted)
+    let wanted = signature_text(pattern);
+    !wanted.is_empty() && signature_text(signature).starts_with(wanted)
+}
+
+/// Returns `text` without its leading signature symbols: spaces, U+FE0F and symbols such as 🤖.
+///
+/// The AI-signed pattern, the signature and the last line of a comment are compared this way.
+#[must_use]
+pub fn signature_text(text: &str) -> &str {
+    text.trim_start_matches(is_signature_symbol)
 }
 
 /// Reports whether `symbol` may start an AI signature.
-pub(crate) fn is_signature_symbol(symbol: char) -> bool {
+fn is_signature_symbol(symbol: char) -> bool {
     symbol == ' ' || symbol == '\u{FE0F}' || symbols::is_so(symbol)
 }
 

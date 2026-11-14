@@ -35,6 +35,7 @@ use crate::model::{
 };
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
 use crate::protocol::request::{checkout_name, go_json};
+use crate::publish::marker_forms;
 use crate::verify::{
     ClaimFinding, ClaimPrior, VERDICT_CONFIRMED, VERDICT_UPHELD, VerificationClaims,
 };
@@ -191,18 +192,22 @@ pub(crate) struct FakeState {
 }
 
 impl FakeState {
-    /// Returns the index of the first published review that carries `marker` and stands.
+    /// Returns the index of the first published review that carries `marker`, under any marker
+    /// name as the real lookup reads it, and stands.
     ///
     /// With `head`, the review must also have been posted on that head. Only a review posted
     /// with `login` matches, as GitHub's lookup reads the reviews of its own login.
     fn standing_review(&self, marker: &str, head: Option<&str>, login: &str) -> Option<usize> {
+        let forms = marker_forms(marker);
         self.published
             .iter()
             .zip(&self.published_heads)
             .enumerate()
             .find(|(index, (existing, published_head))| {
                 !self.dismissed.contains(index)
-                    && existing.body.contains(marker)
+                    && forms
+                        .iter()
+                        .any(|form| existing.body.contains(form.as_str()))
                     && head.is_none_or(|head| head == published_head.as_str())
                     && (self.publisher_logins.get(*index))
                         .is_some_and(|posted| posted.eq_ignore_ascii_case(login))
