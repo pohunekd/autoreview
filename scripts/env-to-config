@@ -274,7 +274,7 @@ def positive(name, value, largest):
     if number <= 0:
         raise Finding(f"{name}: must be a positive integer")
     if number > largest:
-        raise Finding(f"{name}: is larger than Go's time.Duration holds")
+        raise Finding(f"{name}: must be at most {largest}")
     return number
 
 
