@@ -10,6 +10,8 @@ pub(crate) mod output;
 
 pub(crate) mod sessions;
 
+pub(crate) mod version;
+
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::ops::RangeInclusive;

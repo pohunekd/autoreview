@@ -187,6 +187,8 @@ struct ValidationResult {
     policy_digest: String,
     /// The pohunek agent profiles that the policy's reviewers run.
     agent_profiles: Vec<String>,
+    /// Version of the pohunek CLI at `pohunek.bin`, inside the supported range.
+    pohunek_version: String,
     /// Each credential's login and token expiry; only with `--check-credentials`.
     #[serde(skip_serializing_if = "Option::is_none")]
     credentials: Option<Vec<CredentialStatus>>,
@@ -414,15 +416,17 @@ async fn run_engine(
     }
 }
 
-/// Prints the policy digest and agent profiles, and with `check` each credential's check.
+/// Prints the policy digest, the agent profiles and the pohunek version, and with `check` each
+/// credential's check.
 ///
-/// Without `check`, it makes no GitHub call.
+/// Without `check`, it makes no GitHub call; it always runs `pohunek --version`.
 async fn validate(config: &Config, check: bool, cancel: &CancellationToken) -> Result<(), Error> {
     let Some(policy) = config.policy.as_ref() else {
         return Err(Error::config(CONFIGURATION_INVALID, POLICY_KEY, None));
     };
+    let external = External::new(config.clone())?;
+    let pohunek_version = external.pohunek_version(cancel).await?;
     let credentials = if check {
-        let external = External::new(config.clone())?;
         Some(check_credentials(&external, &config.credentials, cancel).await?)
     } else {
         None
@@ -430,16 +434,17 @@ async fn validate(config: &Config, check: bool, cancel: &CancellationToken) -> R
     print_json(&ValidationResult {
         policy_digest: policy.digest().to_owned(),
         agent_profiles: policy.agent_profiles(),
+        pohunek_version,
         credentials,
     })
 }
 
-/// Runs the engine after checking every credential's token with GitHub.
+/// Runs the engine after checking the pohunek version and every credential's token with GitHub.
 ///
 /// With `metrics`, the endpoint is bound after the credential check and before the engine
 /// takes its lock, and it stops when the engine stops. A review panic ends the process, as a
-/// goroutine panic ends Go's. A signal during the credential check is a normal stop, as a
-/// signal while the engine runs: it logs the engine's stop line and returns `Ok`.
+/// goroutine panic ends Go's. A signal during either check is a normal stop, as a signal while
+/// the engine runs: it logs the engine's stop line and returns `Ok`.
 async fn serve(
     engine: &Arc<Engine<External, SystemClock>>,
     external: &External,
@@ -447,6 +452,15 @@ async fn serve(
     metrics: Option<MetricsConfig>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
+    let pohunek_version = match external.pohunek_version(cancel).await {
+        Ok(version) => version,
+        Err(_) if cancel.is_cancelled() => {
+            tracing::info!("pull request review engine stopping");
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
+    tracing::info!(pohunek_version = %pohunek_version, "pohunek version checked");
     let statuses = match check_credentials(external, credentials, cancel).await {
         Ok(statuses) => statuses,
         // Read from the token: the unit's SIGTERM may kill `gh` first, which fails as an exit.

@@ -134,8 +134,10 @@ way and check it with `test -n "$AUTOREVIEW_MATRIX_TOKEN" && echo set`.
 
 Point autoreview at the configuration and check it. `validate` loads the
 config and the policy, reads every prompt and checks that the token variables
-are set. It makes no GitHub or pohunek call; `validate --check-credentials`
-also checks each token with GitHub and prints its login and expiry.
+are set. It prints the version of the `pohunek` CLI at `pohunek.bin` and fails
+when that release is not supported; it makes no GitHub call and reaches no
+pohunek daemon. `validate --check-credentials` also checks each token with
+GitHub and prints its login and expiry.
 
 ```sh
 export AUTOREVIEW_CONFIG="$AUTOREVIEW_HOME/config.yaml"

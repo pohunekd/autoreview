@@ -262,15 +262,23 @@ autoreview validate [--check-credentials]
 ```
 
 Loads the configuration and the policy, reads every prompt and prints the
-policy digest and the agent profiles the policy needs. Without
-`--check-credentials` it makes no GitHub or pohunek call. Prints:
+policy digest, the agent profiles the policy needs and the version of the
+`pohunek` CLI at `pohunek.bin`. It runs `pohunek --version`, which reaches no
+daemon; without `--check-credentials` it makes no GitHub call and no other
+pohunek call. Prints:
 
 ```json
 {
   "policy_digest": "...",
-  "agent_profiles": ["autoreview-codex"]
+  "agent_profiles": ["autoreview-codex"],
+  "pohunek_version": "0.42.0"
 }
 ```
+
+The supported pohunek releases are 0.41.0 or later, before 1.0.0. A release
+outside that range fails with `pohunek_version_unsupported`; a run that fails
+or an output other than `pohunek X.Y.Z` fails with `pohunek_version_invalid`.
+Both name `pohunek.bin`.
 
 `--check-credentials` also runs the [startup check](#autoreview-serve) of every
 credential and adds what GitHub answered, in file order:
@@ -282,14 +290,15 @@ credential and adds what GitHub answered, in file order:
 ```
 
 `expires_at` is the token's expiry in UTC; it is `null` when GitHub sends no
-expiry, as for a token that never expires. Token values are never printed. The
-pohunek version check is planned in #9.
+expiry, as for a token that never expires. Token values are never printed.
 
 ## Service
 
 ### `autoreview serve`
 
-Runs discovery and reviews until stopped. Before it starts, it checks every
+Runs discovery and reviews until stopped. Before it starts, it checks the
+pohunek version as [`validate`](#autoreview-validate) does and logs it as
+`pohunek version checked` with `pohunek_version`. Then it checks every
 credential in file order: it asks GitHub for the login behind the token
 (`GET /user`) with that credential's token only. A token that GitHub refuses
 (revoked, expired or never valid) fails with `credential_invalid`, and a token
@@ -307,7 +316,8 @@ while it runs suspends only its credential and raises `credential_invalid`, see
 
 A second `serve` on the same database is refused. Reviews running at shutdown
 resume from their stored steps on the next start. A SIGINT or SIGTERM during
-the credential check or while the engine runs is a normal stop: `serve` logs
+the pohunek version check, the credential check or while the engine runs is a
+normal stop: `serve` logs
 `pull request review engine stopping` and exits with status 0.
 
 With a [`metrics` section](configuration.md#metrics), `serve` also answers
@@ -448,6 +458,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `stats_range_too_long` | The `stats` range covers more than 366 days |
 | `project_route_not_found`, `project_route_ambiguous` | The repository is registered on no review host that answered, or as two projects on the host that serves it |
 | `pohunek_request_failed`, `pohunek_request_timeout`, `pohunek_session_start_failed` | The review host did not answer or could not start a session |
+| `pohunek_version_invalid`, `pohunek_version_unsupported` | `pohunek --version` of `pohunek.bin` failed or printed no `pohunek X.Y.Z`, or the release is outside the supported range, see [`validate`](#autoreview-validate) |
 | `host_state_ineligible` | Only a host that a `pohunek.host_state` rule held back has the repository; the review waits for a review host |
 | `pohunek_session_lost` | The review host lost the session's worker while the session started; retried on a fresh branch. A leftover session that cannot be removed raises `cleanup_manual`, see [stale sessions](knowledge/runbooks/stale-sessions-and-branches.md#when-a-session-cannot-be-removed) |
 | `pohunek_base_fetch_ref_locked`, `pohunek_session_warning` | The session start hit a locked base fetch or reported a warning; retried on a fresh branch |

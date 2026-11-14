@@ -87,6 +87,15 @@ impl External {
             http,
         })
     }
+
+    /// Returns the version of the pohunek CLI at `pohunek.bin` when the engine supports it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `pohunek_version_invalid` or `pohunek_version_unsupported` for `pohunek.bin`.
+    pub async fn pohunek_version(&self, cancel: &CancellationToken) -> Result<String, Error> {
+        pohunek::version::checked_version(&self.config, cancel).await
+    }
 }
 
 impl Integrations for External {

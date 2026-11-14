@@ -135,16 +135,19 @@ A rollback goes to an earlier autoreview release (Rust).
 
 ## pohunek version compatibility
 
-A check of `pohunek --version` in `validate` is planned in #9. The engine uses
-`project list` and `session new|output|rm`, so a pohunek upgrade is an upgrade
-of autoreview's dependency too:
+`validate` and `serve` run `pohunek --version` on the CLI at `pohunek.bin` and
+refuse a release outside the supported range, 0.41.0 or later, before 1.0.0,
+with `pohunek_version_unsupported` (see [install](../../install.md#prerequisites)).
+The engine uses `project list`, `session list` and `session new|output|rm`, so a
+pohunek upgrade is an upgrade of autoreview's dependency too:
 
 - The minimum version is raised after an upstream fix. Two issues drive the
   workarounds: [zajca/pohunek#1437](https://github.com/zajca/pohunek/issues/1437)
   (base fetch lock) and [zajca/pohunek#1438](https://github.com/zajca/pohunek/issues/1438)
   (branches kept after `session rm`). Until both are fixed, the workarounds stay
   on, and the stale-branch cleanup stays a manual maintenance step.
-- The supported range itself is not published in these pages yet.
+- Upgrade pohunek past the range only with an autoreview release that supports
+  the new release; until then `serve` does not start after a restart.
 
 ## Related pages
 

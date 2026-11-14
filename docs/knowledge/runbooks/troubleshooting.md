@@ -30,6 +30,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `pohunek_base_fetch_timeout`, `pohunek_base_fetch_authentication_failed` | Git on the review host could not fetch the base: no network, a hung SSH agent or a locked credential helper | [Review host checks](#review-host-checks) |
 | `pohunek_base_fetch_ref_locked`, `pohunek_session_warning` | Base fetch on a locked ref, or a session warning | [Session start failures](#session-start-failures) |
 | `pohunek_request_failed`, `pohunek_request_timeout` | Review host did not answer | [Session start failures](#session-start-failures) |
+| `pohunek_version_invalid`, `pohunek_version_unsupported` | The `pohunek` CLI at `pohunek.bin` is missing, prints no release number, or its release is outside the supported range | Install a supported release, see [prerequisites](../../install.md#prerequisites) |
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
 | `review_output_invalid`, `review_output_too_large`, `review_result_invalid` | Reviewer output was unusable, too large or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts, or a Claude profile one that does not name the checkout it checked | [Reviewer output](#reviewer-output) |
