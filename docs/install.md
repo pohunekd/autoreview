@@ -22,8 +22,16 @@ pohunek daemon runs and the repositories are registered.
 
 ## Prerequisites
 
-- **pohunek daemon on each review host** (the minimum version is not published
-  yet; a version check in `validate` is planned in #9).
+- **pohunek daemon on each review host**, and the `pohunek` CLI at `pohunek.bin`
+  on the autoreview host, in the supported range: 0.41.0 or later, before 1.0.0.
+  `validate` and `serve` run `pohunek --version` and refuse a release outside
+  the range with `pohunek_version_unsupported` and an output they cannot read
+  with `pohunek_version_invalid`, see [validate](cli.md#autoreview-validate).
+  The engine runs these CLI commands, each with `--host`: `project list`,
+  `session list`, `session new`, `session output` and `session rm`, and
+  `host command run` with a [`host_state`](configuration.md#pohunek) section.
+  The check reads the CLI's version only; the daemon on each review host is
+  reached through that CLI.
 - **Runtime packages** `claude` and/or `codex`, installed on each review host per the
   [pohunek runtime packages guide](https://pohunek.dev/docs/guides/runtime-packages/).
 - **Repositories registered** with `pohunek project add` on a review host. The first
@@ -143,7 +151,8 @@ Write the configuration as in [first configuration](#first-configuration) and
 the secrets as below, then run the installer again. From then on, each run
 checks the configuration with `validate`, as the `autoreview` user and with the
 new binary, before it replaces the binary or a unit; when `validate` fails, it
-stops and the running service stays as it was. Then it enables `autoreview.service` and
+stops and the running service stays as it was. `validate` runs the `pohunek`
+CLI at `pohunek.bin`, so install a supported pohunek first. Then it enables `autoreview.service` and
 `autoreview-queue.timer`, and restarts the service when the binary or a unit
 changed or when it is not running. Its exit codes: 1 usage, 2 not root or not
 an autoreview binary, 3 the secrets file, 4 `validate`, 5 a failed install

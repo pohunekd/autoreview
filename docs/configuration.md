@@ -236,7 +236,7 @@ token needs and when to use a machine user.
 
 | Key | Meaning |
 |---|---|
-| `bin` | Absolute path of the `pohunek` CLI |
+| `bin` | Absolute path of the `pohunek` CLI; `validate` and `serve` refuse a release outside the [supported range](install.md#prerequisites) |
 | `state_home` | `XDG_STATE_HOME` for the CLI |
 | `runtime_dir` | `XDG_RUNTIME_DIR` for the CLI |
 | `timeout_seconds` | Timeout of one pohunek call, including a session start with its base fetch |
