@@ -33,7 +33,7 @@ const POLICY_KEY: &str = "policy_file";
 /// The tokens of the configuration are left out of the `Debug` output. Once the token of a call
 /// is cancelled, the call starts no child process or request, and one in flight is stopped.
 /// `ensure_session` still reads the session list after a start and removes a rejected session,
-/// as Go does with `context.WithoutCancel`.
+/// even when the call is cancelled, so that a start the daemon accepted is still found.
 #[derive(Debug)]
 pub struct External {
     /// The engine configuration without its policy; the pohunek calls read their settings here.

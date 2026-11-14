@@ -61,7 +61,7 @@ struct GitHubReviewRecord {
 
 autoreview_go_compat::object_only_serde!(GitHubReviewRecord);
 
-/// Body of the review POST. Its keys are in Go's sorted map order.
+/// Body of the review POST. The keys serialize in alphabetical order.
 #[derive(Debug, Serialize)]
 struct ReviewPayload<'a> {
     /// Body text of the review.
@@ -103,7 +103,7 @@ fn expected_state(decision: &Decision) -> &'static str {
     }
 }
 
-/// Reports whether the author `author` is the configured `login`, as Go's `strings.EqualFold`.
+/// Reports whether the author `author` is the configured `login`, under simple case folding.
 ///
 /// The configured login is lower-case ASCII (`user_login_valid` of the engine configuration),
 /// so the author matches exactly when each of its characters folds to the login character. Of
