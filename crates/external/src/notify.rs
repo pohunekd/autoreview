@@ -51,7 +51,7 @@ const HTML_FORMAT: &str = "org.matrix.custom.html";
 /// Cause of a transport failure. The transport's own text can carry the request URL.
 const TRANSPORT_CAUSE: &str = "request failed";
 
-/// Cause of a message limit below one character. Go panics on such a limit.
+/// Cause of a message limit below one character.
 const LIMIT_CAUSE: &str = "matrix_max_characters must be at least 1";
 
 /// Cause of a dot-segment path, which the URL parser would resolve.
@@ -166,11 +166,11 @@ pub(crate) struct MatrixRequest {
     pub(crate) room: String,
     /// The request path after the homeserver URL, with the room and the transaction escaped.
     pub(crate) txn_path: String,
-    /// The event content as JSON, encoded the way Go's `json.Marshal` encodes it.
+    /// The event content as JSON, with `<`, `>`, `&`, U+2028 and U+2029 written as `\uXXXX`.
     pub(crate) content: Vec<u8>,
 }
 
-/// Content of an action, digest or log message. Fields are declared in Go's sorted key order.
+/// Content of an action, digest or log message. Keys serialize in alphabetical order.
 #[derive(Serialize)]
 struct TextContent<'a> {
     /// The message text, cut to the limit.
@@ -182,7 +182,7 @@ struct TextContent<'a> {
     msgtype: &'static str,
 }
 
-/// Content of a queue digest. Fields are declared in Go's sorted key order.
+/// Content of a queue digest. Keys serialize in alphabetical order.
 #[derive(Serialize)]
 struct NoticeContent<'a> {
     /// The plain-text body of the digest.
@@ -218,7 +218,7 @@ pub(crate) fn matrix_transaction_id() -> Result<String, Error> {
 
 /// Builds the request that sends a message of `level` to the room of `matrix`.
 ///
-/// It is built as Go's `sendMatrix` builds it. Only action messages mention the user. A message
+/// Only action messages mention the user. A message
 /// longer than the limit is cut to the limit minus one character, followed by
 /// [`TRUNCATION_MARK`].
 pub(crate) fn matrix_request(
@@ -246,7 +246,7 @@ pub(crate) fn matrix_request(
     build_request(&matrix.room, transaction, &content)
 }
 
-/// Builds the request that posts the review queue digest, as Go's `SendQueueDigest` builds it.
+/// Builds the request that posts the review queue digest.
 ///
 /// The digest goes to the room of `matrix` and mentions nobody. The caller chooses `transaction`.
 pub(crate) fn queue_digest_request(
@@ -265,9 +265,10 @@ pub(crate) fn queue_digest_request(
     build_request(&matrix.room, transaction, &content)
 }
 
-/// Returns `message` cut to `max_characters` as Go's `sendMatrix` cuts it.
+/// Returns `message` unchanged when it fits in `max_characters`, otherwise cut short with a
+/// truncation mark.
 ///
-/// A limit below one character is refused, because Go panics on it.
+/// A limit below one character is refused.
 fn truncated(message: &str, max_characters: i64) -> Result<String, Error> {
     let limit = usize::try_from(max_characters)
         .ok()
@@ -314,7 +315,7 @@ fn build_request<T: Serialize>(
     })
 }
 
-/// Escapes `raw` as one path segment, as Go's `url.PathEscape` does.
+/// Escapes `raw` as one path segment.
 ///
 /// Letters, digits and `-_.~$&+:=@` stay as they are. Every other byte of the UTF-8 text becomes
 /// `%XX` with uppercase hex digits.
@@ -335,7 +336,7 @@ fn path_escape(raw: &str) -> String {
     escaped
 }
 
-/// Encodes `content` as Go's `json.Marshal` does, which escapes `<`, `>`, `&`, U+2028 and U+2029.
+/// Encodes `content` as JSON, writing `<`, `>`, `&`, U+2028 and U+2029 as `\uXXXX` escapes.
 ///
 /// serde writes those characters only inside strings, so escaping the whole text changes nothing
 /// else.
@@ -351,7 +352,7 @@ fn encode<T: Serialize + ?Sized>(content: &T) -> Result<Vec<u8>, Error> {
         .into_bytes())
 }
 
-/// Sends one message to the room of `matrix`, as Go's `sendMatrix` does.
+/// Sends one message to the room of `matrix`.
 ///
 /// Every failure is returned, at every level; [`notify`] drops the muted ones.
 pub(crate) async fn send_matrix(
@@ -366,11 +367,11 @@ pub(crate) async fn send_matrix(
     put_matrix_message(client, matrix, cancel, request).await
 }
 
-/// Sends one event with a PUT and maps the answer to Go's error codes.
+/// Sends one event with a PUT and maps the answer to error codes.
 ///
 /// The response body is not read. A transport failure keeps only the fixed cause, because the
 /// transport's error text can carry the request URL. A cancelled `cancel` is such a failure:
-/// the request is not sent, or it is dropped in flight, as Go's request context does.
+/// the request is not sent, or it is dropped in flight.
 async fn put_matrix_message(
     client: &Client,
     matrix: &Matrix,
@@ -405,7 +406,7 @@ async fn put_matrix_message(
     response_result(response.status())
 }
 
-/// Maps the status of an answer to the codes of Go's `putMatrixMessage`.
+/// Maps the status of an answer to `matrix_unavailable` or `matrix_request_rejected`.
 ///
 /// Too many requests and server errors can succeed later. Every other failure cannot.
 fn response_result(status: StatusCode) -> Result<(), Error> {
@@ -418,7 +419,7 @@ fn response_result(status: StatusCode) -> Result<(), Error> {
     Err(Error::workflow("matrix_request_rejected", true, None))
 }
 
-/// Notifies the room of `matrix` at `level`, as Go's `Notify` does.
+/// Notifies the room of `matrix` at `level`.
 ///
 /// A level other than action drops a message the homeserver cannot take, whatever its route.
 /// The drop is logged, so a muted notification never fails a review.
@@ -453,7 +454,7 @@ fn drop_if_muted(level: Level, error: Error) -> Result<(), Error> {
     Ok(())
 }
 
-/// Posts the review queue digest under `transaction`, as Go's `SendQueueDigest` does.
+/// Posts the review queue digest under `transaction`.
 pub(crate) async fn send_queue_digest(
     client: &Client,
     matrix: &Matrix,
