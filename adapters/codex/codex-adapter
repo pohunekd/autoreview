@@ -650,12 +650,14 @@ def main() -> NoReturn:
     if not sys.stdin.isatty():
         fail("stdin must be a Pohunek-managed PTY")
 
-    sys.stdout.buffer.write(READY_TITLE)
-    sys.stdout.buffer.flush()
     descriptor = sys.stdin.fileno()
     original_attributes = termios.tcgetattr(descriptor)
     try:
+        # Raw mode comes before the title: pohunek writes the frame once it sees the title,
+        # and the TCSAFLUSH of setraw discards input that arrived before the switch.
         tty.setraw(descriptor)
+        sys.stdout.buffer.write(READY_TITLE)
+        sys.stdout.buffer.flush()
         prompt = read_framed_prompt(sys.stdin.buffer, maximum_bytes)
     except InputFrameError as error:
         fail(str(error))

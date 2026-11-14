@@ -706,7 +706,8 @@ class VersionProbeTests(unittest.TestCase):
                     chunk = os.read(process.stdout.fileno(), len(wrapper.READY_TITLE) - len(title))
                     self.assertTrue(chunk, "the adapter closed stdout before the title")
                     title += chunk
-                # Not a bracketed-paste start; the line break delivers it in cooked mode too.
+                # Written at once, as pohunek does: the adapter is raw before the title, so
+                # these bytes, which are not a bracketed-paste start, reach its read.
                 os.write(primary, b"x" * (len(wrapper.BRACKETED_PASTE_START) - 1) + b"\n")
                 stdout, stderr = process.communicate(timeout=10)
             finally:
