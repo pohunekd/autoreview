@@ -65,8 +65,8 @@ pub fn format_rfc3339_seconds(value: OffsetDateTime) -> String {
 
 /// Parses RFC 3339 text with an offset and returns the instant in UTC.
 ///
-/// The accepted texts use the layout `YYYY-MM-DDThh:mm:ss`, then a fraction and
-/// a zone. A one-digit hour and a comma fraction are valid, while a lower-case
+/// The accepted texts use the layout `YYYY-MM-DDThh:mm:ss`, then an optional
+/// fraction and a zone. A one-digit hour and a comma fraction are valid, while a lower-case
 /// `t` or `z`, a space separator and a leap second are refused.
 ///
 /// # Errors
@@ -83,7 +83,7 @@ pub fn parse_rfc3339(text: &str) -> Result<OffsetDateTime, Error> {
     }
 }
 
-/// Parses `text` in the layout `YYYY-MM-DDThh:mm:ss` with a fraction and a zone.
+/// Parses `text` in the layout `YYYY-MM-DDThh:mm:ss` with an optional fraction and a zone.
 fn parse_go_layout(text: &[u8]) -> Result<OffsetDateTime, time::error::Parse> {
     let mut cursor = Cursor { rest: text };
     let year = cursor.digits(YEAR_DIGITS, 0..=MAX_YEAR, "year")?;

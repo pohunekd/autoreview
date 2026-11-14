@@ -206,8 +206,8 @@ struct FilePolicy {
 
 /// Reads an integer field; null reads as zero and quoted text is refused.
 ///
-/// Reads a leading-zero integer such as `030` as YAML 1.1 octal.
-/// serde_saphyr reads it as a float, which this reader refuses.
+/// A leading-zero integer such as `030` is refused: serde_saphyr reads it as a float, which
+/// this reader does not accept.
 fn go_int<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
     deserializer.deserialize_any(GoIntVisitor)
 }

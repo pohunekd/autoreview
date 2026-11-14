@@ -26,10 +26,9 @@ impl Policy {
 
 /// Returns the hex SHA-256 digest that identifies the effective policy.
 ///
-/// The hashed bytes must not change, because review inputs and logs store the digest and
-/// stored rows are compared with it. A rule with `trusted: any` adds nothing, so only a
-/// restricted authors section extends the bytes; `authors` holds the section of each rule,
-/// in the order of `rules`.
+/// The hashed bytes must not change, because review inputs and logs store the digest. A rule
+/// with `trusted: any` adds nothing, so only a restricted authors section extends the bytes;
+/// `authors` holds the section of each rule, in the order of `rules`.
 pub(crate) fn digest_of(
     rules: &[Rule],
     authors: &[Authors],

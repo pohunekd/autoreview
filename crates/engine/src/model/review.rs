@@ -43,7 +43,7 @@ pub fn prior_key(head: &str, id: &str) -> String {
 
 /// Returns a duration of `value` milliseconds.
 ///
-/// The product wraps on overflow, as signed 64-bit multiplication does.
+/// The product wraps on overflow (two's complement) instead of panicking.
 pub(crate) fn milliseconds(value: i64) -> Duration {
     Duration::nanoseconds(value.wrapping_mul(1_000_000))
 }

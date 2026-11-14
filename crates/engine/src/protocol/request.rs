@@ -287,10 +287,11 @@ pub(crate) fn request_invalid(cause: serde_json::Error) -> Error {
     Error::workflow("review_request_invalid", true, Some(Box::new(cause)))
 }
 
-/// Encodes `value` as JSON with the escapes that stored and sent text uses.
+/// Encodes `value` as JSON for the CLI and the reviewer requests.
 ///
-/// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029, so existing rows
-/// and digests stay byte-identical.
+/// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029, the escaping of
+/// every JSON text the CLI prints or writes (command output, reviewer requests, the values
+/// `init` writes).
 pub fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let raw = serde_json::to_string(value)?;
     let mut output = String::with_capacity(raw.len());
