@@ -28,8 +28,8 @@ takes the route of its level. The keys are in
 | `digest` | A quiet record of a result. | The backends of the `digest` route, or the event's own route. Nobody is mentioned. |
 | `log` | Muted. | Only the structured log. Backends of the `log` route, or the event's own route, receive it too, if listed. |
 
-Routes map each level to one backend name. Several backends of the same type
-are fine, for example one chat room per level:
+Routes map each level to one or more backend names. Several backends of the
+same type are fine, for example one chat room per level:
 
 ```yaml
 notify:
@@ -98,15 +98,19 @@ discovery pass waits for a backend; only the warning differs by level:
 | `digest` or `log` | The message cannot be delivered | Dropped with a warning in the log. The review continues. A message of a discovery pass is logged as described below. |
 | `action` | The message cannot be delivered | Dropped with a warning in the log. The review continues, see below. |
 
-A message of a review gets one attempt, bounded by the notifier's request
-timeout (`notify.timeout_seconds`), and is never retried. A failed message is
-logged as the warning `review notification dropped` with its event, review key,
-level and error code. At the `digest` and `log` levels the notifier itself drops
+A message of a review gets one attempt on each backend of its route, bounded by
+the notifier's request timeout (`notify.timeout_seconds`), and is never retried.
+A failed attempt is logged as the warning `review notification dropped` with
+its event, review key, level, backend and error code; the other backends of the
+route still get theirs, and the message counts as delivered only when every
+backend took it. At the `digest` and `log` levels the notifier itself drops
 a message the homeserver or the webhook does not take and logs `matrix
 notification dropped` or `webhook notification dropped` instead. The review then goes on as if the message had
 been sent, and a resumed review does not send it again. When the service shuts
 down during the attempt of an `action` message, the warning carries the code
-`shutdown`, and the resumed review makes one more attempt. At the `digest` and
+`shutdown`, and the resumed review makes one more attempt. On a route with
+several backends the resumed review sends an `action` message only to the
+backends that have not taken it, so no backend gets it twice. At the `digest` and
 `log` levels the notifier logs `matrix notification dropped` with the code
 `matrix_unavailable` (`webhook notification dropped` with `webhook_unavailable`)
 instead, and the resumed review also sends the message again. A waiting review stays visible without
@@ -118,14 +122,15 @@ the discovery lock: a rejected pull request (`review_stopped`), a review that
 stopped or waits for a retry (`review_stopped`, `retry_scheduled`), reviews that
 wait for a review host (`review_stopped`, once per host outage), and a
 `handoff_reminder`. Each message gets one attempt, bounded by the notifier's
-request timeout. Once a message fails, at any level, the later messages of the
-same route in the same pass get no attempt; the route is the event's own route
-or, without one, its level. When the service shuts
+request timeout, on each backend of its route. Once a backend fails, at any
+level, the later messages of the same route in the same pass get no attempt on
+that backend; the other backends of the route still get them. The route is the
+event's own route or, without one, its level. When the service shuts
 down, the messages not yet sent get no attempt and carry the error code
 `shutdown`. A message that is not delivered is logged as the warning
-`discovery notification dropped` with its event, review key, level, error code
-and `skipped_after_failure` (`true` when it got no attempt after a failure of
-its route). A dropped message is never resent: the pass keeps its result, no
+`discovery notification dropped` with its event, review key, level, backend,
+error code and `skipped_after_failure` (`true` when it got no attempt after a
+failure of that backend on its route). A dropped message is never resent: the pass keeps its result, no
 later pass repeats it, and the warning is the only record. A pass that fails
 before it saves sends nothing, and the next pass that saves sends those
 messages.
@@ -181,8 +186,9 @@ Rules for the queue:
   next run includes it again.
 - The message is cut between entries, never inside one, so formatted content stays
   valid.
-- The message gets one attempt. When it fails, the warning
-  `review queue digest dropped` names the code, and the command fails with it.
+- The message gets one attempt on each queue backend. Each failure is logged as
+  `review queue digest dropped` with the backend and the code, and the command
+  fails with the code of the first backend that failed.
 
 ## Message contents
 
