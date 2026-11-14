@@ -13,23 +13,27 @@ use crate::protocol::validate::{
 };
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
-/// Opens the base64 report of a Codex envelope.
-const ENVELOPE_MARKER: &str = "[pohunek-codex-review-result-v1:";
-
-/// Exit line of a Codex session that finished with status 0.
-const EXIT_LINE: &str = "[pohunek-codex-review exited with status 0]";
-
-/// Exit line of a Codex session that the adapter refused.
-const REFUSED_EXIT_LINE: &str = "[pohunek-codex-review exited with status 64]";
-
-/// Line of the adapter, right before its exit line, when the pull request head is missing.
-const HEAD_UNAVAILABLE_MARKER: &str = "[pohunek-codex-review-refused-v1:head_unavailable]";
-
-/// Opens the exit line of a Codex session; the status and `]` follow.
-const EXIT_LINE_PREFIX: &str = "[pohunek-codex-review exited with status ";
-
-/// Opens the adapter's base64 reason line before the exit line of a failed run.
-const REASON_MARKER: &str = "[pohunek-codex-review-reason-v1:";
+/// Marker lines of `autoreview-codex/v1`, then the legacy ones that older adapters write.
+///
+/// One output is read with the markers of one name only; a mix of both is refused.
+const MARKERS: [Markers; 2] = [
+    Markers {
+        envelope: "[autoreview-codex/v1 result:",
+        exit_line: "[autoreview-codex/v1 exited with status 0]",
+        refused_exit_line: "[autoreview-codex/v1 exited with status 64]",
+        head_unavailable: "[autoreview-codex/v1 refused:head_unavailable]",
+        exit_line_prefix: "[autoreview-codex/v1 exited with status ",
+        reason: "[autoreview-codex/v1 reason:",
+    },
+    Markers {
+        envelope: "[pohunek-codex-review-result-v1:",
+        exit_line: "[pohunek-codex-review exited with status 0]",
+        refused_exit_line: "[pohunek-codex-review exited with status 64]",
+        head_unavailable: "[pohunek-codex-review-refused-v1:head_unavailable]",
+        exit_line_prefix: "[pohunek-codex-review exited with status ",
+        reason: "[pohunek-codex-review-reason-v1:",
+    },
+];
 
 /// Line breaks that may separate the report from the exit line.
 const SEPARATORS: [&str; 6] = ["\n", "\r\n", "\n\n", "\n\r\n", "\r\n\n", "\r\n\r\n"];
@@ -39,6 +43,22 @@ const ENDINGS: [&str; 4] = ["\r\n", "\n", "\r", ""];
 
 /// Severities that hold the merge back when a finding flags itself as blocking.
 const BLOCKING_SEVERITIES: [&str; 3] = ["blocker", "critical", "high"];
+
+/// Marker lines of one name of the Codex result protocol.
+struct Markers {
+    /// Opens the base64 report of a Codex envelope.
+    envelope: &'static str,
+    /// Exit line of a Codex session that finished with status 0.
+    exit_line: &'static str,
+    /// Exit line of a Codex session that the adapter refused.
+    refused_exit_line: &'static str,
+    /// Line of the adapter, right before its exit line, when the pull request head is missing.
+    head_unavailable: &'static str,
+    /// Opens the exit line of a Codex session; the status and `]` follow.
+    exit_line_prefix: &'static str,
+    /// Opens the adapter's base64 reason line before the exit line of a failed run.
+    reason: &'static str,
+}
 
 /// Findings; absent or `null` is refused.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,10 +145,16 @@ pub(crate) fn parse_codex_output(
     pr: &PullRequest,
     raw: &str,
 ) -> Result<ReviewerResult, Error> {
-    if refused_for_missing_head(raw) {
+    if MARKERS
+        .iter()
+        .any(|markers| refused_for_missing_head(markers, raw))
+    {
         return Err(review_head_unavailable());
     }
-    let encoded = envelope_payload(raw).ok_or_else(|| exit_without_result(raw))?;
+    let encoded = MARKERS
+        .iter()
+        .find_map(|markers| envelope_payload(markers, raw))
+        .ok_or_else(|| exit_without_result(raw))?;
     let decoded = decode_go_base64(encoded)
         .filter(|v| !v.is_empty())
         .ok_or_else(result_invalid)?;
@@ -192,42 +218,42 @@ pub(crate) fn parse_codex_output(
 }
 
 /// Reports whether `raw` ends with the adapter's marker of a missing head and the exit line
-/// with status 64.
+/// with status 64, both of `markers`.
 ///
 /// The marker must come right before the exit line, separated by one of `SEPARATORS`, as the
 /// adapter writes both at once. A run could print the marker too, but a run that exits with
 /// status 64 is a refusal anyway, so it stops the review and never publishes.
-fn refused_for_missing_head(raw: &str) -> bool {
+fn refused_for_missing_head(markers: &Markers, raw: &str) -> bool {
     ENDINGS
         .iter()
         .filter_map(|ending| raw.strip_suffix(ending))
-        .filter_map(|rest| rest.strip_suffix(REFUSED_EXIT_LINE))
+        .filter_map(|rest| rest.strip_suffix(markers.refused_exit_line))
         .any(|head| {
             SEPARATORS
                 .iter()
                 .filter_map(|separator| head.strip_suffix(separator))
-                .any(|before| before.ends_with(HEAD_UNAVAILABLE_MARKER))
+                .any(|before| before.ends_with(markers.head_unavailable))
         })
 }
 
-/// Returns the base64 text of the envelope that ends `raw`, or `None` when the envelope
-/// pattern does not match.
+/// Returns the base64 text of the envelope of `markers` that ends `raw`, or `None` when the
+/// envelope pattern does not match.
 ///
 /// The output ends with the exit line followed by one of `ENDINGS`. Before the exit line comes one
 /// of `SEPARATORS`, after the `]` that closes the report. The base64 text runs back from that `]`
 /// to the marker. It holds no bracket and no line break, so only one envelope can match.
-fn envelope_payload(raw: &str) -> Option<&str> {
+fn envelope_payload<'a>(markers: &Markers, raw: &'a str) -> Option<&'a str> {
     let mut ending = None;
     for e in ENDINGS {
         if let Some(rest) = raw.strip_suffix(e)
-            && rest.ends_with(EXIT_LINE)
+            && rest.ends_with(markers.exit_line)
         {
             ending = Some(rest);
             break;
         }
     }
     let ending = ending?;
-    let head = ending.strip_suffix(EXIT_LINE)?;
+    let head = ending.strip_suffix(markers.exit_line)?;
     let close = head.rfind(']')?;
     let sep = head.get(close + 1..)?;
     if !SEPARATORS.contains(&sep) {
