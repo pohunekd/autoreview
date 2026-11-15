@@ -3422,6 +3422,120 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn guards_text_section_is_optional_and_every_key_is_required() {
+        let config = parse(EXAMPLE, secret, example_policy).expect("the example loads");
+        assert_eq!(config.text_guard, None, "the example sets no text guard");
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let file = |name: &str, content: &[u8]| {
+            let path = directory.path().join(name);
+            std::fs::write(&path, content).expect("the lexicon file is written");
+            path.display().to_string()
+        };
+        let lexicon = file(
+            "lexicon.txt",
+            b"# weight phrase\n40 ignore previous instructions\n",
+        );
+        let section = |bytes: &str, path: &str| {
+            format!("guards:\n  text:\n    max_input_bytes: {bytes}\n    lexicon_file: {path}\n")
+        };
+        let with = |section: &str| format!("{EXAMPLE}{section}");
+        let config = parse(&with(&section("1048576", &lexicon)), secret, example_policy)
+            .expect("the section loads");
+        let phrases = Lexicon::parse("40 ignore previous instructions").expect("a valid lexicon");
+        let want = TextGuard {
+            max_input_bytes: 1_048_576,
+            lexicon: phrases,
+        };
+        assert_eq!(config.text_guard, Some(want));
+        let error = |text: &str| error_text(parse(&with(text), secret, example_policy));
+        let largest = parse(&with(&section("4194304", &lexicon)), secret, example_policy);
+        assert!(largest.is_ok(), "4 MiB loads");
+        let full = section("1048576", &lexicon);
+        let no_bytes = full.replacen("    max_input_bytes: 1048576\n", "", 1);
+        let no_file = full.replacen(&format!("    lexicon_file: {lexicon}\n"), "", 1);
+        let cases = [
+            ("guards:\n", "guards.text"),
+            ("guards: {}\n", "guards.text"),
+            ("guards:\n  text:\n", "guards.text.max_input_bytes"),
+            (&no_bytes, "guards.text.max_input_bytes"),
+            (&no_file, "guards.text.lexicon_file"),
+        ];
+        for (text, key) in cases {
+            assert_eq!(error(text), format!("configuration_missing: {key}"));
+        }
+        let in_directory = |name: &str| format!("{}/{name}", directory.path().display());
+        let cases = [
+            (
+                section("0", &lexicon),
+                "max_input_bytes: must be a positive integer",
+            ),
+            (
+                section("4194305", &lexicon),
+                "max_input_bytes: must be at most 4194304",
+            ),
+            (
+                section("1", "lexicon.txt"),
+                "lexicon_file: must be a clean absolute path",
+            ),
+            (
+                section("1", &in_directory("../lexicon.txt")),
+                "lexicon_file: must be a clean absolute path",
+            ),
+            (
+                section("1", &in_directory("missing.txt")),
+                "lexicon_file: No such file or directory (os error 2)",
+            ),
+            (
+                section("1", &file("comments.txt", b"# no entry\n\n")),
+                "lexicon_file: the lexicon has no phrase",
+            ),
+            (
+                section(
+                    "1",
+                    &file("weight.txt", b"0 ignore previous instructions\n"),
+                ),
+                "lexicon_file: lexicon line 1: the weight is not a number from 1 to 100",
+            ),
+            (
+                section("1", &file("binary.txt", b"40 ignore \xff\n")),
+                "lexicon_file: stream did not contain valid UTF-8",
+            ),
+            (
+                section("1", &file("large.txt", &[b'#'; 65_537])),
+                "lexicon_file: the lexicon file must be at most 65536 bytes",
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(
+                error(&text),
+                format!("configuration_invalid: guards.text.{expected}")
+            );
+        }
+        for (text, key) in [
+            (format!("{full}    mode: strict\n"), "unknown field `mode`"),
+            (format!("{full}  model: {{}}\n"), "unknown field `model`"),
+        ] {
+            assert!(error(&text).contains(key), "the loader must name {key}");
+        }
+        // A guarded rule reads the lexicon and input bound of `guards.text`.
+        let guarded = deployed_policy_document().replacen(
+            "on_clean: approve, human_review:",
+            "on_clean: approve, guard: {fields: [body], threshold: 100, on_suspect: log}, \
+             human_review:",
+            1,
+        );
+        assert_eq!(
+            error_text(parse(EXAMPLE, secret, |_: &Path| policy_from(&guarded))),
+            concat!(
+                "configuration_missing: guards.text: the policy rule for ",
+                "example-org/example-repo sets guard"
+            )
+        );
+        let loaded = parse(&with(&full), secret, |_: &Path| policy_from(&guarded));
+        assert!(loaded.is_ok(), "a guarded rule loads with guards.text");
+    }
+
+    #[test]
     fn untrusted_route_is_optional_and_every_key_is_required() {
         let entry = concat!(
             "  route_overrides:\n",
