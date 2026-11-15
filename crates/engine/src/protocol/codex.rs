@@ -683,6 +683,14 @@ checkout";
                 "review_head_skills_refused",
             ),
             (
+                "skills refusal after the run",
+                format!(
+                    "{}Y29kZXgtYWRhcHRlcjogeA==]\n{skills}\n{refused}\n",
+                    marker("reason:")
+                ),
+                "review_head_skills_refused",
+            ),
+            (
                 "skills marker after the head marker",
                 format!("{head}\n{skills}\n{refused}\n"),
                 "review_head_skills_refused",

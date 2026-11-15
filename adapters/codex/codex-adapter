@@ -335,7 +335,7 @@ def refusal_marker(error: InputFrameError, after_run: bool, markers: Markers) ->
     """Returns the lines a refusal prints right before its exit line; empty for none.
 
     After the Codex run, the message that `refuse` prints goes on a reason line, as Codex's
-    error line does. The head marker stays last, right before the exit line.
+    error line does. A refusal marker stays last, right before the exit line.
     """
     lines = []
     if after_run:
@@ -840,9 +840,14 @@ def verify_review_checkout(prompt: str, cwd: Path | None = None) -> tuple[str, s
 def verify_review_checkout_after_run(
     prompt: str, checkout_sha: str, cwd: Path | None = None
 ) -> None:
-    """Repeats the checkout check after the run and requires the HEAD it recorded."""
+    """Repeats the checkout check after the run and requires the HEAD it recorded.
+
+    The skills check of a head checkout sees what the run left on disk; a skill written and
+    removed between the two checks passes, see the hooks residual of the threat model.
+    """
     if trusted_checkout(prompt) == CHECKOUT_HEAD:
         verify_checkout_head(prompt, cwd)
+        verify_repository_skills(prompt, cwd)
         return
     if verify_base_checkout(prompt, cwd) != checkout_sha:
         raise InputFrameError("review checkout HEAD changed during the review")
