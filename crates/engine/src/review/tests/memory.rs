@@ -57,6 +57,59 @@ async fn hand_notes_to_the_author(h: &Harness) -> PullRequest {
 }
 
 #[tokio::test]
+async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_review() {
+    let mut h = start_harness(|_| {}).await;
+    let pr = hand_notes_to_the_author(&h).await;
+    h.settle().await;
+    assert!(
+        h.started_count() == 2 && !h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE),
+        "a hand-off must wait for the author's renewed request"
+    );
+    let mut renewed = pr.clone();
+    renewed.review_request_id = 99;
+    h.fake.open(renewed.clone(), h.rule(&pr.repository));
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
+    })
+    .await;
+    assert!(
+        h.started_count() == 2
+            && h.publications() == 1
+            && h.fake
+                .has_note(Level::Action, "The author requested the review again")
+            && h.fake.has_note(Level::Action, "Non-blocking notes: 1"),
+        "the renewed request must reuse the hand-off review: {} sessions, {} publications",
+        h.started_count(),
+        h.publications()
+    );
+    // The notification precedes the stored wait by a moment.
+    h.wait_for("the approval to be accepted", || {
+        let Ok(resolved) = h.resolve(&renewed) else {
+            return false;
+        };
+        h.approve(&resolved.workflow_id, &renewed).is_ok()
+    })
+    .await;
+    h.wait_for("the approval", || h.publications() == 2).await;
+    let (published, _, _, _) = h.fake.snapshot();
+    assert!(
+        published[1].decision == Decision::Approve
+            && published[1].comments.is_empty()
+            && published[1].body.contains("1 non-blocking note(s)"),
+        "decision={:?} comments={} body={}",
+        published[1].decision,
+        published[1].comments.len(),
+        published[1].body
+    );
+    h.settle().await;
+    assert!(
+        h.started_count() == 2 && h.publications() == 2,
+        "an approved head was reviewed or published again"
+    );
+    h.stop_engine().await;
+}
+
+#[tokio::test]
 async fn new_commits_after_a_notes_handoff_are_reviewed_and_wait_for_the_user() {
     let mut h = start_harness(|_| {}).await;
     let pr = hand_notes_to_the_author(&h).await;
@@ -81,29 +134,20 @@ async fn new_commits_after_a_notes_handoff_are_reviewed_and_wait_for_the_user() 
     h.stop_engine().await;
 }
 
-// On a rule the user approves, the next review covers only the new commits.
-// It settles the earlier blocking findings, on a pipeline of either protocol (#23).
+// On a rule the user approves, the next review covers only the new commits and settles the
+// earlier blocking finding: the first review finds it, the second keeps it open, the third
+// finds it fixed. The pipeline is Claude; the Codex verdicts are checked by
+// `protocol::tests::codex_verdicts_settle_the_prior_findings`.
 #[tokio::test]
 async fn open_prior_finding_carries_over_until_it_is_fixed() {
-    prior_finding_carries_over_until_it_is_fixed("acme/manual", "O001", 3).await;
-}
-
-/// Reviews three heads of a pull request on `repository`, which a rule the user approves covers.
-///
-/// The first review finds `prior_id`, the second keeps it open and the third finds it fixed.
-/// `sessions` counts the reviewer sessions of the first two reviews.
-async fn prior_finding_carries_over_until_it_is_fixed(
-    repository: &str,
-    prior_id: &str,
-    sessions: usize,
-) {
+    let prior_id = "O001";
     let mut h = start_harness(|_| {}).await;
     h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
     h.set_output(reviewer_output(vec![json!({
         "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
         "line": 3, "title": "Broken", "body": "It breaks.",
     })]));
-    let pr = integration_pull_request(repository, &sha("a"));
+    let pr = integration_pull_request("acme/manual", &sha("a"));
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the request for changes", || h.publications() == 1)
         .await;
@@ -121,7 +165,7 @@ async fn prior_finding_carries_over_until_it_is_fixed(
         .await;
     let (published, _, started, _) = h.fake.snapshot();
     assert!(
-        started.len() == sessions && published[1].body.contains("incremental review"),
+        started.len() == 3 && published[1].body.contains("incremental review"),
         "the re-review must be incremental with the incremental reviewer only, started {} \
          sessions: {}",
         started.len(),
