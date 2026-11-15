@@ -11,9 +11,11 @@ use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::{ChangedFile, ChangedFiles, CommentableLines};
 use autoreview_engine::model::PullRequest;
+use autoreview_guard::FieldKind;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+use super::guard::GuardRead;
 use super::{GitHub, response_invalid};
 
 /// Files per page of the changed-files API; a short page ends the listing.
@@ -364,6 +366,32 @@ impl GitHub {
             files,
             truncated: end != ListingEnd::Complete,
         })
+    }
+
+    /// Adds the patch of every changed file to `read`, for the text guard.
+    ///
+    /// A file with added lines whose patch GitHub omits, as it does for a large diff, and a
+    /// listing that ends at the page limit mark the read truncated.
+    pub(super) async fn guard_patches(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        pr: &PullRequest,
+        read: &mut GuardRead,
+    ) -> Result<(), Error> {
+        let end = self
+            .visit_changed_files(cancel, credential, pr, None, |file| {
+                if file.patch.is_empty() && file.additions > 0 {
+                    read.cut();
+                }
+                read.push(FieldKind::Patch, &file.patch);
+                Ok(())
+            })
+            .await?;
+        if end != ListingEnd::Complete {
+            read.cut();
+        }
+        Ok(())
     }
 
     /// Visits every changed file once, in listing order, with a validated path.

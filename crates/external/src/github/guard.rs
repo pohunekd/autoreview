@@ -352,6 +352,10 @@ impl GitHub {
             self.read_list(cancel, credential, pull_request, list, publisher, &mut read)
                 .await?;
         }
+        if fields.contains(&FieldKind::Patch) {
+            self.guard_patches(cancel, credential, pull_request, &mut read)
+                .await?;
+        }
         Ok(GuardTexts {
             texts: read.texts,
             truncated: read.truncated,
