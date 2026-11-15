@@ -654,10 +654,10 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{QueuePriority, clean_text, render_queue};
-    use crate::config::Config;
+    use crate::config::{Config, Credential, Credentials};
     use crate::engine::{Clock, Engine};
     use crate::integrations::ReviewRequest;
-    use crate::model::{Decision, PublishedRecord, PullRequest};
+    use crate::model::{Decision, PublishedRecord, PullRequest, ReviewInput};
     use crate::protocol::fixtures::sha;
     use crate::protocol::validate::tests::test_config;
     use crate::store::Store;
@@ -922,6 +922,132 @@ mod tests {
         assert!(
             !got.awaits_author,
             "a closed pull request must end its hand-off: {got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_queue_lists_notes_waiting_on_their_author_apart() {
+        let at = datetime!(2026-10-23 12:00 UTC);
+        let fake = Arc::new(FakeIntegration::new());
+        let (engine, _dir) = new_queue_engine(queue_config(), &fake, at);
+        let waiting = PullRequest {
+            repository: "example-org/example-repo".to_owned(),
+            number: 5,
+            head_sha: sha("a"),
+            review_request_id: 3,
+            title: "Optional polish".to_owned(),
+            url: "https://github.com/example-org/example-repo/pull/5".to_owned(),
+            author: "colleague".to_owned(),
+            ..PullRequest::default()
+        };
+        hand_off(
+            &engine,
+            &fake,
+            &waiting,
+            at - time::Duration::hours(30),
+            true,
+        )
+        .await;
+        let result = engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the queue runs");
+        let queued = fake.lock().queued.clone();
+        assert!(
+            result.sent
+                && result.count == 1
+                && !queued[0].plain.contains("Reviews waiting for you")
+                && queued[0].plain.contains(concat!(
+                    "Waiting on author (1)\n- Optional polish (example-org/example-repo#5, ",
+                    "by colleague): notes handed to the author 30 h ago, reminded"
+                )),
+            "result {result:?} queued {queued:?}"
+        );
+        fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
+        engine
+            .review_queue(&CancellationToken::new())
+            .await
+            .expect("the second run posts");
+        let queued = fake.lock().queued.clone();
+        let (plain, formatted) = (&queued[1].plain, &queued[1].formatted);
+        assert!(
+            plain.contains("Reviews waiting for you (1)")
+                && plain.find("Waiting on author (1)") >= plain.find("first")
+                && formatted.matches("<ul>").count() == 2
+                && formatted.matches("</ul>").count() == 2,
+            "plain={plain} formatted={formatted}"
+        );
+        // Several credentials: each account has its own sections. The hand-off of a failed
+        // credential or of a repository that no credential serves is left out unread. A
+        // hand-off of a review stored with `main` is read with it and listed under its account
+        // after `team` was put before it (#373).
+        let account = |name: &str, login: &str, pattern: &str| Credential {
+            name: name.to_owned(),
+            login: login.to_owned(),
+            token: format!("{name}-token"),
+            matches: vec![pattern.to_owned()],
+        };
+        let mut cfg = queue_config();
+        cfg.credentials = Credentials::new(vec![
+            account("team", "team-bot", "example-org/beta"),
+            account("main", "example-user", "example-org/*"),
+        ])
+        .expect("the credentials load");
+        // No read is retried, so a read that must not happen shows in the counter.
+        cfg.step_retry = Duration::ZERO;
+        let fake = Arc::new(FakeIntegration::new());
+        let (engine, _dir) = new_queue_engine(cfg, &fake, at);
+        let (mut team, mut foreign) = (waiting.clone(), waiting.clone());
+        team.repository = "example-org/beta".to_owned();
+        foreign.repository = "other-org/tool".to_owned();
+        let mut stored = team.clone();
+        stored.number = 6;
+        let input = ReviewInput {
+            pull_request: stored.clone(),
+            publisher_login: "example-user".to_owned(),
+            credential: "main".to_owned(),
+            ..ReviewInput::default()
+        };
+        (engine.store)
+            .in_tx(|transaction| {
+                (engine.store).enqueue_review(transaction, &stored.workflow_id(0), &input)
+            })
+            .expect("the review of the hand-off is stored");
+        for pr in [&team, &foreign, &stored] {
+            hand_off(&engine, &fake, pr, at - time::Duration::hours(30), false).await;
+        }
+        fake.lock().requests = vec![
+            queue_request("example-org/example-repo", 1, "first"),
+            queue_request("example-org/beta", 2, "second"),
+        ];
+        let cancel = CancellationToken::new();
+        engine.review_queue(&cancel).await.expect("the queue runs");
+        fake.lock().failing_credentials = [("team".into(), "github_request_failed".into())].into();
+        let result = engine.review_queue(&cancel).await.expect("the queue runs");
+        let state = fake.lock();
+        let (plain, failed) = (&state.queued[0].plain, &state.queued[1].plain);
+        let main = plain.find("Reviews waiting for example-user (credential main) (1)\n- first");
+        let team = plain.find("Reviews waiting for team-bot (credential team) (1)\n- second");
+        let notes = plain.find("Waiting on author for team-bot (credential team) (1)\n");
+        let own = "Waiting on author for example-user (credential main) (1)\n- Optional polish \
+                   (example-org/beta#6,";
+        let reads = [
+            "example-org/beta#5 team",
+            "example-org/beta#6 main",
+            "example-org/beta#6 main",
+        ];
+        assert!(
+            main.is_some()
+                && main < team
+                && team < notes
+                && result.truncated
+                && failed.starts_with("Reviews waiting for example-user (credential main) (1)")
+                && !failed.contains("team-bot")
+                && plain.contains(own)
+                && failed.contains(own)
+                && state.state_reads == reads,
+            "plain={plain} failed={failed} reads={:?}",
+            state.state_reads
         );
     }
 
