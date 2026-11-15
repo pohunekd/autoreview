@@ -169,6 +169,7 @@ version = "0.4.0"
 dependencies = [
  "autoreview-engine",
  "autoreview-go-compat",
+ "autoreview-guard",
  "autoreview-policy",
  "autoreview-schedule",
  "base64 0.22.1",

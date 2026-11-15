@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
 
+use autoreview_guard::FieldKind;
 use autoreview_policy::{Checkout, Permission, Protocol, Reviewer, Trigger};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -73,6 +74,24 @@ pub struct ChangedFiles {
     /// The files listed, in listing order.
     pub files: Vec<ChangedFile>,
     /// Set when the listing ended at a limit, so `files` may not be every changed file.
+    pub truncated: bool,
+}
+
+/// One pull request text that the text guard scans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardText {
+    /// Where the text comes from.
+    pub kind: FieldKind,
+    /// The text; for `FieldKind::Patch` the unified diff of one file.
+    pub text: String,
+}
+
+/// The texts of the fields that a guard scans, and whether a read left text out.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GuardTexts {
+    /// The texts in read order.
+    pub texts: Vec<GuardText>,
+    /// Set when a read stopped at the byte bound or the page limit, or GitHub omitted a patch.
     pub truncated: bool,
 }
 

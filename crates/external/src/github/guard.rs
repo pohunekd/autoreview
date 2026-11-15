@@ -12,7 +12,9 @@
 )]
 
 use autoreview_engine::error::Error;
+use autoreview_engine::model::PullRequest;
 use autoreview_go_compat::null_default;
+use autoreview_guard::FieldKind;
 use serde::Deserialize;
 
 use super::response_invalid;
@@ -24,6 +26,52 @@ const GRAPHQL_GUARD_TEXT: &str = concat!(
     "    pullRequest(number: $number) { title body }\n",
     "  }\n",
     "}",
+);
+
+/// A paged list of texts, read under the alias `page`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum List {
+    /// The commits; each message is one text.
+    Commits,
+    /// The conversation comments.
+    Comments,
+    /// The review bodies.
+    Reviews,
+    /// The review threads; each comment is one text.
+    Threads,
+}
+
+/// The lists in field order.
+const LISTS: [List; 4] = [List::Commits, List::Comments, List::Reviews, List::Threads];
+
+impl List {
+    /// Returns the field kind of the list's texts.
+    const fn kind(self) -> FieldKind {
+        match self {
+            Self::Commits => FieldKind::CommitMessage,
+            Self::Comments | Self::Reviews => FieldKind::Comment,
+            Self::Threads => FieldKind::ReviewThread,
+        }
+    }
+
+    /// Returns the connection of the list and the selection of one entry.
+    const fn selection(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Commits => ("commits", "commit { message }"),
+            Self::Comments => ("comments", AUTHORED_TEXT),
+            Self::Reviews => ("reviews", AUTHORED_TEXT),
+            Self::Threads => ("reviewThreads", THREAD_COMMENTS),
+        }
+    }
+}
+
+/// The selection of a comment or a review.
+const AUTHORED_TEXT: &str = "author { login } body";
+
+/// The selection of the comments of one review thread, at most one page of them.
+const THREAD_COMMENTS: &str = concat!(
+    "comments(first: 100) { pageInfo { hasNextPage endCursor } ",
+    "nodes { author { login } body } }"
 );
 
 /// The response of a guard query.
@@ -124,6 +172,52 @@ struct Author {
     /// Login of the author.
     #[serde(deserialize_with = "null_default::deserialize")]
     login: String,
+}
+
+/// Returns the `gh` arguments of `query` on `pull_request`, from `after` on when it is set.
+fn guard_args(pull_request: &PullRequest, query: &str, after: &str) -> Vec<String> {
+    let (owner, name) = match pull_request.repository.split_once('/') {
+        Some((owner, name)) => (owner, name),
+        None => (pull_request.repository.as_str(), ""),
+    };
+    let mut args = vec![
+        "api".to_owned(),
+        "graphql".to_owned(),
+        "-f".to_owned(),
+        format!("query={query}"),
+        "-F".to_owned(),
+        format!("owner={owner}"),
+        "-F".to_owned(),
+        format!("name={name}"),
+        "-F".to_owned(),
+        format!("number={}", pull_request.number),
+    ];
+    if !after.is_empty() {
+        args.push("-f".to_owned());
+        args.push(format!("after={after}"));
+    }
+    args
+}
+
+/// Returns the query of one page of `list`.
+fn list_query(list: List) -> String {
+    let (connection, entry) = list.selection();
+    format!(
+        concat!(
+            "query($owner: String!, $name: String!, $number: Int!, $after: String) {{\n",
+            "  repository(owner: $owner, name: $name) {{\n",
+            "    pullRequest(number: $number) {{\n",
+            "      page: {connection}(first: 100, after: $after) {{\n",
+            "        pageInfo {{ hasNextPage endCursor }}\n",
+            "        nodes {{ {entry} }}\n",
+            "      }}\n",
+            "    }}\n",
+            "  }}\n",
+            "}}"
+        ),
+        connection = connection,
+        entry = entry
+    )
 }
 
 /// Decodes the pull request node of a guard query.
