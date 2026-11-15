@@ -134,3 +134,85 @@ pub(crate) const fn invisible(character: char) -> bool {
         || bidi_embedding_or_isolate(character)
         || bidi_mark(character)
 }
+
+/// The state of one run of tag characters.
+#[derive(Debug, Default)]
+struct TagRun {
+    /// The run directly follows `FLAG_BASE`.
+    after_flag_base: bool,
+    /// Tag letters and digits before the cancel tag, as ASCII, up to `FLAG_LETTERS_MAX`.
+    letters: [u8; FLAG_LETTERS_MAX],
+    /// Number of tag letters and digits before the cancel tag.
+    len: usize,
+    /// The cancel tag was seen.
+    cancelled: bool,
+    /// The run holds a tag character that no subdivision flag allows at that place.
+    foreign: bool,
+}
+
+impl TagRun {
+    /// Adds one tag character to the run.
+    fn push(&mut self, character: char) {
+        if character == CANCEL_TAG {
+            self.foreign |= self.cancelled;
+            self.cancelled = true;
+        } else if matches!(character, '\u{E0030}'..='\u{E0039}' | '\u{E0061}'..='\u{E007A}') {
+            self.foreign |= self.cancelled;
+            let ascii = u32::from(character)
+                .checked_sub(0xE0000)
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or_default();
+            match self.letters.get_mut(self.len) {
+                Some(slot) => *slot = ascii,
+                None => self.foreign = true,
+            }
+            self.len = self.len.saturating_add(1);
+        } else {
+            self.foreign = true;
+        }
+    }
+
+    /// Reports whether the finished run is one of the `RGI_FLAGS`.
+    fn is_flag(&self) -> bool {
+        let letters = self.letters.get(..self.len).unwrap_or_default();
+        self.after_flag_base && !self.foreign && self.cancelled && RGI_FLAGS.contains(&letters)
+    }
+}
+
+/// The state of one run of zero-width characters, selectors, bidi marks and bidi controls.
+///
+/// The bidi controls are the embeddings and isolates; overrides have their own signal.
+#[derive(Debug, Default)]
+struct MixedRun {
+    /// Characters in the run.
+    len: usize,
+    /// The run holds a zero-width character.
+    zero_width: bool,
+    /// The run holds a variation selector.
+    selector: bool,
+    /// The run holds a bidi mark.
+    mark: bool,
+    /// The run holds a bidi embedding or isolate.
+    control: bool,
+    /// The run holds a character that natural text does not use between words.
+    ///
+    /// Natural ones are ZWNJ, ZWJ, marks, embeddings and isolates (right-to-left and joining
+    /// scripts).
+    unnatural: bool,
+}
+
+impl MixedRun {
+    /// Reports whether the finished run is an `invisible_run`.
+    ///
+    /// It is when it has `MIXED_RUN_MIN` characters and holds a zero-width character or a
+    /// selector together with another class, or when it has `MARKS_ONLY_MIN` bidi marks and
+    /// controls and nothing else. A run of one class of zero-width characters or selectors
+    /// has its own signal; shorter runs of marks and controls are right-to-left formatting.
+    fn is_hit(&self) -> bool {
+        let classes = [self.zero_width, self.selector, self.mark, self.control];
+        let mixed = classes.iter().filter(|present| **present).count() > 1;
+        let bidi_only = (self.mark || self.control) && !self.zero_width && !self.selector;
+        (self.len >= MIXED_RUN_MIN && (self.zero_width || self.selector) && mixed)
+            || (bidi_only && self.len >= MARKS_ONLY_MIN)
+    }
+}
