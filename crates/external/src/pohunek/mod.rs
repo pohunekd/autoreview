@@ -937,6 +937,13 @@ mod tests {
                 Err("pohunek_response_invalid"),
             ),
             (
+                inspect(concat!(
+                    r#","session_new_fetch_ref_supported":false"#,
+                    r#","session_new_fetch_ref_supported":true"#,
+                )),
+                Err("pohunek_response_invalid"),
+            ),
+            (
                 r#"{"ok":null,"session_new_fetch_ref_supported":true}"#.to_owned(),
                 Err("pohunek_response_invalid"),
             ),
