@@ -81,8 +81,8 @@ impl Lines {
         start.saturating_add(column.saturating_sub(1)).min(self.len)
     }
 
-    /// Returns the text of a 1-based source line, without its line break.
-    fn line<'t>(&self, text: &'t str, line: usize) -> &'t str {
+    /// Returns the text of a 1-based source line, without its line break, if it has one.
+    fn line<'t>(&self, text: &'t str, line: usize) -> Option<&'t str> {
         let start = self.offset(line, 1);
         let end = self
             .starts
@@ -90,9 +90,7 @@ impl Lines {
             .copied()
             .unwrap_or(self.len)
             .max(start);
-        text.get(start..end)
-            .unwrap_or_default()
-            .trim_end_matches('\n')
+        text.get(start..end).map(|line| line.trim_end_matches('\n'))
     }
 
     /// Returns the byte range of a source position, whose end column is inclusive.
@@ -243,14 +241,15 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
                 self.text(rest, false);
                 return;
             };
-            self.text(rest.get(..end).unwrap_or(rest), false);
+            let (inside, after) = split(rest, end);
+            self.text(inside, false);
             self.close_comment();
-            rest = rest.get(end.saturating_add(3)..).unwrap_or_default();
+            rest = split(after, 3).1;
         }
         while let Some(start) = rest.find('<') {
-            self.text(rest.get(..start).unwrap_or_default(), false);
+            let (before, from) = split(rest, start);
+            self.text(before, false);
             self.text(" ", false);
-            let from = rest.get(start..).unwrap_or_default();
             let markup = HIDDEN_MARKUP.iter().find(|(open, _)| {
                 from.as_bytes()
                     .get(..open.len())
@@ -258,18 +257,17 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
                     && (*open != "<!" || declaration(from))
             });
             if let Some((open, close)) = markup {
-                let body = from.get(open.len()..).unwrap_or_default();
+                let body = split(from, open.len()).1;
                 if *open == "<!--" && !inline && !body.contains(close) {
                     self.comment = Some(body.to_owned());
                     rest = "";
                     continue;
                 }
                 let (content, after) = match body.find(close) {
-                    Some(end) => (
-                        body.get(..end).unwrap_or_default(),
-                        body.get(end.saturating_add(close.len())..)
-                            .unwrap_or_default(),
-                    ),
+                    Some(end) => {
+                        let (content, rest) = split(body, end);
+                        (content, split(rest, close.len()).1)
+                    }
                     None => (body, ""),
                 };
                 self.report(Signal::HiddenCommentInstruction, content);
@@ -284,25 +282,19 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
     /// Reads the tag that starts `from` and returns the text after it.
     fn tag<'h>(&mut self, from: &'h str, inline: bool) -> &'h str {
         let closing = from.starts_with("</");
-        let name_from = from.get(if closing { 2 } else { 1 }..).unwrap_or_default();
+        let name_from = split(from, if closing { 2 } else { 1 }).1;
         let name_len = name_from
             .bytes()
             .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
             .count();
         if name_len == 0 {
             self.text("<", false);
-            return from.get(1..).unwrap_or_default();
+            return split(from, 1).1;
         }
-        let name = name_from
-            .get(..name_len)
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let attributes_from = name_from.get(name_len..).unwrap_or_default();
-        let end = tag_end(attributes_from);
-        let attributes = attributes_from.get(..end).unwrap_or_default();
-        let after = attributes_from
-            .get(end.saturating_add(1)..)
-            .unwrap_or_default();
+        let (name, attributes_from) = split(name_from, name_len);
+        let name = name.to_ascii_lowercase();
+        let (attributes, after) = split(attributes_from, tag_end(attributes_from));
+        let after = split(after, 1).1;
         if closing {
             self.pop(&name);
             return after;
@@ -328,6 +320,16 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
         }
         after
     }
+}
+
+/// Splits `text` at byte `at`, moved up to the next character boundary.
+///
+/// The raw HTML reader splits only at ASCII bytes it found, so the split is exact; the
+/// rounding and the fallback (everything in the head) mean a split can neither fail nor
+/// drop text.
+fn split(text: &str, at: usize) -> (&str, &str) {
+    text.split_at_checked(text.ceil_char_boundary(at.min(text.len())))
+        .unwrap_or((text, ""))
 }
 
 /// Reports whether `from` starts a declaration: `<!` and an ASCII letter.
@@ -365,8 +367,8 @@ fn hides(attributes: &str) -> bool {
                 character.is_ascii_whitespace() || matches!(character, '=' | '/')
             })
             .unwrap_or(rest.len());
-        let name = rest.get(..name_len).unwrap_or_default();
-        let after = rest.get(name_len..).unwrap_or_default().trim_start();
+        let (name, after) = split(rest, name_len);
+        let after = after.trim_start();
         let (value, next) = match after.strip_prefix('=') {
             Some(value) => attribute_value(value.trim_start()),
             None => ("", after),
@@ -392,7 +394,7 @@ fn hides(attributes: &str) -> bool {
 fn attribute_value(text: &str) -> (&str, &str) {
     match text.chars().next() {
         Some(quote @ ('"' | '\'')) => {
-            let inner = text.get(1..).unwrap_or_default();
+            let inner = split(text, 1).1;
             match inner.split_once(quote) {
                 Some((value, next)) => (value, next),
                 None => (inner, ""),
@@ -402,10 +404,7 @@ fn attribute_value(text: &str) -> (&str, &str) {
             let end = text
                 .find(|character: char| character.is_ascii_whitespace())
                 .unwrap_or(text.len());
-            (
-                text.get(..end).unwrap_or_default(),
-                text.get(end..).unwrap_or_default(),
-            )
+            split(text, end)
         }
     }
 }
@@ -497,7 +496,7 @@ fn enter<'a, F: FnMut(Signal, u32)>(
         );
         let span = last.saturating_add(1).saturating_sub(first);
         let (text, lines) = source;
-        let shown = if starts_definition(lines.line(text, first)) {
+        let shown = if lines.line(text, first).is_none_or(starts_definition) {
             shown_lines(node)
                 .unwrap_or(span)
                 .min(span.saturating_sub(1))
