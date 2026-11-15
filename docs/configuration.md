@@ -358,7 +358,7 @@ How reviewer sessions are named, started, read and cleaned up.
 | `max_concurrent_reviews` | Reviews running at once, across all review hosts of this service |
 | `debounce_seconds` | Quiet time after a push before a review starts, so a burst of pushes is reviewed once. From 1 to 600 |
 | `retry_delays_seconds` | Delays between scheduler attempts of a failed review: 1 to 5 strictly increasing values, each at most 3600. A review that waits for a review host uses none of them. Their number also bounds the starts again of a head whose fetched `refs/pull/<n>/head` is at another commit (`pohunek_head_fetch_mismatch`) |
-| `usage_limit_retry_delays_seconds` | Delays between scheduler attempts of a review that failed with `reviewer_usage_limited`, the rate or usage limit of the reviewer's model account: 1 to 24 values, none below the one before it, each from 1 to 21600. These attempts use none of `retry_delays_seconds`. Make their sum cover the limit window of the account; the example's 5 h 45 min covers a 5-hour window. `store.review_retention_seconds` must exceed their sum plus one `debounce_seconds` per entry of `retry_delays_seconds`. Required |
+| `usage_limit_retry_delays_seconds` | Delays between scheduler attempts of a review that failed with `reviewer_usage_limited`, the rate or usage limit of the reviewer's model account: 1 to 24 values, none below the one before it, each from 1 to 21600. These attempts use none of `retry_delays_seconds`. Make their sum cover the limit window of the account; the example's 5 h 45 min covers a 5-hour window. Required |
 | `step_retry_seconds`, `step_retry_initial_seconds`, `step_retry_max_interval_seconds` | Total time and backoff of a review step that keeps failing transiently |
 | `discovery_lock_timeout_seconds`, `discovery_lock_poll_ms` | Concurrent discovery passes take turns on a lock |
 | `poll_limit`, `search_page_limit` | GitHub search bounds; a truncated search is an error, never a silent drop |
@@ -390,7 +390,7 @@ summary is too short or too long.
 | Key | Meaning |
 |---|---|
 | `path` | SQLite database of discovery state and reviews. Back it up with `autoreview backup-db` |
-| `review_retention_seconds` | How long a finished review stays. It must exceed the sum of `schedule.usage_limit_retry_delays_seconds` plus one `schedule.debounce_seconds` per entry of `schedule.retry_delays_seconds` |
+| `review_retention_seconds` | How long a finished review stays |
 | `published_retention_seconds` | How long a published decision counts as the baseline of an incremental review |
 
 ## cli
@@ -631,11 +631,6 @@ Besides each key's own range, `validate` enforces:
   `store.published_retention_seconds`.
 - `store.review_retention_seconds` is at least the longest
   `author_limit.window_hours` of the policy's rules.
-- `store.review_retention_seconds` exceeds the sum of
-  `schedule.usage_limit_retry_delays_seconds` plus one
-  `schedule.debounce_seconds` for each entry of `schedule.retry_delays_seconds`:
-  the counts of a usage limit and head fetch mismatch streak are read from the
-  stored reviews, so a pruned run would let the streak retry without end.
 - `schedule.discovery_lock_timeout_seconds` is at most one hour.
 - `session.output_chunk_bytes` and `limits.result_max_bytes` are at most
   `session.output_max_bytes` (itself at most 16 MiB), and

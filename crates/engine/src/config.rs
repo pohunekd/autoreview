@@ -430,13 +430,6 @@ impl Config {
                 "review retention must cover the author limit window",
             ));
         }
-        // Pruned reviews leave the counts of a usage limit and head fetch mismatch streak, so
-        // they must outlive its waits, or the streak never reaches its bound.
-        if self.retention_too_short_for_streak() {
-            return Err(invalid(
-                "review retention must exceed the usage limit retry delays and debounces",
-            ));
-        }
         Ok(())
     }
 
@@ -572,26 +565,6 @@ impl Config {
             }
         }
         false
-    }
-
-    /// Reports whether the review retention does not exceed the waits of one streak.
-    ///
-    /// A streak waits every usage limit delay and one debounce for each head fetch mismatch
-    /// that starts again, one per retry delay. Retryable failures end a streak, so the retry
-    /// delays themselves are not part of it.
-    fn retention_too_short_for_streak(&self) -> bool {
-        let schedule = &self.schedule;
-        let waits = i32::try_from(schedule.retry_delays.len())
-            .ok()
-            .and_then(|restarts| schedule.debounce.checked_mul(restarts))
-            .and_then(|restarts| {
-                (schedule.usage_limit_delays.iter())
-                    .try_fold(restarts, |sum, delay| sum.checked_add(*delay))
-            });
-        let Ok(retention) = SignedDuration::try_from(self.review_retention) else {
-            return false;
-        };
-        waits.is_none_or(|waits| waits >= retention)
     }
 
     /// Reports whether the retention is too short for the policy.
@@ -1325,32 +1298,6 @@ mod tests {
                 "configuration_invalid: config: invalid GitHub configuration",
                 "{login}"
             );
-        }
-        // A one-day retention must exceed the usage limit delays and the one debounce of 120 s
-        // that the single retry delay allows a head fetch mismatch (#461).
-        let streaks: [(&[i64], bool); 3] = [
-            (&[21479, 21600, 21600, 21600], true),
-            (&[21480, 21600, 21600, 21600], false),
-            (&[21600; 24], false),
-        ];
-        for (delays, valid) in streaks {
-            let mut config = valid_config();
-            config.review_retention = Duration::from_secs(24 * 60 * 60);
-            config.schedule.usage_limit_delays = (delays.iter())
-                .map(|delay| time::Duration::seconds(*delay))
-                .collect();
-            match config.validate() {
-                Ok(()) => assert!(valid, "accepted {delays:?}"),
-                Err(error) => assert_eq!(
-                    (valid, error.to_string().as_str()),
-                    (
-                        false,
-                        "configuration_invalid: config: review retention must exceed the usage \
-                         limit retry delays and debounces"
-                    ),
-                    "{delays:?}"
-                ),
-            }
         }
         /// One change of the notification settings.
         type Change = fn(&mut NotifySettings);
