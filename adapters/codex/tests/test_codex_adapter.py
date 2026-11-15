@@ -104,6 +104,8 @@ class WrapperTests(unittest.TestCase):
                 'model_reasoning_effort="high"',
                 "--config",
                 'approval_policy="never"',
+                "--config",
+                "project_doc_max_bytes=0",
                 "--sandbox",
                 "read-only",
                 "--ignore-user-config",

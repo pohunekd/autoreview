@@ -508,6 +508,10 @@ def codex_arguments(
         f'model_reasoning_effort="{reasoning_effort}"',
         "--config",
         'approval_policy="never"',
+        # Codex loads the checkout's `AGENTS.md` files as instructions unless the project is
+        # marked untrusted; a zero byte budget reads none. The prompt names the trusted guidance.
+        "--config",
+        "project_doc_max_bytes=0",
         "--sandbox",
         "read-only",
         "--ignore-user-config",
