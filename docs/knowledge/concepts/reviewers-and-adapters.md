@@ -319,10 +319,11 @@ status 64 on a host without it. It has two parts:
   (see above).
   When Codex exits, the adapter ends every process that the run left before
   it prints a marker: it is their reaper (`PR_SET_CHILD_SUBREAPER`), so a
-  process that forks twice or starts its own session stays below it. Each one
-  gets `SIGTERM`, then `SIGKILL` after 2 seconds, and the adapter stops copying
-  Codex's stderr. So nothing that the run started can append to the output
-  once the nonce is in it, apart from a process that the run had another
+  process that forks twice or starts its own session stays below it. The
+  adapter's children get `SIGTERM`, every process still left gets `SIGKILL`
+  after 2 seconds (a deeper descendant gets only `SIGKILL`), and the adapter
+  stops copying Codex's stderr. So nothing that the run started can append to the
+  output once the nonce is in it, apart from a process that the run had another
   service start (see [threat model](../safety/threat-model.md) row 19).
   The adapter then stays alive for the retention time, so that the coordinator
   can read the output before it removes the session.

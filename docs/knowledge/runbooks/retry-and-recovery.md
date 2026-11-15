@@ -103,10 +103,10 @@ A new commit on the pull request starts a fresh review. Under a
 `review-requested` trigger, a new review request for the same head does too: the
 review request is part of what identifies a review, and the expired review only
 covers the request it ran for. A request made while the wait was open counts as
-well; its review starts on the first discovery pass after the wait ends, after
-the debounce delay. A `label` trigger does not track requests, so adding the
-label again starts no review of that head while the expired review is kept
-(`store.review_retention_seconds`).
+well: the first discovery pass after the wait ends plans its review, which
+starts once the debounce delay, counted from that pass, has passed. A `label`
+trigger does not track requests, so adding the label again starts no review of
+that head while the expired review is kept (`store.review_retention_seconds`).
 
 ## A review published, but a notification failed
 
