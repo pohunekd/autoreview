@@ -26,16 +26,19 @@ const REPLACEMENT: char = '\u{FFFD}';
 ///
 /// The output of either protocol is checked against the verdicts on the prior findings before
 /// the result is validated. The reviewer id is set from `reviewer` only after the output parsed.
+/// A Codex output is read with the nonce of `request`, the session input it answers.
 ///
 /// # Errors
 ///
-/// Returns the code of the first refusal of the parser of the reviewer's protocol, of the
-/// verdict check, or of the validation of the result.
+/// Returns `review_nonce_mismatch` for a Codex `request` without one valid nonce line, else
+/// the code of the first refusal of the parser of the reviewer's protocol, of the verdict
+/// check, or of the validation of the result.
 pub(crate) fn parse_reviewer_output(
     cfg: &Config,
     input: &ReviewInput,
     discussion: &Discussion,
     reviewer: &Reviewer,
+    request: &str,
     raw: &str,
 ) -> Result<ReviewerResult, Error> {
     let mut result = match reviewer.protocol {
@@ -49,7 +52,8 @@ pub(crate) fn parse_reviewer_output(
             parsed
         }
         Protocol::CodexEnvelope => {
-            let parsed = codex::parse_codex_output(cfg, &input.pull_request, raw)?;
+            let nonce = codex::request_nonce(request).ok_or_else(codex::nonce_mismatch)?;
+            let parsed = codex::parse_codex_output(cfg, &input.pull_request, nonce, raw)?;
             validate::validate_prior_verdicts(cfg, &input.prior, discussion, &parsed.prior)?;
             parsed
         }
@@ -134,6 +138,7 @@ pub(crate) mod fixtures {
 
     use crate::model::{PullRequest, ReviewInput, ReviewScope};
     use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
+    use crate::protocol::codex::NONCE_LINE_PREFIX;
 
     /// Returns a 40-character SHA made of `character` repeated.
     pub(crate) fn sha(character: &str) -> String {
@@ -257,8 +262,8 @@ pub(crate) mod fixtures {
             "prior_findings": []
         });
         let encoded = STANDARD.encode(report.to_string().as_bytes());
-        let header = "[autoreview-codex/v1 result:";
-        let footer = format!("[autoreview-codex/v1 exited with status {status}]");
+        let header = format!("[autoreview-codex/v2 {NONCE} result:");
+        let footer = format!("[autoreview-codex/v2 {NONCE} exited with status {status}]");
         format!("{header}{encoded}]\n{footer}\n")
     }
 
@@ -279,9 +284,17 @@ pub(crate) mod fixtures {
         }
         let encoded = STANDARD.encode(report.to_string().as_bytes());
         format!(
-            "[autoreview-codex/v1 result:{encoded}]\n\
-[autoreview-codex/v1 exited with status 0]\n"
+            "[autoreview-codex/v2 {NONCE} result:{encoded}]\n\
+[autoreview-codex/v2 {NONCE} exited with status 0]\n"
         )
+    }
+
+    /// Nonce of the Codex request of the fixtures.
+    pub(crate) const NONCE: &str = "00112233445566778899aabbccddeeff";
+
+    /// The nonce line of a Codex request with `NONCE`, all that the parser reads of it.
+    pub(crate) fn codex_request() -> String {
+        format!("{NONCE_LINE_PREFIX}{NONCE}")
     }
 }
 
@@ -294,7 +307,7 @@ mod tests {
     use crate::model::{Discussion, PriorFinding, PriorVerdict, ReviewInput, ReviewerResult};
     use crate::protocol::combine::combine_prior;
     use crate::protocol::fixtures::{
-        claude_output, claude_session, codex, codex_output, codex_report, opus, sha,
+        claude_output, claude_session, codex, codex_output, codex_report, codex_request, opus, sha,
         test_pull_request,
     };
     use crate::protocol::validate::reviewer_output_retryable;
@@ -330,6 +343,7 @@ mod tests {
             &input,
             &Discussion::default(),
             &opus(),
+            "",
             &claude_output(
                 &pr,
                 json!([{
@@ -349,6 +363,7 @@ mod tests {
             &input,
             &Discussion::default(),
             &codex(),
+            &codex_request(),
             &codex_output(
                 &pr,
                 json!([
@@ -372,10 +387,24 @@ mod tests {
             &input,
             &Discussion::default(),
             &codex(),
+            &codex_request(),
             &codex_output(&pr, json!([]), 1),
         )
         .expect_err("a failed Codex run is refused");
         assert!(reviewer_output_retryable(&failed));
+
+        // A Codex request without a nonce line cannot bind its output (#408).
+        let unbound = parse_reviewer_output(
+            &cfg,
+            &input,
+            &Discussion::default(),
+            &codex(),
+            "- Trusted protocol: autoreview-codex/v2",
+            &codex_output(&pr, json!([]), 0),
+        )
+        .expect_err("an output of a request without a nonce is refused");
+        assert_eq!(error_code(&unbound), "review_nonce_mismatch");
+        assert!(reviewer_output_retryable(&unbound));
 
         let mut other_pr = pr.clone();
         other_pr.head_sha = sha("e");
@@ -388,6 +417,7 @@ mod tests {
             &other,
             &Discussion::default(),
             &opus(),
+            "",
             &claude_output(&pr, json!([]), None),
         )
         .expect_err("a result for another head gets a fresh run");
@@ -399,6 +429,7 @@ mod tests {
             &input,
             &Discussion::default(),
             &opus(),
+            "",
             &claude_output(
                 &pr,
                 json!([{
@@ -459,8 +490,15 @@ mod tests {
             ),
         ];
         for (name, reviewer, raw, code) in cases {
-            let err = parse_reviewer_output(&cfg, &input, &Discussion::default(), &reviewer, &raw)
-                .expect_err(name);
+            let err = parse_reviewer_output(
+                &cfg,
+                &input,
+                &Discussion::default(),
+                &reviewer,
+                &codex_request(),
+                &raw,
+            )
+            .expect_err(name);
             assert_eq!(error_code(&err), code, "{name}");
             assert!(reviewer_output_retryable(&err), "{name}");
         }
@@ -476,7 +514,7 @@ mod tests {
             "approve": true
         }));
         let parse = |raw: &str| {
-            parse_reviewer_output(&cfg, &input, &Discussion::default(), &opus(), raw)
+            parse_reviewer_output(&cfg, &input, &Discussion::default(), &opus(), "", raw)
                 .expect("a Claude result parses")
         };
         assert_eq!(
@@ -532,6 +570,7 @@ mod tests {
                 &input,
                 &Discussion::default(),
                 &opus(),
+                "",
                 &claude_output(&pr, json!([]), verdicts),
             )
             .expect_err(name);
@@ -550,7 +589,7 @@ mod tests {
             ])),
         );
         let result =
-            parse_reviewer_output(&cfg, &input, &Discussion::default(), &opus(), &complete)
+            parse_reviewer_output(&cfg, &input, &Discussion::default(), &opus(), "", &complete)
                 .expect("a complete verdict list parses");
         assert_eq!(result.prior.len(), 2);
 
@@ -605,17 +644,30 @@ mod tests {
             verdict_json(&prior[0].key, PRIOR_FIXED),
             verdict_json(&prior[1].key, PRIOR_OPEN)
         ]));
-        let result =
-            parse_reviewer_output(&cfg, &input, &Discussion::default(), &codex(), &settling)
-                .expect("a Codex result that settles every prior finding parses");
+        let result = parse_reviewer_output(
+            &cfg,
+            &input,
+            &Discussion::default(),
+            &codex(),
+            &codex_request(),
+            &settling,
+        )
+        .expect("a Codex result that settles every prior finding parses");
         let settled: Vec<String> = combine_prior(&prior, &[result])
             .into_iter()
             .map(|settled| settled.verdict.status)
             .collect();
         assert_eq!(settled, [PRIOR_FIXED, PRIOR_OPEN]);
         let partial = output(json!([verdict_json(&prior[0].key, PRIOR_FIXED)]));
-        let err = parse_reviewer_output(&cfg, &input, &Discussion::default(), &codex(), &partial)
-            .expect_err("a Codex result that leaves a prior finding unsettled is refused");
+        let err = parse_reviewer_output(
+            &cfg,
+            &input,
+            &Discussion::default(),
+            &codex(),
+            &codex_request(),
+            &partial,
+        )
+        .expect_err("a Codex result that leaves a prior finding unsettled is refused");
         assert_eq!(error_code(&err), "review_output_invalid");
     }
 }

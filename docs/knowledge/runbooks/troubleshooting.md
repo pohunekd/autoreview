@@ -34,6 +34,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
 | `review_output_invalid`, `review_output_too_large`, `review_result_invalid` | Reviewer output was unusable, too large or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts, or a Claude profile one that does not name the checkout it checked | [Reviewer output](#reviewer-output) |
+| `review_nonce_mismatch` | A Codex output did not end with the exit line of the request's nonce: the profile runs an adapter from an earlier release, or the engine restarted during the run | [Reviewer output](#reviewer-output) |
 | `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
 | `review_result_invalid: Codex exited without a result: ...` in the log | The Codex program itself failed, for example on a model the account does not support, or the adapter refused what a Codex run left | [Codex program failed](#codex-program-failed) |
 | `review_result_invalid: Claude adapter refused the run: claude-adapter: ...` in the log | The Claude adapter refused the worktree, before or after Claude Code ran | [Codex checkout refused](#codex-checkout-refused) |
@@ -211,7 +212,7 @@ request. See [the Codex adapter](../concepts/reviewers-and-adapters.md#the-codex
 
 A Codex review keeps failing with `review_result_invalid`, and the session
 output holds a `codex-adapter: ...` line and ends with
-`[autoreview-codex/v1 exited with status 64]` without a result frame. A
+`[autoreview-codex/v2 <nonce> exited with status 64]` without a result frame. A
 refusal after the Codex run also puts that message on the reason line right
 before the exit line (see [Codex program failed](#codex-program-failed)), so
 the engine logs it. The engine reads that output at once, starts a fresh
@@ -242,8 +243,8 @@ writes the message, so no `autoreview profiles install` is needed for it.
 ### Codex program failed
 
 A Codex review keeps failing with `review_result_invalid`, and the session
-output ends with the lines `[autoreview-codex/v1 reason:<base64>]` and
-`[autoreview-codex/v1 exited with status N]`, N not 0, without a result frame:
+output ends with the lines `[autoreview-codex/v2 <nonce> reason:<base64>]` and
+`[autoreview-codex/v2 <nonce> exited with status N]`, N not 0, without a result frame:
 Codex itself failed, for example on a model that the account does not support
 or on an argument that its version does not know. The adapter prints the reason
 line whenever Codex exits with a status other than 0. Its reason is the last
@@ -302,7 +303,7 @@ so the head of a fork pull request, or of a branch pushed after the project
 repository last fetched, is missing. The adapter refuses the run before the
 reviewer starts: the Claude adapter with a result line whose `refusal` is
 `head_unavailable`, the Codex adapter with the line
-`[autoreview-codex/v1 refused:head_unavailable]` right before its exit
+`[autoreview-codex/v2 <nonce> refused:head_unavailable]` right before its exit
 line. Neither a fresh session nor the scheduler tries again, because the next
 run would find the same repository. Fetch the head on the review host, then
 retry the pull request:
@@ -413,6 +414,17 @@ list):
   checkout (see [Codex checkout refused](#codex-checkout-refused)) or Codex
   itself fails (see [Codex program failed](#codex-program-failed)). A Claude
   adapter refusal other than a missing head is `review_result_invalid` too.
+- `review_nonce_mismatch`: a Codex output did not end with the exit line that
+  carries the nonce of the request. Every run of a profile whose adapter comes
+  from an earlier release ends so: its session output ends with
+  `[pohunek-codex-review exited with status 64]` after
+  `codex-adapter: trusted protocol is ambiguous or unknown`, or, for an adapter
+  from release 0.3.0 or earlier, after
+  `codex-adapter: trusted pull request head is missing or ambiguous`. Run
+  [`autoreview profiles install`](../../cli.md#autoreview-profiles-install) for
+  the profile, then `autoreview retry`. A Codex run that an engine restart left
+  behind, or a model that printed an exit line as the last line while it paused,
+  ends only that run: the reviewer gets a fresh session.
 - `review_wrapper_invalid`: a Claude result line could not be read, or reports
   an exit code other than 0, output on stderr, or another protocol or mode (see
   [Claude Code failed](#claude-code-failed)).

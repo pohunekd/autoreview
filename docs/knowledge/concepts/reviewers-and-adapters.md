@@ -52,11 +52,11 @@ reviewed head SHA. A report without `prior_findings`, or with a finding without
 ### Wire names
 
 Between the engine and an adapter the protocols are named `autoreview-claude/v1`
-and `autoreview-codex/v1`. Each adapter answers in the name of the request it
-got, and the engine reads the legacy names too, so an engine and the adapters on
-a review host may come from different releases: neither an engine update nor a
-rollback needs `autoreview profiles install`. A later release removes the legacy
-names (#393).
+and `autoreview-codex/v2`. Each adapter answers in the name of the request it
+got. The engine reads the legacy Claude names too, so a Claude profile from an
+earlier release keeps working; a later release removes the legacy names (#393).
+A Codex profile must be installed from this release before the engine is
+updated (see below); a rollback of the engine needs no reinstall.
 
 - `autoreview-claude/v1` is the `protocol` field of the request and of the
   result line. The adapter accepts a request of that name or of the legacy name
@@ -66,20 +66,39 @@ names (#393).
   same checks. It sends its requests under the legacy name until every review
   host runs an adapter that reads the new one (#392), because an older adapter
   runs a request of another name as a plain prompt.
-- `autoreview-codex/v1` is named in the trusted line
-  `- Trusted protocol: autoreview-codex/v1` of the request. The adapter then
-  writes `[autoreview-codex/v1 result:<base64>]`,
-  `[autoreview-codex/v1 reason:<base64>]`,
-  `[autoreview-codex/v1 refused:head_unavailable]` and
-  `[autoreview-codex/v1 exited with status N]`. A request without the line, from
-  an older engine, gets the legacy markers
-  `[pohunek-codex-review-result-v1:<base64>]`,
+- `autoreview-codex/v2` is named in the trusted line
+  `- Trusted protocol: autoreview-codex/v2` of the request, followed by the line
+  `- Trusted nonce: <nonce>`: 16 bytes from the engine host's random source in
+  lowercase hex, fresh for every run. The head line of such a request is
+  `- Trusted head commit:` instead of `- Trusted head SHA:`. The adapter
+  removes the nonce line before Codex reads the prompt, so the model never sees
+  the nonce, and writes it into every marker:
+  `[autoreview-codex/v2 <nonce> result:<base64>]`,
+  `[autoreview-codex/v2 <nonce> reason:<base64>]`,
+  `[autoreview-codex/v2 <nonce> refused:head_unavailable]` and
+  `[autoreview-codex/v2 <nonce> exited with status N]`. The engine reads only
+  the markers with the nonce of the request, so markers that the Codex
+  transcript prints, for example while the model pauses, never pass for the
+  adapter's. An output that does not end with the exit line of that nonce is
+  `review_nonce_mismatch`, which gets a fresh session.
+- An adapter from an earlier release does not know `autoreview-codex/v2`: it
+  stops the run with status 64 and the legacy exit line, before Codex runs, and
+  every run of the review ends in `review_nonce_mismatch`. Run
+  `autoreview profiles install` for every Codex profile before the engine is
+  updated. An adapter from release 0.3.0 or earlier reads no protocol line, but
+  it finds no `- Trusted head SHA:` line either, so it stops the run the same
+  way, with `trusted pull request head is missing or ambiguous`: no adapter
+  release passes the nonce to Codex.
+- For an older engine the adapter still answers a request with
+  `- Trusted protocol: autoreview-codex/v1` in the markers
+  `[autoreview-codex/v1 result:<base64>]` and so on, and a request without the
+  line in the legacy markers `[pohunek-codex-review-result-v1:<base64>]`,
   `[pohunek-codex-review-reason-v1:<base64>]`,
   `[pohunek-codex-review-refused-v1:head_unavailable]` and
-  `[pohunek-codex-review exited with status N]`, which an older adapter always
-  writes. A second protocol line or another name stops the run with status 64
-  and the legacy exit line. The engine reads either set of markers, never a mix
-  of both in one output.
+  `[pohunek-codex-review exited with status N]`. A nonce line under either, a
+  second protocol line or nonce line, a missing or malformed nonce under
+  `autoreview-codex/v2`, or another name stops the run with status 64 and the
+  legacy exit line.
 
 ## What the adapter enforces
 
@@ -290,22 +309,25 @@ Python standard library (Python 3.11 or newer). It has two parts:
   `--ephemeral` and an output schema. It checks the report (status `completed`,
   the reviewed head, a blocking flag on every finding, well-formed prior
   findings, the result limit) and prints it as one frame,
-  `[autoreview-codex/v1 result:<base64>]`, followed by the line
-  `[autoreview-codex/v1 exited with status N]` (the legacy markers for a request
-  without the protocol line, see [wire names](#wire-names)). The Codex run gets
+  `[autoreview-codex/v2 <nonce> result:<base64>]`, followed by the line
+  `[autoreview-codex/v2 <nonce> exited with status N]` (the markers of an older
+  engine's request, see [wire names](#wire-names)). Codex reads the prompt
+  without the nonce line. The Codex run gets
   the session environment without the variables that the Claude adapter drops
   (see above).
   The adapter then stays alive for the retention time, so that the coordinator
   can read the output before it removes the session.
   The engine reads the output as finished once its last line, read up to the
-  current end of the output, is an exit line of either name; an exit line that
-  the Codex transcript quotes before the end does not finish it.
+  current end of the output, is an exit line of any of the three names; an exit
+  line that the Codex transcript quotes before the end does not finish it, and
+  one without the request's nonce at the end ends the run with
+  `review_nonce_mismatch`.
   The adapter exits with the status of
   Codex, or with status 64 when the request's trusted lines, the checkout check
   before or after the run, or the report fail. Codex's stderr goes on to the
   session output as it arrives; the adapter keeps its last 64 KiB. When Codex
   exits with a status other than 0, the line
-  `[autoreview-codex/v1 reason:<base64>]` comes right before the exit line,
+  `[autoreview-codex/v2 <nonce> reason:<base64>]` comes right before the exit line,
   with the reason that the engine logs next to `review_result_invalid` (see
   [troubleshooting](../runbooks/troubleshooting.md#codex-program-failed)). A
   refusal after the run prints the same line with its own message,
@@ -319,7 +341,7 @@ Python standard library (Python 3.11 or newer). It has two parts:
   `review_result_invalid` (see
   [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)).
   When the head commit is not in the repository, the line
-  `[autoreview-codex/v1 refused:head_unavailable]` comes right before the
+  `[autoreview-codex/v2 <nonce> refused:head_unavailable]` comes right before the
   exit line, and the engine stops the review with `review_head_unavailable`
   without a fresh session.
   An invalid argument, Codex path file or input frame stops the adapter before

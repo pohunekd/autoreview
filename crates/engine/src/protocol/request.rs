@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::config::Config;
 use crate::error::{Error, error_code};
 use crate::model::{Discussion, PullRequest, ReviewInput};
+use crate::protocol::codex::NONCE_LINE_PREFIX;
 
 /// Protocol name that the request of a claude-structured reviewer carries.
 ///
@@ -18,8 +19,9 @@ pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "claude-otel-noninteractive/req
 
 /// Protocol name on the trusted protocol line of a codex-envelope prompt.
 ///
-/// The adapter answers with the markers of this name; an older adapter ignores the line.
-const CODEX_REQUEST_PROTOCOL: &str = "autoreview-codex/v1";
+/// The adapter answers with the markers of this name bound to the request's nonce; an adapter
+/// that does not know the name refuses the request before Codex runs.
+const CODEX_REQUEST_PROTOCOL: &str = "autoreview-codex/v2";
 
 /// The schema that a claude-structured reviewer must satisfy.
 ///
@@ -62,7 +64,8 @@ const RETRY_INSTRUCTIONS: [(&str, &str); 1] = [(
 /// summary is bounded by `cfg`. A codex-envelope reviewer receives the plain prompt. Both state
 /// the output limits of `cfg` and carry the prior findings with the discussion, which both
 /// protocols settle. A run after the run that `refused` ended gets the retry instruction of
-/// that check after the limits; the first run passes `None`.
+/// that check after the limits; the first run passes `None`. A codex-envelope prompt carries
+/// `nonce` on its nonce line; a claude-structured request does not use it.
 ///
 /// # Errors
 ///
@@ -74,6 +77,7 @@ pub(crate) fn build_reviewer_request(
     input: &ReviewInput,
     reviewer: &Reviewer,
     discussion: &Discussion,
+    nonce: &str,
     refused: Option<&Error>,
 ) -> Result<String, Error> {
     let mut instructions = output_limits(cfg);
@@ -86,7 +90,7 @@ pub(crate) fn build_reviewer_request(
             let schema = review_schema(cfg)?;
             claude_request(input, reviewer, discussion, &instructions, &schema)
         }
-        Protocol::CodexEnvelope => codex_prompt(input, discussion, &instructions),
+        Protocol::CodexEnvelope => codex_prompt(input, discussion, &instructions, nonce),
         Protocol::Unset | Protocol::Other(_) => {
             Err(Error::workflow("review_protocol_invalid", true, None))
         }
@@ -249,18 +253,21 @@ pub(crate) fn base_checkout_hint(pull_request: &PullRequest) -> String {
 
 /// Builds the plain prompt of a codex-envelope reviewer.
 ///
-/// The adapter reads the trusted lines; each must stay the only line with its prefix.
+/// The adapter reads the trusted lines; each must stay the only line with its prefix. It
+/// removes the nonce line before Codex runs. The head line is `- Trusted head commit:`: an
+/// adapter that reads only `- Trusted head SHA:` refuses the request before Codex sees the nonce.
 fn codex_prompt(
     input: &ReviewInput,
     discussion: &Discussion,
     instructions: &str,
+    nonce: &str,
 ) -> Result<String, Error> {
     let pull_request = &input.pull_request;
     let checkout = checkout_name(&input.rule.pipeline.checkout);
     let mut prompt = format!(
         "{}\n\n{}\n\nTrusted review context:\n- Repository: {}\n- Pull request: #{}\n\
-- URL: {}\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n- Base branch: {}\n\
-- Trusted checkout: {}\n- Trusted protocol: {}",
+- URL: {}\n- Trusted head commit: {}\n- Trusted base SHA: {}\n- Base branch: {}\n\
+- Trusted checkout: {}\n- Trusted protocol: {}\n{}{}",
         input.rule.pipeline.prompt,
         instructions,
         pull_request.repository,
@@ -270,7 +277,9 @@ fn codex_prompt(
         pull_request.base_sha,
         pull_request.base_branch,
         checkout,
-        CODEX_REQUEST_PROTOCOL
+        CODEX_REQUEST_PROTOCOL,
+        NONCE_LINE_PREFIX,
+        nonce
     );
     if input.scope.incremental() {
         prompt.push_str(&format!(
@@ -364,7 +373,7 @@ mod tests {
 
     use crate::error::{BoxError, Error, error_code};
     use crate::model::Discussion;
-    use crate::protocol::fixtures::{codex, opus, test_input, test_pull_request};
+    use crate::protocol::fixtures::{NONCE, codex, opus, test_input, test_pull_request};
     use crate::protocol::validate::reviewer_output_invalid;
     use crate::protocol::validate::tests::test_config;
 
@@ -409,6 +418,7 @@ mod tests {
                     &input,
                     &reviewer,
                     &Discussion::default(),
+                    NONCE,
                     refused,
                 )
                 .expect("reviewer request builds");
@@ -427,6 +437,15 @@ mod tests {
                 first.contains(&format!("\n\n{limits}\n\n{context}")) && !first.contains(retry),
                 "first prompt = {first}"
             );
+            // An adapter before `autoreview-codex/v2` finds no head line and refuses (#408).
+            if reviewer.protocol == Protocol::CodexEnvelope {
+                let head = format!("\n- Trusted head commit: {}\n", pr.head_sha);
+                assert!(first.contains(&head), "first prompt = {first}");
+                assert!(
+                    !first.contains("- Trusted head SHA:"),
+                    "first prompt = {first}"
+                );
+            }
             let retried = prompt(Some(&fixable));
             assert_eq!(
                 retried,
