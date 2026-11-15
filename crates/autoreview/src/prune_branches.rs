@@ -34,6 +34,9 @@ const HOST_NOT_LOCAL: &str = "host_not_local";
 /// Error code of a store database that does not exist.
 const STORE_UNAVAILABLE: &str = "store_unavailable";
 
+/// Error code of a run that left work undone; its document is already on stdout.
+pub(crate) const BRANCH_PRUNE_INCOMPLETE: &str = "branch_prune_incomplete";
+
 /// Seconds of one day of `--older-than-days`.
 const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
@@ -62,6 +65,44 @@ pub(crate) struct PruneResult {
     delete: bool,
     /// One entry per review host: `pohunek.hosts` in order, then the route override hosts.
     hosts: Vec<HostReport>,
+    /// Whether `--host` named the one host; then a skipped host fails the command.
+    #[serde(skip)]
+    named: bool,
+}
+
+impl PruneResult {
+    /// Fails a run that left work undone, after its document was printed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `branch_prune_incomplete` when [`incomplete`] reports the run.
+    pub(crate) fn status(&self) -> Result<(), Error> {
+        if incomplete(&self.hosts, self.named) {
+            return Err(Error::workflow(BRANCH_PRUNE_INCOMPLETE, false, None));
+        }
+        Ok(())
+    }
+}
+
+/// Reports whether a run left work undone: a deletion failed, or the host that `--host` named
+/// was skipped or has a repository whose git calls failed.
+///
+/// Without `--host` a skipped host or repository is only reported, so one unreachable host
+/// does not fail the others.
+fn incomplete(hosts: &[HostReport], named: bool) -> bool {
+    hosts.iter().any(|host| {
+        let failed_delete = host
+            .repositories
+            .iter()
+            .flat_map(|repository| &repository.branches)
+            .any(|branch| !branch.error.is_empty());
+        let skipped = !host.skipped.is_empty()
+            || host
+                .repositories
+                .iter()
+                .any(|repository| !repository.error.is_empty());
+        failed_delete || (named && skipped)
+    })
 }
 
 /// The branches of one review host, or why it was skipped.
@@ -189,6 +230,7 @@ pub(crate) async fn run(
     Ok(PruneResult {
         delete: arguments.yes,
         hosts: reports,
+        named: arguments.host.is_some(),
     })
 }
 
