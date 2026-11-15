@@ -81,9 +81,10 @@ impl Lines {
         start.saturating_add(column.saturating_sub(1)).min(self.len)
     }
 
-    /// Returns the text of a 1-based source line, without its line break, if it has one.
-    fn line<'t>(&self, text: &'t str, line: usize) -> Option<&'t str> {
-        let start = self.offset(line, 1);
+    /// Returns the text of a 1-based source line from a 1-based byte column, without its line
+    /// break, if the column falls on a character boundary of the text.
+    fn line<'t>(&self, text: &'t str, line: usize, column: usize) -> Option<&'t str> {
+        let start = self.offset(line, column);
         let end = self
             .starts
             .get(line)
@@ -453,7 +454,8 @@ fn shown_lines<'a>(node: &'a AstNode<'a>) -> Option<usize> {
 }
 
 /// Reports whether a source line starts a reference definition after its container
-/// markers: `[`, then a `]` followed by `:`, or no `]` on the line (a label over lines).
+/// markers: `[`, then the first unescaped `]` followed by `:`, or no unescaped `]` on the line
+/// (a label over lines). A backslash escapes the character after it, as in a label.
 fn starts_definition(line: &str) -> bool {
     let rest = line.trim_start_matches(|character: char| {
         character.is_ascii_whitespace()
@@ -463,10 +465,16 @@ fn starts_definition(line: &str) -> bool {
     let Some(label) = rest.strip_prefix('[') else {
         return false;
     };
+    let mut escaped = false;
+    let close = label.char_indices().find(|&(_, character)| {
+        let closes = !escaped && character == ']';
+        escaped = !escaped && character == '\\';
+        closes
+    });
     !label.starts_with('^')
-        && label.find(']').is_none_or(|close| {
+        && close.is_none_or(|(at, _)| {
             label
-                .get(close.saturating_add(1)..)
+                .get(at.saturating_add(1)..)
                 .is_some_and(|after| after.starts_with(':'))
         })
 }
@@ -477,7 +485,9 @@ fn starts_definition(line: &str) -> bool {
 /// table into its source lines, and moves its inline positions onto them. Such a block
 /// renders only its last lines, so the leading ones stay unrendered and are checked as
 /// definitions, and the field's code positions are no longer trusted (`*shifted`). Only a
-/// block whose first line starts a definition can hold such lines, and that line is always
+/// block whose first line starts a definition can hold such lines; the line is read from
+/// column 1 after container markers and from the block's own start column (a footnote
+/// definition's text starts after `[^x]: `), and either reading counts. That line is always
 /// checked, also when the parser shows it (a table that splits off the paragraph). A line
 /// break that the tree does not show (in a title, a code span or inline HTML) makes more
 /// lines count as definitions, never fewer; when the counts do not fit, every line is
@@ -496,7 +506,12 @@ fn enter<'a, F: FnMut(Signal, u32)>(
         );
         let span = last.saturating_add(1).saturating_sub(first);
         let (text, lines) = source;
-        let shown = if lines.line(text, first).is_none_or(starts_definition) {
+        let column = node.data().sourcepos.start.column;
+        let definition = lines.line(text, first, 1).is_none_or(starts_definition)
+            || lines
+                .line(text, first, column)
+                .is_none_or(starts_definition);
+        let shown = if definition {
             shown_lines(node)
                 .unwrap_or(span)
                 .min(span.saturating_sub(1))
