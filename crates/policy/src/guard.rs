@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::Error;
 
 /// What a pull request gets when its guard score reaches the threshold.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OnSuspect {
     /// A clean review of an approving rule waits for a human.
     #[serde(rename = "await")]
@@ -23,36 +23,49 @@ pub enum OnSuspect {
     /// The decision stays as it is; only the result is recorded and notified.
     #[serde(rename = "log")]
     Log,
+    /// The empty value of a stored guard without the key; parsing never produces it.
+    #[default]
+    #[serde(rename = "")]
+    Unset,
+    /// A value a newer engine stored that this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
 }
 
 impl OnSuspect {
     /// Returns the policy file name of the outcome.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Await => "await",
             Self::Comment => "comment",
             Self::Log => "log",
+            Self::Unset => "",
+            Self::Other(value) => value,
         }
     }
 }
 
 /// The text guard of a rule: its fields, threshold and suspect outcome.
 ///
-/// It is copied with the rule into each review workflow input.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// It is copied with the rule into each review workflow input. A stored guard without a key
+/// reads it as empty, zero or unset, so rows keep decoding when a later release adds a key.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
 pub struct RuleGuard {
-    /// The kinds of pull request text the guard scans; never empty.
+    /// The pull request texts the guard scans; never empty in a parsed policy.
     #[serde(
         serialize_with = "serialize_fields",
         deserialize_with = "deserialize_fields"
     )]
     pub fields: BTreeSet<FieldKind>,
-    /// The guard score from which a pull request is suspect, 1 to `u32::MAX`.
+    /// The score from which a pull request is suspect, 1 to `u32::MAX` when parsed.
     pub threshold: u32,
     /// What a suspect pull request gets.
     pub on_suspect: OnSuspect,
 }
+
+autoreview_go_compat::object_only_serde!(RuleGuard);
 
 /// The guard section as written in the policy file; an absent key is refused.
 #[derive(Debug, Default, Deserialize)]
@@ -88,11 +101,14 @@ fn serialize_fields<S: Serializer>(
     serializer.collect_seq(fields.iter().map(|kind| kind.as_str()))
 }
 
-/// Reads the fields from their codes; an unknown code is an error.
+/// Reads the fields from their codes; null is empty, an unknown code fails.
+///
+/// An unknown code names a text this engine cannot scan. Dropping it would scan less than the
+/// stored rule asks, so the row is refused instead.
 fn deserialize_fields<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<BTreeSet<FieldKind>, D::Error> {
-    let codes = Vec::<String>::deserialize(deserializer)?;
+    let codes = Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default();
     codes
         .iter()
         .map(|code| {
