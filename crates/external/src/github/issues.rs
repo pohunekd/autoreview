@@ -120,7 +120,7 @@ struct ReferenceNode {
 
 autoreview_go_compat::object_only_serde!(ReferenceNode);
 
-/// The repository of a closing issue reference.
+/// The repository of an issue, in either query.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self", deny_unknown_fields)]
 struct ReferenceRepository {
@@ -170,6 +170,8 @@ struct IssueText {
     /// Issue body; `null` reads as empty.
     #[serde(deserialize_with = "null_default::deserialize")]
     body: String,
+    /// Repository of the issue; it must be the pull request's.
+    repository: Option<ReferenceRepository>,
 }
 
 autoreview_go_compat::object_only_serde!(IssueText);
@@ -224,7 +226,8 @@ fn issue_text_query(numbers: &[i64]) -> String {
     );
     for (index, number) in numbers.iter().enumerate() {
         query.push_str(&format!(
-            "    {ISSUE_ALIAS}{index}: issue(number: {number}) {{ number title body }}\n"
+            "    {ISSUE_ALIAS}{index}: issue(number: {number}) \
+             {{ number title body repository {{ nameWithOwner }} }}\n"
         ));
     }
     query.push_str("  }\n}");
@@ -270,8 +273,9 @@ fn decode_closing_references(output: &str, repository: &str) -> Result<ClosingRe
 
 /// Decodes the issue texts of `numbers`, asked for with [`issue_text_query`].
 ///
-/// A response with an error entry, a missing or `null` issue, or an issue of another number is
-/// `github_response_invalid`.
+/// A response with an error entry, a missing or `null` issue, or an issue of another number or
+/// of another repository than `repository` is `github_response_invalid`. The repository check
+/// keeps out an issue transferred after the reference query, even when its number matches.
 fn decode_issue_texts(
     output: &str,
     repository: &str,
@@ -291,7 +295,11 @@ fn decode_issue_texts(
         let text = texts
             .remove(&format!("{ISSUE_ALIAS}{index}"))
             .flatten()
-            .filter(|text| text.number == *number)
+            .filter(|text| {
+                let owner = text.repository.as_ref().map(|owner| &owner.name_with_owner);
+                text.number == *number
+                    && owner.is_some_and(|owner| owner.eq_ignore_ascii_case(repository))
+            })
             .ok_or_else(|| response_invalid(None))?;
         issues.push(LinkedIssue {
             repository: repository.to_owned(),
