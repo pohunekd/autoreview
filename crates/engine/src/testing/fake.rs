@@ -41,15 +41,8 @@ use crate::verify::{
     ClaimFinding, ClaimPrior, VERDICT_CONFIRMED, VERDICT_UPHELD, VerificationClaims,
 };
 
-/// Message of both adapters when the pull request head is not in the review checkout.
-const HEAD_UNAVAILABLE_MESSAGE: &str =
-    "trusted pull request head is unavailable in the review checkout";
-
 /// Produces the output of a reviewer session from its request.
 type OutputFn = Arc<dyn Fn(&SessionRequest) -> String + Send + Sync>;
-
-/// Decides whether a session start fails.
-type StartFailFn = Arc<dyn Fn(&SessionRequest) -> Result<(), Error> + Send + Sync>;
 
 /// A notification the engine sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,12 +87,6 @@ pub(crate) struct FakeState {
     pub(crate) sessions: BTreeMap<String, SessionRequest>,
     /// Every session that was started, in order.
     pub(crate) started: Vec<SessionRequest>,
-    /// Fails a session start when it returns an error; `None` lets every start succeed.
-    pub(crate) start_fail: Option<StartFailFn>,
-    /// Every start request, failed or not.
-    pub(crate) attempts: Vec<SessionRequest>,
-    /// Session IDs whose removal fails.
-    pub(crate) remove_failing: BTreeSet<String>,
     /// Session IDs that were removed, in order.
     pub(crate) removed: Vec<String>,
     /// Commentable lines that the fake returns.
@@ -116,8 +103,6 @@ pub(crate) struct FakeState {
     pub(crate) discussion_reads: Vec<Vec<PriorFinding>>,
     /// Pull requests whose newer head is a rewritten history, by head SHA.
     pub(crate) rewritten: BTreeSet<String>,
-    /// Head SHAs that the review host's repository lacks, so base checkout runs are refused.
-    pub(crate) missing_heads: BTreeSet<String>,
     /// Error code that every publication fails with; `None` lets publications succeed.
     pub(crate) publish_fail: Option<String>,
     /// Until this instant, reads and searches fail transiently; `None` never fails them.
@@ -500,38 +485,12 @@ impl Integrations for FakeIntegration {
     ) -> impl Future<Output = Result<SessionIdentity, Error>> + Send {
         let result = {
             let mut state = self.lock();
-            state.attempts.push(request.clone());
-            let fail = state.start_fail.clone();
             let existing = state
                 .sessions
                 .iter()
                 .find(|(_, existing)| existing.name() == request.name())
                 .map(|(id, _)| id.clone());
-            if let Some(fail) = fail {
-                if let Err(error) = fail(request) {
-                    Err(error)
-                } else if let Some(id) = existing {
-                    Ok(SessionIdentity {
-                        host: request.route.host.clone(),
-                        session_id: id,
-                        worker_instance_id: "worker".to_string(),
-                        runtime_generation: "1".to_string(),
-                        reviewer_id: request.reviewer.id.clone(),
-                    })
-                } else {
-                    state.next_session += 1;
-                    let id = format!("s-{}", state.next_session);
-                    state.sessions.insert(id.clone(), request.clone());
-                    state.started.push(request.clone());
-                    Ok(SessionIdentity {
-                        host: request.route.host.clone(),
-                        session_id: id,
-                        worker_instance_id: "worker".to_string(),
-                        runtime_generation: "1".to_string(),
-                        reviewer_id: request.reviewer.id.clone(),
-                    })
-                }
-            } else if let Some(id) = existing {
+            if let Some(id) = existing {
                 Ok(SessionIdentity {
                     host: request.route.host.clone(),
                     session_id: id,
@@ -580,7 +539,7 @@ impl Integrations for FakeIntegration {
                         .output
                         .clone()
                         .expect("a test sets the fake's output before a session runs");
-                    let refusal = adapter_refusal(&request, &state.missing_heads);
+                    let refusal = adapter_refusal(&request);
                     Ok((request, output, refusal))
                 }
             }
@@ -610,21 +569,11 @@ impl Integrations for FakeIntegration {
                 Some("context canceled".into()),
             )));
         }
-        let result = {
-            let mut state = self.lock();
-            if state.remove_failing.contains(&session.session_id) {
-                Err(Error::pohunek_code(
-                    "runtime_supervision_ambiguous",
-                    Box::new(Error::workflow("pohunek_request_failed", false, None)),
-                ))
-            } else {
-                if state.sessions.remove(&session.session_id).is_some() {
-                    state.removed.push(session.session_id.clone());
-                }
-                Ok(())
-            }
-        };
-        ready(result)
+        let mut state = self.lock();
+        if state.sessions.remove(&session.session_id).is_some() {
+            state.removed.push(session.session_id.clone());
+        }
+        ready(Ok(()))
     }
 
     fn list_commentable_lines(
@@ -935,46 +884,18 @@ pub(crate) fn request_claims(prompt: &str) -> VerificationClaims {
 
 /// Returns the output of the adapter when it refuses the checkout of `request`.
 ///
-/// Like the adapters in `adapters/`, both protocols refuse a base checkout whose head is in
-/// `missing_heads` as `head_unavailable`. The Codex adapter also reads the checkout from the
-/// one trusted checkout line of the prompt, `head` when there is none, and refuses one that
-/// differs from the session's: no result frame, the exit line with status 64.
-fn adapter_refusal(request: &SessionRequest, missing_heads: &BTreeSet<String>) -> Option<String> {
+/// Like the Codex adapter in `adapters/`, it reads the checkout from the one trusted checkout
+/// line of the prompt, `head` when there is none, and refuses one that differs from the
+/// session's: no result frame, the exit line with status 64.
+fn adapter_refusal(request: &SessionRequest) -> Option<String> {
+    if request.reviewer.protocol != Protocol::CodexEnvelope {
+        return None;
+    }
     let session = if request.checkout == Checkout::Head {
         "head"
     } else {
         "base"
     };
-    let missing = session == "base" && missing_heads.contains(&request.pull_request.head_sha);
-    match request.reviewer.protocol {
-        Protocol::ClaudeStructured => missing.then(claude_head_refusal),
-        Protocol::CodexEnvelope => codex_checkout_refusal(request, session, missing),
-        Protocol::Unset | Protocol::Other(_) => None,
-    }
-}
-
-/// Returns the refusal envelope of the Claude adapter for a head that is not in the repository.
-fn claude_head_refusal() -> String {
-    let wrapper = go_json(&json!({
-        "protocol": CLAUDE_RESULT_PROTOCOL,
-        "mode": "structured",
-        "exit_code": 64,
-        "stdout_base64": "",
-        "stderr_base64": STANDARD.encode(format!("claude-adapter: {HEAD_UNAVAILABLE_MESSAGE}\n")),
-        "refusal": "head_unavailable",
-    }))
-    .expect("the fake encodes the Claude refusal");
-    format!("{wrapper}\n")
-}
-
-/// Returns the output of the Codex adapter when it refuses the checkout of `request`.
-///
-/// `session` names the worktree's checkout; `missing` says its head is not in the repository.
-fn codex_checkout_refusal(
-    request: &SessionRequest,
-    session: &str,
-    missing: bool,
-) -> Option<String> {
     let lines: Vec<&str> = request
         .prompt
         .lines()
@@ -985,16 +906,7 @@ fn codex_checkout_refusal(
         [line] => Some(*line),
         _ => None,
     };
-    if named != Some(session) {
-        return Some("[pohunek-codex-review exited with status 64]\n".to_owned());
-    }
-    missing.then(|| {
-        format!(
-            "codex-adapter: {HEAD_UNAVAILABLE_MESSAGE}\n\n\
-[pohunek-codex-review-refused-v1:head_unavailable]\n\
-[pohunek-codex-review exited with status 64]\n"
-        )
-    })
+    (named != Some(session)).then(|| "[pohunek-codex-review exited with status 64]\n".to_owned())
 }
 
 /// Returns the output of a Codex reviewer run with `findings` and the verdicts `prior`.
