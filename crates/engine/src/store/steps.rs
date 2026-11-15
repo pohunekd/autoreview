@@ -6,6 +6,7 @@
 // Rust guideline compliant 2026-06-26
 
 use autoreview_go_compat::go_time::format_rfc3339_nano;
+use rusqlite::types::ToSql;
 use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 
@@ -158,39 +159,67 @@ impl Store {
     pub(super) fn stats_step_runs(
         connection: &Connection,
         (start, end): (OffsetDateTime, OffsetDateTime),
-    ) -> Result<Vec<StepRun>, Error> {
+    ) -> Result<Vec<EndedStepRun>, Error> {
         let finished = time_key("finished_at");
         let (low, high) = (time_key("?1"), time_key("?2"));
         let sql = format!(
-            "SELECT step, outcome, retries, duration_ms FROM review_step_runs \
+            "SELECT step, outcome, retries, duration_ms, finished_at FROM review_step_runs \
              WHERE {finished} >= {low} AND {finished} < {high} ORDER BY workflow_id, step"
         );
-        let mut statement = connection.prepare(&sql).map_err(unavailable)?;
         let (start, end) = (format_rfc3339_nano(start), format_rfc3339_nano(end));
-        let rows = statement
-            .query_map(params![start, end], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                ))
-            })
-            .map_err(unavailable)?;
-        let mut runs = Vec::new();
-        for row in rows {
-            let (step, outcome, retries, duration_ms) = row.map_err(unavailable)?;
-            if let (Some(step), Some(outcome)) =
-                (ReviewStep::parse(&step), StepOutcome::parse(&outcome))
-            {
-                runs.push(StepRun {
+        collect_step_runs(connection, &sql, &[&start, &end])
+    }
+}
+
+/// One recorded run of a step with the time it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EndedStepRun {
+    /// The run.
+    pub run: StepRun,
+    /// End of the run, as RFC 3339 text.
+    pub finished_at: String,
+}
+
+/// Runs a step run select of `step, outcome, retries, duration_ms, finished_at`.
+///
+/// A row whose step or outcome this version does not know is left out.
+///
+/// # Errors
+///
+/// Returns `store_unavailable` when SQLite fails.
+pub(super) fn collect_step_runs(
+    connection: &Connection,
+    sql: &str,
+    params: &[&dyn ToSql],
+) -> Result<Vec<EndedStepRun>, Error> {
+    let mut statement = connection.prepare(sql).map_err(unavailable)?;
+    let rows = statement
+        .query_map(params, |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(unavailable)?;
+    let mut runs = Vec::new();
+    for row in rows {
+        let (step, outcome, retries, duration_ms, finished_at) = row.map_err(unavailable)?;
+        if let (Some(step), Some(outcome)) =
+            (ReviewStep::parse(&step), StepOutcome::parse(&outcome))
+        {
+            runs.push(EndedStepRun {
+                run: StepRun {
                     step,
                     outcome,
                     retries,
                     duration_ms,
-                });
-            }
+                },
+                finished_at,
+            });
         }
-        Ok(runs)
     }
+    Ok(runs)
 }

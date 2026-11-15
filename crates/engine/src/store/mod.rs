@@ -23,6 +23,7 @@ use serde::Serialize;
 
 pub mod discovery;
 pub mod reviews;
+pub mod rollup;
 pub mod steps;
 
 pub use discovery::{
@@ -30,9 +31,10 @@ pub use discovery::{
 };
 pub use reviews::{
     RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
-    REVIEW_RUNNING, ReviewFilter, StoredReview,
+    REVIEW_RUNNING, ReviewFilter, StatsSnapshot, StoredReview,
 };
-pub use steps::{ReviewStep, StepOutcome, StepRun};
+pub use rollup::{Rollup, RollupCount, RollupSample};
+pub use steps::{EndedStepRun, ReviewStep, StepOutcome, StepRun};
 
 /// Schema version stored in `PRAGMA user_version`; a newer database is refused.
 const STORE_SCHEMA_VERSION: i64 = 1;
@@ -204,7 +206,8 @@ impl Store {
 
     /// Creates the schema and stamps the version, after refusing a newer database.
     ///
-    /// Adds the step runs table without a new version, so earlier releases still open the file.
+    /// Adds the step runs and rollup tables without a new version, so earlier releases still
+    /// open the file.
     fn migrate(&self) -> Result<(), Error> {
         let connection = self.lock_connection()?;
         let version: i64 = connection
@@ -222,6 +225,9 @@ impl Store {
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .execute_batch(steps::STEP_RUNS_SCHEMA)
+            .map_err(|err| store_error("store_unavailable", true, err))?;
+        connection
+            .execute_batch(rollup::ROLLUP_SCHEMA)
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .pragma_update(None, "user_version", STORE_SCHEMA_VERSION)

@@ -210,7 +210,7 @@ passes:
 
 | Key | Removes | Why |
 |---|---|---|
-| `store.review_retention_seconds` | Completed reviews whose last update is older than this | Their steps are no longer needed to resume anything |
+| `store.review_retention_seconds` | Completed reviews whose last update is older than this; their counts move to the daily statistics rollup, which has no retention | Their steps are no longer needed to resume anything |
 | `store.published_retention_seconds` | Published decisions older than this | A published decision is the baseline of the next incremental review. Older baselines are not used. |
 
 Two consequences follow from the retention periods:

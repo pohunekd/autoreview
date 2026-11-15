@@ -28,9 +28,10 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   changes nothing. Both forms read the discovery state. Without `--since` they read the
   reviews that are not completed, through the status index. With `--since` they read the
   whole `reviews` and `review_step_runs` tables, so the cost grows with
-  `store.review_retention_seconds`, which decides how many reviews the store keeps. The
-  reviews, the step runs and the discovery state come from one read transaction, so all
-  counts describe the same moment.
+  `store.review_retention_seconds`, which decides how many reviews the store keeps, and the
+  rollup rows of the range's days (see [History](#history)). The reviews, the step runs,
+  the rollup and the discovery state come from one read transaction, so all counts
+  describe the same moment.
 - `autoreview serve` can serve the same numbers to Prometheus; see
   [Prometheus metrics](#prometheus-metrics).
 
@@ -136,8 +137,12 @@ autoreview stats --json | jq -r '.current.stopped_by_repository[] | "\(.key) \(.
 - `since`, `until`: the range; `until` is today (UTC) when `--until` is absent.
 - `pruned_before`: now minus `store.review_retention_seconds`. Completed reviews last
   updated before this instant may already be deleted (see
-  [retention](knowledge/concepts/state-and-recovery.md#retention)), so the counts of
-  earlier days can be too low.
+  [retention](knowledge/concepts/state-and-recovery.md#retention)). The prune that deletes
+  them adds their counts, their publication times and their step runs to a daily rollup
+  in the store, in the same transaction, so every count of the document stays complete.
+  The rollup has no retention. Reviews pruned by an engine before this version, or by an
+  earlier release after a rollback, are not in the rollup; the counts of their days can
+  be too low.
 - `totals`: the counters over the whole range.
 - `days`: one entry per UTC day of the range, in order, every day present.
 - `by_repository`, `by_rule` and `by_reviewer`: the counters over the whole range per
@@ -238,9 +243,10 @@ reaches the step, the step records the time and the retries of its resumed part 
 step whose outcome is stored keeps its record, and the resumed review does not run it
 again. A record that cannot be written fails that write like any other store error.
 
-The step runs are deleted with their review (see `pruned_before`). Reviews that an engine
-before this version ran have no step runs, so they count in no step; a review that such an
-engine started records only the steps that end after the update.
+The step runs are deleted with their review, and the prune adds their counts to the
+rollup (see `pruned_before`). Reviews that an engine before the step runs ran have no step
+runs, so they count in no step; a review that such an engine started records only the steps
+that end after the update.
 
 ```sh
 autoreview stats --since 2026-11-01 --json \
@@ -249,14 +255,15 @@ autoreview stats --since 2026-11-01 --json \
 
 ## Not in the document
 
-The store does not keep these, so the document leaves them out:
+The document leaves these out:
 
-- notes handed off per day, and stops per day: `stopped` is a current count, because the
-  schedule record does not keep the time of the stop;
+- notes handed off per day, and stops per day. The store records both in the rollup:
+  `notes_to_author` for a published review that handed its notes to the author, counted
+  when the review is pruned, and `stopped` for a schedule record that enters `failed`,
+  counted by day and repository when it happens. The document does not show them yet;
 - the duration of each reviewer on its own: the `reviewers` step covers every reviewer of
   a review, and the work between the steps (combining, anchoring, rendering) is in no step;
-- token or cost data, which pohunek does not report to autoreview;
-- days before `pruned_before`, which need a rollup table that outlives the retention.
+- token or cost data, which pohunek does not report to autoreview.
 
 ## Text form
 

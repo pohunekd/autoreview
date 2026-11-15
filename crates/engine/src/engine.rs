@@ -268,7 +268,11 @@ where
         match live(cancel).and_then(|()| self.store.prune_reviews(cutoff)) {
             Err(err) => {
                 if !cancel.is_cancelled() {
-                    tracing::error!(error_code = error_code(&err), "review pruning failed");
+                    tracing::error!(
+                        error_code = error_code(&err),
+                        error = %err,
+                        "review pruning failed"
+                    );
                 }
             }
             Ok(removed) => {

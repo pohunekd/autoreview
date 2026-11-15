@@ -14,7 +14,6 @@ use crate::integrations::{SessionRequest, TokenAnswer};
 use crate::model::RejectedCandidate;
 use crate::model::review::Decision;
 use crate::protocol::fixtures::sha;
-use crate::store::discovery::save_discovery;
 use crate::testing::fake::{count_notes, reviewer_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
 
@@ -99,7 +98,7 @@ async fn clean_review_of_an_approving_rule_is_approved_once_without_the_user() {
         .skipped
         .insert("acme/hidden#8".to_owned(), "untrusted_author".to_owned());
     (h.store
-        .in_tx(|transaction| save_discovery(transaction, &state)))
+        .in_tx(|transaction| h.store.save_discovery(transaction, &state)))
     .expect("the discovery state saves");
     let next = integration_pull_request("acme/gadget", &sha("c"));
     h.fake.open(next.clone(), h.rule(&next.repository));
