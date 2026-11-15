@@ -56,7 +56,6 @@ PERMISSION_WIDENING_OPTIONS = {
     "--permission-prompts",
     "--plugin-dir",
     "--plugin-url",
-    "--strict-mcp-config",
     "--tools",
 }
 WRAPPER_CONTROLLED_ARGUMENTS = {
@@ -68,6 +67,7 @@ WRAPPER_CONTROLLED_ARGUMENTS = {
     "--resume",
     "--setting-sources",
     "--settings",
+    "--strict-mcp-config",
     "-c",
     "-p",
     "-r",

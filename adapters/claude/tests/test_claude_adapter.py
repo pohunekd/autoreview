@@ -141,6 +141,7 @@ class InputFrameTests(unittest.TestCase):
         tail = [
             "--setting-sources",
             "user",
+            "--strict-mcp-config",
             "--print",
             "--output-format",
             "json",
@@ -641,6 +642,7 @@ class ProfileInstallerTests(unittest.TestCase):
             "--output-format=stream-json",
             "--setting-sources=project",
             "--settings",
+            "--strict-mcp-config",
         ):
             with self.subTest(controlled_argument=controlled_argument):
                 with tempfile.TemporaryDirectory() as directory:
@@ -686,7 +688,13 @@ class ProfileInstallerTests(unittest.TestCase):
             with self.subTest(argument=argument):
                 with self.assertRaisesRegex(ValueError, "wrapper-controlled"):
                     self.render_with_args([argument])
-        for argument in ("--resume", "--continue", "--print", "--json-schema"):
+        for argument in (
+            "--resume",
+            "--continue",
+            "--print",
+            "--json-schema",
+            "--strict-mcp-config",
+        ):
             self.assertIn(argument, installer.WRAPPER_CONTROLLED_ARGUMENTS)
 
     def test_rejects_permission_widening_arguments(self) -> None:
@@ -704,7 +712,6 @@ class ProfileInstallerTests(unittest.TestCase):
             ["--disallowed-tools", "Bash"],
             ["--mcp-config", "servers.json"],
             ["--mcp-config=servers.json"],
-            ["--strict-mcp-config"],
             ["--plugin-dir", "plugin"],
             ["--plugin-url", "https://example.invalid/p.zip"],
             ["--permission-prompt-tool", "tool"],

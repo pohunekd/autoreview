@@ -179,9 +179,9 @@ the Python standard library (Python 3.11 or newer). It has two parts:
 - `claude-adapter` is the program a profile starts. It runs under `python3 -I`
   (its first line is `#!/usr/bin/env -S python3 -I`). It reads one request that
   pohunek writes into the session, runs Claude Code once in print mode with
-  `--setting-sources user`, `--no-session-persistence` and, for a structured
-  request, `--json-schema`, and prints one result line that carries the exit
-  code and the output of the run, and the field `checked_checkout` with the
+  `--setting-sources user`, `--strict-mcp-config`, `--no-session-persistence`
+  and, for a structured request, `--json-schema`, and prints one result line
+  that carries the exit code and the output of the run, and the field `checked_checkout` with the
   checkout it checked (`base` or `head`). The Claude Code run gets the session
   environment without the pohunek session identity variables, the GitHub token
   variables (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
@@ -216,9 +216,9 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   runtime package pin, the arguments and the allowed environment keys (see
   [agent profiles](#agent-profiles)) of the base profile,
   refuses an argument that the adapter controls (`--print`, `--output-format`,
-  `--settings`, `--setting-sources`, `--json-schema`, `--resume`, `--continue`
-  and their short forms), and sets the model and the effort level of the new
-  profile. The profile also turns off resuming and disables prompt-box
+  `--settings`, `--setting-sources`, `--strict-mcp-config`, `--json-schema`,
+  `--resume`, `--continue` and their short forms), and sets the model and the
+  effort level of the new profile. The profile also turns off resuming and disables prompt-box
   detection, because the adapter reads its input without rendering one.
 
 The empty detection manifest (`rules = []`) is deliberate. The Claude runtime
@@ -240,8 +240,15 @@ and a refusal list for everything that widens access. The base profile must set
 refused. It must not carry any of `--dangerously-*`, `--allow-dangerously-*`,
 `--add-dir`, `--agents`, `--allowedTools` and `--allowed-tools`,
 `--disallowedTools` and `--disallowed-tools`, `--tools`, `--mcp-config`,
-`--strict-mcp-config`, `--plugin-dir`, `--plugin-url`, `--permission-prompt-tool`
+`--plugin-dir`, `--plugin-url`, `--permission-prompt-tool`
 and `--permission-prompts`, with or without `=value`.
+
+A Claude review run loads no MCP server. The adapter passes `--strict-mcp-config`
+and no `--mcp-config`, so Claude Code skips the servers of `~/.claude.json` (user
+and local scope), of plugins and of a `.mcp.json` in the review checkout. Print
+mode shows no approval prompt for a `.mcp.json` server, so the flag is what keeps
+out one that a `checkout: head` pull request adds. A Codex run passes
+`--ignore-user-config`, so no MCP server of the Codex user config loads.
 
 Configuration comes from the profile and a file next to the program, never from
 a default in the code:
