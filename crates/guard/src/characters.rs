@@ -10,8 +10,14 @@ const FLAG_BASE: char = '\u{1F3F4}';
 /// CANCEL TAG, the end of an emoji subdivision flag.
 const CANCEL_TAG: char = '\u{E007F}';
 
-/// Most tag letters and digits of a subdivision flag: a region of 2-3 and a suffix of 1-4.
-const FLAG_TAG_MAX: usize = 7;
+/// The tag letters of the subdivision flags in the recommended emoji set (UTS #51).
+///
+/// Any other tag sequence renders as a plain black flag on common platforms, so it could carry
+/// a payload of up to seven letters per flag.
+const RGI_FLAGS: [&[u8]; 3] = [b"gbeng", b"gbsct", b"gbwls"];
+
+/// Most tag letters kept for the comparison with `RGI_FLAGS`.
+const FLAG_LETTERS_MAX: usize = 5;
 
 /// Shortest run of zero-width characters or variation selectors that the scanner reports.
 ///
@@ -25,12 +31,17 @@ pub(crate) const fn tag(character: char) -> bool {
 }
 
 /// Reports whether a character shows no width: zero-width, soft hyphen or Hangul filler.
+///
+/// The class holds every Default_Ignorable_Code_Point that renders as nothing, except tags,
+/// variation selectors and bidi controls and marks, which have classes of their own.
 pub(crate) const fn zero_width(character: char) -> bool {
     matches!(
         character,
         '\u{00AD}'
+            | '\u{034F}'
             | '\u{115F}'
             | '\u{1160}'
+            | '\u{17B4}'..='\u{17B5}'
             | '\u{180E}'
             | '\u{200B}'..='\u{200D}'
             | '\u{2060}'..='\u{2064}'
@@ -38,12 +49,27 @@ pub(crate) const fn zero_width(character: char) -> bool {
             | '\u{3164}'
             | '\u{FEFF}'
             | '\u{FFA0}'
+            | '\u{1BCA0}'..='\u{1BCA3}'
+            | '\u{1D173}'..='\u{1D17A}'
+            | '\u{E0080}'..='\u{E00FF}'
+            | '\u{E01F0}'..='\u{E0FFF}'
     )
 }
 
-/// Reports whether a character is a variation selector, VS1-VS16 or VS17-VS256.
+/// Reports whether a character is a variation selector, Mongolian ones included.
 pub(crate) const fn variation_selector(character: char) -> bool {
-    matches!(character, '\u{FE00}'..='\u{FE0F}' | '\u{E0100}'..='\u{E01EF}')
+    matches!(
+        character,
+        '\u{180B}'..='\u{180D}'
+            | '\u{180F}'
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{E0100}'..='\u{E01EF}'
+    )
+}
+
+/// Reports whether a character is a bidi mark: ALM, LRM or RLM.
+const fn bidi_mark(character: char) -> bool {
+    matches!(character, '\u{061C}' | '\u{200E}' | '\u{200F}')
 }
 
 /// Reports whether a character is a bidi override, U+202D or U+202E.
@@ -58,15 +84,14 @@ const fn bidi_embedding_or_isolate(character: char) -> bool {
 
 /// Reports whether a character is dropped before words are compared.
 ///
-/// Besides the classes above it covers the bidi marks U+200E, U+200F and U+061C, so a
-/// phrase split by any invisible character still matches.
+/// It covers every class above, so a phrase split by any invisible character still matches.
 pub(crate) const fn invisible(character: char) -> bool {
     tag(character)
         || zero_width(character)
         || variation_selector(character)
         || bidi_override(character)
         || bidi_embedding_or_isolate(character)
-        || matches!(character, '\u{061C}' | '\u{200E}' | '\u{200F}')
+        || bidi_mark(character)
 }
 
 /// The state of one run of tag characters.
@@ -74,8 +99,10 @@ pub(crate) const fn invisible(character: char) -> bool {
 struct TagRun {
     /// The run directly follows `FLAG_BASE`.
     after_flag_base: bool,
-    /// Tag letters and digits before the cancel tag.
-    letters: usize,
+    /// Tag letters and digits before the cancel tag, as ASCII, up to `FLAG_LETTERS_MAX`.
+    letters: [u8; FLAG_LETTERS_MAX],
+    /// Number of tag letters and digits before the cancel tag.
+    len: usize,
     /// The cancel tag was seen.
     cancelled: bool,
     /// The run holds a tag character that no subdivision flag allows at that place.
@@ -90,18 +117,24 @@ impl TagRun {
             self.cancelled = true;
         } else if matches!(character, '\u{E0030}'..='\u{E0039}' | '\u{E0061}'..='\u{E007A}') {
             self.foreign |= self.cancelled;
-            self.letters = self.letters.saturating_add(1);
+            let ascii = u32::from(character)
+                .checked_sub(0xE0000)
+                .and_then(|code| u8::try_from(code).ok())
+                .unwrap_or_default();
+            match self.letters.get_mut(self.len) {
+                Some(slot) => *slot = ascii,
+                None => self.foreign = true,
+            }
+            self.len = self.len.saturating_add(1);
         } else {
             self.foreign = true;
         }
     }
 
-    /// Reports whether the finished run is one emoji subdivision flag.
+    /// Reports whether the finished run is one of the `RGI_FLAGS`.
     fn is_flag(&self) -> bool {
-        self.after_flag_base
-            && !self.foreign
-            && self.cancelled
-            && (1..=FLAG_TAG_MAX).contains(&self.letters)
+        let letters = self.letters.get(..self.len).unwrap_or_default();
+        self.after_flag_base && !self.foreign && self.cancelled && RGI_FLAGS.contains(&letters)
     }
 }
 
@@ -114,6 +147,7 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
     let mut zero_width_len = 0_usize;
     let mut selector_len = 0_usize;
     for character in text.chars() {
+        let (zero, selector) = (zero_width(character), variation_selector(character));
         if tag(character) {
             tag_run
                 .get_or_insert_with(|| TagRun {
@@ -124,7 +158,7 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
         } else if let Some(run) = tag_run.take() {
             add(Signal::UnicodeTags, u32::from(!run.is_flag()));
         }
-        zero_width_len = if zero_width(character) {
+        zero_width_len = if zero {
             zero_width_len.saturating_add(1)
         } else {
             0
@@ -132,7 +166,7 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
         if zero_width_len == RUN_MIN {
             add(Signal::ZeroWidthRun, 1);
         }
-        selector_len = if variation_selector(character) {
+        selector_len = if selector {
             selector_len.saturating_add(1)
         } else {
             0
