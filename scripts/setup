@@ -1318,7 +1318,7 @@ print_plan() {
 
 # Prints the plan lines of the secrets, the profiles, the packages and the hooks.
 plan_profiles() {
-    local name state agent
+    local name state agent absent=0
     local -a known=()
     check_secrets >/dev/null
     if [ -n "$secrets_missing" ]; then
@@ -1339,11 +1339,18 @@ plan_profiles() {
                 is_one_of "${state#ours }" "${known[@]}" || known+=("${state#ours }")
                 ;;
             absent)
-                plan "agent profile $name" "will run (asks agent, model, effort, limits, timeout)"
+                plan "agent profile $name" "will run (asks agent, model, effort, limits)"
+                absent=1
                 ;;
             *) plan "agent profile $name" "stops: not written by autoreview" ;;
         esac
     done
+    # collect_profiles asks the timeout once for all absent profiles, unless the flag gave it.
+    if [ "$absent" -eq 1 ] && [ -n "$pohunek_timeout" ]; then
+        plan "pohunek timeout of profiles install" "$pohunek_timeout s from the flag"
+    elif [ "$absent" -eq 1 ]; then
+        plan "pohunek timeout of profiles install" "asked once"
+    fi
     for agent in "${known[@]}"; do
         state=$(package_state "$agent") || state="unreadable"
         if [ "$state" = present ]; then
