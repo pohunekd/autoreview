@@ -204,6 +204,7 @@ name = "autoreview-policy"
 version = "0.4.0"
 dependencies = [
  "autoreview-go-compat",
+ "autoreview-guard",
  "hex",
  "serde",
  "serde-saphyr",

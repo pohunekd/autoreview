@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 autoreview-go-compat = { path = "../go-compat" }
+autoreview-guard = { path = "../guard" }
 hex = { workspace = true }
 serde = { workspace = true }
 serde-saphyr = { workspace = true }

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 mod author_limit;
 mod authors;
 mod digest;
+mod guard;
 mod human_review;
 mod parse;
 mod query;
@@ -18,6 +19,7 @@ pub use authors::{
     AuthorClass, AuthorType, Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview,
     login_valid, user_login_valid,
 };
+pub use guard::{OnSuspect, RuleGuard};
 pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};
 pub use types::{
@@ -414,6 +416,41 @@ pub enum Error {
     /// A rule's author limit outcome is unknown.
     #[error("author_limit.over must be wait or skip")]
     AuthorLimitOver,
+
+    /// A rule's guard is null.
+    #[error("guard must be a mapping with fields, threshold and on_suspect")]
+    GuardNull,
+
+    /// A rule's guard names no field.
+    #[error("guard.fields must name at least one field")]
+    GuardFieldsEmpty,
+
+    /// A rule's guard names a field the guard does not scan.
+    #[error("guard.fields: {field:?} is not one of {known}")]
+    GuardField {
+        /// The rejected field.
+        field: String,
+        /// The codes of every field the guard scans.
+        known: String,
+    },
+
+    /// A rule's guard names a field twice.
+    #[error("guard.fields: {field:?} is listed twice")]
+    GuardFieldRepeated {
+        /// The repeated field.
+        field: String,
+    },
+
+    /// A rule's guard threshold is missing or out of range.
+    #[error("guard.threshold must be between 1 and {max}")]
+    GuardThreshold {
+        /// Largest threshold allowed.
+        max: u32,
+    },
+
+    /// A rule's guard outcome is unknown.
+    #[error("guard.on_suspect must be await, comment or log")]
+    GuardOnSuspect,
 
     /// The trusted value of a rule's authors is not any or a usable mapping.
     #[error("authors.trusted must be any or a mapping with logins or permission")]
