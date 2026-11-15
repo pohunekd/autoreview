@@ -9,6 +9,7 @@ pub mod discussion;
 pub(crate) mod engine;
 pub mod error;
 pub mod integrations;
+pub(crate) mod intent;
 pub mod mcp;
 pub(crate) mod messages;
 pub mod metrics;
