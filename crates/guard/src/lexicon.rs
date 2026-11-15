@@ -97,3 +97,68 @@ impl Lexicon {
             .filter_map(|&index| self.entries.get(index).map(|entry| entry.weight))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Lexicon;
+    use crate::Error;
+
+    /// Each row holds a lexicon shape, its text and the parse result.
+    ///
+    /// The result is the number of entries, or the error of the first invalid line.
+    #[test]
+    fn lexicon_parse_accepts_the_format_and_names_the_first_invalid_line() {
+        let fixture = include_str!("../testdata/phrases.txt");
+        let cases: [(&str, &str, Result<usize, Error>); 13] = [
+            ("fixture_lexicon", fixture, Ok(6)),
+            (
+                "comments_blank_lines_and_crlf",
+                "# c\r\n\r\n  \t\r\n7 a b\r\n",
+                Ok(1),
+            ),
+            ("weight_bounds", "1 low\n100 high", Ok(2)),
+            ("only_comments", "# nothing\n\n", Err(Error::LexiconEmpty)),
+            ("empty_text", "", Err(Error::LexiconEmpty)),
+            (
+                "weight_zero",
+                "\n0 phrase",
+                Err(Error::LexiconWeight { line: 2 }),
+            ),
+            (
+                "weight_above_max",
+                "101 phrase",
+                Err(Error::LexiconWeight { line: 1 }),
+            ),
+            (
+                "weight_signed",
+                "+5 phrase",
+                Err(Error::LexiconWeight { line: 1 }),
+            ),
+            (
+                "weight_overflow",
+                "99999999999 phrase",
+                Err(Error::LexiconWeight { line: 1 }),
+            ),
+            (
+                "phrase_first",
+                "phrase 5",
+                Err(Error::LexiconWeight { line: 1 }),
+            ),
+            ("weight_alone", "5", Err(Error::LexiconPhrase { line: 1 })),
+            (
+                "phrase_of_punctuation",
+                "5 -- !! \u{200B}",
+                Err(Error::LexiconPhrase { line: 1 }),
+            ),
+            (
+                "duplicate_after_normalizing",
+                "5 Ignore previous\n# x\n9 ignore,  PREVIOUS",
+                Err(Error::LexiconDuplicate { line: 3, first: 1 }),
+            ),
+        ];
+        for (name, text, expected) in cases {
+            let got = Lexicon::parse(text).map(|lexicon| lexicon.entries.len());
+            assert_eq!(got, expected, "row {name}");
+        }
+    }
+}
