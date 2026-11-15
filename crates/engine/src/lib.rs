@@ -36,4 +36,6 @@ pub use error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code
 #[doc(inline)]
 pub use protocol::request::go_json;
 #[doc(inline)]
+pub use review::guard::guard_outcome;
+#[doc(inline)]
 pub use review_queue::QueueResult;
