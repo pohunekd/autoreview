@@ -33,6 +33,7 @@ use crate::model::{
 };
 use crate::notify::Notification;
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
+use crate::protocol::codex::request_nonce;
 use crate::protocol::request::{checkout_name, go_json};
 use crate::publish::marker_forms;
 use crate::verify::{
@@ -796,7 +797,7 @@ pub(crate) fn request_claims(prompt: &str) -> VerificationClaims {
 ///
 /// Like the Codex adapter in `adapters/`, it reads the checkout from the one trusted checkout
 /// line of the prompt, `head` when there is none, and refuses one that differs from the
-/// session's: no result frame, the exit line with status 64.
+/// session's: no result frame, the exit line with status 64 bound to the request's nonce.
 fn adapter_refusal(request: &SessionRequest) -> Option<String> {
     if request.reviewer.protocol != Protocol::CodexEnvelope {
         return None;
@@ -816,12 +817,22 @@ fn adapter_refusal(request: &SessionRequest) -> Option<String> {
         [line] => Some(*line),
         _ => None,
     };
-    (named != Some(session)).then(|| "[pohunek-codex-review exited with status 64]\n".to_owned())
+    (named != Some(session))
+        .then(|| format!("{}64]\n", codex_marker(request, "exited with status ")))
 }
 
-/// Returns the output of a Codex reviewer run with `findings` and the verdicts `prior`.
+/// Returns the opening of the Codex marker `name` of `request`, bound to its nonce.
+///
+/// Like the adapter, it reads the nonce from the one nonce line of the prompt.
+fn codex_marker(request: &SessionRequest, name: &str) -> String {
+    let nonce = request_nonce(&request.prompt).expect("a Codex request carries one nonce");
+    format!("[autoreview-codex/v2 {nonce} {name}")
+}
+
+/// Returns the output of a Codex reviewer run of `request` with `findings` and the verdicts
+/// `prior`.
 fn codex_output(
-    pull_request: &PullRequest,
+    request: &SessionRequest,
     findings: &[Value],
     prior: &[Value],
     status: i64,
@@ -831,13 +842,16 @@ fn codex_output(
         "summary": "Full review of the pull request diff; details follow.",
         "tests": ["go test ./..."],
         "status": "completed",
-        "reviewed_head_sha": pull_request.head_sha,
+        "reviewed_head_sha": request.pull_request.head_sha,
         "prior_findings": prior,
     }))
     .expect("the fake encodes the Codex report");
     let encoded = STANDARD.encode(report);
-    let prefix = format!("[pohunek-codex-review-result-v1:{encoded}]\n");
-    let status_line = format!("[pohunek-codex-review exited with status {status}]\n");
+    let prefix = format!("{}{encoded}]\n", codex_marker(request, "result:"));
+    let status_line = format!(
+        "{}{status}]\n",
+        codex_marker(request, "exited with status ")
+    );
     format!("{prefix}{status_line}")
 }
 
@@ -928,7 +942,7 @@ pub(crate) fn settling_output(
                     Value::Object(merged)
                 })
                 .collect();
-            return codex_output(&request.pull_request, &codex_findings, &verdicts, 0);
+            return codex_output(request, &codex_findings, &verdicts, 0);
         }
         let claude_findings: Vec<Value> = findings
             .iter()

@@ -28,6 +28,7 @@ use crate::model::{
     ReviewOutcome,
 };
 use crate::prior::settle_prior;
+use crate::protocol::codex::new_nonce;
 use crate::protocol::combine::combine_results;
 use crate::protocol::request::build_reviewer_request;
 use crate::publish::anchor::anchor_findings;
@@ -142,13 +143,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
         }
         for reviewer in review.input.reviewers.clone() {
-            let prompt = match build_reviewer_request(
-                &self.config,
-                &review.input,
-                &reviewer,
-                &review.discussion,
-                None,
-            ) {
+            let prompt = match new_nonce().and_then(|nonce| {
+                build_reviewer_request(
+                    &self.config,
+                    &review.input,
+                    &reviewer,
+                    &review.discussion,
+                    &nonce,
+                    None,
+                )
+            }) {
                 Ok(prompt) => prompt,
                 Err(err) => return review.fail(err).await,
             };

@@ -20,12 +20,23 @@ use tokio_util::sync::CancellationToken;
 use super::sessions::session_list_arguments;
 use super::{decode_ok, decode_strict, pohunek_call, response_invalid};
 
-/// Prefixes of the line that the Codex adapter prints with its run status: the one of
-/// `autoreview-codex/v1`, then the legacy one that older adapters print.
+/// Prefixes of the line that older Codex adapters print with their run status: the one of
+/// `autoreview-codex/v1`, then the legacy one.
+///
+/// The engine refuses their output, but reads it to the end to say why.
 const CODEX_EXIT_PREFIXES: [&[u8]; 2] = [
     b"[autoreview-codex/v1 exited with status ",
     b"[pohunek-codex-review exited with status ",
 ];
+
+/// Opening of the exit line of `autoreview-codex/v2`; the nonce follows it.
+const CODEX_NONCE_EXIT_OPEN: &[u8] = b"[autoreview-codex/v2 ";
+
+/// Text between the nonce and the status of the exit line of `autoreview-codex/v2`.
+const CODEX_NONCE_EXIT_CLOSE: &[u8] = b" exited with status ";
+
+/// Length of the nonce of `autoreview-codex/v2` in lowercase hex characters.
+const CODEX_NONCE_CHARACTERS: usize = 32;
 
 /// Line endings that may follow the Codex exit line at the end of the output.
 ///
@@ -215,7 +226,8 @@ pub(crate) fn output_complete(protocol: &Protocol, output: &[u8]) -> bool {
 /// Reports whether `text` ends with a whole Codex exit line, its line ending removed.
 ///
 /// The line starts the text or follows `\n`, and holds a prefix, a decimal status (`-` before
-/// it for a signal) and `]`, as the adapter prints it.
+/// it for a signal) and `]`, as the adapter prints it. The prefix of `autoreview-codex/v2`
+/// holds a nonce-shaped token; the parser checks that it is the request's nonce.
 fn ends_with_codex_exit_line(text: &[u8]) -> bool {
     let Some(line) = text.strip_suffix(b"]") else {
         return false;
@@ -232,10 +244,27 @@ fn ends_with_codex_exit_line(text: &[u8]) -> bool {
         return false;
     };
     let rest = rest.strip_suffix(b"-").unwrap_or(rest);
-    CODEX_EXIT_PREFIXES.iter().any(|prefix| {
-        rest.strip_suffix(*prefix)
-            .is_some_and(|start| start.is_empty() || start.ends_with(b"\n"))
-    })
+    CODEX_EXIT_PREFIXES
+        .iter()
+        .filter_map(|prefix| rest.strip_suffix(*prefix))
+        .chain(strip_nonce_exit_prefix(rest))
+        .any(|start| start.is_empty() || start.ends_with(b"\n"))
+}
+
+/// Returns `text` without the `autoreview-codex/v2` exit line prefix that ends it.
+///
+/// The prefix holds `CODEX_NONCE_CHARACTERS` lowercase hex characters as its nonce.
+fn strip_nonce_exit_prefix(text: &[u8]) -> Option<&[u8]> {
+    let rest = text.strip_suffix(CODEX_NONCE_EXIT_CLOSE)?;
+    let start = rest.len().checked_sub(CODEX_NONCE_CHARACTERS)?;
+    let nonce = rest.get(start..)?;
+    if !nonce
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return None;
+    }
+    rest.get(..start)?.strip_suffix(CODEX_NONCE_EXIT_OPEN)
 }
 
 /// Reports whether `output`, read up to a chunk, is the complete output of a reviewer.
@@ -450,10 +479,10 @@ mod tests {
     use super::{history_complete, output_complete};
 
     // A Codex session is complete at the exit line of either marker name (#24), only when it is
-    // the last line (#396).
+    // the last line (#396), and at the nonce-bound exit line of `autoreview-codex/v2` (#408).
     #[test]
     fn codex_output_is_complete_at_the_exit_line_of_either_name() {
-        let cases: [(&[u8], bool); 18] = [
+        let cases: [(&[u8], bool); 23] = [
             (b"[autoreview-codex/v1 exited with status 0]\n", true),
             (b"[pohunek-codex-review exited with status 0]\n", true),
             (b"text\n[autoreview-codex/v1 exited with status ", false),
@@ -497,6 +526,30 @@ mod tests {
             ),
             (b"text\n[autoreview-codex/v1 exited with status 64]", true),
             (b"text\n[pohunek-codex-review exited with status 1]\r", true),
+            // The exit line of v2 carries a nonce of 32 lowercase hex characters.
+            (
+                b"text\r\n[autoreview-codex/v2 00112233445566778899aabbccddeeff \
+                  exited with status 0]\r\n",
+                true,
+            ),
+            (
+                b"[autoreview-codex/v2 00112233445566778899aabbccddeeff exited with status -9]",
+                true,
+            ),
+            (
+                b"text\n[autoreview-codex/v2 0011223344556677889aabbccddeeff \
+                  exited with status 0]\n",
+                false,
+            ),
+            (
+                b"text\n[autoreview-codex/v2 00112233445566778899AABBCCDDEEFF \
+                  exited with status 0]\n",
+                false,
+            ),
+            (
+                b"+[autoreview-codex/v2 00112233445566778899aabbccddeeff exited with status 0]\n",
+                false,
+            ),
         ];
         for (output, complete) in cases {
             let text = String::from_utf8_lossy(output);

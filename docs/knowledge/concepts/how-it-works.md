@@ -168,8 +168,8 @@ request also the limit of each prior-finding note, so the reviewer knows them
 before it writes.
 
 A reviewer run that ends in `review_output_incomplete` (an empty output),
-`review_wrapper_invalid`, `review_result_invalid` or `review_output_invalid`
-(a check of this list) gets a fresh session, up to
+`review_wrapper_invalid`, `review_result_invalid`, `review_nonce_mismatch` or
+`review_output_invalid` (a check of this list) gets a fresh session, up to
 `session.reviewer_run_max_attempts`. When the engine's output check refused the
 run (`review_output_invalid`), the request of the fresh run says so in one
 fixed sentence after the limits. Once the attempts are spent, the review fails

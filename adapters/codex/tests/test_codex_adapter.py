@@ -29,6 +29,7 @@ HEAD = "a" * 40
 POHUNEK_NO_DAEMON = "--no-daemon"
 COMMITTER = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
 UNSIGNED = ["-c", "commit.gpgsign=false"]
+NONCE = "00112233445566778899aabbccddeeff"
 
 
 def load_module(name: str, path: Path):
@@ -286,10 +287,15 @@ class WrapperTests(unittest.TestCase):
 
     def test_trusted_head_must_be_unambiguous(self) -> None:
         self.assertEqual(wrapper.trusted_head_sha("- Trusted head SHA: " + HEAD), HEAD)
-        with self.assertRaisesRegex(wrapper.InputFrameError, "missing or ambiguous"):
-            wrapper.trusted_head_sha(
-                "- Trusted head SHA: " + HEAD + "\n- Trusted head SHA: " + HEAD
-            )
+        # The head line of an engine of autoreview-codex/v2 (#408).
+        self.assertEqual(wrapper.trusted_head_sha("- Trusted head commit: " + HEAD), HEAD)
+        for prompt in (
+            "- Trusted head SHA: " + HEAD + "\n- Trusted head SHA: " + HEAD,
+            "- Trusted head SHA: " + HEAD + "\n- Trusted head commit: " + HEAD,
+        ):
+            with self.subTest(prompt=prompt):
+                with self.assertRaisesRegex(wrapper.InputFrameError, "missing or ambiguous"):
+                    wrapper.trusted_head_sha(prompt)
 
     def test_trusted_checkout_must_be_unambiguous(self) -> None:
         self.assertEqual(wrapper.trusted_checkout("- Trusted checkout: base"), "base")
@@ -308,23 +314,52 @@ class WrapperTests(unittest.TestCase):
 
     def test_trusted_protocol_line_selects_the_markers(self) -> None:
         # A prompt of an older engine has no protocol line and gets the legacy markers (#24).
-        self.assertEqual(
-            wrapper.result_markers("- Trusted checkout: base").result_prefix,
-            "[pohunek-codex-review-result-v1:",
+        for prompt, prefix in (
+            ("- Trusted checkout: base", "[pohunek-codex-review-result-v1:"),
+            ("- Trusted protocol: autoreview-codex/v1", "[autoreview-codex/v1 result:"),
+        ):
+            with self.subTest(prompt=prompt):
+                markers, codex_prompt = wrapper.result_markers(prompt)
+                self.assertEqual(markers.result_prefix, prefix)
+                self.assertEqual(codex_prompt, prompt)
+        # Under v2 every marker carries the nonce, and Codex gets the prompt without it (#408).
+        v2 = "- Trusted protocol: autoreview-codex/v2"
+        markers, codex_prompt = wrapper.result_markers(
+            f"Review.\n{v2}\n- Trusted nonce: {NONCE}\n- Base branch: main"
         )
         self.assertEqual(
-            wrapper.result_markers("- Trusted protocol: autoreview-codex/v1").result_prefix,
-            "[autoreview-codex/v1 result:",
+            markers,
+            wrapper.Markers(
+                result_prefix=f"[autoreview-codex/v2 {NONCE} result:",
+                exit_line_format=f"[autoreview-codex/v2 {NONCE} exited with status {{}}]",
+                refusal_format=f"[autoreview-codex/v2 {NONCE} refused:{{}}]",
+                reason_format=f"[autoreview-codex/v2 {NONCE} reason:{{}}]",
+            ),
         )
+        self.assertEqual(codex_prompt, f"Review.\n{v2}\n- Base branch: main")
         for prompt in (
             "- Trusted protocol: autoreview-codex/v1\n- Trusted protocol: autoreview-codex/v1",
-            "- Trusted protocol: autoreview-codex/v2",
+            "- Trusted protocol: autoreview-codex/v3",
             "- Trusted protocol: autoreview-claude/v1",
             "- Trusted protocol: autoreview-codex/v1 ",
             "- Trusted protocol: ",
         ):
             with self.subTest(prompt=prompt):
                 with self.assertRaisesRegex(wrapper.InputFrameError, "ambiguous or unknown"):
+                    wrapper.result_markers(prompt)
+        line = f"- Trusted nonce: {NONCE}"
+        for prompt, message in (
+            (v2, "nonce is missing"),
+            (f"{v2}\n{line}\n{line}", "nonce is missing"),
+            (f"{v2}\n{line.upper()}".replace("- TRUSTED NONCE", "- Trusted nonce"), "nonce is"),
+            (f"{v2}\n{line[:-1]}", "nonce is missing"),
+            (f"{v2}\n{line} ", "nonce is missing"),
+            (f"{v2}\n{line}\r", "nonce is missing"),
+            (line, "valid only with autoreview-codex/v2"),
+            (f"- Trusted protocol: autoreview-codex/v1\n{line}", "valid only with"),
+        ):
+            with self.subTest(prompt=prompt):
+                with self.assertRaisesRegex(wrapper.InputFrameError, message):
                     wrapper.result_markers(prompt)
 
     def test_checkout_head_must_match_trusted_pull_request_head(self) -> None:
@@ -457,13 +492,20 @@ class BaseCheckoutTests(unittest.TestCase):
         ).returncode == 0
 
     def prompt(self, protocol: str | None = None) -> str:
-        """Returns the prompt of an engine; one that names `protocol` has its protocol line."""
+        """Returns the prompt of an engine; one that names `protocol` has its protocol line.
+
+        A prompt of `autoreview-codex/v2` carries `NONCE` on its nonce line.
+        """
         protocol_line = f"\n- Trusted protocol: {protocol}" if protocol is not None else ""
+        head_line = "- Trusted head SHA:"
+        if protocol == "autoreview-codex/v2":
+            protocol_line += f"\n- Trusted nonce: {NONCE}"
+            head_line = "- Trusted head commit:"
         return (
             "Review the pull request.\n\nTrusted review context:\n"
             "- Repository: acme/widget\n- Pull request: #9\n"
             "- URL: https://github.com/acme/widget/pull/9\n"
-            f"- Trusted head SHA: {self.head_sha}\n- Trusted base SHA: {self.base_sha}\n"
+            f"{head_line} {self.head_sha}\n- Trusted base SHA: {self.base_sha}\n"
             f"- Base branch: main\n- Trusted checkout: base{protocol_line}"
         )
 
@@ -477,7 +519,7 @@ class BaseCheckoutTests(unittest.TestCase):
             '  if [ "$1" = --output-last-message ]; then result="$2"; fi\n'
             "  shift\n"
             "done\n"
-            "cat >/dev/null\n"
+            f"cat >'{self.root / 'codex-stdin'}'\n"
             f"{during_run}\n"
             f"printf '%s' '{report}' >\"$result\"\n",
             encoding="utf-8",
@@ -532,6 +574,8 @@ class BaseCheckoutTests(unittest.TestCase):
              "]\n\n[pohunek-codex-review exited with status 0]\n"),
             ("autoreview-codex/v1", "\n[autoreview-codex/v1 result:",
              "]\n\n[autoreview-codex/v1 exited with status 0]\n"),
+            ("autoreview-codex/v2", f"\n[autoreview-codex/v2 {NONCE} result:",
+             f"]\n\n[autoreview-codex/v2 {NONCE} exited with status 0]\n"),
         ):
             with self.subTest(protocol=protocol):
                 status, stdout, stderr = self.run_adapter(protocol=protocol)
@@ -539,6 +583,13 @@ class BaseCheckoutTests(unittest.TestCase):
                 self.assertEqual(status, 0, stderr)
                 self.assertIn(result, stdout)
                 self.assertTrue(stdout.endswith(exit_line), stdout)
+                # Codex reads the prompt without the nonce line, so the model cannot know it.
+                codex_input = (self.root / "codex-stdin").read_text(encoding="utf-8")
+                self.assertIn("- Trusted checkout: base", codex_input)
+                if protocol == "autoreview-codex/v2":
+                    self.assertIn("- Trusted protocol: autoreview-codex/v2", codex_input)
+                self.assertNotIn(NONCE, codex_input)
+                self.assertNotIn("Trusted nonce", codex_input)
                 self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
                 self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
                 self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
@@ -587,7 +638,10 @@ class BaseCheckoutTests(unittest.TestCase):
             ("autoreview-codex/v1", "head is unavailable in the review checkout",
              "\n[autoreview-codex/v1 refused:head_unavailable]\n"
              "[autoreview-codex/v1 exited with status 64]\n"),
-            ("autoreview-codex/v2", "trusted protocol is ambiguous or unknown",
+            ("autoreview-codex/v2", "head is unavailable in the review checkout",
+             f"\n[autoreview-codex/v2 {NONCE} refused:head_unavailable]\n"
+             f"[autoreview-codex/v2 {NONCE} exited with status 64]\n"),
+            ("autoreview-codex/v3", "trusted protocol is ambiguous or unknown",
              "\x07\n[pohunek-codex-review exited with status 64]\n"),
         )
         for protocol, message, ending in cases:
@@ -614,6 +668,8 @@ class BaseCheckoutTests(unittest.TestCase):
              "[pohunek-codex-review exited with status 3]\n"),
             ("autoreview-codex/v1", f"\n[autoreview-codex/v1 reason:{reason}]\n"
              "[autoreview-codex/v1 exited with status 3]\n"),
+            ("autoreview-codex/v2", f"\n[autoreview-codex/v2 {NONCE} reason:{reason}]\n"
+             f"[autoreview-codex/v2 {NONCE} exited with status 3]\n"),
         ):
             with self.subTest(protocol=protocol):
                 status, stdout, stderr = self.run_adapter(failing, protocol)

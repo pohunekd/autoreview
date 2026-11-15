@@ -17,11 +17,12 @@ const SEVERITIES: [&str; 5] = ["blocker", "critical", "high", "medium", "low"];
 pub(crate) const CONFIDENCE_LEVELS: [&str; 3] = ["high", "medium", "low"];
 
 /// Codes of the output failures that a fresh reviewer run may fix.
-const RETRYABLE_CODES: [&str; 4] = [
+const RETRYABLE_CODES: [&str; 5] = [
     "review_output_incomplete",
     "review_output_invalid",
     "review_wrapper_invalid",
     "review_result_invalid",
+    "review_nonce_mismatch",
 ];
 
 /// Sorts findings by severity, then path, then line. Equal findings keep their order.

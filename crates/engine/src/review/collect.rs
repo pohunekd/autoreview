@@ -18,6 +18,7 @@ use crate::error::{Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::Integrations;
 use crate::messages::started_message;
 use crate::model::review::milliseconds;
+use crate::protocol::codex::new_nonce;
 use crate::protocol::request::build_reviewer_request;
 use crate::protocol::validate::reviewer_output_retryable;
 use crate::protocol::{go_utf8_lossy, parse_reviewer_output};
@@ -71,7 +72,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Checks the complete output of a reviewer and stores the result in `slot`.
     ///
-    /// The bytes become text with one U+FFFD per invalid byte.
+    /// The bytes become text with one U+FFFD per invalid byte. The output answers the prompt
+    /// of the slot's current run, which a Codex output must carry the nonce of.
     fn parse_reviewer(&self, slot: &mut ReviewerSlot, output: &[u8]) -> Result<(), Error> {
         let raw = go_utf8_lossy(output);
         let result = parse_reviewer_output(
@@ -79,6 +81,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             &self.input,
             &self.discussion,
             &slot.reviewer,
+            &slot.request.prompt,
             &raw,
         )?;
         slot.state.result = Some(result);
@@ -87,11 +90,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Returns the prompt of the run after the run of `slot` that `refused` ended.
     ///
-    /// The verifier gets `None`: its prompt stays as it is.
+    /// The verifier gets `None`: its prompt stays as it is. A reviewer gets a fresh nonce.
     ///
     /// # Errors
     ///
-    /// Returns the error of `build_reviewer_request`.
+    /// Returns the error of `new_nonce` or of `build_reviewer_request`.
     fn retry_prompt(
         &self,
         id: SlotId,
@@ -104,6 +107,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 &self.input,
                 &slot.reviewer,
                 &self.discussion,
+                &new_nonce()?,
                 Some(refused),
             )
             .map(Some),

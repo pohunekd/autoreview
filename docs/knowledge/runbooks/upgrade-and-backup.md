@@ -61,7 +61,10 @@ retention settings (`store.review_retention_seconds`,
    `review_adapter_outdated`, and the newer Claude adapter refuses the
    `checkout: base` reviews of an engine whose requests carry no trusted
    checkout lines. Run `autoreview retry` for a pull request whose review
-   stopped in that window.
+   stopped in that window. Install every Codex profile before the restart:
+   the engine binds each Codex run to a nonce that only the adapter of this
+   release writes back, and fails the runs of an older one with
+   `review_nonce_mismatch`.
 5. Restart the service and check its state:
 
    ```sh
