@@ -248,29 +248,61 @@ const OVERRIDE_OBJECTS: [&str; 10] = [
 /// Most words after an override verb that may hold its qualifier and object.
 const OVERRIDE_WINDOW: usize = 5;
 
-/// Named character references that are decoded, with their characters.
+/// Named character references that are decoded, with their text.
 ///
-/// The usual escapes, and the invisible characters HTML has names for.
-const NAMED_REFERENCES: [(&str, char); 12] = [
-    ("amp", '&'),
-    ("lt", '<'),
-    ("gt", '>'),
-    ("quot", '"'),
-    ("apos", '\''),
-    ("nbsp", '\u{00A0}'),
-    ("shy", '\u{00AD}'),
-    ("zwj", '\u{200D}'),
-    ("zwnj", '\u{200C}'),
-    ("lrm", '\u{200E}'),
-    ("rlm", '\u{200F}'),
-    ("ZeroWidthSpace", '\u{200B}'),
+/// The usual escapes, and every HTML5 name whose text holds a character of a guard class
+/// (zero-width characters, variation selectors, bidi marks): the full list as of HTML5.
+const NAMED_REFERENCES: [(&str, &str); 43] = [
+    ("amp", "&"),
+    ("lt", "<"),
+    ("gt", ">"),
+    ("quot", "\""),
+    ("apos", "'"),
+    ("nbsp", "\u{00A0}"),
+    ("ApplyFunction", "\u{2061}"),
+    ("InvisibleComma", "\u{2063}"),
+    ("InvisibleTimes", "\u{2062}"),
+    ("NegativeMediumSpace", "\u{200B}"),
+    ("NegativeThickSpace", "\u{200B}"),
+    ("NegativeThinSpace", "\u{200B}"),
+    ("NegativeVeryThinSpace", "\u{200B}"),
+    ("NoBreak", "\u{2060}"),
+    ("ZeroWidthSpace", "\u{200B}"),
+    ("af", "\u{2061}"),
+    ("caps", "\u{2229}\u{FE00}"),
+    ("cups", "\u{222A}\u{FE00}"),
+    ("gesl", "\u{22DB}\u{FE00}"),
+    ("gvertneqq", "\u{2269}\u{FE00}"),
+    ("gvnE", "\u{2269}\u{FE00}"),
+    ("ic", "\u{2063}"),
+    ("it", "\u{2062}"),
+    ("lates", "\u{2AAD}\u{FE00}"),
+    ("lesg", "\u{22DA}\u{FE00}"),
+    ("lrm", "\u{200E}"),
+    ("lvertneqq", "\u{2268}\u{FE00}"),
+    ("lvnE", "\u{2268}\u{FE00}"),
+    ("rlm", "\u{200F}"),
+    ("shy", "\u{00AD}"),
+    ("smtes", "\u{2AAC}\u{FE00}"),
+    ("sqcaps", "\u{2293}\u{FE00}"),
+    ("sqcups", "\u{2294}\u{FE00}"),
+    ("varsubsetneq", "\u{228A}\u{FE00}"),
+    ("varsubsetneqq", "\u{2ACB}\u{FE00}"),
+    ("varsupsetneq", "\u{228B}\u{FE00}"),
+    ("varsupsetneqq", "\u{2ACC}\u{FE00}"),
+    ("vsubnE", "\u{2ACB}\u{FE00}"),
+    ("vsubne", "\u{228A}\u{FE00}"),
+    ("vsupnE", "\u{2ACC}\u{FE00}"),
+    ("vsupne", "\u{228B}\u{FE00}"),
+    ("zwj", "\u{200D}"),
+    ("zwnj", "\u{200C}"),
 ];
 
 /// Named references that HTML also decodes without their `;` (legacy names).
 const LEGACY_NAMES: [&str; 6] = ["amp", "lt", "gt", "quot", "nbsp", "shy"];
 
-/// Most characters of a reference name; longer runs of letters are no reference.
-const REFERENCE_MAX: usize = 16;
+/// Most characters of a reference name ("CounterClockwiseContourIntegral" has 31).
+const REFERENCE_MAX: usize = 32;
 
 /// Most significant digits of a numeric reference that can still name a character.
 ///
@@ -360,11 +392,8 @@ pub(crate) fn decode_references(text: &str) -> String {
     while let Some(start) = rest.find('&') {
         out.push_str(rest.get(..start).unwrap_or_default());
         let from = rest.get(start.saturating_add(1)..).unwrap_or_default();
-        match reference(from) {
-            Some((character, used)) => {
-                out.push(character);
-                rest = from.get(used..).unwrap_or_default();
-            }
+        match reference(from, &mut out) {
+            Some(used) => rest = from.get(used..).unwrap_or_default(),
             None => {
                 out.push('&');
                 rest = from;
@@ -375,8 +404,10 @@ pub(crate) fn decode_references(text: &str) -> String {
     out
 }
 
-/// Decodes the reference that starts `from` (the text after `&`) with its length.
-fn reference(from: &str) -> Option<(char, usize)> {
+/// Decodes the reference that starts `from` (the text after `&`) into `out`.
+///
+/// Returns the length of the reference, or `None`, writing nothing, when there is none.
+fn reference(from: &str, out: &mut String) -> Option<usize> {
     if let Some(number) = from.strip_prefix('#') {
         let (body, radix, prefix) = match number.strip_prefix(['x', 'X']) {
             Some(hex) => (hex, 16, 2_usize),
@@ -395,10 +426,8 @@ fn reference(from: &str) -> Option<(char, usize)> {
             .and_then(char::from_u32)
             .unwrap_or(char::REPLACEMENT_CHARACTER);
         let semicolon = usize::from(body.get(digits..).is_some_and(|tail| tail.starts_with(';')));
-        return Some((
-            character,
-            prefix.saturating_add(digits).saturating_add(semicolon),
-        ));
+        out.push(character);
+        return Some(prefix.saturating_add(digits).saturating_add(semicolon));
     }
     let name_len = from
         .bytes()
@@ -413,15 +442,18 @@ fn reference(from: &str) -> Option<(char, usize)> {
         NAMED_REFERENCES
             .iter()
             .find(|(known, _)| *known == name)
-            .map(|(_, character)| *character)
+            .map(|(_, decoded)| *decoded)
     };
-    if closed && let Some(character) = named(name) {
-        return Some((character, name_len.saturating_add(1)));
+    if closed && let Some(decoded) = named(name) {
+        out.push_str(decoded);
+        return Some(name_len.saturating_add(1));
     }
     let legacy = LEGACY_NAMES
         .iter()
         .find(|legacy| from.starts_with(**legacy))?;
-    named(legacy).map(|character| (character, legacy.len()))
+    let decoded = named(legacy)?;
+    out.push_str(decoded);
+    Some(legacy.len())
 }
 
 /// Returns `text` without its `http://` and `https://` addresses.

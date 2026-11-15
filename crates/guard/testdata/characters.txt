@@ -270,3 +270,9 @@ expect: body:variation_selector_run=4
 score: 100
 --- body
 w1 <U+FE01>w2 <U+FE02>end.<U+FE03> 7<U+FE04> keycap 7<U+FE0F><U+20E3> <U+2764><U+FE0F> <U+845B><U+E0100>
+== zero_width_named_references
+expect: comment:zero_width_run=3
+score: 100
+--- comment
+Hi&NegativeThinSpace;&NegativeThinSpace;&NegativeThinSpace; there
+Hi&NoBreak;&it;&ic;&af; there &NegativeVeryThinSpace;&InvisibleTimes;
