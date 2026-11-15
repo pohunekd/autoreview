@@ -6,7 +6,7 @@ use autoreview_engine::store::StoredReview;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::plan::{BranchPlan, Owners, Rules, Verdict, plan};
+use super::plan::{BranchPlan, Owners, Rules, Verdict, deletion_hook, plan};
 use super::{HostReport, RepositoryReport, incomplete};
 
 const PREFIX: &str = "autoreview/review/";
@@ -145,6 +145,30 @@ fn plan_keeps_every_branch_a_review_session_or_worktree_needs() {
             assert_eq!(plan.commit, format!("{index:040}"));
             assert!(!plan.deleted && plan.error.is_empty());
         }
+    }
+    // A configured hook for the deletion's event keeps the whole repository from being pruned.
+    let own = "core.hookspath\n/dev/null\0hook.reference-transaction.enabled\nfalse\0";
+    let hooks = [
+        (String::new(), false),
+        (own.to_owned(), false),
+        (
+            format!("{own}hook.evil.event\nreference-transaction\0"),
+            true,
+        ),
+        (
+            format!("{own}hook.a.b.event\n Reference-Transaction\0"),
+            true,
+        ),
+        (format!("{own}hook.evil.event\npre-commit\0"), false),
+        (
+            format!("{own}hook.evil.command\nreference-transaction\0"),
+            false,
+        ),
+        (format!("{own}hook.event\nreference-transaction\0"), false),
+        (format!("{own}hook.evil.event\0"), false),
+    ];
+    for (entries, want) in hooks {
+        assert_eq!(deletion_hook(&entries), want, "{entries:?}");
     }
 }
 

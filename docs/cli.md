@@ -483,7 +483,8 @@ git runs without the system and the user configuration (`GIT_CONFIG_NOSYSTEM`,
 (`core.hooksPath=/dev/null`) and file system monitor, and only in the repository at the root
 itself, never in one above it. From git 2.55, `hook.reference-transaction.enabled=false` also
 stops every `reference-transaction` hook that the repository configuration names; git 2.54
-reads the key as the switch of one hook of that name, and older git has no such hooks.
+runs such a hook anyway, so with any git a repository whose configuration names one is not
+pruned and is reported with `"error": "repository_hook_configured"`.
 
 The repositories must be owned by the user who runs the command: git reads `safe.directory`
 only from the system, the user and the command-line configuration, none of which sets it
@@ -525,7 +526,7 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `state_entry_limit_exceeded` | The discovery state hit `schedule.state_entry_limit` |
 | `store_unavailable` | The SQLite store could not be opened or written |
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
-| `host_not_local`, `git_command_failed` | `prune-branches` skipped a host whose repositories are not on this machine, or a git call failed (also for a repository owned by another user) |
+| `host_not_local`, `git_command_failed`, `repository_hook_configured` | `prune-branches` skipped a host whose repositories are not on this machine, a git call failed (also for a repository owned by another user), or a repository configuration names a `reference-transaction` hook |
 | `branch_prune_incomplete` | `prune-branches` printed its document and exits with status 1: a deletion failed, or the `--host` host or one of its repositories was skipped |
 | `stats_range_invalid` | `--since` or `--until` of `stats` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
 | `stats_range_too_long` | The `stats` range covers more than 366 days |
