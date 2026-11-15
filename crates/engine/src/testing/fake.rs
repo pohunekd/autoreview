@@ -18,7 +18,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Credential;
@@ -120,22 +119,6 @@ pub(crate) struct FakeState {
     pub(crate) requests: Vec<ReviewRequest>,
     /// Every queue digest that was posted.
     pub(crate) queued: Vec<QueuedDigest>,
-    /// Error code that the project list of each host fails with, keyed by host.
-    pub(crate) host_fail: BTreeMap<String, String>,
-    /// Every host whose project list was asked for, in order.
-    pub(crate) route_queries: Vec<String>,
-    /// State that the host-state call of each host returns, keyed by host; an absent host fails.
-    ///
-    /// The fake stamps each answer with the current time.
-    pub(crate) capacities: BTreeMap<String, HostCapacity>,
-    /// Every host whose state was asked for, in order.
-    pub(crate) capacity_queries: Vec<String>,
-    /// Repository permission of each author, keyed by `repository login`; absent is below write.
-    pub(crate) permissions: BTreeMap<String, Permission>,
-    /// Every permission read, as `repository login`, in order.
-    pub(crate) permission_reads: Vec<String>,
-    /// Error code of each failing permission read, keyed by `repository login`.
-    pub(crate) permission_fail: BTreeMap<String, String>,
     /// Error code of each failing credential's searches, keyed by credential name.
     ///
     /// Its reads fail transiently as `github_request_failed`.
@@ -381,17 +364,11 @@ impl Integrations for FakeIntegration {
     fn author_permission(
         &self,
         _cancel: &CancellationToken,
-        repository: &str,
-        login: &str,
+        _repository: &str,
+        _login: &str,
     ) -> impl Future<Output = Result<Option<Permission>, Error>> + Send {
-        let key = format!("{repository} {login}");
-        let mut state = self.lock();
-        let result = match state.permission_fail.get(&key) {
-            Some(code) => Err(Error::workflow(code, true, None)),
-            None => Ok(state.permissions.get(&key).copied()),
-        };
-        state.permission_reads.push(key);
-        ready(result)
+        // The fake holds no permission, so every author reads as below write.
+        ready(Ok(None))
     }
 
     fn check_token(
@@ -416,38 +393,20 @@ impl Integrations for FakeIntegration {
         _repository: &str,
         _sources: &[String],
     ) -> impl Future<Output = Result<Vec<ProjectRoute>, Error>> + Send {
-        let result = {
-            let mut state = self.lock();
-            state.route_queries.push(host.to_owned());
-            match state.host_fail.get(host) {
-                Some(code) => Err(Error::workflow(code.clone(), false, None)),
-                None => Ok(vec![ProjectRoute {
-                    host: host.to_owned(),
-                    project_id: "project".to_owned(),
-                }]),
-            }
-        };
-        ready(result)
+        ready(Ok(vec![ProjectRoute {
+            host: host.to_owned(),
+            project_id: "project".to_owned(),
+        }]))
     }
 
     fn host_capacity(
         &self,
         _cancel: &CancellationToken,
-        host: &str,
+        _host: &str,
         _timeout: Duration,
     ) -> impl Future<Output = Result<HostCapacity, Error>> + Send {
-        let result = {
-            let mut state = self.lock();
-            state.capacity_queries.push(host.to_owned());
-            match state.capacities.get(host) {
-                Some(capacity) => Ok(HostCapacity {
-                    timestamp: OffsetDateTime::now_utc(),
-                    ..capacity.clone()
-                }),
-                None => Err(Error::workflow("pohunek_request_failed", false, None)),
-            }
-        };
-        ready(result)
+        // The fake holds no host state, so every read fails and the state stays unknown.
+        ready(Err(Error::workflow("pohunek_request_failed", false, None)))
     }
 
     fn ensure_session(
