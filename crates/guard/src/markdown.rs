@@ -31,6 +31,12 @@ const RAW_TAG_ENDS: [&str; 4] = ["</pre>", "</script>", "</style>", "</textarea>
 /// Style declarations that hide an element, compared lowercased and without whitespace.
 const HIDING_STYLES: [&str; 2] = ["display:none", "visibility:hidden"];
 
+/// Elements whose content a page never shows.
+const HIDDEN_ELEMENTS: [&str; 3] = ["script", "style", "template"];
+
+/// Raw HTML that is never shown besides comments: opener and closer (CommonMark inline HTML).
+const HIDDEN_MARKUP: [(&str, &str); 2] = [("<![CDATA[", "]]>"), ("<?", "?>")];
+
 /// How an HTML block ends; no fence opens inside it, so its comments are not code.
 #[derive(Debug, Clone, Copy)]
 enum HtmlEnd {
@@ -490,6 +496,21 @@ impl<'a> Pass<'a> {
         }
     }
 
+    /// Returns the content range and end of markup from `at` to `close`.
+    ///
+    /// Markup that is never closed runs to the end of the text.
+    fn enclosed(&self, at: usize, open_len: usize, close: &str) -> (usize, usize, usize) {
+        let len = self.bytes.len();
+        let open = at.saturating_add(open_len);
+        match self.slice(open, len).find(close) {
+            Some(found) => {
+                let found = open.saturating_add(found);
+                (open, found, found.saturating_add(close.len()))
+            }
+            None => (open, len, len),
+        }
+    }
+
     /// Returns the offset after the closing tag of the element `name`.
     ///
     /// Its content starts at `from`. Nested elements of the same name count, comments are
@@ -561,6 +582,25 @@ impl Pass<'_> {
             );
             return Some(end);
         }
+        let declaration = self.starts_with(at, "<!")
+            && self
+                .bytes
+                .get(at.saturating_add(2))
+                .is_some_and(u8::is_ascii_alphabetic);
+        let markup = HIDDEN_MARKUP
+            .iter()
+            .find(|(open, _)| self.starts_with(at, open))
+            .copied()
+            .or_else(|| declaration.then_some(("<!", ">")));
+        if let Some((open, close)) = markup {
+            let (start, close, end) = self.enclosed(at, open.len(), close);
+            report(
+                add,
+                Signal::HiddenCommentInstruction,
+                self.slice(start, close),
+            );
+            return Some(end);
+        }
         let name_start = at.saturating_add(1);
         let name_len = self
             .bytes
@@ -588,7 +628,11 @@ impl Pass<'_> {
             return Some(gt);
         } else if name.eq_ignore_ascii_case("details") {
             Signal::CollapsedBlockInstruction
-        } else if hides(attributes) {
+        } else if hides(attributes)
+            || HIDDEN_ELEMENTS
+                .iter()
+                .any(|hidden| name.eq_ignore_ascii_case(hidden))
+        {
             Signal::HiddenElementInstruction
         } else {
             report(add, Signal::LinkMetadataInstruction, attributes);
@@ -821,7 +865,7 @@ fn hides(attributes: &str) -> bool {
             return true;
         }
         if name.eq_ignore_ascii_case("style") {
-            let style: String = value
+            let style: String = words::decode_references(value)
                 .chars()
                 .filter(|character| !character.is_whitespace())
                 .collect::<String>()
