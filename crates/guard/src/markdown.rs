@@ -34,6 +34,9 @@ const HIDING_STYLES: [&str; 2] = ["display:none", "visibility:hidden"];
 /// Elements whose content a page never shows.
 const HIDDEN_ELEMENTS: [&str; 3] = ["script", "style", "template"];
 
+/// The closing tags of `HIDDEN_ELEMENTS`, in the same order.
+const HIDDEN_ELEMENT_ENDS: [&[u8]; 3] = [b"</script", b"</style", b"</template"];
+
 /// Raw HTML that is never shown besides comments: opener and closer (CommonMark inline HTML).
 const HIDDEN_MARKUP: [(&str, &str); 2] = [("<![CDATA[", "]]>"), ("<?", "?>")];
 
@@ -260,6 +263,8 @@ enum Class {
     AngleEnd,
     /// An unescaped `]` followed by `(` or `[`.
     LinkClose,
+    /// The last byte of the pattern, ASCII case ignored.
+    Ends(&'static [u8]),
     /// ASCII whitespace.
     Space,
     /// Anything but ASCII whitespace.
@@ -294,8 +299,12 @@ const TITLE_AFTER: usize = 4;
 const LINK_CLOSE: usize = 18;
 /// First cache slot of a reference definition title (quote, apostrophe, parenthesis).
 const REFERENCE_TITLE: usize = 19;
+/// First cache slot of the closer of inline `HIDDEN_MARKUP`, then of a declaration.
+const MARKUP_END: usize = 22;
+/// First cache slot of the closing tag of an inline `HIDDEN_ELEMENTS` element.
+const ELEMENT_END: usize = 25;
 /// Number of cache slots.
-const SLOTS: usize = 22;
+const SLOTS: usize = 28;
 
 /// The last search of one slot: where it started and what it found.
 #[derive(Debug, Clone, Copy)]
@@ -318,6 +327,12 @@ struct Pass<'a> {
     paragraph: Option<Cached>,
     /// Matching unescaped `[` and `]` offsets, sorted by the `[`.
     brackets: Vec<(usize, usize)>,
+    /// Offsets of the backticks, in order.
+    backticks: Vec<usize>,
+    /// Offsets of the line breaks, in order.
+    line_breaks: Vec<usize>,
+    /// The last line start asked about, and where its content starts after markers.
+    line_content: Option<(usize, usize)>,
 }
 
 /// Reports whether the byte at `at` is escaped: an odd run of backslashes precedes it.
@@ -330,6 +345,16 @@ fn escaped(bytes: &[u8], at: usize) -> bool {
         .count()
         % 2
         == 1
+}
+
+/// Returns the offsets of `wanted` in `bytes`, in order.
+fn offsets(bytes: &[u8], wanted: u8) -> Vec<usize> {
+    bytes
+        .iter()
+        .enumerate()
+        .filter(|(_, byte)| **byte == wanted)
+        .map(|(at, _)| at)
+        .collect()
 }
 
 /// Returns the matching unescaped `[` and `]` pairs of `bytes`, sorted by `[`.
@@ -383,6 +408,9 @@ impl<'a> Pass<'a> {
             cache: [None; SLOTS],
             paragraph: None,
             brackets: bracket_pairs(text.as_bytes()),
+            backticks: offsets(text.as_bytes(), b'`'),
+            line_breaks: offsets(text.as_bytes(), b'\n'),
+            line_content: None,
         }
     }
 
@@ -411,6 +439,11 @@ impl<'a> Pass<'a> {
                         && matches!(bytes.get(at.saturating_add(1)), Some(b'(' | b'['))
                         && !escaped(bytes, at)
                 }
+                Class::Ends(pattern) => at
+                    .saturating_add(1)
+                    .checked_sub(pattern.len())
+                    .and_then(|start| bytes.get(start..=at))
+                    .is_some_and(|window| window.eq_ignore_ascii_case(pattern)),
                 Class::Space => byte.is_ascii_whitespace(),
                 Class::NonSpace => !byte.is_ascii_whitespace(),
             }
@@ -458,7 +491,7 @@ impl<'a> Pass<'a> {
     }
 
     /// Returns the text between two offsets of the pass.
-    fn slice(&self, start: usize, end: usize) -> &str {
+    fn slice(&self, start: usize, end: usize) -> &'a str {
         self.text.get(start..end).unwrap_or_default()
     }
 
@@ -589,10 +622,16 @@ impl Pass<'_> {
                 .is_some_and(u8::is_ascii_alphabetic);
         let markup = HIDDEN_MARKUP
             .iter()
-            .find(|(open, _)| self.starts_with(at, open))
-            .copied()
-            .or_else(|| declaration.then_some(("<!", ">")));
-        if let Some((open, close)) = markup {
+            .enumerate()
+            .find(|(_, (open, _))| self.starts_with(at, open))
+            .map(|(index, &(open, close))| (index, open, close))
+            .or_else(|| declaration.then_some((HIDDEN_MARKUP.len(), "<!", ">")));
+        if let Some((index, open, close)) = markup {
+            let slot = MARKUP_END.saturating_add(index);
+            let content = at.saturating_add(open.len());
+            if !self.never_shown(at, content, slot, close.as_bytes()) {
+                return None;
+            }
             let (start, close, end) = self.enclosed(at, open.len(), close);
             report(
                 add,
@@ -628,10 +667,13 @@ impl Pass<'_> {
             return Some(gt);
         } else if name.eq_ignore_ascii_case("details") {
             Signal::CollapsedBlockInstruction
-        } else if hides(attributes)
-            || HIDDEN_ELEMENTS
-                .iter()
-                .any(|hidden| name.eq_ignore_ascii_case(hidden))
+        } else if hides(attributes) {
+            Signal::HiddenElementInstruction
+        } else if let Some(index) = HIDDEN_ELEMENTS
+            .iter()
+            .position(|hidden| name.eq_ignore_ascii_case(hidden))
+            && let Some(closer) = HIDDEN_ELEMENT_ENDS.get(index)
+            && self.never_shown(at, gt, ELEMENT_END.saturating_add(index), closer)
         {
             Signal::HiddenElementInstruction
         } else {
@@ -646,29 +688,29 @@ impl Pass<'_> {
     /// Handles `![` at `at`: an image alt text, reported when it instructs.
     ///
     /// The alt text runs to the matching `]`, so nested brackets stay inside it. When that `]`
-    /// starts no destination (a code span can hold a `]`), it runs to the next `](` or `][` of
-    /// the paragraph instead.
+    /// starts no destination because it sits in a code span (an odd number of backticks after
+    /// `![`), the alt text runs to the next `](` or `][` of the paragraph instead. Without an
+    /// image the text is shown, which is no hidden text.
     fn image_alt(&mut self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
         if !self.starts_with(at, "![") {
             return None;
         }
         let open = at.saturating_add(1);
-        let paired = self
+        let index = self
             .brackets
             .binary_search_by_key(&open, |&(start, _)| start)
-            .ok()
-            .and_then(|index| self.brackets.get(index))
-            .map(|&(_, close)| close)
-            .filter(|close| matches!(self.bytes.get(close.saturating_add(1)), Some(b'(' | b'[')));
-        let close = match paired {
-            Some(close) => close,
-            None => {
-                let close = self.find(LINK_CLOSE, Class::LinkClose, at.saturating_add(2))?;
-                if close >= self.paragraph_end(at) {
-                    return None;
-                }
-                close
+            .ok()?;
+        let (_, paired) = *self.brackets.get(index)?;
+        let close = if matches!(self.bytes.get(paired.saturating_add(1)), Some(b'(' | b'[')) {
+            paired
+        } else if self.backticks_between(at, paired) % 2 == 1 {
+            let close = self.find(LINK_CLOSE, Class::LinkClose, at.saturating_add(2))?;
+            if close >= self.paragraph_end(at) {
+                return None;
             }
+            close
+        } else {
+            return None;
         };
         report(
             add,
@@ -831,12 +873,71 @@ impl Pass<'_> {
         Some(at.saturating_add(run))
     }
 
+    /// Returns the offset where the line holding `at` starts.
+    fn line_start(&self, at: usize) -> usize {
+        let index = self
+            .line_breaks
+            .partition_point(|line_break| *line_break < at);
+        index
+            .checked_sub(1)
+            .and_then(|previous| self.line_breaks.get(previous))
+            .map_or(0, |line_break| line_break.saturating_add(1))
+    }
+
+    /// Returns the number of backticks in `start..end`.
+    fn backticks_between(&self, start: usize, end: usize) -> usize {
+        let before = |offset: usize| self.backticks.partition_point(|tick| *tick < offset);
+        before(end).saturating_sub(before(start))
+    }
+
+    /// Reports whether `at` lies inside a code span of its line: an odd number of backticks
+    /// before it and at least one after it on the line.
+    fn in_code_span(&self, at: usize) -> bool {
+        let line = self.line_start(at);
+        self.backticks_between(line, at) % 2 == 1
+            && self.backticks_between(at, self.line_end(at)) > 0
+    }
+
+    /// Reports whether `at` starts an HTML block: only container markers precede it.
+    fn block_start(&mut self, at: usize) -> bool {
+        let line = self.line_start(at);
+        let content = match self.line_content {
+            Some((start, content)) if start == line => content,
+            _ => {
+                let content = self.container_content(line);
+                self.line_content = Some((line, content));
+                content
+            }
+        };
+        content == at
+    }
+
+    /// Reports whether the hidden markup or element at `at` is hidden on the page.
+    ///
+    /// It is when it starts an HTML block (CommonMark kinds 1, 3, 4 and 5 run to their closer
+    /// or the end of the text), or when it is inline raw HTML: outside a code span and closed
+    /// by `closer`, searched from `from` in cache slot `slot`, before the paragraph ends.
+    fn never_shown(&mut self, at: usize, from: usize, slot: usize, closer: &'static [u8]) -> bool {
+        if self.block_start(at) {
+            return true;
+        }
+        if self.in_code_span(at) {
+            return false;
+        }
+        let first_end = from.saturating_add(closer.len()).saturating_sub(1);
+        self.find(slot, Class::Ends(closer), first_end)
+            .is_some_and(|last| last < self.paragraph_end(at))
+    }
+
     /// Returns the offset of the next line break from `from`, or the text end.
     fn line_end(&self, from: usize) -> usize {
-        let len = self.bytes.len();
-        self.slice(from, len)
-            .find('\n')
-            .map_or(len, |found| from.saturating_add(found))
+        let index = self
+            .line_breaks
+            .partition_point(|line_break| *line_break < from);
+        self.line_breaks
+            .get(index)
+            .copied()
+            .unwrap_or(self.bytes.len())
     }
 }
 
