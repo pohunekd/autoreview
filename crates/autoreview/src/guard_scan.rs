@@ -264,3 +264,111 @@ fn scan_corpus(
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use autoreview_engine::error_code;
+    use autoreview_guard::Lexicon;
+
+    use super::*;
+
+    /// One corpus line of `number` with `texts` as JSON and `truncated`.
+    fn line(number: u64, texts: &str, truncated: bool) -> String {
+        format!(
+            "{{\"repository\":\"acme/widget\",\"number\":{number},\"texts\":{texts},\
+\"truncated\":{truncated}}}\n"
+        )
+    }
+
+    #[test]
+    fn corpus_lines_need_every_key_and_scan_as_the_review_step() {
+        let guard = RuleGuard {
+            fields: BTreeSet::from([GuardField::Kind(FieldKind::Body)]),
+            threshold: 100,
+            on_suspect: OnSuspect::Log,
+        };
+        let lexicon = Lexicon::parse("40 ignore previous instructions").expect("a valid lexicon");
+        let settings = TextGuard {
+            max_input_bytes: 64,
+            lexicon,
+        };
+        // The JSON escape of U+E0041, a tag character, so the source holds no invisible text.
+        let escape = "\\udb40\\udc41";
+        let tag = format!(r#"[{{"kind":"body","text":"Fix.{escape}"}}]"#);
+        let title = format!(r#"[{{"kind":"title","text":"{escape}"}}]"#);
+        let long = format!(r#"[{{"kind":"body","text":"{}"}}]"#, "a".repeat(65));
+        let corpus = [
+            line(1, &tag, false),
+            line(2, &title, false),
+            line(3, &long, false),
+        ];
+        let result =
+            scan_corpus(corpus.concat().as_bytes(), &guard, &settings).expect("a valid corpus");
+        let flags: Vec<(u64, u32, bool, bool)> = (result.pull_requests.iter())
+            .map(|scan| (scan.number, scan.score, scan.truncated, scan.suspect))
+            .collect();
+        // The title is not a guard field; the third body crosses the 64-byte bound.
+        let want = vec![
+            (1, 100, false, true),
+            (2, 0, false, false),
+            (3, 0, true, true),
+        ];
+        assert_eq!(flags, want);
+        let want = Summary {
+            pull_requests: 3,
+            flagged: 2,
+            flagged_percent: 66.66,
+            hidden_text: 1,
+            truncated: 1,
+            signals: BTreeMap::from([("unicode_tags".to_owned(), 1)]),
+        };
+        assert_eq!(result.summary, want);
+
+        let body = r#"[{"kind":"body","text":"x"}]"#;
+        let good = line(1, body, false);
+        let refused = [
+            (
+                "not JSON",
+                format!("{good}not json\n"),
+                "corpus line 2: Syntax",
+            ),
+            (
+                "an empty line",
+                format!("{good}\n{good}"),
+                "corpus line 2: Eof",
+            ),
+            (
+                "no truncated key",
+                good.replace(",\"truncated\":false", ""),
+                "line 1: Data",
+            ),
+            (
+                "an unknown key",
+                good.replace("\"number\"", "\"extra\":1,\"number\""),
+                "line 1",
+            ),
+            ("number zero", line(0, body, false), "corpus line 1: Data"),
+            (
+                "a null text",
+                line(1, r#"[{"kind":"body","text":null}]"#, false),
+                "line 1",
+            ),
+            (
+                "an unknown kind",
+                line(1, r#"[{"kind":"file","text":"x"}]"#, false),
+                "line 1",
+            ),
+            (
+                "no texts key",
+                good.replace("\"texts\":[", "\"other\":["),
+                "line 1: Data",
+            ),
+            ("no line", String::new(), "the corpus has no pull request"),
+        ];
+        for (case, text, want) in refused {
+            let err = scan_corpus(text.as_bytes(), &guard, &settings).expect_err(case);
+            assert_eq!(error_code(&err), GUARD_CORPUS_INVALID, "{case}");
+            assert!(err.to_string().contains(want), "{case}: {err}");
+        }
+    }
+}
