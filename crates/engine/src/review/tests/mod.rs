@@ -3,10 +3,6 @@
 // Rust guideline compliant 2026-06-26
 
 mod approval;
-mod authors;
 mod core;
-mod delivery;
 mod mcp;
 mod memory;
-mod steps;
-mod verify;

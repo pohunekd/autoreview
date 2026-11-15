@@ -269,14 +269,6 @@ impl FakeIntegration {
         state.answered.remove(&key);
     }
 
-    /// Marks a pull request as lapsed with an error code.
-    pub(crate) fn lapse(&self, pr: PullRequest, code: &str) {
-        let mut state = self.lock();
-        let key = pr.key();
-        state.candidates.remove(&key);
-        state.lapsed.insert(key, code.to_string());
-    }
-
     /// Marks a pull request as closed.
     pub(crate) fn close(&self, pr: PullRequest) {
         let mut state = self.lock();
@@ -362,24 +354,6 @@ impl FakeIntegration {
             }
             Ok(())
         }
-    }
-
-    /// Holds every notification that contains `fragment` after it is recorded.
-    ///
-    /// A held notification returns once the returned gate has a permit.
-    pub(crate) fn hold_notes(&self, fragment: &str) -> Arc<Semaphore> {
-        let gate = Arc::new(Semaphore::new(0));
-        self.lock().held_notes = Some((fragment.to_owned(), Arc::clone(&gate)));
-        gate
-    }
-
-    /// Holds every posted review after it is recorded.
-    ///
-    /// A held publication returns once the returned gate has a permit.
-    pub(crate) fn hold_publications(&self) -> Arc<Semaphore> {
-        let gate = Arc::new(Semaphore::new(0));
-        self.lock().held_publications = Some(Arc::clone(&gate));
-        gate
     }
 }
 
@@ -1278,23 +1252,6 @@ fn verifier_output(
             "prior_findings": priors,
         }),
     )
-}
-
-/// Returns a session output that answers verifier requests by the claim verdicts.
-///
-/// Every other request goes to `reviewers`.
-pub(crate) fn verifying(
-    reviewers: impl Fn(&SessionRequest) -> String + Send + Sync + 'static,
-    finding: impl Fn(&ClaimFinding) -> &'static str + Send + Sync + 'static,
-    prior: impl Fn(&ClaimPrior) -> &'static str + Send + Sync + 'static,
-) -> impl Fn(&SessionRequest) -> String + Send + Sync + 'static {
-    move |request: &SessionRequest| {
-        if request.reviewer.id == VERIFIER_REVIEWER_ID {
-            verifier_output(request, &finding, &prior)
-        } else {
-            reviewers(request)
-        }
-    }
 }
 
 /// Policy document of the integration tests: pipelines, repositories and notifications.

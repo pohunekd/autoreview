@@ -25,7 +25,7 @@ use crate::model::{
 };
 use crate::protocol::fixtures::sha;
 use crate::protocol::validate::tests::test_config;
-use crate::store::{REVIEW_AWAITING, Store};
+use crate::store::Store;
 
 /// A clock that moves only when a wait ends, so retry tests never sleep.
 pub(crate) struct FakeClock {
@@ -284,23 +284,6 @@ impl Harness {
         }
     }
 
-    /// Waits until `condition` holds, running a discovery poll before every check.
-    ///
-    /// A failed poll is ignored, so a test can wait through an outage of discovery.
-    pub(crate) async fn wait_for_polling(&self, description: &str, condition: impl Fn() -> bool) {
-        let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
-        loop {
-            let _ = self.engine.poll(&CancellationToken::new()).await;
-            if condition() {
-                return;
-            }
-            if tokio::time::Instant::now() > deadline {
-                self.time_out(description);
-            }
-            tokio::time::sleep(WAIT_PAUSE).await;
-        }
-    }
-
     /// Fails the test with the state of the fake.
     fn time_out(&self, description: &str) -> ! {
         let (published, notes, started, open) = self.fake.snapshot();
@@ -345,38 +328,6 @@ impl Harness {
         };
         self.engine
             .approve(&CancellationToken::new(), workflow_id, &request)
-    }
-
-    /// Approves the review of `pr` once it is stored as awaiting.
-    ///
-    /// `approve` refuses a review that is not awaiting yet.
-    pub(crate) async fn approve_when_awaiting(
-        &self,
-        pr: &PullRequest,
-    ) -> Result<ApprovalResult, Error> {
-        let resolved = self
-            .resolve(pr)
-            .expect("the review of the pull request resolves");
-        self.wait_for("the stored approval wait", || {
-            matches!(
-                self.store.get_review(&resolved.workflow_id),
-                Ok(Some(stored)) if stored.status == REVIEW_AWAITING
-            )
-        })
-        .await;
-        self.approve(&resolved.workflow_id, pr)
-    }
-
-    /// Reports whether the review of the first started session has stored the step `name`.
-    pub(crate) fn step_recorded(&self, name: &str) -> bool {
-        let (_, _, started, _) = self.fake.snapshot();
-        let Some(first) = started.first() else {
-            return false;
-        };
-        matches!(
-            self.store.load_step::<bool>(&first.workflow_id, name),
-            Ok(Some(_))
-        )
     }
 
     /// Retries the stopped review of `pr` by the prefix of its head.
