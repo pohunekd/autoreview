@@ -228,14 +228,19 @@ pohunek:
 ```
 
 With this entry an untrusted author's review runs only on `isolated-host`, and a
-trusted author's only on `review-host`. Neither falls back to the other host:
+trusted author's only on `review-host`. The entry pins the trusted reviews as
+well, so like any pinned repository they have no failover over `pohunek.hosts`
+and skip the `pohunek.host_state` rules. Neither falls back to the other host:
 when `isolated-host` fails, the review waits for it, and when it has no such
 project, the review fails with `project_route_not_found`. A review whose author
 class is not known counts as untrusted. The class is read on every discovery
 pass: a review that started before the author's trust changed stays on its
 host, and the next one (a new head, a retry, a retarget) takes the route of the
-new class. `route_overrides` keys name one repository each, so each public
-repository needs its own entry.
+new class. A review that was queued or running when the `untrusted` key was
+added keeps the route stored in its input, also after a restart, and finishes
+on that host; the new route applies from the next dispatch of the pull request
+(a new head, a retry, a retarget). `route_overrides` keys name one
+repository each, so each public repository needs its own entry.
 
 Plan the separation per repository: a public repository with strangers gets an
 untrusted route to a dedicated review host, and a private repository can share

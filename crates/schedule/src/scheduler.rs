@@ -96,6 +96,11 @@ pub struct Record {
     /// A host wait keeps it, so the dispatch after the wait is not held as a new start.
     #[serde(skip_serializing_if = "is_false")]
     pub continues: bool,
+    /// Marks a dispatch of a pull request whose author limit skip was notified.
+    ///
+    /// A host wait keeps it, so a skip after the wait sends no second notice.
+    #[serde(skip_serializing_if = "is_false")]
+    pub skip_notified: bool,
 }
 
 autoreview_go_compat::object_only_serde!(Record);
@@ -115,8 +120,19 @@ impl Default for Record {
             handled_workflow: String::new(),
             handled_retries: 0,
             continues: false,
+            skip_notified: false,
         }
     }
+}
+
+/// Reports whether the author limit skip of the pull request of `record` was notified.
+///
+/// The record carries [`AUTHOR_LIMIT_REACHED`], or waits for a host after a dispatch that was so
+/// notified. A withdrawn record proves nothing: a pull request that asks again is notified again.
+fn skip_was_notified(record: &Record) -> bool {
+    record.phase != phase::WITHDRAWN
+        && (record.error_code == AUTHOR_LIMIT_REACHED
+            || (record.awaits_host && record.skip_notified))
 }
 
 /// Reports whether a flag is unset; an unset flag is not written.
@@ -221,10 +237,9 @@ pub fn plan(
         if previous.phase == phase::RUNNING && !previous.workflow_id.is_empty() {
             blocking.push(previous.workflow_id.clone());
         }
-        // A new head of a pull request whose start the author limit skipped keeps the code, so
-        // a skip of the new head sends no second notice.
-        let skipped =
-            previous.phase == phase::FAILED && previous.error_code == AUTHOR_LIMIT_REACHED;
+        // A new head of a pull request whose skip by the author limit was notified keeps the
+        // code, so a skip of the new head sends no second notice.
+        let skipped = skip_was_notified(&previous);
         Record {
             identity: target_identity.clone(),
             phase: phase::WAITING.to_owned(),
@@ -242,6 +257,7 @@ pub fn plan(
             handled_workflow: String::new(),
             handled_retries: 0,
             continues: false,
+            skip_notified: false,
         }
     } else {
         previous
@@ -566,9 +582,9 @@ pub struct AuthorBound {
 /// dispatch from a `retry_wait` record of the same identity goes through over the bound, an
 /// automatic retry or an operator `retry`, when it waits for no host or its delayed dispatch
 /// was such a continuation; the dispatch keeps that mark in `continues`. Over the bound, a
-/// `skip` bound fails the record with [`AUTHOR_LIMIT_REACHED`] and notifies, unless the
-/// `previous` record carries that code from a skip of the pull request; otherwise the record
-/// waits until a start leaves the window.
+/// `skip` bound fails the record with [`AUTHOR_LIMIT_REACHED`] and notifies, unless `previous`
+/// proves that the skip of the pull request was notified; the dispatch keeps that proof in
+/// `skip_notified`. Otherwise the record waits until a start leaves the window.
 ///
 /// # Errors
 ///
@@ -583,10 +599,12 @@ pub fn limit_author(
     let continues = previous.identity == decision.record.identity
         && previous.phase == phase::RETRY_WAIT
         && (!previous.awaits_host || previous.continues);
+    let notified = skip_was_notified(previous);
     if !decision.dispatch {
         return Ok(decision);
     }
     decision.record.continues = continues;
+    decision.record.skip_notified = notified;
     if continues {
         return Ok(decision);
     }
@@ -604,7 +622,7 @@ pub fn limit_author(
     if bound.skip {
         decision.record.phase = phase::FAILED.to_owned();
         decision.record.error_code = AUTHOR_LIMIT_REACHED.to_owned();
-        decision.notify = previous.error_code != AUTHOR_LIMIT_REACHED;
+        decision.notify = !notified;
     } else {
         decision.record.phase = phase::WAITING.to_owned();
         decision.record.due_at = free_at;
@@ -1530,7 +1548,7 @@ mod tests {
                 previous: record(phase::COMPLETED, 1, false), skip: true, ago: &[1, 2],
                 want: (false, failed, true, code, 0) },
             LimitCase { name: "a skip of a new head of a skipped pull request sends no notice",
-                previous: carried, skip: true, ago: &[1, 2],
+                previous: carried.clone(), skip: true, ago: &[1, 2],
                 want: (false, failed, false, code, 0) },
         ];
         let bound = |skip: bool| AuthorBound {
@@ -1606,26 +1624,62 @@ mod tests {
             admitted.dispatch,
             "the freed slot was not used: {admitted:?}"
         );
-        // A new head of a skipped pull request carries the code through its debounce, and a
-        // dispatch drops it.
+        // A new head of a skipped pull request carries the code through its debounce, also to a
+        // head pushed during it or during a host wait, and a dispatch drops it. A withdrawn
+        // record carries nothing, so a pull request that asks again is notified again (#423).
+        let next = Target {
+            head_sha: "c".repeat(40),
+            ..target.clone()
+        };
+        let free = &starts[..1];
         let fresh = plan(skipped.clone(), &target, &[], now, &policy).expect("plan");
+        let pushed = plan(fresh.record.clone(), &next, &[], now, &policy).expect("plan");
         let due = plan(fresh.record.clone(), &target, &[], later, &policy).expect("plan");
+        let slot = limit_author(due.clone(), &fresh.record, free, &bound(true), later);
+        let on_host = wait_for_host(slot.expect("limit").record, "pohunek_request_failed");
+        let pushed_on_host = plan(on_host, &next, &[], later, &policy).expect("plan");
+        let withdrawn = Record {
+            phase: phase::WITHDRAWN.to_owned(),
+            ..fresh.record.clone()
+        };
+        let asked = plan(withdrawn, &target, &[], now, &policy).expect("plan");
         assert!(
-            fresh.record.error_code == code && due.dispatch && due.record.error_code.is_empty(),
-            "the skip was not carried: {fresh:?} {due:?}"
+            fresh.record.error_code == code
+                && pushed.record.error_code == code
+                && due.dispatch
+                && due.record.error_code.is_empty()
+                && pushed_on_host.record.error_code == code
+                && asked.record.error_code.is_empty(),
+            "the skip was not carried: {pushed:?} {pushed_on_host:?} {asked:?}"
         );
-        // A retry or an operator `retry` over the bound that meets a host outage, under both
-        // outcomes, starts once the host is back, with no notice.
-        for skip in [false, true] {
-            let retry = record(phase::RETRY_WAIT, 1, false);
-            let due = plan(retry.clone(), &target, &[], now, &policy).expect("plan");
-            let first = limit_author(due, &retry, &starts, &bound(skip), now).expect("limit");
+        // A dispatch with a free slot that meets a host outage is judged again once the window
+        // is full: a retry or an operator `retry` starts with no notice, a new start is held or
+        // skipped, and a later head of a skipped pull request sends no second notice (#423). A
+        // restart after a superseded continuation keeps a stale `continues` until its dispatch.
+        let stale = Record {
+            continues: true,
+            ..record(wait, 1, false)
+        };
+        #[rustfmt::skip]
+        let host_waits = [
+            ("a retry that waits", record(phase::RETRY_WAIT, 1, false), false, (true, false)),
+            ("a retry that skips", record(phase::RETRY_WAIT, 1, false), true, (true, false)),
+            ("a new start", record(wait, 0, false), true, (false, true)),
+            ("a restart with a stale continuation mark", stale, false, (false, false)),
+            ("a later head of a skipped pull request", carried, true, (false, false)),
+        ];
+        for (name, previous, skip, (dispatch, notify)) in host_waits {
+            let due = plan(previous.clone(), &target, &[], now, &policy).expect("plan");
+            let first = limit_author(due, &previous, free, &bound(skip), now).expect("limit");
             let waiting = wait_for_host(first.record.clone(), "pohunek_request_failed");
             let back = plan(waiting.clone(), &target, &[], now, &policy).expect("plan");
             let second = limit_author(back, &waiting, &starts, &bound(skip), now).expect("limit");
             assert!(
-                first.dispatch && !first.notify && second.dispatch && !second.notify,
-                "skip={skip}: the retry was held after the host wait: {second:?}"
+                first.dispatch
+                    && !first.notify
+                    && second.dispatch == dispatch
+                    && second.notify == notify,
+                "{name}: {first:?} {second:?}"
             );
         }
         // A skip notice is the review_stopped text with the explanation of the code.
