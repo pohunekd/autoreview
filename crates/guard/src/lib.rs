@@ -74,6 +74,9 @@ pub struct Field<'a> {
     /// Where the text comes from.
     pub kind: FieldKind,
     /// The text; for `FieldKind::Patch` the unified diff of one file.
+    ///
+    /// In fields GitHub renders, character references are decoded before the character,
+    /// chat-template and lexicon scanners run, as the rendered page and a model show them.
     pub text: &'a str,
 }
 
@@ -206,12 +209,11 @@ pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
     let mut counts: BTreeMap<(FieldKind, Signal), u32> = BTreeMap::new();
     let mut entries_by_kind: BTreeMap<FieldKind, BTreeSet<usize>> = BTreeMap::new();
     for field in fields {
-        let added;
-        let text = if field.kind == FieldKind::Patch {
-            added = added_lines(field.text);
-            added.as_str()
-        } else {
-            field.text
+        let rendered = field.kind.renders_markdown();
+        let shown = match field.kind {
+            FieldKind::Patch => added_lines(field.text),
+            _ if rendered => words::decode_references(field.text),
+            _ => field.text.to_owned(),
         };
         let mut add = |signal: Signal, count: u32| {
             if count > 0 {
@@ -219,12 +221,12 @@ pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
                 *total = total.saturating_add(count);
             }
         };
-        characters::scan(text, field.kind == FieldKind::Patch, &mut add);
-        if field.kind.renders_markdown() {
-            markdown::scan(text, &mut add);
+        characters::scan(&shown, field.kind == FieldKind::Patch, &mut add);
+        if rendered {
+            markdown::scan(field.text, &mut add);
         }
-        add(Signal::ChatTemplateToken, template::count(text));
-        let normalized = words::normalize(text);
+        add(Signal::ChatTemplateToken, template::count(&shown));
+        let normalized = words::normalize(&shown);
         entries_by_kind
             .entry(field.kind)
             .or_default()

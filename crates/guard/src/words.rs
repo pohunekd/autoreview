@@ -92,17 +92,97 @@ pub(crate) fn normalize(text: &str) -> String {
     out
 }
 
+/// Named character references that are decoded, with their characters.
+///
+/// The usual escapes, and the invisible characters HTML has names for.
+const NAMED_REFERENCES: [(&str, char); 12] = [
+    ("amp", '&'),
+    ("lt", '<'),
+    ("gt", '>'),
+    ("quot", '"'),
+    ("apos", '\''),
+    ("nbsp", '\u{00A0}'),
+    ("shy", '\u{00AD}'),
+    ("zwj", '\u{200D}'),
+    ("zwnj", '\u{200C}'),
+    ("lrm", '\u{200E}'),
+    ("rlm", '\u{200F}'),
+    ("ZeroWidthSpace", '\u{200B}'),
+];
+
+/// Most characters between `&` and `;` of a character reference that is decoded.
+const REFERENCE_MAX: usize = 16;
+
 /// Reports whether hidden text instructs a reviewer (the cue rule).
 ///
-/// It does when it names a model and holds a directive verb, when it holds an override
-/// phrase, or when it holds a chat-template token. Web addresses are left out first: their
-/// paths hold arbitrary words.
+/// It does when it holds an override phrase or a chat-template token, or when, with its web
+/// addresses left out (their paths hold arbitrary words), it names a model and holds a
+/// directive verb. Character references are decoded first, as a reader of the text would.
 pub(crate) fn instructs(text: &str) -> bool {
-    let text = without_web_addresses(text);
-    let text = text.as_str();
-    let words = normalize(text);
-    let has = |phrases: &[&str]| phrases.iter().any(|phrase| words.contains(phrase));
-    (has(&ADDRESSEES) && has(&DIRECTIVES)) || has(&OVERRIDES) || template::count(text) > 0
+    let text = decode_references(text);
+    let words = normalize(&text);
+    let without_addresses = normalize(&without_web_addresses(&text));
+    let has = |words: &str, phrases: &[&str]| phrases.iter().any(|phrase| words.contains(phrase));
+    has(&words, &OVERRIDES)
+        || template::count(&text) > 0
+        || (has(&without_addresses, &ADDRESSEES) && has(&without_addresses, &DIRECTIVES))
+}
+
+/// Returns `text` with its numeric and its `NAMED_REFERENCES` character references decoded.
+///
+/// A reference needs its `;`. A number that is no character, or an unknown name, stays as
+/// written. The output is decoded once: `&amp;#105;` gives `&#105;`.
+pub(crate) fn decode_references(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        out.push_str(rest.get(..start).unwrap_or_default());
+        let from = rest.get(start.saturating_add(1)..).unwrap_or_default();
+        let window_end = from
+            .char_indices()
+            .nth(REFERENCE_MAX.saturating_add(1))
+            .map_or(from.len(), |(end, _)| end);
+        let name = from
+            .get(..window_end)
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .filter(|name| name.len() < from.len() && name.len() <= REFERENCE_MAX)
+            .unwrap_or_default();
+        match reference(name) {
+            Some(character) => {
+                out.push(character);
+                rest = from.get(name.len().saturating_add(1)..).unwrap_or_default();
+            }
+            None => {
+                out.push('&');
+                rest = from;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Returns the character of the reference `name`, the text between `&` and `;`.
+fn reference(name: &str) -> Option<char> {
+    if let Some(number) = name.strip_prefix('#') {
+        let (digits, radix) = match number.strip_prefix(['x', 'X']) {
+            Some(hex) => (hex, 16),
+            None => (number, 10),
+        };
+        if digits.is_empty() || !digits.chars().all(|digit| digit.is_digit(radix)) {
+            return None;
+        }
+        return u32::from_str_radix(digits, radix)
+            .ok()
+            .filter(|code| *code != 0)
+            .and_then(char::from_u32);
+    }
+    NAMED_REFERENCES
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, character)| *character)
 }
 
 /// Returns `text` without its `http://` and `https://` addresses.
