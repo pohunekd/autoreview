@@ -327,8 +327,10 @@ struct Pass<'a> {
     paragraph: Option<Cached>,
     /// Matching unescaped `[` and `]` offsets, sorted by the `[`.
     brackets: Vec<(usize, usize)>,
-    /// Offsets of the backticks, in order.
+    /// Offsets of the unescaped backticks, in order.
     backticks: Vec<usize>,
+    /// The code ranges of the text (`code_ranges`), in order.
+    code: &'a [(usize, usize)],
     /// Offsets of the line breaks, in order.
     line_breaks: Vec<usize>,
     /// The last line start asked about, and where its content starts after markers.
@@ -401,14 +403,18 @@ fn value_quote(bytes: &[u8], start: usize, end: usize) -> Option<(u8, usize)> {
 
 impl<'a> Pass<'a> {
     /// Prepares the pass over `text`.
-    fn new(text: &'a str) -> Self {
+    fn new(text: &'a str, code: &'a [(usize, usize)]) -> Self {
         Self {
             text,
             bytes: text.as_bytes(),
             cache: [None; SLOTS],
             paragraph: None,
             brackets: bracket_pairs(text.as_bytes()),
-            backticks: offsets(text.as_bytes(), b'`'),
+            backticks: offsets(text.as_bytes(), b'`')
+                .into_iter()
+                .filter(|at| !escaped(text.as_bytes(), *at))
+                .collect(),
+            code,
             line_breaks: offsets(text.as_bytes(), b'\n'),
             line_content: None,
         }
@@ -604,8 +610,13 @@ impl<'a> Pass<'a> {
 impl Pass<'_> {
     /// Handles the `<` at `at` and returns the offset after what it consumed.
     ///
+    /// A `<` inside a code span starts nothing: GitHub shows it as code.
+    ///
     /// A name followed by `:` is an autolink such as `<https://...>`, shown as a link.
     fn tag(&mut self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
+        if self.in_code_span(at) {
+            return None;
+        }
         if self.starts_with(at, "<!--") {
             let (open, close, end) = self.comment(at);
             report(
@@ -681,8 +692,33 @@ impl Pass<'_> {
             return Some(gt.saturating_add(1));
         };
         let end = self.element_end(gt.saturating_add(1), name);
-        report(add, signal, self.slice(at, end));
+        if signal == Signal::CollapsedBlockInstruction {
+            report(add, signal, &self.outside_code(at, end));
+        } else {
+            report(add, signal, self.slice(at, end));
+        }
         Some(end)
+    }
+
+    /// Returns the text of `start..end` without the code ranges inside it.
+    ///
+    /// A collapsed block shows its code as code once opened, and logs are its usual content;
+    /// an instruction in such code still meets the lexicon.
+    fn outside_code(&self, start: usize, end: usize) -> String {
+        let mut out = String::new();
+        let mut at = start;
+        let first = self
+            .code
+            .partition_point(|&(_, code_end)| code_end <= start);
+        for &(code_start, code_end) in self.code.get(first..).unwrap_or_default() {
+            if code_start >= end {
+                break;
+            }
+            out.push_str(self.slice(at, code_start.max(at)));
+            at = at.max(code_end);
+        }
+        out.push_str(self.slice(at.min(end), end));
+        out
     }
 
     /// Handles `![` at `at`: an image alt text, reported when it instructs.
@@ -1012,8 +1048,8 @@ fn report(add: &mut impl FnMut(Signal, u32), signal: Signal, text: &str) {
 ///
 /// `code` holds the field's `code_ranges`, which the pass skips.
 pub(crate) fn scan(text: &str, code: &[(usize, usize)], add: &mut impl FnMut(Signal, u32)) {
+    let mut pass = Pass::new(text, code);
     let mut code = code.iter().copied().peekable();
-    let mut pass = Pass::new(text);
     let mut at = 0_usize;
     while let Some(&byte) = pass.bytes.get(at) {
         if let Some(&(start, end)) = code.peek()
