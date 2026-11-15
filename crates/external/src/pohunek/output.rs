@@ -27,6 +27,11 @@ const CODEX_EXIT_PREFIXES: [&[u8]; 2] = [
     b"[pohunek-codex-review exited with status ",
 ];
 
+/// Line endings that may follow the Codex exit line at the end of the output.
+///
+/// They are the endings the Codex result parser accepts after the exit line.
+const CODEX_EXIT_ENDINGS: [&[u8]; 4] = [b"\r\n", b"\n", b"\r", b""];
+
 /// Error code of a removal whose session is already absent.
 const SESSION_NOT_FOUND: &str = "pohunek_session_not_found";
 
@@ -188,17 +193,47 @@ pub(crate) fn list_arguments(session: &SessionIdentity) -> Vec<String> {
 /// A Claude reviewer is complete once its output is one JSON value or ends with a newline.
 /// Invalid UTF-8 cannot change the verdict, because a replacement character is valid inside a
 /// string and invalid outside one, as the raw bytes are.
+///
+/// A Codex reviewer is complete once the last line of its output is an exit line of either
+/// marker name. An exit line that the transcript quotes before the end does not count.
 pub(crate) fn output_complete(protocol: &Protocol, output: &[u8]) -> bool {
     match protocol {
         Protocol::ClaudeStructured => {
             let text = String::from_utf8_lossy(output);
             serde_json::from_str::<IgnoredAny>(text.trim()).is_ok() || output.ends_with(b"\n")
         }
-        Protocol::CodexEnvelope => CODEX_EXIT_PREFIXES
+        Protocol::CodexEnvelope => CODEX_EXIT_ENDINGS
             .iter()
-            .any(|prefix| output.windows(prefix.len()).any(|window| window == *prefix)),
+            .filter_map(|ending| output.strip_suffix(*ending))
+            .any(ends_with_codex_exit_line),
         Protocol::Unset | Protocol::Other(_) => false,
     }
+}
+
+/// Reports whether `text` ends with a whole Codex exit line, its line ending removed.
+///
+/// The line starts the text or follows `\n`, and holds a prefix, a decimal status (`-` before
+/// it for a signal) and `]`, as the adapter prints it.
+fn ends_with_codex_exit_line(text: &[u8]) -> bool {
+    let Some(line) = text.strip_suffix(b"]") else {
+        return false;
+    };
+    let digits = line
+        .iter()
+        .rev()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digits == 0 {
+        return false;
+    }
+    let Some(rest) = line.get(..line.len().saturating_sub(digits)) else {
+        return false;
+    };
+    let rest = rest.strip_suffix(b"-").unwrap_or(rest);
+    CODEX_EXIT_PREFIXES.iter().any(|prefix| {
+        rest.strip_suffix(*prefix)
+            .is_some_and(|start| start.is_empty() || start.ends_with(b"\n"))
+    })
 }
 
 /// Returns the `ok` payload of a `session output` envelope.
@@ -402,16 +437,54 @@ mod tests {
 
     use super::output_complete;
 
-    // A Codex session is complete at the exit line of either marker name (#24).
+    // A Codex session is complete at the exit line of either marker name (#24), only when it is
+    // the last line (#396).
     #[test]
     fn codex_output_is_complete_at_the_exit_line_of_either_name() {
-        let cases: [(&[u8], bool); 6] = [
+        let cases: [(&[u8], bool); 18] = [
             (b"[autoreview-codex/v1 exited with status 0]\n", true),
             (b"[pohunek-codex-review exited with status 0]\n", true),
-            (b"text\n[autoreview-codex/v1 exited with status ", true),
+            (b"text\n[autoreview-codex/v1 exited with status ", false),
             (b"[autoreview-codex/v1 result:e30=]\n", false),
             (b"[autoreview-codex/v2 exited with status 0]\n", false),
             (b"", false),
+            // A quoted exit line is followed by more of the transcript.
+            (
+                b"diff\n[autoreview-codex/v1 exited with status 0]\nmore\n",
+                false,
+            ),
+            (
+                b"cat\r\n[pohunek-codex-review exited with status 0]\r\nmore",
+                false,
+            ),
+            // A quoted exit line that ends the output so far, but does not start its line.
+            (b"+[autoreview-codex/v1 exited with status 0]\n", false),
+            (
+                b"it prints [pohunek-codex-review exited with status 64]",
+                false,
+            ),
+            // A line that is not a whole exit line.
+            (b"text\n[pohunek-codex-review exited with status 0", false),
+            (b"text\n[autoreview-codex/v1 exited with status N]\n", false),
+            (b"text\n[autoreview-codex/v1 exited with status ]\n", false),
+            (
+                b"text\n[autoreview-codex/v1 exited with status 0]\n\n",
+                false,
+            ),
+            // The real exit line ends the output, after a quoted one, in PTY line endings.
+            (
+                b"[autoreview-codex/v1 exited with status 0]\r\n\r\n\
+                  [autoreview-codex/v1 result:e30=]\r\n\r\n\
+                  [autoreview-codex/v1 exited with status 0]\r\n",
+                true,
+            ),
+            (
+                b"[pohunek-codex-review-reason-v1:]\n\
+                  [pohunek-codex-review exited with status -9]\n",
+                true,
+            ),
+            (b"text\n[autoreview-codex/v1 exited with status 64]", true),
+            (b"text\n[pohunek-codex-review exited with status 1]\r", true),
         ];
         for (output, complete) in cases {
             let text = String::from_utf8_lossy(output);
