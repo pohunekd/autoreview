@@ -366,3 +366,32 @@ pub(crate) fn compact_schema(schema: &[u8]) -> Result<String, Error> {
     }
     Ok(output)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::model::Discussion;
+    use crate::protocol::fixtures::{NONCE, codex, test_input, test_pull_request};
+    use crate::protocol::validate::tests::test_config;
+
+    use super::build_reviewer_request;
+
+    // An adapter before `autoreview-codex/v2` finds no head line and refuses (#408).
+    #[test]
+    fn codex_request_names_the_head_commit_line_of_the_v2_adapter() {
+        let pr = test_pull_request(9);
+        let reviewer = codex();
+        let input = test_input(&reviewer, pr.clone());
+        let prompt = build_reviewer_request(
+            &test_config(),
+            &input,
+            &reviewer,
+            &Discussion::default(),
+            NONCE,
+            None,
+        )
+        .expect("reviewer request builds");
+        let head = format!("\n- Trusted head commit: {}\n", pr.head_sha);
+        assert!(prompt.contains(&head), "prompt = {prompt}");
+        assert!(!prompt.contains("- Trusted head SHA:"), "prompt = {prompt}");
+    }
+}
