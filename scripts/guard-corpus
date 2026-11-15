@@ -16,15 +16,20 @@ fewer files than the pull request. It also sets it for 250 commits, the most the
 lists, and pages review comments one by one where a review pages threads, so it can only
 set it more often. Unlike a review, it keeps the comments of the reviewing account.
 
-The script only reads GitHub through the given gh; it sends the texts nowhere and writes
-only FILE, which must not exist yet. It exits 2 on a usage error and 1 when a gh call
-fails, and then removes FILE.
+The script only reads GitHub through the given gh and sends the texts nowhere. It writes
+a temporary file `.FILE.<random>.partial` next to FILE and links it to FILE only after
+the last pull request, so FILE exists only after a complete fetch. FILE must not exist
+yet, and one that appears during the run is never overwritten. It exits 2 on a usage
+error and 1 when a gh call or a write fails. On that, on Ctrl-C, SIGTERM, SIGHUP and any
+other error it removes the temporary file; only a signal such as SIGKILL leaves it.
 """
 
 import argparse
 import json
 import os
 import re
+import secrets
+import signal
 import subprocess
 import sys
 
@@ -123,6 +128,11 @@ def positive(text):
     return int(text)
 
 
+def stop_on_signal(signum, _frame):
+    """Ends the run through an exception, so the cleanup of `main` removes the partial file."""
+    raise SystemExit(128 + signum)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="guard-corpus", allow_abbrev=False)
     parser.add_argument("--gh-binary", required=True, help="absolute path of gh")
@@ -138,18 +148,33 @@ def main():
     for repository in arguments.repositories:
         if not REPOSITORY.fullmatch(repository):
             parser.error(f"{repository!r} is not OWNER/REPO")
+    directory, name = os.path.split(arguments.output)
+    if not name:
+        parser.error("--output must name a file")
+    if os.path.lexists(arguments.output):
+        parser.error("--output cannot be created: File exists")
+    fetch = Fetch(arguments.gh_binary, arguments.page_limit)
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, stop_on_signal)
+    partial = os.path.join(directory, f".{name}.{secrets.token_hex(8)}.partial")
     try:
-        out = open(arguments.output, "x", encoding="ascii", newline="\n")
+        # O_EXCL and mode 0o666 under the umask, as open(..., "x") creates a file.
+        descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     except OSError as error:
         parser.error(f"--output cannot be created: {error.strerror}")
-    fetch = Fetch(arguments.gh_binary, arguments.page_limit)
     try:
-        with out:
+        with open(descriptor, "w", encoding="ascii", newline="\n") as out:
             write_corpus(fetch, arguments.repositories, arguments.count, out)
+            out.flush()
+            os.fsync(out.fileno())
+        # A link, unlike a rename, fails when FILE appeared during the run.
+        os.link(partial, arguments.output)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
-        os.remove(arguments.output)
         print(f"guard-corpus: {error}", file=sys.stderr)
         return 1
+    finally:
+        # Runs on every exit, also on KeyboardInterrupt and a signal's SystemExit.
+        os.remove(partial)
     return 0
 
 
