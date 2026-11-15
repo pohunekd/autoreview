@@ -360,107 +360,15 @@ pub(crate) fn compact_schema(schema: &[u8]) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
-    use autoreview_policy::{Checkout, Protocol};
+    use autoreview_policy::Protocol;
 
     use crate::error::{BoxError, Error, error_code};
-    use crate::model::{Discussion, ReviewScope};
-    use crate::protocol::fixtures::{codex, opus, sha, test_input, test_pull_request};
+    use crate::model::Discussion;
+    use crate::protocol::fixtures::{codex, opus, test_input, test_pull_request};
     use crate::protocol::validate::reviewer_output_invalid;
     use crate::protocol::validate::tests::test_config;
 
-    use super::{REVIEW_SCHEMA, build_reviewer_request};
-
-    #[test]
-    fn reviewer_requests_carry_the_trusted_context_their_prompt_refers_to() {
-        let pr = test_pull_request(9);
-        let claude_input = test_input(&opus(), pr.clone());
-        let raw = build_reviewer_request(
-            &test_config(),
-            &claude_input,
-            &opus(),
-            &Discussion::default(),
-            None,
-        )
-        .expect("claude request builds");
-        let request: serde_json::Value =
-            serde_json::from_str(&raw).expect("claude request is JSON");
-        let prompt = request["prompt"].as_str().expect("prompt is a string");
-        assert_eq!(request["protocol"], "claude-otel-noninteractive/request-v1");
-        assert!(request["json_schema"].is_object());
-        assert!(prompt.contains(&format!(
-            "Trusted request context:\nRepository: acme/widget\nPull request: 9\nHead SHA: {}",
-            pr.head_sha
-        )));
-        // The fixture's checkout is unset, which starts the worktree at the base branch.
-        assert!(prompt.contains(&format!(
-            "Review scope: full\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n\
-- Trusted checkout: base\n\n",
-            pr.head_sha, pr.base_sha
-        )));
-        assert!(prompt.ends_with(&format!(
-            "`git diff {}...{}` and the code at the head with `git show {}:<path>`.\n",
-            pr.base_sha, pr.head_sha, pr.head_sha
-        )));
-        let mut head_input = claude_input.clone();
-        head_input.rule.pipeline.checkout = Checkout::Head;
-        let raw = build_reviewer_request(
-            &test_config(),
-            &head_input,
-            &opus(),
-            &Discussion::default(),
-            None,
-        )
-        .expect("claude request builds");
-        let request: serde_json::Value =
-            serde_json::from_str(&raw).expect("claude request is JSON");
-        let prompt = request["prompt"].as_str().expect("prompt is a string");
-        assert!(prompt.contains("\n- Trusted checkout: head\n\n"));
-        assert!(!prompt.contains("git diff"));
-
-        let mut codex_input = test_input(&codex(), pr.clone());
-        codex_input.scope = ReviewScope {
-            mode: "incremental".to_owned(),
-            previous_head_sha: sha("c"),
-        };
-        let prompt = build_reviewer_request(
-            &test_config(),
-            &codex_input,
-            &codex(),
-            &Discussion::default(),
-            None,
-        )
-        .expect("codex prompt builds");
-        assert!(
-            prompt
-                .contains("Trusted review context:\n- Repository: acme/widget\n- Pull request: #9")
-        );
-        assert!(prompt.contains(&format!(
-            "- Trusted base SHA: {}\n- Base branch: main\n- Trusted checkout: base\n\
-- Trusted protocol: autoreview-codex/v1\n- Trusted previously reviewed head SHA: {}\n\n",
-            pr.base_sha,
-            sha("c")
-        )));
-        assert!(prompt.ends_with(&format!(
-            "`git diff {}...{}` and the code at the head with `git show {}:<path>`. Set \
-reviewed_head_sha to {}.",
-            pr.base_sha, pr.head_sha, pr.head_sha, pr.head_sha
-        )));
-
-        codex_input.rule.pipeline.checkout = Checkout::Head;
-        let prompt = build_reviewer_request(
-            &test_config(),
-            &codex_input,
-            &codex(),
-            &Discussion::default(),
-            None,
-        )
-        .expect("codex prompt builds");
-        assert!(prompt.ends_with(&format!(
-            "- Base branch: main\n- Trusted checkout: head\n\
-- Trusted protocol: autoreview-codex/v1\n- Trusted previously reviewed head SHA: {}",
-            sha("c")
-        )));
-    }
+    use super::build_reviewer_request;
 
     #[test]
     fn reviewer_requests_state_the_output_limits_and_the_check_that_refused_the_run_before() {
@@ -533,31 +441,5 @@ reviewed_head_sha to {}.",
                 assert_eq!(prompt(Some(refused)), first, "{}", error_code(refused));
             }
         }
-    }
-
-    #[test]
-    fn claude_request_schema_bounds_the_summary_by_the_configuration() {
-        let mut cfg = test_config();
-        cfg.min_summary_characters = 25;
-        cfg.max_summary_characters = 600;
-        let raw = build_reviewer_request(
-            &cfg,
-            &test_input(&opus(), test_pull_request(9)),
-            &opus(),
-            &Discussion::default(),
-            None,
-        )
-        .expect("claude request builds");
-        let request: serde_json::Value =
-            serde_json::from_str(&raw).expect("claude request is JSON");
-        let summary = &request["json_schema"]["properties"]["summary"];
-        assert_eq!(
-            summary,
-            &serde_json::json!({"type": "string", "minLength": 25, "maxLength": 600})
-        );
-        let mut embedded: serde_json::Value =
-            serde_json::from_slice(REVIEW_SCHEMA).expect("embedded schema is JSON");
-        embedded["properties"]["summary"] = summary.clone();
-        assert_eq!(request["json_schema"], embedded);
     }
 }

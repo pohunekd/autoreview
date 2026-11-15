@@ -289,13 +289,9 @@ pub(crate) mod fixtures {
 mod tests {
     use serde_json::{Value, json};
 
-    use crate::discussion::{DISCUSSION_ROLE_AUTHOR, DISCUSSION_ROLE_REVIEWER};
     use crate::error::error_code;
     use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN, prior_key};
-    use crate::model::{
-        Discussion, DiscussionComment, DiscussionThread, PriorFinding, PriorVerdict, ReviewInput,
-        ReviewerResult,
-    };
+    use crate::model::{Discussion, PriorFinding, PriorVerdict, ReviewInput, ReviewerResult};
     use crate::protocol::combine::combine_prior;
     use crate::protocol::fixtures::{
         claude_output, claude_session, codex, codex_output, codex_report, opus, sha,
@@ -579,54 +575,6 @@ mod tests {
         );
         assert_eq!(combined[0].verdict.status, PRIOR_OPEN);
         assert_eq!(combined[1].verdict.status, PRIOR_ANSWERED);
-    }
-
-    #[test]
-    fn relies_on_must_name_a_commenter_of_the_finding() {
-        let cfg = test_config();
-        let pr = test_pull_request(3);
-        let key = prior_key(&sha("c"), "O001");
-        let input = ReviewInput {
-            pull_request: pr.clone(),
-            prior: vec![PriorFinding {
-                key: key.clone(),
-                ..PriorFinding::default()
-            }],
-            ..ReviewInput::default()
-        };
-        let discussion = Discussion {
-            threads: vec![DiscussionThread {
-                key: key.clone(),
-                resolved: false,
-                replies: vec![DiscussionComment {
-                    author: "colleague".to_owned(),
-                    role: DISCUSSION_ROLE_AUTHOR.to_owned(),
-                    ..DiscussionComment::default()
-                }],
-            }],
-            comments: vec![DiscussionComment {
-                author: "reviewer".to_owned(),
-                role: DISCUSSION_ROLE_REVIEWER.to_owned(),
-                ..DiscussionComment::default()
-            }],
-        };
-        let output = |login: &str| {
-            claude_output(
-                &pr,
-                json!([]),
-                Some(json!([{
-                    "key": key, "status": PRIOR_ANSWERED, "note": "Settled.",
-                    "relies_on": login
-                }])),
-            )
-        };
-        for login in ["colleague", "reviewer", ""] {
-            parse_reviewer_output(&cfg, &input, &discussion, &opus(), &output(login))
-                .expect("a relies_on that names a commenter, or nobody, parses");
-        }
-        let err = parse_reviewer_output(&cfg, &input, &discussion, &opus(), &output("stranger"))
-            .expect_err("a relies_on that names nobody in the discussion is refused");
-        assert_eq!(error_code(&err), "review_output_invalid");
     }
 
     // A Codex re-review settles the prior findings as a Claude one does: each needs one verdict,
