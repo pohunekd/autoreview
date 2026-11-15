@@ -4,7 +4,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::time::Duration;
 
@@ -336,6 +336,20 @@ pub trait Integrations {
         credential: &Credential,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<LinkedIssues, Error>> + Send;
+
+    /// Reads the texts of the `fields` that a rule's text guard scans.
+    ///
+    /// It reads with `credential`'s token and leaves out what `publisher` wrote. Reading stops
+    /// once `max_bytes` bytes of text are read or at the page limit, and then sets `truncated`.
+    fn read_guard_texts(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        pull_request: &PullRequest,
+        fields: &BTreeSet<FieldKind>,
+        max_bytes: usize,
+        publisher: &str,
+    ) -> impl Future<Output = Result<GuardTexts, Error>> + Send;
 
     /// Reports whether `head` extends `previous` by commits that each have one parent.
     fn linear_history(

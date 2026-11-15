@@ -6,19 +6,18 @@
 
 // Rust guideline compliant 2026-11-15
 
-#![expect(
-    dead_code,
-    reason = "GitHub::guard_texts calls it once the Integrations method exists"
-)]
+use std::collections::BTreeSet;
 
+use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
-use autoreview_engine::integrations::GuardText;
+use autoreview_engine::integrations::{GuardText, GuardTexts};
 use autoreview_engine::model::PullRequest;
 use autoreview_go_compat::null_default;
 use autoreview_guard::FieldKind;
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 
-use super::response_invalid;
+use super::{GitHub, response_invalid};
 
 /// Query of the title and body of one pull request.
 const GRAPHQL_GUARD_TEXT: &str = concat!(
@@ -313,5 +312,87 @@ fn take_entry(list: List, entry: Node, publisher: &str, read: &mut GuardRead) {
                 }
             }
         }
+    }
+}
+
+impl GitHub {
+    /// Reads the texts of `fields` for the text guard, bounded by `max_bytes`.
+    ///
+    /// Each list is paged until it ends; the page limit or the bound marks it truncated, and so
+    /// does a changed file with added lines whose patch GitHub omits.
+    pub(crate) async fn guard_texts(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        pull_request: &PullRequest,
+        fields: &BTreeSet<FieldKind>,
+        max_bytes: usize,
+        publisher: &str,
+    ) -> Result<GuardTexts, Error> {
+        let mut read = GuardRead {
+            max_bytes,
+            ..GuardRead::default()
+        };
+        let (title, body) = (FieldKind::Title, FieldKind::Body);
+        if fields.contains(&title) || fields.contains(&body) {
+            let args = guard_args(pull_request, GRAPHQL_GUARD_TEXT, "");
+            let output = self.github::<()>(cancel, credential, &args, None).await?;
+            let node = decode_pull_node(&output)?;
+            if fields.contains(&title) {
+                read.push(title, &node.title);
+            }
+            if fields.contains(&body) {
+                read.push(body, &node.body);
+            }
+        }
+        for list in LISTS
+            .into_iter()
+            .filter(|list| fields.contains(&list.kind()))
+        {
+            self.read_list(cancel, credential, pull_request, list, publisher, &mut read)
+                .await?;
+        }
+        Ok(GuardTexts {
+            texts: read.texts,
+            truncated: read.truncated,
+        })
+    }
+
+    /// Reads every page of `list` into `read` until it ends, the bound or the page limit.
+    async fn read_list(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        pull_request: &PullRequest,
+        list: List,
+        publisher: &str,
+        read: &mut GuardRead,
+    ) -> Result<(), Error> {
+        let query = list_query(list);
+        let mut after = String::new();
+        for _ in 1..=self.search_page_limit {
+            if read.full() {
+                read.cut();
+                return Ok(());
+            }
+            let args = guard_args(pull_request, &query, &after);
+            let output = self.github::<()>(cancel, credential, &args, None).await?;
+            let page = decode_pull_node(&output)?
+                .page
+                .ok_or_else(|| response_invalid(None))?;
+            for entry in page.nodes {
+                let entry = entry.ok_or_else(|| response_invalid(None))?;
+                take_entry(list, entry, publisher, read);
+            }
+            if !page.page_info.has_next_page {
+                return Ok(());
+            }
+            if page.page_info.end_cursor.is_empty() {
+                return Err(response_invalid(None));
+            }
+            after = page.page_info.end_cursor;
+        }
+        read.cut();
+        Ok(())
     }
 }

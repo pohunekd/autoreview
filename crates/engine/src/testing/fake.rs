@@ -10,6 +10,7 @@ use std::future::{Future, Ready, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use autoreview_guard::FieldKind;
 use autoreview_policy::TriggerKind;
 use autoreview_policy::{
     Checkout, Level, Permission, Policy, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID,
@@ -24,8 +25,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Credential;
 use crate::error::{BoxError, Error, WORKFLOW_FAILED};
 use crate::integrations::{
-    ChangedFile, ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState,
-    ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest, TokenAnswer,
+    ChangedFile, ChangedFiles, CommentableLines, GitHubReview, GuardText, GuardTexts, Integrations,
+    PullRequestState, ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
@@ -97,6 +98,10 @@ pub(crate) struct FakeState {
     pub(crate) closing_issues: Option<LinkedIssues>,
     /// Pull request of each closing-issue read, as `repository#number`, in order.
     pub(crate) closing_reads: Vec<String>,
+    /// Texts that the guard read returns, filtered by the fields it asks for.
+    pub(crate) guard_texts: Vec<GuardText>,
+    /// Number of guard reads.
+    pub(crate) guard_reads: usize,
     /// Pull requests whose newer head is a rewritten history, by head SHA.
     pub(crate) rewritten: BTreeSet<String>,
     /// Refused candidates that the candidate search returns.
@@ -579,6 +584,30 @@ impl Integrations for FakeIntegration {
                 .ok_or_else(|| Error::workflow("github_request_rejected", true, None))
         };
         ready(result)
+    }
+
+    fn read_guard_texts(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        _pull_request: &PullRequest,
+        fields: &BTreeSet<FieldKind>,
+        _max_bytes: usize,
+        _publisher: &str,
+    ) -> impl Future<Output = Result<GuardTexts, Error>> + Send {
+        let result = {
+            let mut state = self.lock();
+            state.guard_reads = state.guard_reads.saturating_add(1);
+            let texts = (state.guard_texts.iter())
+                .filter(|text| fields.contains(&text.kind))
+                .cloned()
+                .collect();
+            GuardTexts {
+                texts,
+                truncated: false,
+            }
+        };
+        ready(Ok(result))
     }
 
     fn linear_history(
