@@ -34,8 +34,12 @@ const HIDDEN_MARKUP: [(&str, &str); 4] = [
     ("<!", ">"),
 ];
 
-/// Most bytes of a raw HTML piece compared, lowercased, with the `HIDDEN_MARKUP` openers.
-const OPENER_MAX: usize = 9;
+/// Elements that never have content, where a trailing `/` closes the tag (HTML void
+/// elements). On any other element `<x/>` opens it, as a browser reads it.
+const VOID_ELEMENTS: [&str; 13] = [
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
+    "wbr",
+];
 
 /// Returns the parser options of GitHub comments and descriptions (GFM extensions).
 fn options() -> Options<'static> {
@@ -111,13 +115,23 @@ struct Walk<'a, F: FnMut(Signal, u32)> {
     frames: Vec<Frame>,
     /// How many open frames have each element name.
     open: BTreeMap<String, usize>,
-    /// The alt text of the image being read.
+    /// The alt text of the outermost image being read, inner images' text included.
     alt: Option<String>,
+    /// How many images are open; only the outermost one collects and reports alt text.
+    alt_depth: usize,
+    /// The text of an HTML comment that an HTML block opened and did not close.
+    ///
+    /// The browser keeps such a comment open across the following Markdown blocks, so
+    /// everything up to a `-->` in later raw HTML, or the end of the field, is hidden.
+    comment: Option<String>,
 }
 
 impl<F: FnMut(Signal, u32)> Walk<'_, F> {
     /// Takes shown text, or code when `code` is set, in document order.
     fn text(&mut self, text: &str, code: bool) {
+        if let Some(comment) = self.comment.as_mut() {
+            comment.push_str(text);
+        }
         if let Some(alt) = self.alt.as_mut() {
             alt.push_str(text);
         }
@@ -133,6 +147,13 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
     fn report(&mut self, signal: Signal, text: &str) {
         if words::instructs(text) {
             (self.add)(signal, 1);
+        }
+    }
+
+    /// Closes an open comment, if any, and reports its text.
+    fn close_comment(&mut self) {
+        if let Some(comment) = self.comment.take() {
+            self.report(Signal::HiddenCommentInstruction, &comment);
         }
     }
 
@@ -203,19 +224,32 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
     /// Reads one raw HTML piece; `inline` is set for inline HTML inside a paragraph.
     fn raw_html(&mut self, html: &str, inline: bool) {
         let mut rest = html;
+        if self.comment.is_some() {
+            let Some(end) = rest.find("-->") else {
+                self.text(rest, false);
+                return;
+            };
+            self.text(rest.get(..end).unwrap_or(rest), false);
+            self.close_comment();
+            rest = rest.get(end.saturating_add(3)..).unwrap_or_default();
+        }
         while let Some(start) = rest.find('<') {
             self.text(rest.get(..start).unwrap_or_default(), false);
             self.text(" ", false);
             let from = rest.get(start..).unwrap_or_default();
-            let head = from
-                .get(..from.len().min(OPENER_MAX))
-                .unwrap_or(from)
-                .to_ascii_lowercase();
-            let markup = HIDDEN_MARKUP
-                .iter()
-                .find(|(open, _)| head.starts_with(open) && (*open != "<!" || declaration(from)));
+            let markup = HIDDEN_MARKUP.iter().find(|(open, _)| {
+                from.as_bytes()
+                    .get(..open.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(open.as_bytes()))
+                    && (*open != "<!" || declaration(from))
+            });
             if let Some((open, close)) = markup {
                 let body = from.get(open.len()..).unwrap_or_default();
+                if *open == "<!--" && !inline && !body.contains(close) {
+                    self.comment = Some(body.to_owned());
+                    rest = "";
+                    continue;
+                }
                 let (content, after) = match body.find(close) {
                     Some(end) => (
                         body.get(..end).unwrap_or_default(),
@@ -271,8 +305,9 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
         } else {
             None
         };
+        let self_closing = attributes.trim_end().ends_with('/');
         if let Some(signal) = signal
-            && !attributes.trim_end().ends_with('/')
+            && !(self_closing && VOID_ELEMENTS.contains(&name.as_str()))
         {
             let paragraph_only = inline && hidden_element && self.frames.is_empty();
             self.push(name, signal, paragraph_only);
@@ -406,7 +441,10 @@ fn enter<F: FnMut(Signal, u32)>(walk: &mut Walk<'_, F>, node: &AstNode<'_>, cove
                 walk.report(Signal::LinkMetadataInstruction, &title);
             }
             if image {
-                walk.alt = Some(String::new());
+                if walk.alt_depth == 0 {
+                    walk.alt = Some(String::new());
+                }
+                walk.alt_depth = walk.alt_depth.saturating_add(1);
             }
         }
         _ => {}
@@ -417,7 +455,10 @@ fn enter<F: FnMut(Signal, u32)>(walk: &mut Walk<'_, F>, node: &AstNode<'_>, cove
 fn leave<F: FnMut(Signal, u32)>(walk: &mut Walk<'_, F>, node: &AstNode<'_>) {
     match node.data().value {
         NodeValue::Image(_) => {
-            if let Some(alt) = walk.alt.take() {
+            walk.alt_depth = walk.alt_depth.saturating_sub(1);
+            if walk.alt_depth == 0
+                && let Some(alt) = walk.alt.take()
+            {
                 walk.report(Signal::LinkMetadataInstruction, &alt);
             }
         }
@@ -476,6 +517,8 @@ pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Vec<(usize,
         frames: Vec::new(),
         open: BTreeMap::new(),
         alt: None,
+        alt_depth: 0,
+        comment: None,
     };
     for edge in root.traverse() {
         match edge {
@@ -492,6 +535,7 @@ pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Vec<(usize,
         }
     }
     walk.close_all();
+    walk.close_comment();
     unrendered_lines(text, &covered, walk.add);
     code.sort_unstable();
     code
