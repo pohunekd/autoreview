@@ -4,7 +4,7 @@
 
 `scripts/gates` runs each gate, in the order below, and reports its own result.
 With no argument it runs every group; CI runs the `docs`, `adapters`, `rust` and
-`go` groups as four jobs.
+`deny` groups as four jobs.
 
 Docs group:
 
@@ -38,6 +38,21 @@ Rust group, on the toolchain pinned in `rust-toolchain.toml`:
 7. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
 8. `rust-test`: `cargo test --workspace --locked`
 9. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
+
+Deny group, with the policy in `deny.toml`:
+
+10. `cargo-deny` (`cargo-deny --locked check licenses advisories`): every crate
+    in `Cargo.lock` has a licence that `deny.toml` allows, and no RustSec
+    advisory (vulnerable, unmaintained or unsound crate) matches a crate in
+    `Cargo.lock` unless `deny.toml` ignores it. Skipped like `shellcheck` when
+    `cargo-deny` is not on `PATH`.
+    - The advisory database is fetched on every run. Without network the gate
+      fails with `failed to fetch advisory database`; it never passes on a
+      stale copy.
+    - A new advisory fails every pull request until the crate is updated, or
+      until `deny.toml` ignores the advisory with a reason that links an issue.
+    - A pull request that adds a crate under a licence not yet listed adds the
+      licence to `deny.toml`, naming the crate. Copyleft licences are refused.
 
 Planned, not a gate yet: validation of the example policies. It lands with M1,
 which also decides how `validate` can run in CI without tokens or a running
@@ -124,6 +139,8 @@ text. Describe checks against the owner's own daemons in words only.
 - `rust` runs `scripts/gates rust` on the toolchain pinned in
   `rust-toolchain.toml`, with the dependency cache restored from `main` and
   saved only by runs on `main`.
+- `deny` runs `scripts/gates deny` with the `cargo-deny` release archive whose
+  version and SHA-256 the workflow pins.
 - `changelog` runs `scripts/changelog check` and, on a pull request, requires a fragment unless the pull request carries `no-changelog`.
 - `ci` is the only required status check. It fails unless every job succeeded.
 
