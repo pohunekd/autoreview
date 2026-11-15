@@ -86,6 +86,8 @@ pub enum Signal {
     ZeroWidthRun,
     /// A run of two or more variation selectors.
     VariationSelectorRun,
+    /// A run of 3+ invisible characters that mixes classes or holds a bidi mark.
+    InvisibleRun,
     /// A left-to-right or right-to-left override, U+202D or U+202E.
     BidiOverride,
     /// An embedding U+202A-202C or isolate U+2066-2069 on an added patch line.
@@ -114,6 +116,7 @@ impl Signal {
             Self::UnicodeTags => "unicode_tags",
             Self::ZeroWidthRun => "zero_width_run",
             Self::VariationSelectorRun => "variation_selector_run",
+            Self::InvisibleRun => "invisible_run",
             Self::BidiOverride => "bidi_override",
             Self::BidiControlInPatch => "bidi_control_in_patch",
             Self::HiddenCommentInstruction => "hidden_comment_instruction",
@@ -135,6 +138,7 @@ impl Signal {
             Self::UnicodeTags
             | Self::ZeroWidthRun
             | Self::VariationSelectorRun
+            | Self::InvisibleRun
             | Self::BidiOverride
             | Self::HiddenCommentInstruction
             | Self::CollapsedBlockInstruction

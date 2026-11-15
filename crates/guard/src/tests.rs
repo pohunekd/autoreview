@@ -1,7 +1,8 @@
 //! Table tests over the synthetic fixture corpus in `testdata/`.
 //!
-//! A corpus file is ASCII; a non-ASCII character is written `<U+XXXX>`. Lines before the
-//! first row and lines starting with `#` before a row's first field are comments.
+//! A corpus file is ASCII; a non-ASCII character is written `<U+XXXX>`, and
+//! `<REP n>text</REP>` stands for `text` repeated `n` times. Lines before the first row and
+//! lines starting with `#` before a row's first field are comments.
 //!
 //! ```text
 //! == row_name
@@ -29,10 +30,11 @@ const KINDS: [FieldKind; 6] = [
 ];
 
 /// Every signal, to read the codes of the corpus by their stable code.
-const SIGNALS: [Signal; 12] = [
+const SIGNALS: [Signal; 13] = [
     Signal::UnicodeTags,
     Signal::ZeroWidthRun,
     Signal::VariationSelectorRun,
+    Signal::InvisibleRun,
     Signal::BidiOverride,
     Signal::BidiControlInPatch,
     Signal::HiddenCommentInstruction,
@@ -78,6 +80,24 @@ fn decode(text: &str) -> String {
     out
 }
 
+/// Replaces every `<REP n>text</REP>` of a corpus text with `text` repeated `n` times.
+fn expand(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<REP ") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 5..];
+        let close = after.find('>').expect("closed <REP");
+        let times: usize = after[..close].parse().expect("repeat count");
+        let body = &after[close + 1..];
+        let end = body.find("</REP>").expect("closed </REP>");
+        out.push_str(&body[..end].repeat(times));
+        rest = &body[end + 6..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Parses a corpus file into rows.
 fn rows(corpus: &str) -> Vec<Row> {
     assert!(
@@ -92,7 +112,7 @@ fn rows(corpus: &str) -> Vec<Row> {
     let close = |rows: &mut Vec<Row>, text: &mut Option<Vec<&str>>, repeat: usize| {
         if let (Some(lines), Some(row)) = (text.take(), rows.last_mut()) {
             let field = row.fields.last_mut().expect("open field");
-            field.1 = decode(&lines.join("\n")).repeat(repeat);
+            field.1 = decode(&expand(&lines.join("\n"))).repeat(repeat);
         }
     };
     for line in corpus.lines() {

@@ -25,6 +25,11 @@ const FLAG_LETTERS_MAX: usize = 5;
 /// a row have no legitimate use and are how payloads are encoded in invisible characters.
 const RUN_MIN: usize = 2;
 
+/// Shortest run of invisible characters of several classes, or with a bidi mark, reported.
+///
+/// The longest legitimate mix is two: VS16 then ZWJ inside an emoji sequence.
+const MIXED_RUN_MIN: usize = 3;
+
 /// Reports whether a character is a Unicode tag character, U+E0000-E007F.
 pub(crate) const fn tag(character: char) -> bool {
     matches!(character, '\u{E0000}'..='\u{E007F}')
@@ -138,6 +143,28 @@ impl TagRun {
     }
 }
 
+/// The state of one run of zero-width characters, variation selectors and bidi marks.
+#[derive(Debug, Default)]
+struct MixedRun {
+    /// Characters in the run.
+    len: usize,
+    /// The run holds a zero-width character.
+    zero_width: bool,
+    /// The run holds a variation selector.
+    selector: bool,
+    /// The run holds a bidi mark.
+    mark: bool,
+}
+
+impl MixedRun {
+    /// Reports whether the finished run is an `invisible_run`: long enough and not one class.
+    ///
+    /// A run of zero-width characters only or of variation selectors only has its own signal.
+    fn is_hit(&self) -> bool {
+        self.len >= MIXED_RUN_MIN && (self.mark || (self.zero_width && self.selector))
+    }
+}
+
 /// Reports the character signals of `text` to `add`: tags, runs and bidi controls.
 ///
 /// `in_patch` is set for added patch lines, where embeddings and isolates are reported too.
@@ -146,8 +173,22 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
     let mut previous = '\n';
     let mut zero_width_len = 0_usize;
     let mut selector_len = 0_usize;
+    let mut mixed = MixedRun::default();
     for character in text.chars() {
-        let (zero, selector) = (zero_width(character), variation_selector(character));
+        let (zero, selector, mark) = (
+            zero_width(character),
+            variation_selector(character),
+            bidi_mark(character),
+        );
+        if zero || selector || mark {
+            mixed.len = mixed.len.saturating_add(1);
+            mixed.zero_width |= zero;
+            mixed.selector |= selector;
+            mixed.mark |= mark;
+        } else {
+            add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
+            mixed = MixedRun::default();
+        }
         if tag(character) {
             tag_run
                 .get_or_insert_with(|| TagRun {
@@ -184,4 +225,5 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
     if let Some(run) = tag_run {
         add(Signal::UnicodeTags, u32::from(!run.is_flag()));
     }
+    add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
 }
