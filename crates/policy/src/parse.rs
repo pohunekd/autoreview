@@ -19,9 +19,9 @@ use crate::authors::{Authors, FileAuthors, parse_authors, user_login_valid};
 use crate::digest::digest_of;
 use crate::human_review::{FileHumanReview, parse_human_review};
 use crate::types::{
-    Checkout, EVENTS, Event, Level, MAX_APPROVAL_HOURS, MAX_POLICY_BYTES, MAX_PROMPT_BYTES,
-    MAX_REVIEWERS_PER_PR, MAX_RULES, OPTIONAL_EVENTS, OnClean, OnFindings, OnNotes, Pipeline,
-    Policy, Protocol, REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind,
+    Checkout, EVENTS, Event, IntentCheck, Level, MAX_APPROVAL_HOURS, MAX_POLICY_BYTES,
+    MAX_PROMPT_BYTES, MAX_REVIEWERS_PER_PR, MAX_RULES, OPTIONAL_EVENTS, OnClean, OnFindings,
+    OnNotes, Pipeline, Policy, Protocol, REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind,
     VERIFIER_REVIEWER_ID, Verifier, is_finding_prefix, is_identifier, is_label, is_owner,
     is_profile, is_repo_name, is_source,
 };
@@ -104,6 +104,9 @@ struct FilePipeline {
     project_sources: Vec<String>,
     /// Verifier section, absent for unchecked findings.
     verifier: Option<FileVerifier>,
+    /// Intent check name; absent means off, null is refused.
+    #[serde(deserialize_with = "present")]
+    intent_check: Option<Option<String>>,
 }
 
 /// A verifier as written in the policy file.
@@ -653,6 +656,16 @@ fn parse_pipelines(
             }
             sources.push(source.clone());
         }
+        let intent_check = match value.intent_check.as_ref() {
+            None => IntentCheck::Off,
+            Some(Some(raw)) if raw == "off" => IntentCheck::Off,
+            Some(Some(raw)) if raw == "issues" => IntentCheck::Issues,
+            Some(_) => {
+                return Err(Error::PipelineIntentCheck {
+                    pipeline: name.clone(),
+                });
+            }
+        };
         let prompt = load_prompt(name, &value.prompt, read_prompt)?;
         let verifier = parse_verifier(name, value.verifier.as_ref(), reviewers, read_prompt)?;
         pipelines.insert(
@@ -666,6 +679,7 @@ fn parse_pipelines(
                 checkout,
                 project_sources: sources,
                 verifier,
+                intent_check,
             },
         );
     }
@@ -1102,7 +1116,9 @@ mod tests {
     use crate::Error;
     use crate::author_limit::{AuthorLimit, OverLimit};
     use crate::authors::{Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview};
-    use crate::types::{Event, Level, MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy};
+    use crate::types::{
+        Event, IntentCheck, Level, MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy,
+    };
 
     /// The authors section of the acme/special rule in the valid policy.
     const SPECIAL_AUTHORS: &str = "{match: acme/special, authors: {trusted: any},";
@@ -1329,6 +1345,46 @@ notifications:
         );
     }
 
+    /// An absent or `off` intent check hashes nothing, so existing policies keep their digest.
+    #[test]
+    fn intent_check_parses_and_changes_the_digest_only_when_on() {
+        const PINNED: &str = "78ab635662e41adc871491ea70f495ce62d272870f22b730d69c694213c0433b";
+        let intent = |policy: &Policy, repository: &str| {
+            policy
+                .resolve(repository)
+                .map(|rule| rule.pipeline.intent_check.clone())
+        };
+        let absent = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        assert_eq!(absent.digest(), PINNED);
+        assert_eq!(intent(&absent, "acme/other"), Some(IntentCheck::Off));
+        let document =
+            VALID_POLICY.replacen("checkout: base,", "checkout: base, intent_check: off,", 1);
+        let off = parse(document.as_bytes(), prompts).expect("intent_check off parses");
+        assert_eq!(
+            off.digest(),
+            PINNED,
+            "intent_check off must keep the digest"
+        );
+        assert_eq!(intent(&off, "acme/other"), Some(IntentCheck::Off));
+        let document = VALID_POLICY.replacen(
+            "checkout: base,",
+            "checkout: base, intent_check: issues,",
+            1,
+        );
+        let on = parse(document.as_bytes(), prompts).expect("intent_check issues parses");
+        assert_ne!(
+            on.digest(),
+            PINNED,
+            "intent_check issues must change the digest"
+        );
+        assert_eq!(intent(&on, "acme/other"), Some(IntentCheck::Issues));
+        assert_eq!(
+            intent(&on, "solo/app"),
+            Some(IntentCheck::Off),
+            "a pipeline without the key must stay off"
+        );
+    }
+
     #[test]
     fn human_review_parses_and_changes_the_digest() {
         let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
@@ -1432,6 +1488,8 @@ notifications:
             ("shared prefix", valid.replacen("finding_prefix: X", "finding_prefix: O", 1), "share finding_prefix"),
             ("bad protocol", valid.replacen("protocol: codex-envelope", "protocol: plain", 1), "protocol must be"),
             ("bad checkout", valid.replacen("checkout: head", "checkout: merge", 1), "checkout must be"),
+            ("null intent_check", valid.replacen("checkout: head", "checkout: head, intent_check: null", 1), "pipeline side: intent_check must be off or issues"),
+            ("unknown intent_check", valid.replacen("checkout: head", "checkout: head, intent_check: pr", 1), "pipeline side: intent_check must be off or issues"),
             ("prompt escapes directory", valid.replacen("prompt: prompts/side.md", "prompt: ../side.md", 1), "inside the policy directory"),
             ("missing prompt", valid.replacen("prompt: prompts/side.md", "prompt: prompts/none.md", 1), "prompts/none.md"),
             ("missing event", valid.replacen("  superseded: log\n", "", 1), "event superseded needs a level"),

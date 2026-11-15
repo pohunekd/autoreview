@@ -119,6 +119,29 @@ impl Checkout {
     }
 }
 
+/// Whether the reviewers compare the change with the issues the pull request closes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum IntentCheck {
+    /// No issue text reaches the reviewers; a pipeline without the key gets it.
+    #[default]
+    #[serde(rename = "off")]
+    Off,
+    /// The reviewers get the title and body of each issue the pull request closes.
+    #[serde(rename = "issues")]
+    Issues,
+    /// A value that a newer engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl IntentCheck {
+    /// Reports whether the value is `off`, which a stored pipeline leaves out.
+    #[must_use]
+    pub fn is_off(&self) -> bool {
+        *self == Self::Off
+    }
+}
+
 /// Kind of event that starts a review.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TriggerKind {
@@ -483,6 +506,9 @@ pub struct Pipeline {
     /// its findings unchecked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verifier: Option<Verifier>,
+    /// Whether the reviewers compare the change with the issues it closes; `off` when absent.
+    #[serde(skip_serializing_if = "IntentCheck::is_off")]
+    pub intent_check: IntentCheck,
 }
 
 autoreview_go_compat::object_only_serde!(Pipeline);

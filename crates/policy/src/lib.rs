@@ -21,8 +21,8 @@ pub use authors::{
 pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};
 pub use types::{
-    Checkout, EVENTS, Event, Level, OPTIONAL_EVENTS, OnClean, OnFindings, OnNotes, Pipeline,
-    Policy, Protocol, REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind,
+    Checkout, EVENTS, Event, IntentCheck, Level, OPTIONAL_EVENTS, OnClean, OnFindings, OnNotes,
+    Pipeline, Policy, Protocol, REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind,
     VERIFIER_REVIEWER_ID, Verifier, WORKFLOW_EVENTS,
 };
 
@@ -234,6 +234,13 @@ pub enum Error {
     /// A pipeline checkout is unknown.
     #[error("pipeline {pipeline}: checkout must be base or head")]
     PipelineCheckout {
+        /// The pipeline name.
+        pipeline: String,
+    },
+
+    /// A pipeline intent check is null or unknown.
+    #[error("pipeline {pipeline}: intent_check must be off or issues")]
+    PipelineIntentCheck {
         /// The pipeline name.
         pipeline: String,
     },

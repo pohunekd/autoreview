@@ -350,6 +350,7 @@ mod tests {
                 checkout,
                 project_sources: vec!["manual".to_owned()],
                 verifier: None,
+                ..Pipeline::default()
             },
             ..Rule::default()
         }
