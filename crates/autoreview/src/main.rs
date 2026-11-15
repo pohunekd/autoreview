@@ -626,7 +626,8 @@ fn review_limit(limit: Option<&str>, maximum: i64) -> Result<i64, Error> {
 
 /// Prints `value` as JSON, then a newline.
 ///
-/// `<`, `>`, `&`, U+2028 and U+2029 are escaped, as in every JSON output of the CLI.
+/// `<`, `>`, `&`, U+2028 and U+2029 are escaped, as in all JSON command output on stdout;
+/// the JSON log lines on stderr do not use this escaping.
 ///
 /// # Errors
 ///

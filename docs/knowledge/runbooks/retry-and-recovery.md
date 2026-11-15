@@ -89,20 +89,24 @@ commit arrives, the review request changes, or the pull request is retargeted to
 another base branch (`base_branch_changed`) before the review was published.
 Nothing is published for the old state. The newer head, or the same head against
 the new base branch, is reviewed under its own review. `approve` for the old head
-returns `review_superseded`, and that is the expected answer. Do not retry a
-superseded review.
+returns `review_superseded`, or `review_not_awaiting_approval` once the wait is
+cleared; both are the expected answer. Do not retry a superseded review.
 
 ## Expired waits
 
 A clean review under `on_clean: await` waits for a human approval for
 `approval.timeout_hours` (1 to 720). A wait that passes that time ends as
-`approval_expired`: the event is raised and `approve` returns `approval_expired`.
-Nothing is posted.
+`approval_expired`: the event is raised and `approve` returns `approval_expired`,
+or `review_not_awaiting_approval` once the wait is cleared. Nothing is posted.
 
-The reference does not say whether a new review request alone starts a fresh
-review of an expired wait. The documented way to get a new decision is a new
-commit on the pull request. Check the behaviour on a test pull request before
-you rely on the request alone.
+A new commit on the pull request starts a fresh review. Under a
+`review-requested` trigger, a new review request for the same head does too: the
+review request is part of what identifies a review, and the expired review only
+covers the request it ran for. A request made while the wait was open counts as
+well; its review starts on the first discovery pass after the wait ends, after
+the debounce delay. A `label` trigger does not track requests, so adding the
+label again starts no review of that head while the expired review is kept
+(`store.review_retention_seconds`).
 
 ## A review published, but a notification failed
 

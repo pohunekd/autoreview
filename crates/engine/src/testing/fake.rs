@@ -83,8 +83,6 @@ pub(crate) struct FakeState {
     pub(crate) sessions: BTreeMap<String, SessionRequest>,
     /// Every session that was started, in order.
     pub(crate) started: Vec<SessionRequest>,
-    /// Session IDs that were removed, in order.
-    pub(crate) removed: Vec<String>,
     /// Commentable lines that the fake returns.
     pub(crate) commentable: CommentableLines,
     /// Changed files that the fake returns.
@@ -501,9 +499,7 @@ impl Integrations for FakeIntegration {
             )));
         }
         let mut state = self.lock();
-        if state.sessions.remove(&session.session_id).is_some() {
-            state.removed.push(session.session_id.clone());
-        }
+        state.sessions.remove(&session.session_id);
         ready(Ok(()))
     }
 
