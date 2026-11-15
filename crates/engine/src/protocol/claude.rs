@@ -3,6 +3,7 @@
 // Rust guideline compliant 2026-06-26
 
 use autoreview_policy::Checkout;
+use autoreview_schedule::scheduler::REVIEWER_USAGE_LIMITED;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -31,6 +32,9 @@ const REFUSAL_HEAD_UNAVAILABLE: &str = "head_unavailable";
 /// Exit code of the wrapper when the adapter refuses the run.
 const EXIT_REFUSED: i64 = 64;
 
+/// HTTP status of the API error that ends a run on a rate or usage limit.
+const STATUS_TOO_MANY_REQUESTS: i64 = 429;
+
 /// Protocol name of the wrapper.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
@@ -53,6 +57,21 @@ pub(crate) struct ClaudeWrapper {
 }
 
 autoreview_go_compat::object_only_serde!(ClaudeWrapper);
+
+/// The fields of Claude Code's result message that name the API error that ended the run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+struct ClaudeApiError {
+    /// Kind of the message, `result` for the final one.
+    #[serde(rename = "type")]
+    r#type: String,
+    /// Subtype of the result; Claude Code reports an API error under `success`.
+    subtype: String,
+    /// Whether the session reported an error.
+    is_error: bool,
+    /// HTTP status of the API error that ended the run; absent or `null` without one.
+    api_error_status: Option<i64>,
+}
 
 /// Kind of the message, `result` for the final one.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,8 +156,9 @@ impl ClaudeFinding {
 /// Returns `review_output_incomplete` for empty output, `review_wrapper_invalid`,
 /// `claude_result_invalid` and `claude_result_mismatch` for a wrapper, outer message or prose
 /// result that the engine refuses, the codes of `decode_structured` for a refusal or an older
-/// adapter, and `review_output_invalid` with a reason for an artifact that names another pull
-/// request or head, has no findings list or has a finding the engine refuses.
+/// adapter, `reviewer_usage_limited` for a run that a rate or usage limit ended, and
+/// `review_output_invalid` with a reason for an artifact that names another pull request or
+/// head, has no findings list or has a finding the engine refuses.
 pub(crate) fn parse_claude_output(
     pr: &PullRequest,
     checkout: &Checkout,
@@ -198,6 +218,8 @@ pub(crate) fn parse_claude_output(
 /// that checked the review checkout writes it, outside the base64 output of the run. A
 /// `review_wrapper_invalid` of a run whose exit code is not 0 carries the end of its stderr.
 /// A `review_result_invalid` of a refusal carries the adapter's message from its stderr.
+/// A run that `usage_limited` reports is `reviewer_usage_limited`, whatever its exit code and
+/// stderr.
 pub(crate) fn decode_structured<T>(raw: &str, checkout: &Checkout) -> Result<T, Error>
 where
     T: DeserializeOwned + PartialEq + Default,
@@ -213,6 +235,9 @@ where
     if is_result_protocol(&wrapper.protocol) && wrapper.checked_checkout != checkout_name(checkout)
     {
         return Err(review_adapter_outdated());
+    }
+    if usage_limited(&wrapper) {
+        return Err(Error::workflow(REVIEWER_USAGE_LIMITED, true, None));
     }
     let stderr = decode_go_base64(&wrapper.stderr_base64);
     if stderr.is_none()
@@ -267,6 +292,34 @@ where
     } else {
         Err(claude_mismatch())
     }
+}
+
+/// Reports whether Claude Code ended the run of `wrapper` on a rate or usage limit.
+///
+/// Only the structured fields of the result message count: `type` `result`, subtype `success`,
+/// `is_error` and `api_error_status` 429. Claude Code writes them around the model's text, so
+/// a review that mentions a limit never matches; the `result` text is not read.
+fn usage_limited(wrapper: &ClaudeWrapper) -> bool {
+    if !is_result_protocol(&wrapper.protocol) || wrapper.mode != "structured" {
+        return false;
+    }
+    let Some(stdout) = decode_go_base64(&wrapper.stdout_base64) else {
+        return false;
+    };
+    let text = go_utf8_lossy(&stdout);
+    if refuse_case_variant_keys(&text, REVIEWER_USAGE_LIMITED).is_err()
+        || !text
+            .trim_start_matches([' ', '\t', '\n', '\r'])
+            .starts_with('{')
+    {
+        return false;
+    }
+    serde_json::from_str::<ClaudeApiError>(&text).is_ok_and(|outer| {
+        outer.r#type == "result"
+            && outer.subtype == "success"
+            && outer.is_error
+            && outer.api_error_status == Some(STATUS_TOO_MANY_REQUESTS)
+    })
 }
 
 /// Reports whether `protocol` names the result wrapper, by its name or by its legacy name.
@@ -696,4 +749,108 @@ mod tests {
             assert_eq!(err.to_string(), message, "{name}");
         }
     }
+
+    // Claude Code ends a run on a rate or usage limit with a result message whose
+    // `api_error_status` is 429 (#461). Only these structured fields name the limit: a review
+    // that mentions one, another status and the limit text alone keep their codes.
+    #[test]
+    fn usage_limit_is_named_only_by_the_structured_result_fields() {
+        let pr = test_pull_request(3);
+        let wrapper = |exit_code: i64, stdout: &Value, stderr: &str| {
+            json!({
+                "protocol": CLAUDE_RESULT_PROTOCOL,
+                "mode": "structured",
+                "exit_code": exit_code,
+                "stdout_base64": STANDARD.encode(stdout.to_string()),
+                "stderr_base64": STANDARD.encode(stderr),
+                "checked_checkout": "base"
+            })
+        };
+        let limit = json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": true,
+            "api_error_status": 429,
+            "result": "You've hit your session limit \u{b7} resets 3pm"
+        });
+        let with = |key: &str, value: Value| {
+            let mut changed = limit.clone();
+            changed[key] = value;
+            changed
+        };
+        let mut text_mode = wrapper(1, &limit, "");
+        text_mode["mode"] = json!("text");
+        let mentioning = claude_output(
+            &pr,
+            json!([{"id": "C001", "severity": "low", "confidence": "high", "path": "a.go",
+                    "line": 1, "side": "RIGHT", "title": "Usage limit reached",
+                    "body": "\"api_error_status\": 429, \"is_error\": true"}]),
+            None,
+        );
+        let cases = [
+            (
+                "limit, status 1",
+                wrapper(1, &limit, ""),
+                "reviewer_usage_limited",
+            ),
+            (
+                "limit, status 0",
+                wrapper(0, &limit, ""),
+                "reviewer_usage_limited",
+            ),
+            (
+                "limit and stderr",
+                wrapper(1, &limit, "Error: x\n"),
+                "reviewer_usage_limited",
+            ),
+            (
+                "status 500",
+                wrapper(1, &with("api_error_status", json!(500)), ""),
+                INVALID,
+            ),
+            (
+                "status text",
+                wrapper(1, &with("api_error_status", json!("429")), ""),
+                INVALID,
+            ),
+            (
+                "no status",
+                wrapper(1, &with("api_error_status", json!(null)), ""),
+                INVALID,
+            ),
+            (
+                "not an error",
+                wrapper(1, &with("is_error", json!(false)), ""),
+                INVALID,
+            ),
+            (
+                "error subtype",
+                wrapper(1, &with("subtype", json!("error_max_turns")), ""),
+                INVALID,
+            ),
+            (
+                "case variant",
+                wrapper(1, &with("API_ERROR_STATUS", json!(1)), ""),
+                INVALID,
+            ),
+            (
+                "array",
+                wrapper(1, &json!(["result", "success", true, 429]), ""),
+                INVALID,
+            ),
+            ("text mode", text_mode, INVALID),
+        ];
+        for (name, output, code) in cases {
+            let err =
+                parse_claude_output(&pr, &Checkout::Base, &format!("{output}\n")).expect_err(name);
+            assert_eq!(error_code(&err), code, "{name}");
+            assert_eq!(reviewer_output_retryable(&err), code == INVALID, "{name}");
+        }
+        let result = parse_claude_output(&pr, &Checkout::Base, &mentioning)
+            .expect("a review that mentions a limit parses");
+        assert_eq!(result.findings.len(), 1);
+    }
+
+    /// The code of a wrapper that the engine refuses.
+    const INVALID: &str = "review_wrapper_invalid";
 }

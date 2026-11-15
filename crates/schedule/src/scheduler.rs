@@ -19,6 +19,9 @@ pub const HEAD_FETCH_MISMATCH: &str = "pohunek_head_fetch_mismatch";
 /// Error code of a review start that the author limit of its rule holds or skips.
 pub const AUTHOR_LIMIT_REACHED: &str = "author_limit_reached";
 
+/// Failure code of a reviewer run that its model account's rate or usage limit ended.
+pub const REVIEWER_USAGE_LIMITED: &str = "reviewer_usage_limited";
+
 /// The pull request and head that a review request names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Target {
