@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use autoreview_policy::Level;
+use autoreview_schedule::phase;
 use bytes::Bytes;
 use http::{Request, StatusCode};
 use http_body_util::{BodyExt, Full};
@@ -290,6 +291,14 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
         "metrics = {text}"
     );
 
+    // A record that enters `failed` counts as a stop today, in total and under its repository.
+    let mut state = h.store.load_discovery().expect("the discovery state loads");
+    let record = state.schedule.get_mut(&pr.key());
+    record.expect("the pull request has a record").phase = phase::FAILED.to_owned();
+    (h.store
+        .in_tx(|transaction| h.store.save_discovery(transaction, &state)))
+    .expect("the discovery state saves");
+
     // A prune moves the counts of the reviews it deletes into the rollup: the history stays.
     let history = async || {
         let (_, body) = call(&server, Some(READ_TOKEN), "review_stats", since.clone()).await;
@@ -307,9 +316,20 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
         .prune_reviews(cutoff)
         .expect("prune the completed review");
     let rolled_up = history().await;
+    let today = OffsetDateTime::now_utc().date().to_string();
+    let counted = |list: &str, key: &str| {
+        kept[list]
+            .as_array()
+            .and_then(|entries| entries.iter().find(|entry| entry["key"] == json!(key)))
+            .map(|entry| (entry["stopped"].clone(), entry["notes_to_author"].clone()))
+    };
     assert!(
         pruned == 1
             && kept["totals"]["approved_after_wait"] == json!(1)
+            && kept["totals"]["stopped"] == json!(1)
+            && kept["totals"]["notes_to_author"] == json!(0)
+            && counted("days", &today) == Some((json!(1), json!(0)))
+            && counted("by_repository", "acme/manual") == Some((json!(1), json!(0)))
             && kept["steps"]
                 .as_array()
                 .is_some_and(|steps| !steps.is_empty())

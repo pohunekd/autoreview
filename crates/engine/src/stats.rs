@@ -1,9 +1,9 @@
 //! Review statistics: the current state and a daily history, read from the store only.
 //!
 //! One review row is one attempt: a retry is a new row, so `started` and `failed` count
-//! attempts. The counts come from the `reviews` and `review_step_runs` tables, the rollup of
-//! the pruned reviews and the schedule records of the discovery state; nothing asks GitHub or
-//! pohunek.
+//! attempts. The counts come from the `reviews`, `review_steps` and `review_step_runs` tables,
+//! the rollup of the pruned reviews and of the stops, and the schedule records of the
+//! discovery state; nothing asks GitHub or pohunek.
 
 // Rust guideline compliant 2026-06-26
 
@@ -57,9 +57,6 @@ const MEDIAN_PERCENT: usize = 50;
 
 /// Percentile of the slow publication time.
 const P90_PERCENT: usize = 90;
-
-/// Counter of the published attempts that handed their notes to the author; rollup only.
-const COUNTER_NOTES: &str = "notes_to_author";
 
 /// Counter of the `failure` dimension, the field of `FailedCount`.
 const COUNTER_FAILED: &str = "failed";
@@ -265,7 +262,7 @@ pub struct StepCounts {
     pub duration_p90_ms: Option<i64>,
 }
 
-/// Counts of review attempts that started or completed in one bucket.
+/// Counts of review attempts that started or completed, and of stops, in one bucket.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Counters {
     /// Attempts created in the bucket.
@@ -288,6 +285,10 @@ pub struct Counters {
     pub approval_expired: i64,
     /// Attempts that failed for any other reason; a retry is a new attempt.
     pub failed: i64,
+    /// Published attempts that handed their notes to the author instead of approving.
+    pub notes_to_author: i64,
+    /// Pull requests whose schedule record entered `failed`; no rule or reviewer has one.
+    pub stopped: i64,
     /// Median seconds from creation to completion of the published attempts.
     pub publication_median_seconds: Option<i64>,
     /// 90th percentile of the same seconds, nearest rank.
@@ -331,7 +332,7 @@ pub(crate) enum Published {
 
 impl Counters {
     /// Returns each counter with its field name, the rollup's counter, without the percentiles.
-    fn named(&self) -> [(&'static str, i64); 10] {
+    fn named(&self) -> [(&'static str, i64); 12] {
         [
             ("started", self.started),
             ("completed", self.completed),
@@ -343,6 +344,8 @@ impl Counters {
             ("superseded", self.superseded),
             ("approval_expired", self.approval_expired),
             ("failed", self.failed),
+            ("notes_to_author", self.notes_to_author),
+            ("stopped", self.stopped),
         ]
     }
 
@@ -359,6 +362,8 @@ impl Counters {
             "superseded" => Some(&mut self.superseded),
             "approval_expired" => Some(&mut self.approval_expired),
             "failed" => Some(&mut self.failed),
+            "notes_to_author" => Some(&mut self.notes_to_author),
+            "stopped" => Some(&mut self.stopped),
             _ => None,
         }
     }
@@ -399,8 +404,6 @@ impl StepCounts {
 struct Tally {
     /// The counts; the two percentiles are filled by `finish`.
     counters: Counters,
-    /// Published attempts that handed their notes to the author; kept in the rollup only.
-    notes: i64,
     /// Seconds to publication of every published attempt with a valid duration.
     seconds: Vec<i64>,
 }
@@ -413,20 +416,17 @@ impl Tally {
                 *counter += value;
             }
         }
-        self.notes += other.notes;
         self.seconds.extend_from_slice(&other.seconds);
     }
 
     /// Reports whether the rollup counter `name` counts in a bucket.
     fn knows(name: &str) -> bool {
-        name == COUNTER_NOTES || Counters::default().named_mut(name).is_some()
+        Counters::default().named_mut(name).is_some()
     }
 
     /// Adds `value` to the rollup counter `name`; a name that `knows` refuses adds nothing.
     fn add_named(&mut self, name: &str, value: i64) {
-        if name == COUNTER_NOTES {
-            self.notes += value;
-        } else if let Some(counter) = self.counters.named_mut(name) {
+        if let Some(counter) = self.counters.named_mut(name) {
             *counter += value;
         }
     }
@@ -696,7 +696,8 @@ impl HistoryTally {
                 _ => PublicationPlan::default(),
             };
             if plan.notes_to_author {
-                self.add(review, completed.date(), |bucket| bucket.notes += 1);
+                let notes = |bucket: &mut Tally| bucket.counters.notes_to_author += 1;
+                self.add(review, completed.date(), notes);
             }
         }
         Ok(())
@@ -841,12 +842,11 @@ fn push_samples(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, valu
     }
 }
 
-/// Adds the counters, the notes and the seconds of one bucket.
+/// Adds the counters and the seconds of one bucket.
 fn push_tally(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, tally: &Tally) {
     for (name, value) in tally.counters.named() {
         push_count(rollup, day, dimension, key, name, value);
     }
-    push_count(rollup, day, dimension, key, COUNTER_NOTES, tally.notes);
     push_samples(rollup, day, dimension, key, &tally.seconds);
 }
 
@@ -875,12 +875,13 @@ pub(crate) fn rollup(
 /// approval decision, and every schedule record in phase `failed`. With `range`, an attempt
 /// counts as started on the UTC day of `created_at` and as completed on the UTC day of
 /// `completed_at`, each only inside the range, and a step run on the UTC day it ended; the
-/// rollup adds the same counts of the pruned reviews of the range's days.
+/// rollup adds the same counts of the pruned reviews of the range's days, and its stops.
 ///
 /// # Errors
 ///
 /// Returns `store_state_invalid` for a timestamp, an outcome or a rollup day that does not
-/// decode, for a completed row without `completed_at`, and for a schedule key without `#`.
+/// decode, for a completed row without `completed_at`, for the plan of a published row that
+/// does not decode, and for a schedule key without `#`.
 pub fn compute(
     snapshot: &StatsSnapshot,
     range: Option<&StatsRange>,
@@ -991,7 +992,7 @@ fn history(
     pruned_before: OffsetDateTime,
 ) -> Result<History, Error> {
     let mut tally = HistoryTally::default();
-    tally.add_reviews(&snapshot.reviews, &BTreeMap::new(), Some(range))?;
+    tally.add_reviews(&snapshot.reviews, &snapshot.plans, Some(range))?;
     tally.add_runs(&snapshot.steps)?;
     tally.add_rollup(&snapshot.rollup)?;
     let mut totals = Tally::default();
@@ -1093,6 +1094,11 @@ impl fmt::Display for StatsDocument {
             totals.approved_after_wait,
             totals.changes_requested,
             totals.commented
+        )?;
+        writeln!(
+            f,
+            "  notes handed to the author {}, pull requests stopped {}",
+            totals.notes_to_author, totals.stopped
         )?;
         if !history.failed_by_code.is_empty() {
             let codes: Vec<String> = history

@@ -115,6 +115,9 @@ pub struct StatsSnapshot {
     pub steps: Vec<EndedStepRun>,
     /// The rollup of the days of the range; empty without one.
     pub rollup: Rollup,
+    /// The stored plans of the reviews completed inside the range, by workflow ID, undecoded;
+    /// empty without a range.
+    pub plans: BTreeMap<String, String>,
 }
 
 impl StoredReview {
@@ -302,16 +305,18 @@ impl Store {
     }
 
     /// Reads the reviews of `stats_reviews`, the discovery state and, with `range`, the step
-    /// runs that ended inside it and the rollup of its days, as one snapshot.
+    /// runs that ended inside it, the rollup of its days and the plans of the reviews
+    /// completed inside it, as one snapshot.
     ///
     /// A deferred transaction takes no write lock; in WAL mode its first read fixes the
     /// snapshot, so a write of another process between the reads is not seen, and a pruned
-    /// review is either a row or in the rollup. Without `range` the step runs and the rollup
-    /// are empty and not read.
+    /// review is either a row or in the rollup. Without `range` the step runs, the rollup and
+    /// the plans are empty and not read.
     ///
     /// # Errors
     ///
-    /// The errors of `stats_reviews`, `load_discovery`, `stats_step_runs` and `read_rollup`.
+    /// The errors of `stats_reviews`, `load_discovery`, `stats_step_runs`, `read_rollup` and
+    /// `stored_plans`.
     pub fn stats_snapshot(
         &self,
         range: Option<(OffsetDateTime, OffsetDateTime)>,
@@ -322,7 +327,7 @@ impl Store {
             .map_err(unavailable)?;
         let reviews = Self::stats_reviews(&transaction, range)?;
         let discovery = Self::read_discovery(&transaction)?;
-        let (steps, rollup) = match range {
+        let (steps, rollup, plans) = match range {
             Some((start, end)) => (
                 Self::stats_step_runs(&transaction, (start, end))?,
                 read_rollup(
@@ -330,8 +335,9 @@ impl Store {
                     &start.date().to_string(),
                     &end.date().to_string(),
                 )?,
+                completed_plans(&transaction, (start, end))?,
             ),
-            None => (Vec::new(), Rollup::default()),
+            None => (Vec::new(), Rollup::default(), BTreeMap::new()),
         };
         transaction.commit().map_err(unavailable)?;
         Ok(StatsSnapshot {
@@ -339,6 +345,7 @@ impl Store {
             discovery,
             steps,
             rollup,
+            plans,
         })
     }
 
@@ -496,23 +503,49 @@ fn collect_reviews(
     Ok(reviews)
 }
 
-/// Returns the stored plan of each review matched by `filter`, by workflow ID, undecoded.
+/// Returns the stored plan of each review completed inside `range`, by workflow ID, undecoded.
+///
+/// These are the completed rows of `stats_reviews` whose completion `compute` counts.
 ///
 /// # Errors
 ///
 /// Returns `store_unavailable` when SQLite fails.
-fn pruned_plans(
+fn completed_plans(
+    connection: &Connection,
+    (start, end): (OffsetDateTime, OffsetDateTime),
+) -> Result<BTreeMap<String, String>, Error> {
+    let completed = time_key("completed_at");
+    let (low, high) = (time_key("?2"), time_key("?3"));
+    let filter = format!(
+        "status = ?1 AND completed_at IS NOT NULL \
+         AND {completed} >= {low} AND {completed} < {high}"
+    );
+    let (start, end) = (format_rfc3339_nano(start), format_rfc3339_nano(end));
+    stored_plans(connection, &filter, &[&REVIEW_COMPLETED, &start, &end])
+}
+
+/// Returns the stored plan of each review matched by `filter`, by workflow ID, undecoded.
+///
+/// `filter` uses the parameters `bound`; the step name is the parameter after them.
+///
+/// # Errors
+///
+/// Returns `store_unavailable` when SQLite fails.
+fn stored_plans(
     connection: &Connection,
     filter: &str,
-    cutoff: &str,
+    bound: &[&dyn ToSql],
 ) -> Result<BTreeMap<String, String>, Error> {
     let sql = format!(
-        "SELECT workflow_id, output FROM review_steps WHERE name = ?3 AND workflow_id IN \
-         (SELECT workflow_id FROM reviews WHERE {filter})"
+        "SELECT workflow_id, output FROM review_steps WHERE name = ?{} AND workflow_id IN \
+         (SELECT workflow_id FROM reviews WHERE {filter})",
+        bound.len() + 1
     );
+    let mut values = bound.to_vec();
+    values.push(&STEP_PLAN);
     let mut statement = connection.prepare(&sql).map_err(unavailable)?;
     let rows = statement
-        .query_map(params![REVIEW_COMPLETED, cutoff, STEP_PLAN], |row| {
+        .query_map(values.as_slice(), |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(unavailable)?;
@@ -797,7 +830,7 @@ impl Store {
                 ),
                 &bound,
             )?;
-            let plans = pruned_plans(transaction, &filter, &cutoff)?;
+            let plans = stored_plans(transaction, &filter, &bound)?;
             add_rollup(transaction, &rollup(&reviews, &runs, &plans)?)?;
             let rows = transaction
                 .execute(&format!("DELETE FROM reviews WHERE {filter}"), bound)
