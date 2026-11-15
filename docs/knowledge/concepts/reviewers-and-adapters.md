@@ -247,8 +247,25 @@ A Claude review run loads no MCP server. The adapter passes `--strict-mcp-config
 and no `--mcp-config`, so Claude Code skips the servers of `~/.claude.json` (user
 and local scope), of plugins and of a `.mcp.json` in the review checkout. Print
 mode shows no approval prompt for a `.mcp.json` server, so the flag is what keeps
-out one that a `checkout: head` pull request adds. A Codex run passes
-`--ignore-user-config`, so no MCP server of the Codex user config loads.
+out one that a `checkout: head` pull request adds. With a managed
+`managed-mcp.json` on the review host, Claude Code exits at startup when it gets
+`--strict-mcp-config` (see
+[managed MCP](https://code.claude.com/docs/en/managed-mcp)), so every Claude
+review run on that host fails closed with the exit status of Claude Code; remove
+the file or use Codex on that host.
+
+A Codex run passes `--ignore-user-config`, so no MCP server of the Codex user
+config loads. Codex 0.167.0 reads a `.codex/config.toml` in the checkout (MCP
+servers, sandbox, approval policy, hooks) only for a trusted project, and only
+the user config (ignored), the system config `/etc/codex/config.toml`, managed
+configuration or a `--config` argument can mark a project trusted, never a file
+in the checkout (`codex-rs/config/src/loader/mod.rs` at tag `rust-v0.167.0`).
+Do not mark a review worktree or its repository trusted in the system or
+managed configuration. Codex reads the `AGENTS.md` files of the checkout as
+instructions unless the project is marked untrusted, so the adapter passes
+`project_doc_max_bytes=0` and Codex reads none (`codex-rs/core/src/agents_md.rs`).
+The prompt tells the reviewer to read the guidance from the trusted base. This
+is checked against Codex 0.167.0 only; autoreview does not pin a Codex version.
 
 Configuration comes from the profile and a file next to the program, never from
 a default in the code:
@@ -314,8 +331,8 @@ status 64 on a host without it. It has two parts:
     with `git diff <base>...<head>` and `git show <head>:<path>`.
 
   It runs `codex exec` once with `--sandbox read-only`,
-  `approval_policy="never"`, `--ignore-user-config`, `--ignore-rules`,
-  `--ephemeral` and an output schema. It checks the report (status `completed`,
+  `approval_policy="never"`, `project_doc_max_bytes=0`, `--ignore-user-config`,
+  `--ignore-rules`, `--ephemeral` and an output schema. It checks the report (status `completed`,
   the reviewed head, a blocking flag on every finding, well-formed prior
   findings, the result limit) and prints it as one frame,
   `[autoreview-codex/v2 <nonce> result:<base64>]`, followed by the line

@@ -52,7 +52,8 @@ request, so no trusted line holds a line break from a branch name.
 MCP tool results keep U+0085, U+2028 and U+2029 as written. They are not
 requests: autoreview passes no MCP server to a reviewer or the verifier, and
 keeps out the servers of the host's agent configuration (Claude Code runs with
-`--strict-mcp-config`, Codex with `--ignore-user-config`, see
+`--strict-mcp-config`, Codex with `--ignore-user-config` and reads the project
+configuration of the checkout only for a project the host trusts, see
 [the Claude adapter](../concepts/reviewers-and-adapters.md#the-claude-adapter)).
 A result has no trusted line, only one JSON value inside the untrusted-data
 notice. In a JSON string none of these characters ends the string or starts a
