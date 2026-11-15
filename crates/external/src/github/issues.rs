@@ -374,14 +374,19 @@ mod tests {
         json!({"number": number, "repository": {"nameWithOwner": repository}})
     }
 
-    /// Returns the text page of `issues`, `(number, title, body)` under aliases in order.
-    fn texts(issues: &[(i64, &str, &str)]) -> String {
-        let mut repository = serde_json::Map::new();
-        for (index, (number, title, body)) in issues.iter().enumerate() {
-            let text = json!({"number": number, "title": title, "body": body});
-            repository.insert(format!("issue{index}"), text);
+    /// Returns the text page of `issues` under aliases in order.
+    ///
+    /// Each issue is `(repository, number, title, body)`; `None` sends the repository as `null`.
+    fn texts(issues: &[(Option<&str>, i64, &str, &str)]) -> String {
+        let mut page = serde_json::Map::new();
+        for (index, (repository, number, title, body)) in issues.iter().enumerate() {
+            let repository = repository.map(|name| json!({"nameWithOwner": name}));
+            let text = json!({
+                "number": number, "title": title, "body": body, "repository": repository
+            });
+            page.insert(format!("issue{index}"), text);
         }
-        json!({"data": {"repository": repository}}).to_string()
+        json!({"data": {"repository": page}}).to_string()
     }
 
     /// Each row is a reference page of a pull request of `acme/widget` and the references read
@@ -440,32 +445,79 @@ mod tests {
         let query = issue_text_query(&[12, 14]);
         assert!(
             query.contains(concat!(
-                "    issue0: issue(number: 12) { number title body }\n",
-                "    issue1: issue(number: 14) { number title body }\n"
+                "    issue0: issue(number: 12) ",
+                "{ number title body repository { nameWithOwner } }\n",
+                "    issue1: issue(number: 14) ",
+                "{ number title body repository { nameWithOwner } }\n",
             )),
             "{query}"
         );
-        let page = texts(&[(12, "Own", "Body"), (14, "Second", "")]);
-        let issues = decode_issue_texts(&page, "acme/widget", &[12, 14]).expect("texts decode");
-        let got: Vec<(&str, i64, &str, &str, bool)> = (issues.iter())
-            .map(|issue| {
-                let (title, body) = (issue.title.as_str(), issue.body.as_str());
-                (
-                    issue.repository.as_str(),
-                    issue.number,
-                    title,
-                    body,
-                    issue.truncated,
-                )
-            })
-            .collect();
-        let want = [
+        // Each row is a text page for the numbers 12 and 14 of `acme/widget`. A text is kept
+        // only when GitHub returns it with the asked number and repository; any other text,
+        // such as one of an issue transferred between the two queries, fails the whole read.
+        let own = Some("acme/widget");
+        let both = [
             ("acme/widget", 12, "Own", "Body", false),
             ("acme/widget", 14, "Second", "", false),
         ];
-        assert_eq!(got, want);
-        let other = texts(&[(13, "Other", "Body")]);
-        let err = decode_issue_texts(&other, "acme/widget", &[12]).expect_err("number differs");
-        assert_eq!(error_code(&err), "github_response_invalid");
+        let missing = json!({"data": {"repository": {
+            "issue0": {"number": 12, "title": "Own", "body": "Body"},
+            "issue1": {"number": 14, "title": "Second", "body": ""}
+        }}});
+        type Texts = Vec<(&'static str, i64, &'static str, &'static str, bool)>;
+        let text_cases: [(&str, String, Result<Texts, &str>); 6] = [
+            (
+                "own repository",
+                texts(&[(own, 12, "Own", "Body"), (own, 14, "Second", "")]),
+                Ok(both.to_vec()),
+            ),
+            (
+                "own repository in another case",
+                texts(&[
+                    (Some("Acme/Widget"), 12, "Own", "Body"),
+                    (own, 14, "Second", ""),
+                ]),
+                Ok(both.to_vec()),
+            ),
+            (
+                "an issue of another repository",
+                texts(&[
+                    (own, 12, "Own", "Body"),
+                    (Some("secret/tracker"), 14, "Moved", ""),
+                ]),
+                Err("github_response_invalid"),
+            ),
+            (
+                "an issue with a null repository",
+                texts(&[(own, 12, "Own", "Body"), (None, 14, "Second", "")]),
+                Err("github_response_invalid"),
+            ),
+            (
+                "issues without their repository",
+                missing.to_string(),
+                Err("github_response_invalid"),
+            ),
+            (
+                "an issue of another number",
+                texts(&[(own, 12, "Own", "Body"), (own, 13, "Other", "")]),
+                Err("github_response_invalid"),
+            ),
+        ];
+        for (name, page, want) in text_cases {
+            let got = decode_issue_texts(&page, "acme/widget", &[12, 14]);
+            let got = got.map_err(|err| error_code(&err).to_owned());
+            let got = (got.as_ref())
+                .map(|issues| {
+                    (issues.iter())
+                        .map(|issue| {
+                            let (title, body) = (issue.title.as_str(), issue.body.as_str());
+                            let repository = issue.repository.as_str();
+                            (repository, issue.number, title, body, issue.truncated)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .map_err(String::as_str);
+            assert_eq!(got, want, "{name}");
+        }
     }
 }
