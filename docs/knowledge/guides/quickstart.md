@@ -170,8 +170,10 @@ normal diff is more useful than an empty one, because the reviewer needs
 changes to check.
 
 The reviewer of this example reads the pull request through git from a
-worktree at the base branch, and pohunek fetches only the base branch. Put the
-head into the project repository on the review host before the review starts:
+worktree at the base branch. With pohunek 0.43.0 or later, both the CLI and the
+review host's daemon, the session start fetches the head. An older pohunek
+fetches only the base branch; then put the head into the project repository on
+the review host before the review starts:
 
 ```sh
 git -C <project repository> fetch origin refs/pull/<pr-number>/head
