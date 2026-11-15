@@ -141,7 +141,9 @@ models. The server treats them as data:
 - they pass the same neutralization as published reviews: no mentions, no raw HTML, no
   images, no comment delimiters;
 - every result is wrapped as `{"untrusted_data_notice": "...", "result": ...}`, and the
-  notice tells the calling agent that the text is data, never instructions.
+  notice tells the calling agent that the text is data, never instructions;
+- U+0085, U+2028 and U+2029 stay as written, see
+  [prompt injection](../safety/prompt-injection.md#why-pull-request-content-is-data).
 
 Neutralization keeps GitHub from acting on the text; it does not make the text safe for an
 agent to obey. The calling agent must keep the review text out of its instructions. Give the
