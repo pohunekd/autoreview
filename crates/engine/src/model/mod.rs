@@ -30,8 +30,8 @@ pub use pull_request::{
 #[doc(inline)]
 pub use review::{
     ApprovalDecision, ApprovalResult, ApproveRequest, Artifact, AwaitRecord, Decision, Discussion,
-    DiscussionComment, DiscussionThread, FindingCheck, IntentOutcome, LinkedIssue, LinkedIssues,
-    Outcome, PollResult, PriorCheck, PriorResult, PriorVerdict, PublishResult, PublishedRecord,
-    ResolveRequest, ResolveResult, RetryRequest, RetryResult, ReviewOutcome, SessionIdentity,
-    Verification, prior_key,
+    DiscussionComment, DiscussionThread, FindingCheck, GuardOutcome, GuardSignal, IntentOutcome,
+    LinkedIssue, LinkedIssues, Outcome, PollResult, PriorCheck, PriorResult, PriorVerdict,
+    PublishResult, PublishedRecord, ResolveRequest, ResolveResult, RetryRequest, RetryResult,
+    ReviewOutcome, SessionIdentity, Verification, prior_key,
 };

@@ -329,6 +329,11 @@ pub enum Event {
     /// Findings on own PR event.
     #[serde(rename = "findings_on_own_pr")]
     FindingsOnOwnPr,
+    /// The text guard of a rule found a pull request suspect.
+    ///
+    /// It is always sent at the action level, so no policy names it.
+    #[serde(rename = "guard_suspect")]
+    GuardSuspect,
     /// Handoff reminder event.
     #[serde(rename = "handoff_reminder")]
     HandoffReminder,
@@ -364,6 +369,7 @@ impl Event {
             Self::CredentialInvalid => "credential_invalid",
             Self::CredentialRestored => "credential_restored",
             Self::FindingsOnOwnPr => "findings_on_own_pr",
+            Self::GuardSuspect => "guard_suspect",
             Self::HandoffReminder => "handoff_reminder",
             Self::RetryScheduled => "retry_scheduled",
             Self::ReviewStopped => "review_stopped",
