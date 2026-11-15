@@ -74,9 +74,6 @@ Write a test only for:
   result, and published once. It is the only test that drives several packages
   together.
 
-Tests ported from the earlier engine are not yet triaged against this policy;
-#350 tracks that triage.
-
 Do not write:
 
 - tests per function, getters, trivial mappings, or anything the type system

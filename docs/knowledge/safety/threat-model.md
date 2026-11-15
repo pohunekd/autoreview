@@ -71,7 +71,7 @@ the engine publishes.
 
 | # | Attack | Mitigation | Status |
 |---|---|---|---|
-| 1 | Untrusted code runs in the reviewer's worktree | Untrusted authors and forks are reviewed from `checkout: base`, so their code is not checked out as the working tree | Engine behaviour; regression test `clean_review_of_a_fork_pull_request_is_a_comment_from_the_base_checkout` |
+| 1 | Untrusted code runs in the reviewer's worktree | Untrusted authors and forks are reviewed from `checkout: base`, so their code is not checked out as the working tree | Engine behaviour; test `untrusted_input_needs_a_base_checkout_and_no_approval` |
 | 2 | Untrusted author gets an auto-approval | Untrusted sections may use `on_clean: comment` or `await`, never `approve`; `validate` rejects `approve` there, and publication never approves an untrusted author without the user | `validate` rule and engine behaviour; test `clean_review_of_an_untrusted_author_is_never_approved_without_the_user` |
 | 3 | Prompt injection through the diff, description, comments or files | Prompts declare PR content as data; reviewer runs are read-only; the engine validates the output and publishes it | See [prompt injection](prompt-injection.md) |
 | 4 | Model output forges the review marker or pings people | Output is neutralized: no `@mentions`, no raw HTML, no images that GitHub would fetch, no references to another repository's issues, pull requests or discussions, no link reference definitions, HTML comment delimiters defused | Engine behaviour |
