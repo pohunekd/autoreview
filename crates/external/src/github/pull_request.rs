@@ -8,7 +8,9 @@
 use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::PullRequestState;
-use autoreview_engine::model::{PullRequest, branch_valid, repository_valid, sha_valid};
+use autoreview_engine::model::{
+    PullRequest, branch_valid, pull_request_url_valid, repository_valid, sha_valid,
+};
 use autoreview_go_compat::{go_time, null_default, null_entries};
 use autoreview_policy::{Trigger, TriggerKind, login_valid};
 use serde::{Deserialize, Serialize};
@@ -348,11 +350,6 @@ fn has_label(raw: &GitHubPullRequest, label: &str) -> bool {
     false
 }
 
-/// Reports whether `url` is the URL of the pull request `repository#number` on `host`.
-pub(super) fn url_matches(url: &str, host: &str, repository: &str, number: i64) -> bool {
-    url.eq_ignore_ascii_case(&format!("https://{host}/{repository}/pull/{number}"))
-}
-
 /// Reports whether a lowercased author login is a GitHub login (`login_valid`).
 ///
 /// An empty login is a deleted account and passes. An Enterprise Managed User login
@@ -414,13 +411,17 @@ pub(crate) fn decode_pull_request(
         || pull_request.number <= 0
         || title.is_empty()
         || title.len() > MAX_TITLE_BYTES
-        || !url_matches(&pull_request.url, host, &repository, pull_request.number)
+        || !pull_request_url_valid(&pull_request.url, host, &repository, pull_request.number)
         || !sha_valid(&pull_request.head_sha)
         || !sha_valid(&pull_request.base_sha)
-        || !branch_valid(&pull_request.base_branch)
+        || pull_request.base_branch.is_empty()
         || !author_valid(&author)
     {
         return Err(response_invalid(None));
+    }
+    // GitHub allows base branch names that the trusted request lines cannot hold.
+    if !branch_valid(&pull_request.base_branch) {
+        return Err(Error::workflow("base_branch_unsupported", true, None));
     }
     if raw.is_draft {
         return Err(Error::workflow("pull_request_draft", true, None));
@@ -481,7 +482,7 @@ pub(crate) fn decode_pull_request_state(
         || raw.number != number
         || !sha_valid(&state.head_sha)
         || !author_valid(&author)
-        || !url_matches(&state.url, host, repository, number)
+        || !pull_request_url_valid(&state.url, host, repository, number)
     {
         return Err(response_invalid(None));
     }

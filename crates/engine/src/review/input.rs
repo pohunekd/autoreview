@@ -16,7 +16,7 @@ use crate::model::ids::{
 use crate::model::pull_request::{SCOPE_FULL, SCOPE_INCREMENTAL};
 use crate::model::{
     Artifact, PullRequest, ReviewInput, ReviewerResult, SessionIdentity, branch_valid, prior_key,
-    sha_valid,
+    pull_request_url_valid, sha_valid,
 };
 use crate::verify::VerifierResult;
 
@@ -69,8 +69,9 @@ pub(crate) const BACKEND_STEP_SEPARATOR: &str = "@";
 
 /// Checks that a stored review input is complete and consistent.
 ///
-/// The checks run in a fixed order, so the first failing one names the error.
-pub(crate) fn validate_input(input: &ReviewInput) -> Result<(), BoxError> {
+/// The checks run in a fixed order, so the first failing one names the error. The pull request
+/// URL must name the pull request on `github_host`.
+pub(crate) fn validate_input(input: &ReviewInput, github_host: &str) -> Result<(), BoxError> {
     let pull_request = &input.pull_request;
     if input.version < MIN_INPUT_VERSION
         || input.version > INPUT_VERSION
@@ -87,6 +88,14 @@ pub(crate) fn validate_input(input: &ReviewInput) -> Result<(), BoxError> {
     // The base branch is written into trusted request lines; an empty one is unknown.
     if !pull_request.base_branch.is_empty() && !branch_valid(&pull_request.base_branch) {
         return Err(BoxError::from("base branch is invalid"));
+    }
+    // Discovery checked the base commit and URL; trusted request lines repeat them.
+    if !sha_valid(&pull_request.base_sha) {
+        return Err(BoxError::from("base commit is invalid"));
+    }
+    let (repository, number) = (&pull_request.repository, pull_request.number);
+    if !pull_request_url_valid(&pull_request.url, github_host, repository, number) {
+        return Err(BoxError::from("pull request URL is invalid"));
     }
     if input.rule.match_glob.is_empty() || input.reviewers.is_empty() {
         return Err(BoxError::from("review rule is missing"));
@@ -412,15 +421,21 @@ mod tests {
     fn validate_input_rejects_inconsistent_input() {
         let rule = test_rule(opus(), OnFindings::RequestChanges, OnClean::Approve);
         let valid = test_input(rule, test_pull_request(2));
-        if let Err(err) = validate_input(&valid) {
+        if let Err(err) = validate_input(&valid, "github.com") {
             panic!("{err}");
         }
         let mut managed = valid.clone();
         managed.publisher_login = "mona-cat_octo".to_owned();
-        if let Err(err) = validate_input(&managed) {
+        if let Err(err) = validate_input(&managed, "github.com") {
             panic!("a managed user publishes: {err}");
         }
-        let mutations: [(&str, Mutation); 8] = [
+        // GitHub's URL keeps the repository's case; discovery stores the repository in lower case.
+        let mut mixed_case = valid.clone();
+        mixed_case.pull_request.url = "https://GitHub.com/Acme/Widget/pull/2".to_owned();
+        if let Err(err) = validate_input(&mixed_case, "github.com") {
+            panic!("a mixed-case URL: {err}");
+        }
+        let mutations: [(&str, Mutation); 16] = [
             ("version", |input| input.version = 1),
             ("foreign reviewer", |input| input.reviewers = vec![codex()]),
             ("incremental head", |input| {
@@ -442,13 +457,36 @@ mod tests {
             ("second underscore", |input| {
                 input.publisher_login = "mona_cat_octo".to_owned();
             }),
+            // #446: the stored base commit and URL get the decoder's checks.
+            ("empty base commit", |input| {
+                input.pull_request.base_sha = String::new()
+            }),
+            ("short base commit", |input| {
+                input.pull_request.base_sha = "b".repeat(39)
+            }),
+            ("upper-case base commit", |input| {
+                input.pull_request.base_sha = "B".repeat(40);
+            }),
+            ("empty URL", |input| input.pull_request.url = String::new()),
+            ("URL of another host", |input| {
+                input.pull_request.url = "https://example.invalid/acme/widget/pull/2".to_owned();
+            }),
+            ("URL of another number", |input| {
+                input.pull_request.url = "https://github.com/acme/widget/pull/3".to_owned();
+            }),
+            ("URL of another repository", |input| {
+                input.pull_request.url = "https://github.com/acme/other/pull/2".to_owned();
+            }),
+            ("URL with a suffix", |input| {
+                input.pull_request.url = "https://github.com/acme/widget/pull/2/files".to_owned();
+            }),
         ];
         for (name, mutate) in mutations {
             let mut input = valid.clone();
             input.notifications = notification_levels();
             mutate(&mut input);
             assert!(
-                validate_input(&input).is_err(),
+                validate_input(&input, "github.com").is_err(),
                 "{name}: invalid input accepted"
             );
         }
@@ -456,7 +494,7 @@ mod tests {
         // be one that a reader takes as a line break; an empty base branch is unknown.
         let mut unknown_base = valid.clone();
         unknown_base.pull_request.base_branch = String::new();
-        if let Err(err) = validate_input(&unknown_base) {
+        if let Err(err) = validate_input(&unknown_base, "github.com") {
             panic!("an unknown base branch: {err}");
         }
         let breaks = [
@@ -467,7 +505,7 @@ mod tests {
             let mut input = valid.clone();
             input.pull_request.base_branch = format!("release{separator}x");
             assert!(
-                validate_input(&input).is_err(),
+                validate_input(&input, "github.com").is_err(),
                 "U+{:04X}: base branch accepted",
                 u32::from(separator)
             );
@@ -479,7 +517,7 @@ mod tests {
         let rule = test_rule(opus(), OnFindings::Comment, OnClean::Comment);
         let mut valid = test_input(rule, test_pull_request(3));
         valid.author_class = AuthorClass::Untrusted;
-        if let Err(err) = validate_input(&valid) {
+        if let Err(err) = validate_input(&valid, "github.com") {
             panic!("{err}");
         }
         let mutations: [(&str, Mutation); 4] = [
@@ -500,7 +538,7 @@ mod tests {
                 input.author_class = class.clone();
                 mutate(&mut input);
                 assert!(
-                    validate_input(&input).is_err(),
+                    validate_input(&input, "github.com").is_err(),
                     "{name} of a {class:?} review accepted"
                 );
             }
@@ -510,7 +548,7 @@ mod tests {
         older.rule.on_clean = OnClean::Approve;
         older.rule.pipeline.checkout = Checkout::Head;
         assert!(
-            validate_input(&older).is_ok(),
+            validate_input(&older, "github.com").is_ok(),
             "a review stored before author classes keeps its rule"
         );
     }
@@ -526,18 +564,18 @@ mod tests {
             github_review_id: 4,
             ..PriorFinding::default()
         }];
-        if let Err(err) = validate_input(&input) {
+        if let Err(err) = validate_input(&input, "github.com") {
             panic!("a current input with prior findings must be valid: {err}");
         }
         input.version = 3;
         assert!(
-            validate_input(&input).is_err(),
+            validate_input(&input, "github.com").is_err(),
             "an earlier input must not carry prior findings"
         );
         input.version = INPUT_VERSION;
         input.prior[0].key = "cccccccccccc:O002".to_owned();
         assert!(
-            validate_input(&input).is_err(),
+            validate_input(&input, "github.com").is_err(),
             "a prior finding whose key does not name it was accepted"
         );
     }

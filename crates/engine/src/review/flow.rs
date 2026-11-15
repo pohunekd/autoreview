@@ -119,7 +119,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             approved: false,
             retries: AtomicI64::new(0),
         };
-        if let Err(err) = validate_input(&review.input) {
+        if let Err(err) = validate_input(&review.input, &self.config.github_host) {
             return review
                 .fail(Error::workflow("review_input_invalid", true, Some(err)))
                 .await;

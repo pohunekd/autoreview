@@ -150,6 +150,14 @@ pub fn branch_valid(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b'-'))
 }
 
+/// Reports whether `url` is the URL of the pull request `repository#number` on `host`.
+///
+/// It is `https://<host>/<repository>/pull/<number>`, compared ignoring ASCII case.
+#[must_use]
+pub fn pull_request_url_valid(url: &str, host: &str, repository: &str, number: i64) -> bool {
+    url.eq_ignore_ascii_case(&format!("https://{host}/{repository}/pull/{number}"))
+}
+
 /// Reports whether a repository, number and head name one valid review head.
 pub(crate) fn review_identity_valid(repository: &str, number: i64, head: &str) -> bool {
     repository_valid(repository) && number > 0 && sha_valid(head)

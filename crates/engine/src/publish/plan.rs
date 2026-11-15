@@ -332,7 +332,7 @@ mod tests {
                 test_pull_request(1),
             );
             input.version = version;
-            if let Err(err) = validate_input(&input) {
+            if let Err(err) = validate_input(&input, "example.invalid") {
                 panic!("{name}: input version {version} must stay valid: {err}");
             }
             let artifact = Artifact {

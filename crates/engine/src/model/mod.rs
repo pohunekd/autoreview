@@ -20,7 +20,7 @@ pub use host_state::{
 #[doc(inline)]
 pub use ids::{
     HEAD_PREFIX_MIN_LEN, SHA_LEN, WORKFLOW_ID_PREFIX, branch_valid, head_prefix_valid,
-    repository_valid, sha_valid,
+    pull_request_url_valid, repository_valid, sha_valid,
 };
 #[doc(inline)]
 pub use pull_request::{

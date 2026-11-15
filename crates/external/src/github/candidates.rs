@@ -14,14 +14,15 @@ use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
 use autoreview_engine::integrations::{ReadiedDraft, ReviewRequest, ReviewRequestList};
 use autoreview_engine::model::{
-    Candidate, CandidateList, PullRequest, RejectedCandidate, repository_valid,
+    Candidate, CandidateList, PullRequest, RejectedCandidate, pull_request_url_valid,
+    repository_valid,
 };
 use autoreview_go_compat::{null_default, null_entries};
 use autoreview_policy::{Authors, Policy, Rule, Trigger, TriggerKind};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use super::pull_request::{GitHubPullRequest, decode_pull_request, ready_draft_id, url_matches};
+use super::pull_request::{GitHubPullRequest, decode_pull_request, ready_draft_id};
 use super::{GitHub, graphql_search, response_invalid};
 
 /// Query that marks a draft pull request ready for review (`graphQLMarkReady`).
@@ -234,7 +235,8 @@ fn covering<'a>(
 }
 
 /// Sorts the outcome of reading one candidate: kept, skipped because its trigger lapsed,
-/// rejected because its data is invalid, or a failure that stops the search (`classify`).
+/// rejected because its data is invalid or unsupported, or a failure that stops the search
+/// (`classify`).
 ///
 /// A kept candidate carries `rule` and `authors`, which come from one policy match.
 fn classify(
@@ -259,7 +261,12 @@ fn classify(
                 Ok(())
             } else {
                 let code = error_code(&error);
-                if code == "github_response_invalid" || code == "review_request_event_missing" {
+                if matches!(
+                    code,
+                    "github_response_invalid"
+                        | "base_branch_unsupported"
+                        | "review_request_event_missing"
+                ) {
                     list.rejected.push(RejectedCandidate {
                         repository: repository.to_owned(),
                         number,
@@ -404,7 +411,7 @@ fn decode_review_request_search(
         let repository = repository_name(&item.repository).to_ascii_lowercase();
         if !repository_valid(&repository)
             || item.number <= 0
-            || !url_matches(&item.url, host, &repository, item.number)
+            || !pull_request_url_valid(&item.url, host, &repository, item.number)
         {
             tracing::warn!(
                 repository = %repository,
@@ -744,7 +751,7 @@ mod tests {
     use autoreview_engine::model::{CandidateList, PullRequest};
     use autoreview_policy::{Authors, Trigger, TriggerKind};
 
-    use super::{classify, covering};
+    use super::{GitHubPullRequest, classify, covering, decode_pull_request};
 
     /// A policy whose first and second rule both match `acme/special` and `solo/special`.
     const OVERLAPPING_POLICY: &str = "version: 1
@@ -846,6 +853,55 @@ notifications:
                 covered.is_none_or(|(rule, _)| policy.resolve(repository) == Some(rule)),
                 "{repository}: the pair is not the rule that resolve returns"
             );
+        }
+    }
+
+    // An unsupported base branch name gets its own code (#446). An empty one stays a
+    // malformed response, and neither stops the search.
+    #[test]
+    fn unsupported_base_branch_is_rejected_with_its_own_code() {
+        let policy = autoreview_policy::parse(OVERLAPPING_POLICY.as_bytes(), |_| {
+            Ok(b"Review the pull request.".to_vec())
+        })
+        .expect("the overlapping policy parses");
+        let label = Trigger {
+            kind: TriggerKind::Label,
+            label: "ai:review".to_owned(),
+        };
+        let covered = covering(&policy, "solo/tool", &label).expect("solo/* covers the label");
+        let longest = "a".repeat(255);
+        let too_long = "a".repeat(256);
+        let cases = [
+            ("main", None),
+            ("release/2.0_rc-1", None),
+            (longest.as_str(), None),
+            ("", Some("github_response_invalid")),
+            (too_long.as_str(), Some("base_branch_unsupported")),
+            ("release..next", Some("base_branch_unsupported")),
+            ("feature x", Some("base_branch_unsupported")),
+            ("feature\nx", Some("base_branch_unsupported")),
+            ("feature\u{2028}x", Some("base_branch_unsupported")),
+            ("caf\u{e9}", Some("base_branch_unsupported")),
+        ];
+        for (base, want) in cases {
+            let node = serde_json::json!({
+                "id": "PR_node", "number": 7, "title": "Add widget",
+                "url": "https://github.com/solo/tool/pull/7", "state": "OPEN",
+                "isDraft": false, "isCrossRepository": false,
+                "headRefOid": "a".repeat(40), "headRefName": "feature",
+                "baseRefOid": "b".repeat(40), "baseRefName": base,
+                "author": {"__typename": "User", "login": "colleague"},
+                "labels": {"nodes": [{"name": "ai:review"}]},
+                "repository": {"nameWithOwner": "solo/tool"},
+            });
+            let raw: GitHubPullRequest = serde_json::from_value(node).expect("the node decodes");
+            let outcome = decode_pull_request(&raw, "github.com", "example-user", &label);
+            let mut list = CandidateList::default();
+            classify(&mut list, "solo/tool", 7, covered, outcome)
+                .expect("a refused pull request never fails the search");
+            let got = list.rejected.first().map(|rejected| rejected.code.as_str());
+            assert_eq!(got, want, "{base:?}");
+            assert_eq!(list.candidates.is_empty(), want.is_some(), "{base:?}");
         }
     }
 }
