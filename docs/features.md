@@ -48,6 +48,12 @@ blocking finding against the code and turns the ones it cannot confirm into
 notes, with the reason. Nothing is dropped silently.
 [Verification](knowledge/concepts/verification.md)
 
+**Compares the change with its issue.** With `intent_check: issues`, the
+reviewers also read the GitHub issues the pull request closes and report a
+clear mismatch as a blocking finding. The review states which issues it
+compared.
+[Intent check](policy.md#intent-check)
+
 **Decides what to publish.** Blocking findings request changes or comment.
 A clean review approves, comments, or waits for a human. Non-blocking notes
 can go to the author first. Your own pull requests always get a comment.

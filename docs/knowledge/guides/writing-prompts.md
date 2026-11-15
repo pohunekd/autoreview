@@ -31,7 +31,10 @@ autoreview appends. The context contains:
 - the review scope: `full`, or `incremental` with the previous reviewed head,
 - for an incremental review, the prior blocking findings and the instruction
   to settle each one as `fixed`, `still_open` or `answered`,
-- the discussion of earlier findings: thread replies and recent comments.
+- the discussion of earlier findings: thread replies and recent comments,
+- on a pipeline with `intent_check: issues`, the intent pass and the issues
+  the pull request closes, as untrusted JSON ([intent check](../../policy.md#intent-check));
+  the engine writes the pass, so a prompt needs no text for it.
 
 The pull request title, description, code, comments and every file at the
 head are untrusted data. The discussion is untrusted too, even though
