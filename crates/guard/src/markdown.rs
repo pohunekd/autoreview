@@ -182,29 +182,49 @@ fn ends_html(line: &str, end: HtmlEnd, blank: bool) -> bool {
     }
 }
 
-/// A byte class that the forward pass looks for; one cached search per class.
+/// What a cached search looks for.
 #[derive(Debug, Clone, Copy)]
-enum Find {
-    /// `>`, the end of an HTML tag.
-    TagEnd,
-    /// An unescaped `]`.
-    Bracket,
-    /// An unescaped `"`.
-    Quote,
-    /// An unescaped `'`.
-    Apostrophe,
-    /// An unescaped `)`.
-    Paren,
+enum Class {
+    /// One byte.
+    Byte(u8),
+    /// One byte that no odd run of backslashes escapes.
+    Unescaped(u8),
+    /// The end of a `<...>` link destination: an unescaped `>`, `<` or a line break.
+    AngleEnd,
     /// ASCII whitespace.
     Space,
     /// Anything but ASCII whitespace.
     NonSpace,
 }
 
-/// Number of `Find` classes.
-const FIND_CLASSES: usize = 7;
+/// Cache slot of the first `>` after a tag name.
+const TAG_END: usize = 0;
+/// Cache slot of the `"` that closes a double-quoted attribute value.
+const ATTRIBUTE_QUOTE: usize = 1;
+/// Cache slot of the `'` that closes a single-quoted attribute value.
+const ATTRIBUTE_APOSTROPHE: usize = 2;
+/// Cache slot of the first `>` after a quoted attribute value.
+const VALUE_END: usize = 3;
+/// Cache slot of the start of a link destination.
+const DESTINATION: usize = 4;
+/// Cache slot of the whitespace after a link destination.
+const DESTINATION_END: usize = 5;
+/// Cache slot of the end of a `<...>` link destination.
+const ANGLE_END: usize = 6;
+/// Cache slot of the `]` that closes a reference definition label.
+const LABEL_END: usize = 7;
+/// First cache slot of a link title after a plain destination.
+const TITLE_AFTER_PLAIN: usize = 8;
+/// First cache slot of a link title after a `<...>` destination.
+const TITLE_AFTER_ANGLE: usize = 13;
+/// Offset of the title opener slot within a title slot group.
+const TITLE_OPEN: usize = 0;
+/// Offset of the `)` after the title within a title slot group.
+const TITLE_AFTER: usize = 4;
+/// Number of cache slots.
+const SLOTS: usize = 18;
 
-/// The last search of one class: where it started and what it found.
+/// The last search of one slot: where it started and what it found.
 #[derive(Debug, Clone, Copy)]
 struct Cached {
     /// The byte offset the search started at.
@@ -219,8 +239,66 @@ struct Pass<'a> {
     text: &'a str,
     /// The field text as bytes; every offset the pass keeps is at an ASCII byte or the end.
     bytes: &'a [u8],
-    /// The last search of each `Find` class.
-    cache: [Option<Cached>; FIND_CLASSES],
+    /// The last search of each cache slot.
+    cache: [Option<Cached>; SLOTS],
+    /// The last paragraph end search.
+    paragraph: Option<Cached>,
+    /// Matching unescaped `[` and `]` offsets, sorted by the `[`.
+    brackets: Vec<(usize, usize)>,
+}
+
+/// Reports whether the byte at `at` is escaped: an odd run of backslashes precedes it.
+fn escaped(bytes: &[u8], at: usize) -> bool {
+    let before = bytes.get(..at).unwrap_or_default();
+    before
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
+/// Returns the matching unescaped `[` and `]` pairs of `bytes`, sorted by `[`.
+fn bracket_pairs(bytes: &[u8]) -> Vec<(usize, usize)> {
+    let mut open = Vec::new();
+    let mut pairs = Vec::new();
+    for (at, byte) in bytes.iter().enumerate() {
+        if matches!(byte, b'[' | b']') && escaped(bytes, at) {
+            continue;
+        }
+        if *byte == b'[' {
+            open.push(at);
+        } else if *byte == b']'
+            && let Some(start) = open.pop()
+        {
+            pairs.push((start, at));
+        }
+    }
+    pairs.sort_unstable();
+    pairs
+}
+
+/// Returns the first quote that opens an attribute value in `start..end`, and its offset.
+///
+/// A value is quoted when `=` and optional whitespace precede the quote.
+fn value_quote(bytes: &[u8], start: usize, end: usize) -> Option<(u8, usize)> {
+    let mut at = start;
+    while at < end {
+        if bytes.get(at) == Some(&b'=') {
+            let mut quote = at.saturating_add(1);
+            while quote < end && bytes.get(quote).is_some_and(u8::is_ascii_whitespace) {
+                quote = quote.saturating_add(1);
+            }
+            match bytes.get(quote) {
+                Some(&byte @ (b'"' | b'\'')) if quote < end => return Some((byte, quote)),
+                _ => at = quote,
+            }
+        } else {
+            at = at.saturating_add(1);
+        }
+    }
+    None
 }
 
 impl Pass<'_> {
