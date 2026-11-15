@@ -59,7 +59,8 @@ autoreview prune-branches --git-binary /usr/bin/git --older-than-days 7 --yes
 ```
 
 It never deletes a branch whose review is queued, running, awaiting or still being cleaned
-up, a branch a pohunek session of the host works on, or a branch checked out in a worktree.
+up, a branch a pohunek session of the host works on, a branch checked out in a worktree, or
+a symbolic ref.
 Each deleted branch is printed with its commit; `git -C <path> branch <branch> <commit>`
 restores it. pohunek has no command that deletes a branch on another machine, so a review
 host whose repositories are elsewhere is skipped as `host_not_local`. Do not delete review

@@ -66,19 +66,30 @@ fn plan_keeps_every_branch_a_review_session_or_worktree_needs() {
         upper,
         branch('5', ""),
         branch('5', "-"),
+        branch('5', "-link-run1"),
+        branch('9', "-link-run1"),
+        format!("{PREFIX}link"),
     ];
-    let mut refs = String::from("refs/heads/main\0aaaa\n");
-    refs.push_str("refs/heads/autoreview/reviewer\0bbbb\n");
+    let symbolic = &names[names.len() - 3..];
+    let mut refs = String::from("refs/heads/main\0aaaa\0\n");
+    refs.push_str("refs/heads/autoreview/reviewer\0bbbb\0\n");
     refs.push_str(&format!(
-        "refs/remotes/origin/{}\0cccc\n",
+        "refs/remotes/origin/{}\0cccc\0\n",
         branch('5', "-x-run1")
     ));
     refs.push_str(&format!(
         "refs/heads/{} without a commit\n",
         branch('5', "-y-run1")
     ));
+    // A line without the symref field is skipped.
+    refs.push_str(&format!("refs/heads/{}\0dddd\n", branch('6', "-z-run1")));
     for (index, name) in names.iter().enumerate() {
-        refs.push_str(&format!("refs/heads/{name}\0{index:040}\n"));
+        let target = if symbolic.contains(name) {
+            "refs/heads/main"
+        } else {
+            ""
+        };
+        refs.push_str(&format!("refs/heads/{name}\0{index:040}\0{target}\n"));
     }
     let worktrees = format!(
         "worktree /srv/repo\0HEAD aaaa\0branch refs/heads/main\0\0\
@@ -88,7 +99,8 @@ fn plan_keeps_every_branch_a_review_session_or_worktree_needs() {
         branch('5', "-codex-run1"),
     );
     use Verdict::{
-        AgeUnknown, CheckedOut, Delete, NameUnknown, ReviewActive, SessionLive, TooRecent,
+        AgeUnknown, CheckedOut, Delete, NameUnknown, ReviewActive, SessionLive, SymbolicRef,
+        TooRecent,
     };
     let active = [ReviewActive; 5];
     let kept = [
@@ -98,6 +110,9 @@ fn plan_keeps_every_branch_a_review_session_or_worktree_needs() {
         NameUnknown,
         NameUnknown,
         NameUnknown,
+        SymbolicRef,
+        SymbolicRef,
+        SymbolicRef,
     ];
     let cases = [
         (None, [Delete, Delete, Delete, Delete]),

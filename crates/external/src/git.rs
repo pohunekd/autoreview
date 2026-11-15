@@ -13,7 +13,9 @@ use crate::process::{GIT_INHERITED, child_environment, run};
 /// Error code of a git call that could not start, timed out or failed.
 const GIT_COMMAND_FAILED: &str = "git_command_failed";
 
-/// Lists every local branch of the repository at `root`, one `refname NUL commit` line each.
+/// Lists every local branch of the repository at `root` as `refname NUL commit NUL symref`.
+///
+/// `symref` is the target of a symbolic ref and empty for a branch.
 ///
 /// # Errors
 ///
@@ -26,7 +28,7 @@ pub async fn branch_refs(
 ) -> Result<String, Error> {
     let command = [
         "for-each-ref",
-        "--format=%(refname)%00%(objectname)",
+        "--format=%(refname)%00%(objectname)%00%(symref)",
         "refs/heads/",
     ];
     git_call(config, cancel, git, root, &command).await
@@ -60,7 +62,8 @@ pub async fn delete_ref(
     refname: &str,
     commit: &str,
 ) -> Result<(), Error> {
-    let command = ["update-ref", "-d", refname, commit];
+    // Without `--no-deref` git deletes the target of a symbolic ref instead of the ref.
+    let command = ["update-ref", "--no-deref", "-d", refname, commit];
     git_call(config, cancel, git, root, &command)
         .await
         .map(|_| ())

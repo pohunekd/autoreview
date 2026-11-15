@@ -72,6 +72,8 @@ pub(crate) struct Rules<'a> {
 pub(crate) enum Verdict {
     /// No review, session or worktree needs the branch; `--yes` deletes it.
     Delete,
+    /// The ref is symbolic; deleting it by name could delete the branch it points at.
+    SymbolicRef,
     /// The name does not hold a workflow ID after the prefix.
     NameUnknown,
     /// Its review is queued, running, awaiting or still being cleaned up.
@@ -105,8 +107,9 @@ pub(crate) struct BranchPlan {
 
 /// Returns every branch under the prefix with its verdict, in the order of `refs`.
 ///
-/// `refs` is the output of `git for-each-ref --format=%(refname)%00%(objectname)`; a line
-/// that is not a local branch is skipped. `worktrees` is the output of
+/// `refs` is the output of `git for-each-ref --format=%(refname)%00%(objectname)%00%(symref)`;
+/// a line without exactly three fields or that is not a local branch is skipped. A symbolic ref
+/// is kept: git lists it with the commit of its target. `worktrees` is the output of
 /// `git worktree list --porcelain -z`.
 pub(crate) fn plan(refs: &str, worktrees: &str, rules: &Rules<'_>) -> Vec<BranchPlan> {
     let checked_out: BTreeSet<&str> = worktrees
@@ -116,7 +119,10 @@ pub(crate) fn plan(refs: &str, worktrees: &str, rules: &Rules<'_>) -> Vec<Branch
         .collect();
     let mut plans = Vec::new();
     for line in refs.lines() {
-        let Some((refname, commit)) = line.split_once('\0') else {
+        let mut fields = line.split('\0');
+        let (Some(refname), Some(commit), Some(target), None) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
             continue;
         };
         let Some(branch) = refname.strip_prefix(HEADS) else {
@@ -128,7 +134,11 @@ pub(crate) fn plan(refs: &str, worktrees: &str, rules: &Rules<'_>) -> Vec<Branch
         plans.push(BranchPlan {
             branch: branch.to_owned(),
             commit: commit.to_owned(),
-            verdict: verdict(branch, checked_out.contains(branch), rules),
+            verdict: if target.is_empty() {
+                verdict(branch, checked_out.contains(branch), rules)
+            } else {
+                Verdict::SymbolicRef
+            },
             deleted: false,
             error: String::new(),
         });
