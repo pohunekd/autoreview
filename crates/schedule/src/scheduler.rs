@@ -331,7 +331,7 @@ pub fn plan(
             let code = failure_code(&latest_run.failure);
             // A superseded run left nothing behind; the head is reviewed anew. So is a start
             // whose fetched head was another commit, until the retry budget is spent.
-            let mismatches = consecutive_failures(runs, &target_identity, HEAD_FETCH_MISMATCH);
+            let mismatches = streak_failures(runs, &target_identity, HEAD_FETCH_MISMATCH);
             let again = superseded(&code)
                 || (code == HEAD_FETCH_MISMATCH && mismatches <= policy.retry_delays.len());
             if again {
@@ -356,10 +356,10 @@ pub fn plan(
                 r.handled_workflow = latest_run.workflow_id.clone();
                 r.handled_retries = r.retries;
             }
-            // A usage limit notifies on the first limited run in a row and when it stops.
+            // A usage limit notifies on the first limited run of its streak and when it stops.
             let mut notify = !repeated;
             if code == REVIEWER_USAGE_LIMITED {
-                let limited = consecutive_failures(runs, &target_identity, REVIEWER_USAGE_LIMITED);
+                let limited = streak_failures(runs, &target_identity, REVIEWER_USAGE_LIMITED);
                 r = after_usage_limit(r, limited, now, policy)?;
                 notify = notify && (limited <= 1 || r.phase == phase::FAILED);
             } else {
@@ -643,18 +643,26 @@ pub fn limit_author(
     Ok(decision)
 }
 
-/// Counts the latest ended runs of `identity` that failed with `code`.
+/// Failure codes whose runs spend no retry; they form one streak of a review identity.
+const STREAK_CODES: [&str; 2] = [HEAD_FETCH_MISMATCH, REVIEWER_USAGE_LIMITED];
+
+/// Counts the runs that failed with `code` in the latest streak of `identity`.
 ///
-/// Runs are read from the highest attempt down; the first run with another ending stops the
-/// count, so only consecutive failures with `code` count.
-fn consecutive_failures(runs: &[Run], identity: &str, code: &str) -> usize {
+/// Runs are read from the highest attempt down while each one ended and failed with a code of
+/// [`STREAK_CODES`]; the first run with another ending ends the streak. Neither streak code
+/// resets the other's count, so a head that alternates them still stops at either bound.
+fn streak_failures(runs: &[Run], identity: &str, code: &str) -> usize {
     let mut own: Vec<&Run> = runs
         .iter()
         .filter(|run| run.target.identity() == identity)
         .collect();
     own.sort_by_key(|run| std::cmp::Reverse(run.attempt));
     own.iter()
-        .take_while(|run| !run.active() && !run.released && failure_code(&run.failure) == code)
+        .map(|run| (run, failure_code(&run.failure)))
+        .take_while(|(run, failed)| {
+            !run.active() && !run.released && STREAK_CODES.contains(&failed.as_str())
+        })
+        .filter(|(_, failed)| failed == code)
         .count()
 }
 
@@ -706,7 +714,7 @@ pub fn after_failure(
     Ok(r)
 }
 
-/// Records a run that a usage limit ended; `limited` counts it and the limited runs before it.
+/// Records a run that a usage limit ended; `limited` counts the limited runs of its streak.
 ///
 /// The review waits for the delay at that count in `usage_limit_delays` and keeps its retry
 /// budget, so a later transient fault still gets every retry. With the delays spent it fails.
@@ -1412,7 +1420,8 @@ mod tests {
     }
 
     // A start whose fetched head is another commit is started again until the retry budget
-    // is spent, then the head stops with a notice; any other ending resets the count (#416).
+    // is spent, then the head stops with a notice; any other ending but a usage limit resets
+    // the count (#416).
     #[test]
     fn head_fetch_mismatch_restarts_until_the_retry_budget_then_stops() {
         const M: &str = HEAD_FETCH_MISMATCH;
@@ -1496,17 +1505,20 @@ mod tests {
     }
 
     // A run that a usage limit ended waits on the usage limit delays and keeps the retry budget;
-    // it notifies on the first limited run in a row and when the delays are spent (#461).
+    // it notifies on the first limited run of its streak and when the delays are spent. A
+    // fetch mismatch and a usage limit share one streak, so neither resets the other's count
+    // (#461).
     #[test]
     fn usage_limit_retries_on_its_own_delays_then_stops() {
         const U: &str = REVIEWER_USAGE_LIMITED;
         const G: &str = "github_request_failed";
+        const M: &str = HEAD_FETCH_MISMATCH;
         let wait = |notify: bool, minutes: i64| ("retry_wait", notify, minutes);
         let stop = ("failed", true, 0);
         // Each case: its name, the ending of each run, the phase, notice and delay after each, and
         // the retries spent at the end.
         type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool, i64)], i64);
-        let cases: [Case<'_>; 4] = [
+        let cases: [Case<'_>; 6] = [
             (
                 "stops after its own delays",
                 &[U, U, U, U],
@@ -1541,6 +1553,34 @@ mod tests {
                     wait(false, 30),
                     ("waiting", false, 2),
                     wait(true, 15),
+                ],
+                0,
+            ),
+            (
+                "a fetch mismatch keeps the usage count",
+                &[U, M, U, M, U, M, U],
+                &[
+                    wait(true, 15),
+                    ("waiting", false, 2),
+                    wait(false, 30),
+                    ("waiting", false, 2),
+                    wait(false, 60),
+                    ("waiting", false, 2),
+                    stop,
+                ],
+                0,
+            ),
+            (
+                "a usage limit keeps the mismatch count",
+                &[M, U, M, U, M, U, M],
+                &[
+                    ("waiting", false, 2),
+                    wait(true, 15),
+                    ("waiting", false, 2),
+                    wait(false, 30),
+                    ("waiting", false, 2),
+                    wait(false, 60),
+                    stop,
                 ],
                 0,
             ),
