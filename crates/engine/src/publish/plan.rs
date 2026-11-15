@@ -118,16 +118,16 @@ mod tests {
     use std::collections::BTreeMap;
 
     use autoreview_policy::{
-        AuthorClass, Checkout, EVENTS, Event, Level, OnClean, OnFindings, OnNotes, Pipeline,
-        Protocol, Reviewer, Rule, Trigger, TriggerKind,
+        AuthorClass, Checkout, EVENTS, Event, Level, OnClean, OnFindings, OnNotes, OnSuspect,
+        Pipeline, Protocol, Reviewer, Rule, Trigger, TriggerKind,
     };
 
     use super::{PublicationPlan, plan_publication, publication_event};
     use crate::model::ids::INPUT_VERSION;
     use crate::model::pull_request::SCOPE_FULL;
     use crate::model::{
-        Artifact, Decision, Finding, NotesHandoff, ProjectRoute, PullRequest, ReviewInput,
-        ReviewScope, RunLimits,
+        Artifact, Decision, Finding, GuardOutcome, GuardSignal, NotesHandoff, ProjectRoute,
+        PullRequest, ReviewInput, ReviewScope, RunLimits,
     };
     use crate::publish::anchor::anchor_findings;
     use crate::review::input::validate_input;
@@ -501,6 +501,126 @@ mod tests {
             input.handoff = handoff;
             let artifact = Artifact {
                 findings,
+                ..Artifact::default()
+            };
+            assert_eq!(
+                plan_publication(&input, &artifact, "reviewer"),
+                want,
+                "{name}"
+            );
+        }
+    }
+
+    /// A suspect guard result holds only a clean approval and, with `comment`, softens a request
+    /// for changes on an untrusted author; it never blocks (#345).
+    #[test]
+    fn text_guard_holds_a_clean_approval_and_never_blocks() {
+        let guard = |suspect: bool, outcome: OnSuspect| GuardOutcome {
+            signals: vec![GuardSignal {
+                field: "body".to_owned(),
+                signal: "unicode_tags".to_owned(),
+                count: 1,
+            }],
+            score: 100,
+            threshold: 100,
+            suspect,
+            outcome,
+            ..GuardOutcome::default()
+        };
+        let plan =
+            |decision: Decision, await_approval: bool, own_pull_request: bool| PublicationPlan {
+                decision,
+                await_approval,
+                own_pull_request,
+                ..PublicationPlan::default()
+            };
+        let (trusted, untrusted) = (AuthorClass::Trusted, AuthorClass::Untrusted);
+        let cases = [
+            (
+                "a suspect clean review of an approving rule waits",
+                (OnClean::Approve, trusted.clone(), "colleague", vec![]),
+                guard(true, OnSuspect::Await),
+                plan(Decision::Approve, true, false),
+            ),
+            (
+                "an unknown stored outcome waits",
+                (OnClean::Approve, trusted.clone(), "colleague", vec![]),
+                guard(true, OnSuspect::Other("block".to_owned())),
+                plan(Decision::Approve, true, false),
+            ),
+            (
+                "log approves",
+                (OnClean::Approve, trusted.clone(), "colleague", vec![]),
+                guard(true, OnSuspect::Log),
+                plan(Decision::Approve, false, false),
+            ),
+            (
+                "comment approves a clean review",
+                (OnClean::Approve, trusted.clone(), "colleague", vec![]),
+                guard(true, OnSuspect::Comment),
+                plan(Decision::Approve, false, false),
+            ),
+            (
+                "a result below the threshold approves",
+                (OnClean::Approve, trusted.clone(), "colleague", vec![]),
+                guard(false, OnSuspect::Await),
+                plan(Decision::Approve, false, false),
+            ),
+            (
+                "a blocking finding still asks for changes",
+                (
+                    OnClean::Approve,
+                    trusted.clone(),
+                    "colleague",
+                    vec![blocking()],
+                ),
+                guard(true, OnSuspect::Await),
+                plan(Decision::RequestChanges, false, false),
+            ),
+            (
+                "comment softens changes on an untrusted author",
+                (
+                    OnClean::Await,
+                    untrusted.clone(),
+                    "colleague",
+                    vec![blocking()],
+                ),
+                guard(true, OnSuspect::Comment),
+                plan(Decision::Comment, false, false),
+            ),
+            (
+                "comment keeps changes on a trusted author",
+                (
+                    OnClean::Approve,
+                    trusted.clone(),
+                    "colleague",
+                    vec![blocking()],
+                ),
+                guard(true, OnSuspect::Comment),
+                plan(Decision::RequestChanges, false, false),
+            ),
+            (
+                "await keeps changes on an untrusted author",
+                (OnClean::Await, untrusted, "colleague", vec![blocking()]),
+                guard(true, OnSuspect::Await),
+                plan(Decision::RequestChanges, false, false),
+            ),
+            (
+                "an own pull request gets a plain comment",
+                (OnClean::Approve, trusted, "reviewer", vec![]),
+                guard(true, OnSuspect::Await),
+                plan(Decision::Comment, false, true),
+            ),
+        ];
+        for (name, (on_clean, class, author, findings), guard, want) in cases {
+            let mut pull_request = test_pull_request(1);
+            pull_request.author = author.to_owned();
+            let rule = test_rule(opus(), OnFindings::RequestChanges, on_clean);
+            let mut input = test_input(rule, pull_request);
+            input.author_class = class;
+            let artifact = Artifact {
+                findings,
+                guard: Some(guard),
                 ..Artifact::default()
             };
             assert_eq!(
