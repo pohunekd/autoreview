@@ -2,7 +2,7 @@
 type: Runbook
 id: runbook/stale-sessions-and-branches
 title: Stale sessions and branches
-description: Why review branches and pohunek sessions accumulate on the review hosts, and how to remove a session that autoreview could not remove.
+description: Why review branches and pohunek sessions accumulate on the review hosts, how to remove a session that autoreview could not remove, and how to remove the branches that no review needs.
 source_kind: manual
 intents: [debug, help]
 ---
@@ -27,8 +27,8 @@ pile up.
   `<session.branch_prefix><workflow>-<reviewer>-run<N>[-start<M>]`, so a single
   review can leave several branches behind.
 
-autoreview removes a reviewer's session, not its branch, and no autoreview
-command removes review branches.
+autoreview removes a reviewer's session, not its branch. Remove the leftover branches
+with `autoreview prune-branches`, described below.
 
 ## When a session cannot be removed
 
@@ -46,11 +46,25 @@ Use the session name from the listing. Check the review first: `cleanup_manual`
 is raised for a finished review, and a session that still runs a review is not
 a leftover. If a session is still running, check its output before you remove it.
 
-## Branches of running reviews
+## Remove leftover branches
 
-A running review works on its branch, and nothing checks a manual delete
-against the running reviews. Do not delete review branches with
-`git push --delete` or `git branch -D` on the review host while `serve` runs.
+[`autoreview prune-branches`](../../cli.md#autoreview-prune-branches) lists
+the branches under `session.branch_prefix` that no review needs, and deletes them with
+`--yes`. Run it on the machine that holds the store and the review host's repositories, as
+the user of the service, while `serve` runs or not:
+
+```sh
+autoreview prune-branches --git-binary /usr/bin/git                    # list only
+autoreview prune-branches --git-binary /usr/bin/git --older-than-days 7 --yes
+```
+
+It never deletes a branch whose review is queued, running, awaiting or still being cleaned
+up, a branch a pohunek session of the host works on, or a branch checked out in a worktree.
+Each deleted branch is printed with its commit; `git -C <path> branch <branch> <commit>`
+restores it. pohunek has no command that deletes a branch on another machine, so a review
+host whose repositories are elsewhere is skipped as `host_not_local`. Do not delete review
+branches with `git push --delete` or `git branch -D`: nothing checks a manual delete against
+the running reviews.
 
 ## Related pages
 
