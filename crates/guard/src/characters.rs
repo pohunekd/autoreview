@@ -42,6 +42,22 @@ fn transparent(character: char) -> bool {
     character.is_whitespace() || character == BRAILLE_BLANK
 }
 
+/// COMBINING ENCLOSING KEYCAP: a digit, `#` or `*`, a selector and it form an emoji.
+const KEYCAP: char = '\u{20E3}';
+
+/// Reports whether a selector after `base`, followed by `next`, has a text base.
+///
+/// No standardized or emoji sequence starts with ASCII, whitespace, or a Latin, Greek or
+/// Cyrillic letter; the one exception is a keycap (`1`, VS16, U+20E3). Emoji, CJK, math and
+/// Mongolian bases stay legitimate.
+fn text_base(base: char, next: Option<char>) -> bool {
+    let keycap = matches!(base, '0'..='9' | '#' | '*') && next == Some(KEYCAP);
+    !keycap
+        && (base.is_ascii()
+            || base.is_whitespace()
+            || matches!(base, '\u{00C0}'..='\u{024F}' | '\u{0370}'..='\u{052F}'))
+}
+
 /// Reports whether a character is a Unicode tag character, U+E0000-E007F.
 pub(crate) const fn tag(character: char) -> bool {
     matches!(character, '\u{E0000}'..='\u{E007F}')
@@ -189,8 +205,8 @@ impl MixedRun {
 
 /// Reports the character signals of `text` to `add`: tags, runs and bidi controls.
 ///
-/// A variation selector directly after an ASCII letter also counts as a
-/// `variation_selector_run`: no standardized sequence uses a Latin letter as its base.
+/// A variation selector whose base is text (`text_base`) also counts as a
+/// `variation_selector_run`, whitespace between them included.
 ///
 /// `in_patch` is set for added patch lines, where embeddings and isolates are reported too.
 pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)) {
@@ -198,9 +214,10 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
     let mut previous = '\n';
     let mut zero_width_len = 0_usize;
     let mut selector_len = 0_usize;
-    let mut selector_after_letter = false;
+    let mut selector_after_text = false;
     let mut mixed = MixedRun::default();
-    for character in text.chars() {
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
         if transparent(character) {
             if let Some(run) = tag_run.take() {
                 add(Signal::UnicodeTags, u32::from(!run.is_flag()));
@@ -248,13 +265,10 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
             0
         };
         if selector_len == 1 {
-            selector_after_letter = previous.is_ascii_alphabetic();
-            add(
-                Signal::VariationSelectorRun,
-                u32::from(selector_after_letter),
-            );
+            selector_after_text = text_base(previous, characters.peek().copied());
+            add(Signal::VariationSelectorRun, u32::from(selector_after_text));
         }
-        if selector_len == RUN_MIN && !selector_after_letter {
+        if selector_len == RUN_MIN && !selector_after_text {
             add(Signal::VariationSelectorRun, 1);
         }
         if bidi_override(character) {

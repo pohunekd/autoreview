@@ -265,3 +265,8 @@ expect: comment:zero_width_run=1
 score: 100
 --- comment
 Use `&ZeroWidthSpace;&ZeroWidthSpace;` to break the word.
+== selectors_after_spaces_periods_and_digits
+expect: body:variation_selector_run=4
+score: 100
+--- body
+w1 <U+FE01>w2 <U+FE02>end.<U+FE03> 7<U+FE04> keycap 7<U+FE0F><U+20E3> <U+2764><U+FE0F> <U+845B><U+E0100>
