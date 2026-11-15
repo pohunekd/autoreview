@@ -301,14 +301,26 @@ fn value_quote(bytes: &[u8], start: usize, end: usize) -> Option<(u8, usize)> {
     None
 }
 
-impl Pass<'_> {
-    /// Returns the first offset at or after `from` that matches `class`.
+impl<'a> Pass<'a> {
+    /// Prepares the pass over `text`.
+    fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            bytes: text.as_bytes(),
+            cache: [None; SLOTS],
+            paragraph: None,
+            brackets: bracket_pairs(text.as_bytes()),
+        }
+    }
+
+    /// Returns the first offset at or after `from` that matches `class`, cached in `slot`.
     ///
-    /// A search that starts between an earlier start and its result has the same result, so
-    /// the pass, whose offsets only grow, reads each byte a bounded number of times.
-    fn find(&mut self, class: Find, from: usize) -> Option<usize> {
-        let slot = self.cache.get_mut(class as usize)?;
-        if let Some(last) = *slot
+    /// Each slot serves one call site, whose start offsets only grow while the pass runs. A
+    /// search that starts between an earlier start and its result has the same result, so
+    /// each slot reads each byte a bounded number of times.
+    fn find(&mut self, slot: usize, class: Class, from: usize) -> Option<usize> {
+        let cached = self.cache.get_mut(slot)?;
+        if let Some(last) = *cached
             && last.from <= from
             && last.found.is_none_or(|found| found >= from)
         {
@@ -317,19 +329,54 @@ impl Pass<'_> {
         let bytes = self.bytes;
         let found = (from..bytes.len()).find(|&at| {
             let byte = bytes.get(at).copied().unwrap_or_default();
-            let escaped = at > 0 && bytes.get(at.saturating_sub(1)) == Some(&b'\\');
             match class {
-                Find::TagEnd => byte == b'>',
-                Find::Bracket => byte == b']' && !escaped,
-                Find::Quote => byte == b'"' && !escaped,
-                Find::Apostrophe => byte == b'\'' && !escaped,
-                Find::Paren => byte == b')' && !escaped,
-                Find::Space => byte.is_ascii_whitespace(),
-                Find::NonSpace => !byte.is_ascii_whitespace(),
+                Class::Byte(wanted) => byte == wanted,
+                Class::Unescaped(wanted) => byte == wanted && !escaped(bytes, at),
+                Class::AngleEnd => matches!(byte, b'>' | b'<' | b'\n') && !escaped(bytes, at),
+                Class::Space => byte.is_ascii_whitespace(),
+                Class::NonSpace => !byte.is_ascii_whitespace(),
             }
         });
-        *slot = Some(Cached { from, found });
+        *cached = Some(Cached { from, found });
         found
+    }
+
+    /// Returns the offset of the line break that ends the paragraph holding `from`.
+    ///
+    /// A paragraph ends before a blank line; without one it ends at the end of the text.
+    fn paragraph_end(&mut self, from: usize) -> usize {
+        let len = self.bytes.len();
+        if let Some(last) = self.paragraph
+            && last.from <= from
+            && last.found.is_some_and(|found| found >= from)
+        {
+            return last.found.unwrap_or(len);
+        }
+        let mut at = from;
+        let end = loop {
+            let Some(found) = self.slice(at, len).find('\n') else {
+                break len;
+            };
+            let line_break = at.saturating_add(found);
+            let next = line_break.saturating_add(1);
+            let next_end = self
+                .slice(next, len)
+                .find('\n')
+                .map_or(len, |end| next + end);
+            if self
+                .slice(next, next_end)
+                .trim_matches([' ', '\t', '\r'])
+                .is_empty()
+            {
+                break line_break;
+            }
+            at = next;
+        };
+        self.paragraph = Some(Cached {
+            from,
+            found: Some(end),
+        });
+        end
     }
 
     /// Returns the text between two offsets of the pass.
@@ -398,6 +445,33 @@ impl Pass<'_> {
             }
         }
         len
+    }
+
+    /// Returns where the tag with attributes at `from` ends, and whether it is closed.
+    ///
+    /// A `>` inside a quoted attribute value does not end the tag. A closed tag ends at its
+    /// `>`; a value that is never closed, or no `>` after it, ends the tag-like text there
+    /// (`false`). Without any `>` after `from` there is no tag.
+    fn tag_end(&mut self, from: usize) -> Option<(usize, bool)> {
+        let mut gt = self.find(TAG_END, Class::Byte(b'>'), from)?;
+        let mut at = from;
+        while let Some((quote, open)) = value_quote(self.bytes, at, gt) {
+            let slot = if quote == b'"' {
+                ATTRIBUTE_QUOTE
+            } else {
+                ATTRIBUTE_APOSTROPHE
+            };
+            let after_open = open.saturating_add(1);
+            let Some(close) = self.find(slot, Class::Byte(quote), after_open) else {
+                return Some((after_open, false));
+            };
+            at = close.saturating_add(1);
+            let Some(next) = self.find(VALUE_END, Class::Byte(b'>'), at) else {
+                return Some((at, false));
+            };
+            gt = next;
+        }
+        Some((gt, true))
     }
 }
 
