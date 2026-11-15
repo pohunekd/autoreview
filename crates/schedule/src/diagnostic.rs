@@ -4,7 +4,7 @@
 
 use std::error::Error as StdError;
 
-use crate::scheduler::{AUTHOR_LIMIT_REACHED, HEAD_FETCH_MISMATCH};
+use crate::scheduler::{AUTHOR_LIMIT_REACHED, HEAD_FETCH_MISMATCH, REVIEWER_USAGE_LIMITED};
 
 /// Lowercase substrings of an error message and the diagnostic code each one maps to.
 ///
@@ -231,6 +231,12 @@ pub fn failure_explanation(code: &str) -> &'static str {
              `author_limit` allows in its window, and the rule skips reviews over the bound, so \
              this head is not reviewed. A later commit is reviewed if it comes after the window \
              frees a slot; retry this PR to review this head now."
+        }
+        REVIEWER_USAGE_LIMITED => {
+            "The reviewer's model account reached its rate or usage limit: Claude Code ended the \
+             run with HTTP status 429. The review is tried again on the delays of \
+             `schedule.usage_limit_retry_delays_seconds`, which use none of the other retries; \
+             when they are spent, retry this PR after the limit resets."
         }
         "credential_invalid" => {
             "GitHub refused the token of the review's credential: revoked, expired or never valid. Replace the token in the variable that its `token_env` names and restart autoreview, then retry this PR; it is not retried automatically."

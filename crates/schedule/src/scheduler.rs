@@ -331,7 +331,7 @@ pub fn plan(
             let code = failure_code(&latest_run.failure);
             // A superseded run left nothing behind; the head is reviewed anew. So is a start
             // whose fetched head was another commit, until the retry budget is spent.
-            let mismatches = head_mismatches(runs, &target_identity);
+            let mismatches = consecutive_failures(runs, &target_identity, HEAD_FETCH_MISMATCH);
             let again = superseded(&code)
                 || (code == HEAD_FETCH_MISMATCH && mismatches <= policy.retry_delays.len());
             if again {
@@ -356,11 +356,19 @@ pub fn plan(
                 r.handled_workflow = latest_run.workflow_id.clone();
                 r.handled_retries = r.retries;
             }
-            r = after_failure(r, &code, now, policy)?;
+            // A usage limit notifies on the first limited run in a row and when it stops.
+            let mut notify = !repeated;
+            if code == REVIEWER_USAGE_LIMITED {
+                let limited = consecutive_failures(runs, &target_identity, REVIEWER_USAGE_LIMITED);
+                r = after_usage_limit(r, limited, now, policy)?;
+                notify = notify && (limited <= 1 || r.phase == phase::FAILED);
+            } else {
+                r = after_failure(r, &code, now, policy)?;
+            }
             return Ok(Decision {
                 record: r,
                 dispatch: false,
-                notify: !repeated,
+                notify,
             });
         }
     } else if r.phase == phase::RUNNING {
@@ -635,20 +643,18 @@ pub fn limit_author(
     Ok(decision)
 }
 
-/// Counts the latest ended runs of `identity` that failed with [`HEAD_FETCH_MISMATCH`].
+/// Counts the latest ended runs of `identity` that failed with `code`.
 ///
 /// Runs are read from the highest attempt down; the first run with another ending stops the
-/// count, so only consecutive mismatching starts count.
-fn head_mismatches(runs: &[Run], identity: &str) -> usize {
+/// count, so only consecutive failures with `code` count.
+fn consecutive_failures(runs: &[Run], identity: &str, code: &str) -> usize {
     let mut own: Vec<&Run> = runs
         .iter()
         .filter(|run| run.target.identity() == identity)
         .collect();
     own.sort_by_key(|run| std::cmp::Reverse(run.attempt));
     own.iter()
-        .take_while(|run| {
-            !run.active() && !run.released && failure_code(&run.failure) == HEAD_FETCH_MISMATCH
-        })
+        .take_while(|run| !run.active() && !run.released && failure_code(&run.failure) == code)
         .count()
 }
 
@@ -697,6 +703,34 @@ pub fn after_failure(
         return Ok(r);
     }
     r.phase = phase::FAILED.to_owned();
+    Ok(r)
+}
+
+/// Records a run that a usage limit ended; `limited` counts it and the limited runs before it.
+///
+/// The review waits for the delay at that count in `usage_limit_delays` and keeps its retry
+/// budget, so a later transient fault still gets every retry. With the delays spent it fails.
+///
+/// # Errors
+///
+/// Returns `Error::TimeOutOfRange` when adding the delay to the current
+/// instant leaves the range that `time` can represent.
+fn after_usage_limit(
+    mut r: Record,
+    limited: usize,
+    now: OffsetDateTime,
+    policy: &Policy,
+) -> Result<Record, Error> {
+    r.error_code = REVIEWER_USAGE_LIMITED.to_owned();
+    r.awaits_host = false;
+    let delay = (limited.checked_sub(1)).and_then(|i| policy.usage_limit_delays.get(i));
+    let Some(delay) = delay else {
+        r.phase = phase::FAILED.to_owned();
+        return Ok(r);
+    };
+    r.phase = phase::RETRY_WAIT.to_owned();
+    r.due_at = due_after(now, *delay)?;
+    r.attempt = r.attempt.wrapping_add(1);
     Ok(r)
 }
 
@@ -864,9 +898,10 @@ mod tests {
     use time::{Duration, OffsetDateTime};
 
     use super::{
-        AUTHOR_LIMIT_REACHED, AuthorBound, Decision, HEAD_FETCH_MISMATCH, Policy, Record, Retarget,
-        Run, Target, after_failure, head_mismatch_notification, limit_author, notification, plan,
-        plan_on_base, plan_retarget, reconcile_completed, retryable, wait_for_host,
+        AUTHOR_LIMIT_REACHED, AuthorBound, Decision, HEAD_FETCH_MISMATCH, Policy,
+        REVIEWER_USAGE_LIMITED, Record, Retarget, Run, Target, after_failure,
+        head_mismatch_notification, limit_author, notification, plan, plan_on_base, plan_retarget,
+        reconcile_completed, retryable, wait_for_host,
     };
     use crate::diagnostic::{diagnostic, failure_explanation};
     use crate::phase;
@@ -1458,6 +1493,81 @@ mod tests {
                 );
             }
         }
+    }
+
+    // A run that a usage limit ended waits on the usage limit delays and keeps the retry budget;
+    // it notifies on the first limited run in a row and when the delays are spent (#461).
+    #[test]
+    fn usage_limit_retries_on_its_own_delays_then_stops() {
+        const U: &str = REVIEWER_USAGE_LIMITED;
+        const G: &str = "github_request_failed";
+        let wait = |notify: bool, minutes: i64| ("retry_wait", notify, minutes);
+        let stop = ("failed", true, 0);
+        // Each case: its name, the ending of each run, the phase, notice and delay after each, and
+        // the retries spent at the end.
+        type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool, i64)], i64);
+        let cases: [Case<'_>; 4] = [
+            (
+                "stops after its own delays",
+                &[U, U, U, U],
+                &[wait(true, 15), wait(false, 30), wait(false, 60), stop],
+                0,
+            ),
+            (
+                "success ends the wait",
+                &[U, U, ""],
+                &[wait(true, 15), wait(false, 30), ("completed", false, 0)],
+                0,
+            ),
+            (
+                "keeps the retry budget",
+                &[G, U, G, U, U, G, G],
+                &[
+                    wait(true, 1),
+                    wait(true, 15),
+                    wait(true, 5),
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(true, 15),
+                    stop,
+                ],
+                3,
+            ),
+            (
+                "a moved head resets the count",
+                &[U, U, "head_changed", U],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    ("waiting", false, 2),
+                    wait(true, 15),
+                ],
+                0,
+            ),
+        ];
+        for (name, endings, want, retries) in cases {
+            let (target, mut now, policy) = fixture();
+            let mut runs = Vec::new();
+            let mut record = Record::default();
+            for (ending, (phase, notify, minutes)) in endings.iter().zip(want.iter()) {
+                now += Duration::hours(1);
+                let decision = dispatch_and_end(record, &target, &mut runs, ending, now, &policy);
+                let due = decision.record.due_at == now + Duration::minutes(*minutes);
+                assert!(
+                    decision.record.phase == *phase
+                        && decision.notify == *notify
+                        && (*minutes == 0 || due),
+                    "{name}: after {ending:?}: {decision:?}"
+                );
+                record = decision.record;
+            }
+            // A restart plans from the stored record again: no second notice, no new start.
+            let again = plan(record.clone(), &target, &runs, now, &policy).expect("plan");
+            assert!(!again.notify, "{name}: notified twice: {again:?}");
+            assert_eq!(record.retries, retries, "{name}: the retries spent");
+        }
+        assert!(!retryable(U), "the usage limit is not a transient fault");
+        assert_ne!(failure_explanation(U), failure_explanation(""));
     }
 
     /// One row of the author limit table: what `limit_author` makes of a due dispatch.
