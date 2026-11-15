@@ -306,6 +306,14 @@ fn listing_end(
     }
 }
 
+/// Reports whether a patch read for the guard left changed files out.
+///
+/// GitHub lists at most 3000 files, so a listing that is not complete or that visited fewer
+/// files than `changed_files`, the pull request's own count, left files out.
+fn patches_cut(end: ListingEnd, visited: usize, changed_files: usize) -> bool {
+    end != ListingEnd::Complete || visited < changed_files
+}
+
 impl GitHub {
     /// Returns the commentable lines of every changed file, keyed by path.
     ///
@@ -371,16 +379,20 @@ impl GitHub {
     /// Adds the patch of every changed file to `read`, for the text guard.
     ///
     /// A file with added lines whose patch GitHub omits, as it does for a large diff, and a
-    /// listing that ends at the page limit mark the read truncated.
+    /// listing that left files out mark the read truncated: one that reached the file cap, or
+    /// one with fewer files than `changed_files`, the count read before the listing.
     pub(super) async fn guard_patches(
         &self,
         cancel: &CancellationToken,
         credential: &Credential,
         pr: &PullRequest,
+        changed_files: usize,
         read: &mut GuardRead,
     ) -> Result<(), Error> {
+        let mut visited: usize = 0;
         let end = self
-            .visit_changed_files(cancel, credential, pr, None, |file| {
+            .visit_changed_files(cancel, credential, pr, Some(LISTED_FILES_CAP), |file| {
+                visited += 1;
                 if file.patch.is_empty() && file.additions > 0 {
                     read.cut();
                 }
@@ -388,7 +400,7 @@ impl GitHub {
                 Ok(())
             })
             .await?;
-        if end != ListingEnd::Complete {
+        if patches_cut(end, visited, changed_files) {
             read.cut();
         }
         Ok(())
@@ -444,5 +456,25 @@ at end of file",
             .expect("a deleted file parses");
         assert!(deleted.is_empty());
         assert!(super::commentable_lines_from_patch("@@ broken @@").is_err());
+    }
+
+    #[test]
+    fn patches_cut() {
+        use super::ListingEnd::{Cap, Complete, PageLimit};
+        let cases = [
+            (Complete, 4, 4, false),
+            (Complete, 5, 4, false),
+            (Complete, 3000, 3001, true),
+            (Complete, 0, 1, true),
+            (Cap, 3000, 3000, true),
+            (PageLimit, 2000, 2000, true),
+        ];
+        for (end, visited, changed_files, cut) in cases {
+            assert_eq!(
+                super::patches_cut(end, visited, changed_files),
+                cut,
+                "{end:?} after {visited} of {changed_files} files"
+            );
+        }
     }
 }

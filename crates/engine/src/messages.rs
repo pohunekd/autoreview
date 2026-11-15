@@ -143,9 +143,13 @@ pub(crate) fn approval_requested_message(
         message.push('.');
     }
     if let Some(guard) = artifact.guard.as_ref().filter(|guard| guard.holds()) {
+        let lead = if approves_clean(input) {
+            "This rule approves clean reviews without you, but the text guard"
+        } else {
+            "The text guard"
+        };
         message.push_str(&format!(
-            "\nThis rule approves clean reviews without you, \
-             but the text guard flagged the pull request: {}.",
+            "\n{lead} flagged the pull request: {}.",
             guard_text(guard)
         ));
     }
@@ -177,6 +181,11 @@ pub(crate) fn approval_requested_message(
     message
 }
 
+/// Reports whether the input's rule approves a clean review without the owner.
+fn approves_clean(input: &ReviewInput) -> bool {
+    input.rule.on_clean == OnClean::Approve
+}
+
 /// The action message of a suspect text guard result: codes only, never pull request text.
 ///
 /// It is sent before the reviewers run, so its outcome line states the rule, not a decision.
@@ -187,9 +196,7 @@ pub(crate) fn guard_suspect_message(input: &ReviewInput, guard: &GuardOutcome) -
         OnSuspect::Comment => {
             "comment, a request for changes on an untrusted author becomes a comment"
         }
-        _ if input.rule.on_clean == OnClean::Approve => {
-            "await, a clean review waits for your approval"
-        }
+        _ if approves_clean(input) => "await, a clean review waits for your approval",
         _ => "await, the rule does not approve clean reviews, so nothing changes",
     };
     let signals: Vec<String> = (guard.signals.iter())

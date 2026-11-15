@@ -423,8 +423,10 @@ guard:
   - `log`: nothing changes; only the stored result and the notification remain.
 - A pull request is suspect when its score reaches `threshold`, when the read
   stopped at `guards.text.max_input_bytes` or the page limit (the rest was not
-  scanned), or when the configuration has no `guards.text` section. The last
-  case and a stored guard this engine cannot read behave as `await`.
+  scanned), when the changed-files listing has fewer files than the pull
+  request (GitHub lists at most 3000), or when the configuration has no
+  `guards.text` section. The last case and a stored guard this engine cannot
+  read behave as `await`.
 - No outcome requests changes: the guard never blocks a pull request.
 - Every suspect pull request sends one `guard_suspect` message at level
   `action`, whatever the outcome. It names the signal codes, the score and the
@@ -432,10 +434,10 @@ guard:
   same signals sends none. With `await` or `comment`, the published review
   names the signal codes in one line.
 - The guard reads its fields with extra GitHub calls, only for a rule with
-  `guard`: a GraphQL query for the title and body, one paged query per list
-  (commits, comments and reviews, review threads) and the changed-files
-  listing for `patch`. Comments and reviews of the reviewing account are not
-  scanned.
+  `guard`: a GraphQL query for the title, the body and the changed-file count
+  (also for `patch`), one paged query per list (commits, comments and reviews,
+  review threads) and the changed-files listing for `patch`. Comments, reviews
+  and review-thread comments of the reviewing account are not scanned.
 - A rule with `guard` needs the [`guards.text`](configuration.md#guards)
   section of the configuration; without it the configuration fails to load.
 - A rule with `guard` changes the policy digest; a policy without one keeps its

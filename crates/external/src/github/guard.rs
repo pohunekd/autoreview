@@ -19,11 +19,11 @@ use tokio_util::sync::CancellationToken;
 
 use super::{GitHub, response_invalid};
 
-/// Query of the title and body of one pull request.
+/// Query of the title, the body and the changed-file count of one pull request.
 const GRAPHQL_GUARD_TEXT: &str = concat!(
     "query($owner: String!, $name: String!, $number: Int!) {\n",
     "  repository(owner: $owner, name: $name) {\n",
-    "    pullRequest(number: $number) { title body }\n",
+    "    pullRequest(number: $number) { title body changedFiles }\n",
     "  }\n",
     "}",
 );
@@ -113,6 +113,9 @@ struct PullNode {
     /// The body; `null` reads as empty.
     #[serde(deserialize_with = "null_default::deserialize")]
     body: String,
+    /// The number of changed files, read by the title query only.
+    #[serde(rename = "changedFiles")]
+    changed_files: Option<u64>,
     /// One page of the list the query names.
     page: Option<Page>,
 }
@@ -318,8 +321,9 @@ fn take_entry(list: List, entry: Node, publisher: &str, read: &mut GuardRead) {
 impl GitHub {
     /// Reads the texts of `fields` for the text guard, bounded by `max_bytes`.
     ///
-    /// Each list is paged until it ends; the page limit or the bound marks it truncated, and so
-    /// does a changed file with added lines whose patch GitHub omits.
+    /// Each list is paged until it ends. The page limit, the bound, a changed file with added
+    /// lines whose patch GitHub omits and a changed-files listing that left files out mark the
+    /// read truncated.
     pub(crate) async fn guard_texts(
         &self,
         cancel: &CancellationToken,
@@ -333,11 +337,18 @@ impl GitHub {
             max_bytes,
             ..GuardRead::default()
         };
-        let (title, body) = (FieldKind::Title, FieldKind::Body);
-        if fields.contains(&title) || fields.contains(&body) {
+        let (title, body, patch) = (FieldKind::Title, FieldKind::Body, FieldKind::Patch);
+        let mut changed_files: usize = 0;
+        if [title, body, patch]
+            .iter()
+            .any(|kind| fields.contains(kind))
+        {
             let args = guard_args(pull_request, GRAPHQL_GUARD_TEXT, "");
             let output = self.github::<()>(cancel, credential, &args, None).await?;
             let node = decode_pull_node(&output)?;
+            changed_files = (node.changed_files)
+                .and_then(|count| usize::try_from(count).ok())
+                .ok_or_else(|| response_invalid(None))?;
             if fields.contains(&title) {
                 read.push(title, &node.title);
             }
@@ -352,8 +363,8 @@ impl GitHub {
             self.read_list(cancel, credential, pull_request, list, publisher, &mut read)
                 .await?;
         }
-        if fields.contains(&FieldKind::Patch) {
-            self.guard_patches(cancel, credential, pull_request, &mut read)
+        if fields.contains(&patch) {
+            self.guard_patches(cancel, credential, pull_request, changed_files, &mut read)
                 .await?;
         }
         Ok(GuardTexts {
