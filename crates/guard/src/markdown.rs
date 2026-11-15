@@ -252,6 +252,8 @@ enum Class {
     Unescaped(u8),
     /// The end of a `<...>` link destination: an unescaped `>`, `<` or a line break.
     AngleEnd,
+    /// An unescaped `]` followed by `(` or `[`.
+    LinkClose,
     /// ASCII whitespace.
     Space,
     /// Anything but ASCII whitespace.
@@ -282,8 +284,10 @@ const TITLE_AFTER_ANGLE: usize = 13;
 const TITLE_OPEN: usize = 0;
 /// Offset of the `)` after the title within a title slot group.
 const TITLE_AFTER: usize = 4;
+/// Cache slot of the fallback `]` of an alt text.
+const LINK_CLOSE: usize = 18;
 /// Number of cache slots.
-const SLOTS: usize = 18;
+const SLOTS: usize = 19;
 
 /// The last search of one slot: where it started and what it found.
 #[derive(Debug, Clone, Copy)]
@@ -394,6 +398,11 @@ impl<'a> Pass<'a> {
                 Class::Byte(wanted) => byte == wanted,
                 Class::Unescaped(wanted) => byte == wanted && !escaped(bytes, at),
                 Class::AngleEnd => matches!(byte, b'>' | b'<' | b'\n') && !escaped(bytes, at),
+                Class::LinkClose => {
+                    byte == b']'
+                        && matches!(bytes.get(at.saturating_add(1)), Some(b'(' | b'['))
+                        && !escaped(bytes, at)
+                }
                 Class::Space => byte.is_ascii_whitespace(),
                 Class::NonSpace => !byte.is_ascii_whitespace(),
             }
@@ -590,21 +599,31 @@ impl Pass<'_> {
 
     /// Handles `![` at `at`: an image alt text, reported when it instructs.
     ///
-    /// The alt text runs to the matching `]`, so nested brackets stay inside it.
+    /// The alt text runs to the matching `]`, so nested brackets stay inside it. When that `]`
+    /// starts no destination (a code span can hold a `]`), it runs to the next `](` or `][` of
+    /// the paragraph instead.
     fn image_alt(&mut self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
         if !self.starts_with(at, "![") {
             return None;
         }
         let open = at.saturating_add(1);
-        let index = self
+        let paired = self
             .brackets
             .binary_search_by_key(&open, |&(start, _)| start)
-            .ok()?;
-        let (_, close) = *self.brackets.get(index)?;
-        let after = self.bytes.get(close.saturating_add(1));
-        if !matches!(after, Some(b'(' | b'[')) {
-            return None;
-        }
+            .ok()
+            .and_then(|index| self.brackets.get(index))
+            .map(|&(_, close)| close)
+            .filter(|close| matches!(self.bytes.get(close.saturating_add(1)), Some(b'(' | b'[')));
+        let close = match paired {
+            Some(close) => close,
+            None => {
+                let close = self.find(LINK_CLOSE, Class::LinkClose, at.saturating_add(2))?;
+                if close >= self.paragraph_end(at) {
+                    return None;
+                }
+                close
+            }
+        };
         report(
             add,
             Signal::LinkMetadataInstruction,
