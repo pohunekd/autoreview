@@ -60,9 +60,9 @@ pub(crate) const POHUNEK_INHERITED: [&str; 9] = [
 
 /// Variables of the engine that a git child inherits.
 ///
-/// git reads the user's configuration through `HOME` and `XDG_CONFIG_HOME`; no `GIT_*`
-/// variable reaches it, so the repository is the one that `-C` names.
-pub(crate) const GIT_INHERITED: [&str; 4] = ["PATH", "HOME", "TMPDIR", "XDG_CONFIG_HOME"];
+/// No `HOME`, `XDG_CONFIG_HOME` or `GIT_*` variable reaches it: git reads no user
+/// configuration, and the repository is the one that `-C` names.
+pub(crate) const GIT_INHERITED: [&str; 2] = ["PATH", "TMPDIR"];
 
 /// Errors of a child process run.
 ///

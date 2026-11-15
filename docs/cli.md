@@ -458,6 +458,7 @@ Each listed branch gets a `verdict`:
 | Verdict | Meaning |
 |---|---|
 | `delete` | No review, session or worktree needs it; `--yes` deletes it |
+| `symbolic_ref` | The ref is symbolic (`git symbolic-ref`); git lists it with its target's commit, so it is never deleted; kept |
 | `name_unknown` | No workflow ID follows the prefix; kept |
 | `review_active` | Its review is queued, running or awaiting, or its session cleanup is pending; kept |
 | `session_live` | A pohunek session of the host works on it; kept |
@@ -474,12 +475,14 @@ Each listed branch gets a `verdict`:
 ```
 
 Before each deletion the log line `branch delete` names the host, the repository, the branch
-and the commit. A deletion runs `git update-ref -d` with the listed commit, so a branch that
-moved since the listing stays and gets `"error": "git_command_failed"`. Restore a deleted
-branch with `git -C <path> branch <branch> <commit>` while the commit still exists. A host
-whose pohunek calls fail is reported with the error code in `skipped`, and a repository
-whose git calls fail with it in `error`; the other hosts go on. A missing store database is
-`store_unavailable`.
+and the commit. A deletion runs `git update-ref --no-deref -d` with the listed commit, so a
+branch that moved since the listing stays and gets `"error": "git_command_failed"`. Restore a
+deleted branch with `git -C <path> branch <branch> <commit>` while the commit still exists.
+git runs without the system and the user configuration (`GIT_CONFIG_NOSYSTEM`,
+`GIT_CONFIG_GLOBAL=/dev/null`, no `HOME`), without hooks and file system monitor, and
+only in the repository at the root itself, never in one above it. A host whose pohunek calls
+fail is reported with the error code in `skipped`, and a repository whose git calls fail with
+it in `error`; the other hosts go on. A missing store database is `store_unavailable`.
 
 The document is printed in every case once the hosts were read. The command then exits with
 status 1 and logs `command failed` with `branch_prune_incomplete`, without a second object on
