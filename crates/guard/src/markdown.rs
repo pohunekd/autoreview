@@ -51,9 +51,10 @@ enum Block {
 
 /// Returns the byte ranges of closed fenced code blocks, fence lines included.
 ///
-/// A fence opens only at the start of the text or after a blank line, never inside an HTML
-/// block, and counts only when a closing fence follows. Each rule is stricter than CommonMark,
-/// so a range is always code that GitHub shows; text it misses is scanned.
+/// A fence opens only in column 0 (a fence inside a list item ends with the item), at the
+/// start of the text or after a blank line, never inside an HTML block, and counts only when
+/// a closing fence follows. Each rule is stricter than CommonMark, so a range is always code
+/// that GitHub shows; text it misses is scanned.
 fn code_ranges(text: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut block = Block::Text;
@@ -91,7 +92,8 @@ fn code_ranges(text: &str) -> Vec<(usize, usize)> {
             continue;
         }
         if let Some(rest) = indented(line) {
-            if let Some((marker, len)) = opens_fence(rest).filter(|_| after_blank) {
+            let column_zero = rest.len() == line.len();
+            if let Some((marker, len)) = opens_fence(rest).filter(|_| after_blank && column_zero) {
                 block = Block::Fence { marker, len, start };
             } else if let Some(end) = html_start(rest)
                 && !ends_html(line, end, false)
