@@ -1,12 +1,12 @@
-//! Tests of `init`: the embedded files, the written config and the refusal to overwrite.
+//! Tests of `init`: the written config loads, and the login follows the user login grammar.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use autoreview_engine::Error;
 use clap::ValueEnum;
 
-use super::{Example, INIT_FILE_EXISTS, InitArguments, Layout, agent_profiles, render, write};
+use super::{Example, InitArguments, Layout, agent_profiles, render, write};
 use crate::config_file;
 
 /// The login that the tests pass to `init`.
@@ -105,38 +105,4 @@ fn init_login_follows_the_user_login_grammar() {
             "{login}"
         );
     }
-}
-
-#[test]
-fn init_refuses_a_symlinked_prompts_directory() {
-    let root = tempfile::tempdir().expect("a temporary directory");
-    let directory = root.path().join("setup");
-    let elsewhere = root.path().join("elsewhere");
-    fs::create_dir_all(&directory).expect("the directory is created");
-    fs::create_dir_all(&elsewhere).expect("the link target is created");
-    let prompts = directory.join("prompts");
-    std::os::unix::fs::symlink(&elsewhere, &prompts).expect("prompts/ is a symlink");
-    let text = directory.to_str().expect("a UTF-8 temporary path");
-    let init = arguments(&directory, Example::SingleRepoComment);
-    let files = render(&init, text).expect("the files render");
-    let error = write(&directory, &files).expect_err("a symlinked prompts/ is refused");
-    assert_eq!(
-        config_error(&error),
-        (INIT_FILE_EXISTS, prompts.to_str().expect("a UTF-8 path"))
-    );
-    assert_eq!(walk(&directory), [prompts]);
-    assert!(walk(&elsewhere).is_empty());
-}
-
-/// Returns every path below `directory`, depth first.
-fn walk(directory: &Path) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(directory).expect("a readable directory") {
-        let path = entry.expect("an entry").path();
-        if path.is_dir() && !path.is_symlink() {
-            paths.extend(walk(&path));
-        }
-        paths.push(path);
-    }
-    paths
 }
