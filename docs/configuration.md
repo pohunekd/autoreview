@@ -106,6 +106,7 @@ limits:
   max_title_characters: 512
   max_body_characters: 2500
   max_discussion_characters: 40000
+  max_issue_characters: 20000
   max_path_characters: 4096
   max_test_characters: 1024
   excerpt_characters: 360
@@ -378,6 +379,7 @@ summary is too short or too long.
 | `min_summary_characters`, `max_summary_characters` | Summary length; stated to the reviewer |
 | `max_title_characters`, `max_body_characters` | Finding title and body |
 | `max_discussion_characters` | Discussion of earlier findings handed to a re-review |
+| `max_issue_characters` | Titles and bodies of the issues a pull request closes, handed to the reviewers of a pipeline with `intent_check: issues` ([policy](policy.md#pipelines)); a longer text is cut and marked |
 | `max_path_characters`, `max_test_characters` | Path and test entry |
 | `excerpt_characters` | Length of finding excerpts in notifications |
 
