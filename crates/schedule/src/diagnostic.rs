@@ -154,12 +154,13 @@ pub fn fetch_failure(detail: &str) -> (&'static str, bool) {
 /// Classifies the error code of a `session new` that failed its pull request head fetch.
 ///
 /// Returns the failure code and whether the failure is permanent, or `None` for any other
-/// code. A head that is not the trusted one means the pull request moved.
+/// code. A fetched head that is not the trusted one is `pohunek_head_fetch_mismatch`, which the
+/// scheduler starts again until the retry budget is spent.
 pub fn head_fetch_failure(code: &str) -> Option<(&'static str, bool)> {
     match code {
         "fetch_ref_not_found" => Some(("pohunek_head_fetch_ref_missing", true)),
         "fetch_ref_failed" => Some(("pohunek_head_fetch_failed", false)),
-        "fetch_ref_commit_mismatch" => Some(("head_changed", true)),
+        "fetch_ref_commit_mismatch" => Some(("pohunek_head_fetch_mismatch", true)),
         _ => None,
     }
 }
@@ -195,6 +196,9 @@ pub fn failure_explanation(code: &str) -> &'static str {
         }
         "pohunek_head_fetch_failed" => {
             "Git could not fetch the pull request head on the review host: a network, authentication or timeout failure, or Git older than 2.29 there. Check GitHub access and the Git version on the review host."
+        }
+        "pohunek_head_fetch_mismatch" => {
+            "At every start of the review, `refs/pull/<n>/head` fetched on the review host was at another commit than the head GitHub reports for the pull request, so GitHub did not update the ref. Check the pull request on GitHub, then retry this PR or push a new commit."
         }
         "pohunek_session_warning" => {
             "The reviewer session reported a warning other than a failed base fetch, for example an existing branch checked out instead of the review base, or a failed setup script or hook. The session was removed; check the project's setup scripts and hooks and stale branches under `session.branch_prefix` on the review host before retrying."
@@ -410,7 +414,10 @@ mod tests {
                 "fetch_ref_failed",
                 Some(("pohunek_head_fetch_failed", false)),
             ),
-            ("fetch_ref_commit_mismatch", Some(("head_changed", true))),
+            (
+                "fetch_ref_commit_mismatch",
+                Some(("pohunek_head_fetch_mismatch", true)),
+            ),
             ("fetch_ref_outcome_missing", None),
             ("session_new_fetch_ref_unsupported", None),
             ("branch_fetch_failed", None),

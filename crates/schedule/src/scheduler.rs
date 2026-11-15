@@ -13,6 +13,9 @@ use crate::{Error, diagnostic::failure_explanation, phase};
 /// Characters of the head SHA that a notification shows: the first twelve.
 const NOTIFICATION_HEAD_CHARS: usize = 12;
 
+/// Failure code of a session start whose fetched pull request head is another commit.
+pub const HEAD_FETCH_MISMATCH: &str = "pohunek_head_fetch_mismatch";
+
 /// The pull request and head that a review request names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Target {
@@ -281,8 +284,12 @@ pub fn plan(
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             let code = failure_code(&latest_run.failure);
-            // A superseded run left nothing behind; the head is reviewed anew.
-            if superseded(&code) {
+            // A superseded run left nothing behind; the head is reviewed anew. So is a start
+            // whose fetched head was another commit, until the retry budget is spent.
+            let mismatches = head_mismatches(runs, &target_identity);
+            let again = superseded(&code)
+                || (code == HEAD_FETCH_MISMATCH && mismatches <= policy.retry_delays.len());
+            if again {
                 r.phase = phase::WAITING.to_owned();
                 r.attempt = latest_run.attempt.wrapping_add(1);
                 r.error_code = String::new();
@@ -515,6 +522,23 @@ pub fn plan_on_base(
     Ok(decision)
 }
 
+/// Counts the latest ended runs of `identity` that failed with [`HEAD_FETCH_MISMATCH`].
+///
+/// Runs are read from the highest attempt down; the first run with another ending stops the
+/// count, so only consecutive mismatching starts count.
+fn head_mismatches(runs: &[Run], identity: &str) -> usize {
+    let mut own: Vec<&Run> = runs
+        .iter()
+        .filter(|run| run.target.identity() == identity)
+        .collect();
+    own.sort_by_key(|run| std::cmp::Reverse(run.attempt));
+    own.iter()
+        .take_while(|run| {
+            !run.active() && !run.released && failure_code(&run.failure) == HEAD_FETCH_MISMATCH
+        })
+        .count()
+}
+
 /// Returns the next attempt of `identity` whose workflow is not the `published` one.
 ///
 /// The run of the published review may be pruned while its record is kept.
@@ -662,6 +686,34 @@ pub fn notification(target: &Target, record: &Record) -> String {
             record.error_code
         )
     }
+}
+
+/// Returns the notice that the review of `target` stopped on a fetched head of another commit.
+///
+/// It names the expected head SHA and the `fetched` commit, or says that pohunek named none.
+pub fn head_mismatch_notification(target: &Target, record: &Record, fetched: &str) -> String {
+    let description = failure_explanation(&record.error_code);
+    let head: String = target
+        .head_sha
+        .chars()
+        .take(NOTIFICATION_HEAD_CHARS)
+        .collect();
+    let fetched = if fetched.is_empty() {
+        "not reported"
+    } else {
+        fetched
+    };
+    format!(
+        "Review for {} at {} stopped after attempt {}. {} Expected commit: {}. Fetched commit: \
+         {}. No further automatic attempt is scheduled. Diagnostic: {}.",
+        target.key(),
+        head,
+        record.attempt.wrapping_add(1),
+        description,
+        target.head_sha,
+        fetched,
+        record.error_code
+    )
 }
 
 /// Returns the notice that reviews wait for a review host.
