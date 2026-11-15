@@ -330,6 +330,20 @@ struct RouteOverrideFile {
     host: Option<Value>,
     /// pohunek project identifier on that host.
     project_id: Option<Value>,
+    /// The route of the untrusted authors' pull requests; without it they take this route.
+    /// A null section reads as a section without keys, so its first key is reported missing.
+    #[serde(default, deserialize_with = "present_section")]
+    untrusted: Option<UntrustedRouteFile>,
+}
+
+/// The `untrusted` route of one `pohunek.route_overrides` entry.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UntrustedRouteFile {
+    /// pohunek host that runs the untrusted authors' reviews.
+    host: Option<Value>,
+    /// pohunek project identifier on that host.
+    project_id: Option<Value>,
 }
 
 /// The `session` section.
@@ -780,7 +794,7 @@ fn map_file(
     if pohunek_hosts.is_empty() {
         return Err(invalid("pohunek.hosts", "must list at least one host"));
     }
-    let route_overrides = match &pohunek.route_overrides {
+    let (route_overrides, untrusted_route_overrides) = match &pohunek.route_overrides {
         Some(overrides) => route_overrides(overrides)?,
         None => return Err(missing("pohunek.route_overrides")),
     };
@@ -923,6 +937,7 @@ fn map_file(
         pohunek_runtime,
         pohunek_hosts,
         route_overrides,
+        untrusted_route_overrides,
         host_state,
         notify,
         secret_variables: secret_variables.take(),
@@ -1077,15 +1092,21 @@ fn repository_pattern_valid(pattern: &str) -> bool {
     })
 }
 
-/// Maps `pohunek.route_overrides`; every key names one repository.
+/// Routes keyed by repository: the routes of every author, then the untrusted authors' routes.
+type RouteMaps = (
+    BTreeMap<String, RouteOverride>,
+    BTreeMap<String, RouteOverride>,
+);
+
+/// Maps `pohunek.route_overrides` and their `untrusted` routes; every key names one repository.
 ///
 /// # Errors
 ///
-/// Returns `configuration_invalid` for a key that is not `owner/repository`.
-fn route_overrides(
-    overrides: &BTreeMap<String, RouteOverrideFile>,
-) -> Result<BTreeMap<String, RouteOverride>, Error> {
+/// Returns `configuration_invalid` for a key that is not `owner/repository`, and
+/// `configuration_missing` for a missing `host` or `project_id`, also of an `untrusted` route.
+fn route_overrides(overrides: &BTreeMap<String, RouteOverrideFile>) -> Result<RouteMaps, Error> {
     let mut out = BTreeMap::new();
+    let mut untrusted = BTreeMap::new();
     for (repository, entry) in overrides {
         if *repository == "*" || repository.contains('*') || !repository_pattern_valid(repository) {
             return Err(invalid(
@@ -1096,8 +1117,14 @@ fn route_overrides(
         let host = text(&entry.host, "pohunek.route_overrides.host")?;
         let project_id = text(&entry.project_id, "pohunek.route_overrides.project_id")?;
         out.insert(repository.clone(), RouteOverride { host, project_id });
+        if let Some(entry) = &entry.untrusted {
+            let host = text(&entry.host, "pohunek.route_overrides.untrusted.host")?;
+            let key = "pohunek.route_overrides.untrusted.project_id";
+            let project_id = text(&entry.project_id, key)?;
+            untrusted.insert(repository.clone(), RouteOverride { host, project_id });
+        }
     }
-    Ok(out)
+    Ok((out, untrusted))
 }
 
 /// Maps `pohunek.host_state`; `None` when the section is absent.
@@ -3292,6 +3319,68 @@ pub(crate) mod tests {
         assert!(
             parse(&unknown, secret, example_policy).is_err(),
             "the section refuses a key it does not know"
+        );
+    }
+
+    #[test]
+    fn untrusted_route_is_optional_and_every_key_is_required() {
+        let entry = concat!(
+            "  route_overrides:\n",
+            "    example-org/public-repo:\n",
+            "      host: review-host\n",
+            "      project_id: project-a\n",
+        );
+        let untrusted = concat!(
+            "      untrusted:\n",
+            "        host: isolated-host\n",
+            "        project_id: project-b\n",
+        );
+        let with = |text: &str| mutated("  route_overrides: {}\n", text);
+        let config = parse(&with(entry), secret, example_policy).expect("the entry loads");
+        assert!(config.untrusted_route_overrides.is_empty());
+        let full = format!("{entry}{untrusted}");
+        let config = parse(&with(&full), secret, example_policy).expect("the route loads");
+        let route = |host: &str, project_id: &str| RouteOverride {
+            host: host.to_owned(),
+            project_id: project_id.to_owned(),
+        };
+        let repository = "example-org/public-repo".to_owned();
+        let pins = |pin: RouteOverride| BTreeMap::from([(repository.clone(), pin)]);
+        assert!(
+            config.route_overrides == pins(route("review-host", "project-a"))
+                && config.untrusted_route_overrides == pins(route("isolated-host", "project-b")),
+            "routes {:?} untrusted {:?}",
+            config.route_overrides,
+            config.untrusted_route_overrides
+        );
+        let missing = "configuration_missing: pohunek.route_overrides.untrusted.";
+        // (old, new, expected error)
+        let cases = [
+            (untrusted, "      untrusted:\n", format!("{missing}host")),
+            (
+                "        host: isolated-host\n",
+                "",
+                format!("{missing}host"),
+            ),
+            (
+                "        project_id: project-b\n",
+                "",
+                format!("{missing}project_id"),
+            ),
+            (
+                "host: isolated-host",
+                "host: isolated host",
+                "configuration_invalid: config: invalid untrusted route override".to_owned(),
+            ),
+        ];
+        for (old, new, expected) in cases {
+            let text = with(&full.replacen(old, new, 1));
+            assert_eq!(error_text(parse(&text, secret, example_policy)), expected);
+        }
+        let unknown = with(&format!("{full}        hosts: [isolated-host]\n"));
+        assert!(
+            parse(&unknown, secret, example_policy).is_err(),
+            "the untrusted route refuses a key it does not know"
         );
     }
 

@@ -377,8 +377,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 // A route failure is not retried here. A failed host leaves the review due for
                 // the next pass; any other route failure follows the scheduler's retry policy.
                 let sources = &candidate.rule.pipeline.project_sources;
+                let class = candidate.author_class.as_ref();
                 match self
-                    .resolve_route(cancel, &pr.repository, sources, &mut host_pass)
+                    .resolve_route(cancel, &pr.repository, class, sources, &mut host_pass)
                     .await
                 {
                     Err(err) if cancel.is_cancelled() => return Err(err),
@@ -386,7 +387,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                         decision.record =
                             scheduler::wait_for_host(decision.record, error_code(&err));
                         // Each host outage is announced once, by the first review that waits.
-                        let failed = self.failed_route_hosts(&pr.repository, &host_pass.failures);
+                        let failed =
+                            self.failed_route_hosts(&pr.repository, class, &host_pass.failures);
                         let new: Vec<&str> = failed
                             .iter()
                             .filter(|host| !state.host_outages.contains_key(*host))

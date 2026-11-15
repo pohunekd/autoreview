@@ -12,7 +12,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Config, Credential, Credentials};
+use crate::config::{Config, Credential, Credentials, RouteOverride};
 use crate::integrations::{SessionRequest, TokenAnswer};
 use crate::model::review::Decision;
 use crate::model::{PullRequest, RejectedCandidate};
@@ -325,6 +325,85 @@ async fn reviewer_output_over_the_limits_gets_a_fresh_run() {
         told,
         vec![(1, false), (2, true)],
         "opus runs and the named check"
+    );
+    h.stop_engine().await;
+}
+
+/// Adds `isolated-host` and pins `public/widget` and `public/gadget` to `example-host`; their
+/// untrusted authors go to `isolated-host` and to `absent-host`, which is not configured.
+fn untrusted_routes(config: &mut Config) {
+    config.pohunek_hosts = vec!["example-host".to_owned(), "isolated-host".to_owned()];
+    let pin = |host: &str| RouteOverride {
+        host: host.to_owned(),
+        project_id: "project".to_owned(),
+    };
+    for (repository, untrusted) in [
+        ("public/widget", "isolated-host"),
+        ("public/gadget", "absent-host"),
+    ] {
+        (config.route_overrides).insert(repository.to_owned(), pin("example-host"));
+        (config.untrusted_route_overrides).insert(repository.to_owned(), pin(untrusted));
+    }
+}
+
+/// The author class of the discovery pass picks the route (#400): a trusted author's review
+/// runs on the repository's route, an untrusted author's only on its untrusted route, and an
+/// untrusted route that no host serves fails before any session starts, also on a retry.
+#[tokio::test]
+async fn untrusted_author_reviews_run_only_on_the_untrusted_route() {
+    let mut h = start_harness(untrusted_routes).await;
+    let user = |repository: &str, head: &str, login: &str| {
+        let mut pr = integration_pull_request(repository, &sha(head));
+        login.clone_into(&mut pr.author);
+        pr.author_type = "User".to_owned();
+        pr
+    };
+    let maintainer = user("public/widget", "a", "maintainer");
+    let stranger = user("public/widget", "b", "stranger");
+    let unrouted = user("public/gadget", "c", "stranger");
+    for pr in [&maintainer, &stranger, &unrouted] {
+        h.fake.open(pr.clone(), h.rule(&pr.repository));
+    }
+    let record = |pr: &PullRequest| {
+        let state = h.store.load_discovery().expect("the discovery state loads");
+        state.schedule.get(&pr.key()).cloned().unwrap_or_default()
+    };
+    // A review that ran on a wrong host completes, so the wait ends and the check below fails.
+    h.poll_until("both reviews and the end of the third", || {
+        let phase = record(&unrouted).phase;
+        h.publications() >= 2 && (phase == "failed" || phase == "completed")
+    })
+    .await;
+    let retried = h.retry(&unrouted).await.map(|result| result.workflow_id);
+    h.settle().await;
+    let (_, _, started, _) = h.fake.snapshot();
+    let sessions: Vec<(&str, &str)> = (started.iter())
+        .filter(|request| request.pull_request.number != unrouted.number)
+        .map(|request| {
+            (
+                request.pull_request.author.as_str(),
+                request.route.host.as_str(),
+            )
+        })
+        .collect();
+    let host = |author: &str| match author {
+        "maintainer" => "example-host",
+        _ => "isolated-host",
+    };
+    let failed = record(&unrouted);
+    assert!(
+        sessions.len() == started.len()
+            && sessions.iter().any(|(author, _)| *author == "maintainer")
+            && sessions.iter().any(|(author, _)| *author == "stranger")
+            && sessions.iter().all(|(author, used)| *used == host(author))
+            && failed.phase == "failed"
+            && failed.error_code == "project_route_not_found"
+            && failed.workflow_id.is_empty()
+            && retried
+                .as_ref()
+                .is_err_and(|err| err.to_string() == "review_retry_not_dispatched"),
+        "sessions={sessions:?} started={} failed={failed:?} retried={retried:?}",
+        started.len()
     );
     h.stop_engine().await;
 }

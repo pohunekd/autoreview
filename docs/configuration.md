@@ -244,7 +244,7 @@ token needs and when to use a machine user.
 | `runtime_dir` | `XDG_RUNTIME_DIR` for the CLI |
 | `timeout_seconds` | Timeout of one pohunek call, including a session start with its base fetch |
 | `hosts` | pohunek host names that may run reviewers, in priority order; one or more |
-| `route_overrides` | Map `owner/repo: {host, project_id}` that pins a repository to one host and project |
+| `route_overrides` | Map `owner/repo: {host, project_id}` that pins a repository to one host and project; an entry's optional `untrusted: {host, project_id}` pins its untrusted authors' pull requests instead |
 
 For each review autoreview asks the hosts in `hosts` in order for their pohunek
 projects and takes the first host with a project that matches the repository, by
@@ -258,7 +258,14 @@ of `schedule.retry_delays_seconds` and starts on the first pass after a host
 answers (see
 [waiting for a review host](knowledge/concepts/state-and-recovery.md#waiting-for-a-review-host)).
 A `route_overrides` entry asks only its host.
-See [run on several hosts](knowledge/guides/multihost.md).
+Its `untrusted` route is taken by every pull request whose author the rule does
+not trust, and by one whose class is not known; it asks only its own host, so a
+failing host or a missing project never moves such a review to the entry's host.
+Without `untrusted` all authors take the entry's route. When `untrusted` is
+present both its keys are required, also when its value is null
+(`configuration_missing: pohunek.route_overrides.untrusted.host`).
+See [run on several hosts](knowledge/guides/multihost.md) and
+[untrusted authors](knowledge/safety/untrusted-authors.md#separate-review-host).
 
 ### pohunek.host_state
 

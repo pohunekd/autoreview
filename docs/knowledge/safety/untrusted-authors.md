@@ -196,23 +196,50 @@ cannot use up the budget of the others.
 ## Separate review host
 
 Untrusted reviews should run on a review host that holds no other secrets.
-autoreview selects the host per repository, not per author:
+autoreview selects the host per repository, and per author class with an
+untrusted route:
 
-- `pohunek.route_overrides` pins one repository (`owner/repo`) to one host. All
-  its pull requests, from trusted and untrusted authors, run there.
-- Registering a repository only on one review host has the same effect. A
+- `pohunek.route_overrides` pins one repository (`owner/repo`) to one host. Without
+  an `untrusted` key all its pull requests, from trusted and untrusted authors,
+  run there.
+- The `untrusted` key of the entry names the host and project of the pull
+  requests whose author the rule does not trust; the trusted authors keep the
+  entry's own route (example below).
+- Registering a repository only on one review host has the same effect as a pin. A
   repository that two hosts serve always runs on the first of them in
   `pohunek.hosts` that answers, so its untrusted pull requests can run on the
   trusted host. A pipeline with `auto` in `project_sources` also accepts a
   project that pohunek discovered on a host without `pohunek project add`. Pin
   the repository with `route_overrides`, or keep `auto` out of `project_sources`
   for untrusted pipelines.
-- autoreview cannot choose a host per author (#400). Do not split one repository's
-  authors across two autoreview instances; the two would process the same pull
-  requests.
+- Do not split one repository's authors across two autoreview instances; the
+  two would process the same pull requests.
 
-Plan the separation per repository: a public repository with strangers gets a
-dedicated review host, and a private repository can share the trusted host.
+```yaml
+pohunek:
+  hosts: [review-host, isolated-host]
+  route_overrides:
+    example-org/public-repo:
+      host: review-host
+      project_id: <project-id-on-review-host>
+      untrusted:
+        host: isolated-host
+        project_id: <project-id-on-isolated-host>
+```
+
+With this entry an untrusted author's review runs only on `isolated-host`, and a
+trusted author's only on `review-host`. Neither falls back to the other host:
+when `isolated-host` fails, the review waits for it, and when it has no such
+project, the review fails with `project_route_not_found`. A review whose author
+class is not known counts as untrusted. The class is read on every discovery
+pass: a review that started before the author's trust changed stays on its
+host, and the next one (a new head, a retry, a retarget) takes the route of the
+new class. `route_overrides` keys name one repository each, so each public
+repository needs its own entry.
+
+Plan the separation per repository: a public repository with strangers gets an
+untrusted route to a dedicated review host, and a private repository can share
+the trusted host.
 
 ## Related pages
 

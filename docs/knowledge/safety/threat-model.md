@@ -148,7 +148,9 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   `pohunek project add` only on the hosts that should see them.
 - Run untrusted-author reviews on a review host without secrets in its
   environment, as far as the host allows. autoreview chooses the host per repository
-  with `route_overrides`; see [untrusted authors](untrusted-authors.md#separate-review-host).
+  with `route_overrides`, and the host of the untrusted authors with the entry's
+  `untrusted` route, which never falls back to the trusted host; see
+  [untrusted authors](untrusted-authors.md#separate-review-host).
 - pohunek's host-global hooks (`hooks/<event>` in its config directory) run
   before the in-repo ones, with the session's worktree as their working
   directory. On a host that serves `checkout: head` reviews, a global hook that

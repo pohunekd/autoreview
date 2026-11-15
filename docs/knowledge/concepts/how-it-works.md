@@ -114,7 +114,9 @@ when only a held-back host has the repository, the review waits for a review hos
 with `host_state_ineligible`.
 `pohunek.route_overrides` pins the repository to one `{host, project_id}` pair:
 only that host is asked, and an override that matches none of its projects
-behaves as no match. The two route errors fail through the scheduler and end
+behaves as no match. The entry's `untrusted` route, when set, pins the pull
+requests of the authors that the rule does not trust the same way. The two
+route errors fail through the scheduler and end
 `failed`, because they are not retried. The route is
 stored in the review input, so every session of the review, also after a
 restart, goes to the same host and project; a retry is a new attempt and routes
