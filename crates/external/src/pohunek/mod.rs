@@ -6,6 +6,8 @@
 
 // Rust guideline compliant 2026-06-26
 
+pub(crate) mod branches;
+
 pub(crate) mod output;
 
 pub(crate) mod sessions;
