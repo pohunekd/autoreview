@@ -296,7 +296,11 @@ Python standard library (Python 3.11 or newer). It has two parts:
   the session environment without the variables that the Claude adapter drops
   (see above).
   The adapter then stays alive for the retention time, so that the coordinator
-  can read the output before it removes the session. It exits with the status of
+  can read the output before it removes the session.
+  The engine reads the output as finished once its last line is an exit line of
+  either name; an exit line that the Codex transcript quotes before the end does
+  not finish it.
+  The adapter exits with the status of
   Codex, or with status 64 when the request's trusted lines, the checkout check
   before or after the run, or the report fail. Codex's stderr goes on to the
   session output as it arrives; the adapter keeps its last 64 KiB. When Codex
