@@ -33,7 +33,7 @@ use crate::messages::{
     session_cleanup_failed_message, superseded_message,
 };
 use crate::model::review::milliseconds;
-use crate::model::{Discussion, PullRequest, ReviewInput, RunLimits};
+use crate::model::{Discussion, LinkedIssues, PullRequest, ReviewInput, RunLimits};
 use crate::notify::Notification;
 use crate::store::{RESULT_FAILURE, ReviewStep, StepOutcome, StepRun};
 
@@ -185,6 +185,8 @@ pub(crate) struct Review<'a, I, C> {
     pub(crate) verifier: Option<ReviewerSlot>,
     /// What the reviewers of a review with prior findings read.
     pub(crate) discussion: Discussion,
+    /// The issues the pull request closes, read for a pipeline with an intent check.
+    pub(crate) linked: Option<LinkedIssues>,
     /// Set once the user approved a waiting review.
     pub(crate) approved: bool,
     /// Repeated attempts since the current step started.

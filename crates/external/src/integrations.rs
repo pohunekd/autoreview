@@ -13,8 +13,8 @@ use autoreview_engine::integrations::{
     ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use autoreview_engine::model::{
-    CandidateList, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
-    PullRequest, SessionIdentity,
+    CandidateList, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
+    PublishResult, PullRequest, SessionIdentity,
 };
 use autoreview_engine::notify::Notification;
 use autoreview_policy::{Permission, Policy, Protocol, Trigger};
@@ -272,6 +272,17 @@ impl Integrations for External {
                 prior,
                 self.config.max_discussion_characters,
             )
+            .await
+    }
+
+    async fn list_closing_issues(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        pull_request: &PullRequest,
+    ) -> Result<LinkedIssues, Error> {
+        (self.github)
+            .list_closing_issues(cancel, credential, pull_request)
             .await
     }
 

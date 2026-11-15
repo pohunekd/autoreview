@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use crate::config::Config;
 use crate::error::{Error, error_code};
-use crate::model::{Discussion, PullRequest, ReviewInput};
+use crate::intent::reviewer_section;
+use crate::model::{Discussion, LinkedIssues, PullRequest, ReviewInput};
 use crate::protocol::codex::NONCE_LINE_PREFIX;
 
 /// Protocol name that the request of a claude-structured reviewer carries.
@@ -65,18 +66,21 @@ const RETRY_INSTRUCTIONS: [(&str, &str); 1] = [(
 /// the output limits of `cfg` and carry the prior findings with the discussion, which both
 /// protocols settle. A run after the run that `refused` ended gets the retry instruction of
 /// that check after the limits; the first run passes `None`. A codex-envelope prompt carries
-/// `nonce` on its nonce line; a claude-structured request does not use it.
+/// `nonce` on its nonce line; a claude-structured request does not use it. `linked` is set
+/// for a pipeline with an intent check and adds its section after the prior findings.
 ///
 /// # Errors
 ///
 /// Returns `review_protocol_invalid` for a protocol without a request format,
 /// `embedded_asset_invalid` when the schema is not JSON or has no summary object, and
-/// `review_request_invalid` when the prior findings or the discussion cannot be encoded.
+/// `review_request_invalid` when the prior findings, the discussion or the issues cannot be
+/// encoded.
 pub(crate) fn build_reviewer_request(
     cfg: &Config,
     input: &ReviewInput,
     reviewer: &Reviewer,
     discussion: &Discussion,
+    linked: Option<&LinkedIssues>,
     nonce: &str,
     refused: Option<&Error>,
 ) -> Result<String, Error> {
@@ -85,12 +89,14 @@ pub(crate) fn build_reviewer_request(
         instructions.push_str("\n\n");
         instructions.push_str(retry);
     }
+    let intent = reviewer_section(linked)?;
+    let intent = intent.as_deref();
     match reviewer.protocol {
         Protocol::ClaudeStructured => {
             let schema = review_schema(cfg)?;
-            claude_request(input, reviewer, discussion, &instructions, &schema)
+            claude_request(input, reviewer, discussion, intent, &instructions, &schema)
         }
-        Protocol::CodexEnvelope => codex_prompt(input, discussion, &instructions, nonce),
+        Protocol::CodexEnvelope => codex_prompt(input, discussion, intent, &instructions, nonce),
         Protocol::Unset | Protocol::Other(_) => {
             Err(Error::workflow("review_protocol_invalid", true, None))
         }
@@ -162,6 +168,7 @@ fn claude_request(
     input: &ReviewInput,
     reviewer: &Reviewer,
     discussion: &Discussion,
+    intent: Option<&str>,
     instructions: &str,
     schema: &str,
 ) -> Result<String, Error> {
@@ -202,6 +209,9 @@ Head SHA: {}\nReviewer: {}\nReview scope: {}\n{}\n\n{}\n",
     }
     if !input.prior.is_empty() {
         prompt.push_str(&format!("\n{}\n", prior_section(input, discussion)?));
+    }
+    if let Some(intent) = intent {
+        prompt.push_str(&format!("\n{intent}\n"));
     }
     let prompt_json = go_json(&prompt).map_err(request_invalid)?;
     let protocol_json = go_json(CLAUDE_REQUEST_PROTOCOL).map_err(request_invalid)?;
@@ -259,6 +269,7 @@ pub(crate) fn base_checkout_hint(pull_request: &PullRequest) -> String {
 fn codex_prompt(
     input: &ReviewInput,
     discussion: &Discussion,
+    intent: Option<&str>,
     instructions: &str,
     nonce: &str,
 ) -> Result<String, Error> {
@@ -296,6 +307,9 @@ fn codex_prompt(
     }
     if !input.prior.is_empty() {
         prompt.push_str(&format!("\n\n{}", prior_section(input, discussion)?));
+    }
+    if let Some(intent) = intent {
+        prompt.push_str(&format!("\n\n{intent}"));
     }
     Ok(prompt)
 }
@@ -386,6 +400,7 @@ mod tests {
             &input,
             &reviewer,
             &Discussion::default(),
+            None,
             NONCE,
             None,
         )

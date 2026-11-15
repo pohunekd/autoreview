@@ -32,6 +32,12 @@ The discussion of earlier findings is untrusted too. It is bounded by
 `limits.max_discussion_characters`, and the reviewer treats it as claims to
 check, not as instructions.
 
+The issues that a pull request closes, which a pipeline with
+`intent_check: issues` hands to the reviewers, are untrusted too: anyone who
+can edit an issue writes them. They are bounded by
+`limits.max_issue_characters` and sit on one line of JSON, so no issue text
+starts a line of the request and none can forge a trusted line.
+
 ## What the prompts say
 
 The generic prompt (`prompts/generic.md`) tells the reviewer:
@@ -118,6 +124,9 @@ attack it models. `scripts/gates` runs them with the other Rust tests.
   head; a Codex result carries only the head. The reviewer then gets a fresh
   run. A decision in the result is refused in a Codex result and never read
   from a Claude result.
+- Request building (`intent`): an issue whose title or body forges the trusted
+  lines of both adapters, closes the JSON line, or asks for an approval
+  changes only its own JSON line of the reviewer and verifier requests.
 - Decision planning (`publish::plan`): a finding that asks for an approval is
   planned by its blocking flag only, so on an `on_clean: await` rule the
   approval still waits for a person.

@@ -107,6 +107,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 &self.input,
                 &slot.reviewer,
                 &self.discussion,
+                self.linked.as_ref(),
                 &new_nonce()?,
                 Some(refused),
             )

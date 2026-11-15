@@ -155,6 +155,7 @@ A pipeline says how a pull request is reviewed.
 | `checkout` | `base`: the worktree starts at the base branch tip, so repository guidance is read from trusted content; the reviewer reads the change through git (`git diff <base>...<head>`, `git show <head>:<path>`) without checking the head out. With pohunek 0.43.0 or later (the CLI and the review host's daemon) the session start fetches `refs/pull/<n>/head` at the trusted head without checking it out; with an older pohunek only the base branch is fetched, so the head commit must already be in the repository. Without the head the Claude and Codex adapters stop the review with `review_head_unavailable` and nothing is published. `head`: the worktree starts at `refs/pull/<n>/head`, so pohunek runs the hooks of the pull request head (`.pohunek/`), and with them any code they run (see the [threat model](knowledge/safety/threat-model.md#residual-risks)) |
 | `project_sources` | Which pohunek projects may serve the repository: `manual` (registered with `pohunek project add`), `auto` (discovered), or both |
 | `verifier` | Optional, see below |
+| `intent_check` | Optional. `issues`: the reviewers compare the change with the issues the pull request closes, see [intent check](#intent-check). `off`, or no key: no comparison. `intent_check: null` is an error |
 
 ### Verifier
 
@@ -176,6 +177,30 @@ On a rule that approves clean reviews without a human (`on_clean: approve`),
 the approval turns into a wait for a human when the verifier demoted a blocking
 finding of an `escalate_severities` severity, or `escalate_count` blocking
 findings.
+
+### Intent check
+
+With `intent_check: issues`, the engine reads the GitHub issues that the pull
+request closes (its closing references, up to ten) once per review, with the
+credential of the review. Only issues of the pull request's own repository are
+read: an issue of another repository may be private while the review is
+public, so its text is never requested, and the published review says only
+that issues of other repositories were not compared, without naming them.
+Their titles and bodies share `limits.max_issue_characters` characters
+([configuration](configuration.md#limits)); a text over the limit is cut, ends
+with `…` and is marked `truncated`, and an issue past the limit keeps its
+reference with an empty text. The issues reach the reviewers, and the verifier,
+as untrusted data on one line of JSON after the trusted request context.
+
+The engine adds the intent pass to the request: a clear mismatch (the change
+does something other than an issue asks, or leaves out a part the issue makes
+essential) is a blocking finding; every other difference goes to the summary.
+A pull request that closes no issue is not a finding. The published review
+states which issues were compared, that none is linked, or that they could not
+be read: a failed or refused read never fails the review, it is logged as
+`linked issues could not be read`. Without the key, or with `off`, nothing is
+read and the request is unchanged. The key changes the policy digest only when
+it is `issues`.
 
 ## Repository rules
 
@@ -440,6 +465,7 @@ request content itself is always untrusted input. See
 | `notes_handoff is set but no rule sets on_notes comment` | Remove the section, or set `on_notes` on a rule |
 | `authors is required` | State who the rule trusts; `trusted: any` reviews every author, forks included, with the rule's outcomes |
 | `untrusted pipeline must use checkout base` | Use a base-checkout pipeline for untrusted authors |
+| `pipeline <name>: intent_check must be off or issues` | Set `off` or `issues`, or remove the key |
 | `authors.untrusted is required unless trusted is any` | Add `untrusted: skip` or an untrusted mapping |
 | `authors.untrusted.on_clean must be comment or await, never approve` | Use `comment` or `await` |
 | `author_limit.reviews must be between 1 and 1000` | Set `reviews`; also shown when it is missing |

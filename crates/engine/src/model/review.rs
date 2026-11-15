@@ -84,6 +84,89 @@ pub struct PriorResult {
 
 autoreview_go_compat::object_only_serde!(PriorResult);
 
+/// One issue that the pull request closes, as the reviewer request carries it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
+pub struct LinkedIssue {
+    /// Repository of the issue as `owner/name`.
+    pub repository: String,
+    /// Issue number.
+    pub number: i64,
+    /// Issue title, cut to the configured limit.
+    pub title: String,
+    /// Issue body, cut to the configured limit.
+    pub body: String,
+    /// Set when the title or the body was cut or left out for the limit.
+    pub truncated: bool,
+}
+
+autoreview_go_compat::object_only_serde!(LinkedIssue);
+
+impl LinkedIssue {
+    /// Returns the issue reference as `owner/name#number`.
+    #[must_use]
+    pub fn reference(&self) -> String {
+        format!("{}#{}", self.repository, self.number)
+    }
+}
+
+/// The issues that the pull request closes, read once per review.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
+pub struct LinkedIssues {
+    /// Whether GitHub answered the read; `false` when it failed or was refused.
+    pub read: bool,
+    /// The issues in GitHub's order.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    pub issues: Vec<LinkedIssue>,
+    /// Set when the pull request closes more issues than one read returns.
+    pub more: bool,
+    /// Set when it also closes issues of other repositories, which are never read.
+    pub other_repositories: bool,
+}
+
+autoreview_go_compat::object_only_serde!(LinkedIssues);
+
+impl LinkedIssues {
+    /// Returns what the published review states about the intent check.
+    #[must_use]
+    pub fn outcome(&self) -> IntentOutcome {
+        let references = |truncated_only: bool| {
+            (self.issues.iter())
+                .filter(|issue| !truncated_only || issue.truncated)
+                .map(LinkedIssue::reference)
+                .collect()
+        };
+        IntentOutcome {
+            read: self.read,
+            compared: references(false),
+            truncated: references(true),
+            more: self.more,
+            other_repositories: self.other_repositories,
+        }
+    }
+}
+
+/// What the intent check compared, as the published review states it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
+pub struct IntentOutcome {
+    /// Whether the issues that the pull request closes could be read.
+    pub read: bool,
+    /// The issues compared, as `owner/name#number`, in GitHub's order.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    pub compared: Vec<String>,
+    /// The compared issues whose text was cut to the configured limit.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    pub truncated: Vec<String>,
+    /// Set when the pull request closes more issues than one read returns.
+    pub more: bool,
+    /// Set when it also closes issues of other repositories, which were not compared.
+    pub other_repositories: bool,
+}
+
+autoreview_go_compat::object_only_serde!(IntentOutcome);
+
 /// Discussion on the pull request since earlier reviews.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
@@ -231,6 +314,9 @@ pub struct Artifact {
         deserialize_with = "autoreview_go_compat::null_default::deserialize"
     )]
     pub human_review: Vec<String>,
+    /// What the intent check compared; absent for a pipeline without one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<IntentOutcome>,
 }
 
 autoreview_go_compat::object_only_serde!(Artifact);

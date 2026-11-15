@@ -120,7 +120,12 @@ Roll back only with a backup taken before the upgrade:
 3. If the new version may have changed the store, restore the backup over
    `store.path` while the service is stopped. Reviews published after the backup
    are not in the restored store; check them on GitHub before you retry.
-4. Run `validate` with the old version, then start the service.
+4. Restore the `config.yaml` of the old version, or remove the keys that the new
+   version added: an earlier release refuses an unknown key, such as
+   `limits.max_issue_characters` for a release before it. On a converted
+   deployment, remove the matching `HERMES_PR_REVIEW_*` variable too, or run
+   the old release's `scripts/env-to-config`, which refuses it as unknown.
+5. Run `validate` with the old version, then start the service.
 
 A rollback goes to an earlier autoreview release (Rust).
 

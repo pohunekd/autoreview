@@ -139,7 +139,11 @@ default:
   followed at each run.
 - `--maximum-input-bytes`: the largest request the adapter accepts. A re-review
   request also carries the prior findings and the discussion (bounded by
-  `limits.max_discussion_characters`), so the value must cover them.
+  `limits.max_discussion_characters`), and on a pipeline with
+  `intent_check: issues` every reviewer and verifier request carries the closed
+  issues (bounded by `limits.max_issue_characters`), so the value must cover
+  them. Both limits count characters; JSON escaping can make one character up to
+  7 bytes of a `claude-structured` request (`<` becomes `\\u003c`).
 - `--maximum-result-bytes` (Codex only, required there): the largest report the
   adapter prints. Keep it at most `limits.result_max_bytes`, which the engine
   enforces.

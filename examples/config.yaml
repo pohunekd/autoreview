@@ -83,6 +83,7 @@ limits:
   max_title_characters: 512
   max_body_characters: 2500
   max_discussion_characters: 40000
+  max_issue_characters: 20000
   max_path_characters: 4096
   max_test_characters: 1024
   excerpt_characters: 360

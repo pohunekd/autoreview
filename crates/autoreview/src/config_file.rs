@@ -438,6 +438,8 @@ struct LimitsFile {
     max_body_characters: Option<Value>,
     /// Longest discussion handed to a re-review, in characters.
     max_discussion_characters: Option<Value>,
+    /// Longest text of the closed issues handed to one reviewer request, in characters.
+    max_issue_characters: Option<Value>,
     /// Longest path, in characters.
     max_path_characters: Option<Value>,
     /// Longest test entry, in characters.
@@ -894,6 +896,8 @@ fn map_file(
         &limits.max_discussion_characters,
         "limits.max_discussion_characters",
     )?;
+    let max_issue_characters =
+        positive(&limits.max_issue_characters, "limits.max_issue_characters")?;
     let max_path_characters = positive(&limits.max_path_characters, "limits.max_path_characters")?;
     let max_test_characters = positive(&limits.max_test_characters, "limits.max_test_characters")?;
     let excerpt_characters = positive(&limits.excerpt_characters, "limits.excerpt_characters")?;
@@ -982,6 +986,7 @@ fn map_file(
         max_title_characters,
         max_body_characters,
         max_discussion_characters,
+        max_issue_characters,
         max_path_characters,
         max_test_characters,
         github_body_max_bytes,

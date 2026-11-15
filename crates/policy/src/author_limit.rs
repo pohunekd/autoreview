@@ -71,9 +71,10 @@ pub(crate) struct FileAuthorLimit {
 /// # Errors
 ///
 /// Returns the error of the deserializer.
-pub(crate) fn present<'de, D>(deserializer: D) -> Result<Option<Option<FileAuthorLimit>>, D::Error>
+pub(crate) fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
+    T: Deserialize<'de>,
 {
     Option::deserialize(deserializer).map(Some)
 }

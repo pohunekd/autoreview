@@ -346,6 +346,7 @@ pub(crate) mod tests {
             max_title_characters: 256,
             max_body_characters: 4000,
             max_discussion_characters: 8000,
+            max_issue_characters: 8000,
             max_path_characters: 512,
             max_test_characters: 256,
             github_body_max_bytes: 65_536,

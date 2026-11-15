@@ -4,7 +4,7 @@
 
 use std::sync::atomic::AtomicI64;
 
-use autoreview_policy::{Event, OnClean, Reviewer};
+use autoreview_policy::{Event, IntentCheck, OnClean, Reviewer};
 use autoreview_schedule::scheduler::superseded;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
@@ -12,20 +12,21 @@ use tokio_util::sync::CancellationToken;
 
 use super::input::{
     ArtifactOutcome, RenderOutcome, SLOT_STATE_PREFIX, STATE_CREDENTIAL, STEP_COMMENTABLE,
-    STEP_DISCUSSION, STEP_HUMAN_REVIEW, STEP_PLAN, STEP_PUBLISHED_AT, STEP_RENDERED, SlotState,
-    validate_input,
+    STEP_DISCUSSION, STEP_HUMAN_REVIEW, STEP_LINKED_ISSUES, STEP_PLAN, STEP_PUBLISHED_AT,
+    STEP_RENDERED, SlotState, validate_input,
 };
-use super::sessions::{Review, ReviewerSlot, StepFailure};
+use super::sessions::{Review, ReviewerSlot, StepFailure, is_shutdown};
 use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
 use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, SessionRequest,
 };
+use crate::intent::bound_issues;
 use crate::messages::published_message;
 use crate::model::{
-    Artifact, Discussion, Outcome, PublishResult, PublishedRecord, PullRequest, ReviewInput,
-    ReviewOutcome,
+    Artifact, Discussion, LinkedIssues, Outcome, PublishResult, PublishedRecord, PullRequest,
+    ReviewInput, ReviewOutcome,
 };
 use crate::prior::settle_prior;
 use crate::protocol::codex::new_nonce;
@@ -114,6 +115,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             slots: Vec::new(),
             verifier: None,
             discussion: Discussion::default(),
+            linked: None,
             approved: false,
             retries: AtomicI64::new(0),
         };
@@ -142,6 +144,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 Err(failure) => return review.fail_step(failure).await,
             }
         }
+        // An adopted hand-off runs no reviewer, so it reads no issue.
+        if review.input.rule.pipeline.intent_check == IntentCheck::Issues
+            && !review.input.adopts_handoff()
+        {
+            review.linked = Some(review.linked_issues().await?);
+        }
         for reviewer in review.input.reviewers.clone() {
             let prompt = match new_nonce().and_then(|nonce| {
                 build_reviewer_request(
@@ -149,6 +157,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     &review.input,
                     &reviewer,
                     &review.discussion,
+                    review.linked.as_ref(),
                     &nonce,
                     None,
                 )
@@ -216,6 +225,52 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
+    /// Reads the issues that the pull request closes once per review, bounded by the limit.
+    ///
+    /// A failed read never fails the review: a transient error gets the step retries, then the
+    /// review stores the issues as unread and logs it once. A shutdown stores nothing, so the
+    /// resumed review reads again.
+    ///
+    /// # Errors
+    ///
+    /// Returns the shutdown error, or the error of the store.
+    async fn linked_issues(&self) -> Result<LinkedIssues, Error> {
+        let store = &self.engine.store;
+        let stored = live(&self.cancel).and_then(|()| {
+            store.load_step::<LinkedIssues>(&self.workflow_id, STEP_LINKED_ISSUES)
+        })?;
+        if let Some(stored) = stored {
+            return Ok(stored);
+        }
+        let max_characters = self.engine.config.max_issue_characters;
+        let read = self
+            .fresh(STEP_LINKED_ISSUES, || {
+                let integration = &*self.engine.integration;
+                let (cancel, credential) = (&self.cancel, self.credential());
+                let pull_request = &self.input.pull_request;
+                async move {
+                    (integration.list_closing_issues(cancel, credential?, pull_request)).await
+                }
+            })
+            .await;
+        let linked = match read {
+            Ok(linked) => bound_issues(linked, max_characters),
+            Err(err) if is_shutdown(&err) => return Err(err),
+            Err(err) => {
+                tracing::warn!(
+                    review_id = %self.input.pull_request.review_id(),
+                    workflow_id = %self.workflow_id,
+                    code = error_code(&err),
+                    "linked issues could not be read"
+                );
+                LinkedIssues::default()
+            }
+        };
+        live(&self.cancel)?;
+        store.save_step(&self.workflow_id, STEP_LINKED_ISSUES, &linked)?;
+        Ok(linked)
+    }
+
     /// Returns the slot of `reviewer` with its stored progress, or its first progress.
     ///
     /// The prompt of the verifier is empty here: it depends on the combined findings.
@@ -380,6 +435,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             Err(err) => return self.fail(err).await,
         };
         artifact.human_review = signals;
+        // An adopted hand-off keeps the outcome of the review that wrote it.
+        if let Some(linked) = &self.linked {
+            artifact.intent = Some(linked.outcome());
+        }
         let plan = plan_publication(&self.input, &artifact, &self.input.publisher_login);
         live(&self.cancel)?;
         self.engine
