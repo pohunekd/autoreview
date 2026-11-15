@@ -102,3 +102,86 @@ pub(crate) struct BranchPlan {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub(crate) error: String,
 }
+
+/// Returns every branch under the prefix with its verdict, in the order of `refs`.
+///
+/// `refs` is the output of `git for-each-ref --format=%(refname)%00%(objectname)`; a line
+/// that is not a local branch is skipped. `worktrees` is the output of
+/// `git worktree list --porcelain -z`.
+pub(crate) fn plan(refs: &str, worktrees: &str, rules: &Rules<'_>) -> Vec<BranchPlan> {
+    let checked_out: BTreeSet<&str> = worktrees
+        .split('\0')
+        .filter_map(|field| field.strip_prefix(WORKTREE_BRANCH))
+        .filter_map(|refname| refname.strip_prefix(HEADS))
+        .collect();
+    let mut plans = Vec::new();
+    for line in refs.lines() {
+        let Some((refname, commit)) = line.split_once('\0') else {
+            continue;
+        };
+        let Some(branch) = refname.strip_prefix(HEADS) else {
+            continue;
+        };
+        if !branch.starts_with(rules.prefix) {
+            continue;
+        }
+        plans.push(BranchPlan {
+            branch: branch.to_owned(),
+            commit: commit.to_owned(),
+            verdict: verdict(branch, checked_out.contains(branch), rules),
+            deleted: false,
+            error: String::new(),
+        });
+    }
+    plans
+}
+
+/// Returns the verdict of `branch`; the first rule that keeps it names the reason.
+fn verdict(branch: &str, checked_out: bool, rules: &Rules<'_>) -> Verdict {
+    let Some(workflow_id) = workflow_id(branch, rules.prefix) else {
+        return Verdict::NameUnknown;
+    };
+    if rules.owners.active.contains(workflow_id) {
+        return Verdict::ReviewActive;
+    }
+    if rules.sessions.contains(branch) {
+        return Verdict::SessionLive;
+    }
+    if checked_out {
+        return Verdict::CheckedOut;
+    }
+    let Some(older_than) = rules.older_than else {
+        return Verdict::Delete;
+    };
+    match rules.owners.finished.get(workflow_id) {
+        Some(Some(updated)) if elapsed_at_least(rules.now - *updated, older_than) => {
+            Verdict::Delete
+        }
+        Some(Some(_)) => Verdict::TooRecent,
+        Some(None) => Verdict::AgeUnknown,
+        // The store deletes a finished review once it is older than the retention.
+        None if rules.retention >= older_than => Verdict::Delete,
+        None => Verdict::AgeUnknown,
+    }
+}
+
+/// Returns the workflow ID that starts `branch` after `prefix`.
+///
+/// The ID is [`WORKFLOW_ID_PREFIX`] and 64 lowercase hex digits; a `-` and at least one more
+/// character must follow it, as `<reviewer>-run<N>` does.
+fn workflow_id<'a>(branch: &'a str, prefix: &str) -> Option<&'a str> {
+    let token = branch.strip_prefix(prefix)?;
+    let length = WORKFLOW_ID_PREFIX.len() + WORKFLOW_DIGEST_LEN;
+    let id = token.get(..length)?;
+    let digest = id.strip_prefix(WORKFLOW_ID_PREFIX)?;
+    let hex = digest
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    let rest = token.get(length..)?;
+    (hex && rest.len() > 1 && rest.starts_with('-')).then_some(id)
+}
+
+/// Reports whether `elapsed` is at least `minimum`; a negative `elapsed` never is.
+fn elapsed_at_least(elapsed: time::Duration, minimum: Duration) -> bool {
+    time::Duration::try_from(minimum).is_ok_and(|minimum| elapsed >= minimum)
+}
