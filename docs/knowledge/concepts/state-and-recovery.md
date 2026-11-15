@@ -106,6 +106,14 @@ These rules also apply to the layers:
   request is retargeted to another base branch, or the trigger stops asking, the
   attempt ends quietly. The pull request is reviewed again after the debounce
   time, with a new attempt number.
+- **A fetched head of another commit is started again, within a bound.** A
+  session start whose fetched `refs/pull/<n>/head` is at another commit than the
+  trusted head (`pohunek_head_fetch_mismatch`) is planned again after the
+  debounce, once for each entry in `schedule.retry_delays_seconds`, without a
+  notice and without spending the scheduler's retries. The next consecutive
+  mismatch stops the head with `review_stopped`. The count is read from the
+  stored reviews of the head, so a restart neither resets it nor counts a start
+  twice.
 - **A failure is notified once.** A pull request retargeted away from the base
   branch of a failed review and back before a new review runs gets no second
   notice for that failure. The review keeps its retry count: a review stopped
