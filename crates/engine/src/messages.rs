@@ -2,13 +2,14 @@
 
 // Rust guideline compliant 2026-06-26
 
+use autoreview_policy::{OnClean, OnSuspect};
 use time::OffsetDateTime;
 
 use crate::integrations::{PullRequestState, SessionRequest};
 use crate::model::review::PRIOR_ANSWERED;
 use crate::model::{
-    Artifact, Decision, Finding, PublishResult, PublishedRecord, PullRequest, ReviewInput,
-    SessionIdentity,
+    Artifact, Decision, Finding, GuardOutcome, PublishResult, PublishedRecord, PullRequest,
+    ReviewInput, SessionIdentity,
 };
 use crate::publish::neutralize::{single_line, visible_excerpt};
 use crate::publish::plan::{PublicationPlan, blocking_count};
@@ -165,6 +166,46 @@ pub(crate) fn approval_requested_message(
     if !notes.is_empty() {
         message.push_str("\nNotes:\n");
         message.push_str(&finding_lines(input, &notes, excerpt_characters));
+    }
+    message
+}
+
+/// The action message of a suspect text guard result: codes only, never pull request text.
+///
+/// It is sent before the reviewers run, so its outcome line states the rule, not a decision.
+pub(crate) fn guard_suspect_message(input: &ReviewInput, guard: &GuardOutcome) -> String {
+    let pr = &input.pull_request;
+    let outcome = match &guard.outcome {
+        OnSuspect::Log => "log, nothing changes",
+        OnSuspect::Comment => {
+            "comment, a request for changes on an untrusted author becomes a comment"
+        }
+        _ if input.rule.on_clean == OnClean::Approve => {
+            "await, a clean review waits for your approval"
+        }
+        _ => "await, the rule does not approve clean reviews, so nothing changes",
+    };
+    let signals: Vec<String> = (guard.signals.iter())
+        .map(|hit| format!("{} {} x{}", hit.field, hit.signal, hit.count))
+        .collect();
+    let mut message = format!(
+        "Text guard flagged a pull request\n\nReview ID: {}\nPR: {}\nOutcome: {outcome}\n\
+         Score: {}, threshold {}\nSignals: {}",
+        pr.review_id(),
+        pr.url,
+        guard.score,
+        guard.threshold,
+        if signals.is_empty() {
+            "none".to_owned()
+        } else {
+            signals.join("; ")
+        }
+    );
+    if guard.truncated {
+        message.push_str("\nText: cut at the input bound, the rest was not scanned");
+    }
+    if guard.unscanned {
+        message.push_str("\nText: not scanned, the configuration has no guards.text section");
     }
     message
 }

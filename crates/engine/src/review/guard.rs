@@ -5,14 +5,19 @@
 use std::collections::BTreeSet;
 
 use autoreview_guard::{Field, FieldKind, Report, scan};
-use autoreview_policy::{GuardField, OnSuspect, RuleGuard};
+use autoreview_policy::{Event, GuardField, Level, OnSuspect, RuleGuard};
 
-use super::input::STEP_GUARD;
+use super::input::{NOTIFY_STEP_PREFIX, STEP_GUARD};
 use super::sessions::Review;
+use crate::discovery::poll::live;
 use crate::engine::Clock;
 use crate::error::Error;
 use crate::integrations::{GuardText, GuardTexts, Integrations};
+use crate::messages::guard_suspect_message;
 use crate::model::{GuardOutcome, GuardSignal};
+
+/// Name of the notification step of the guard, stored as `notify/guard`.
+const GUARD_NOTIFY: &str = "guard";
 
 /// Reports whether this engine cannot fully read a stored guard, which then fails closed.
 ///
@@ -80,14 +85,14 @@ fn outcome_of(guard: &RuleGuard, report: &Report, truncated: bool) -> GuardOutco
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
-    /// Runs the text guard of the rule once per review.
+    /// Runs the text guard of the rule once per review and notifies a suspect result.
     ///
     /// A resumed review reads the stored result. A failed read gets the step retries and then
     /// fails the review, so nothing is published unscanned.
     ///
     /// # Errors
     ///
-    /// Returns the error of the read or of the store.
+    /// Returns the error of the read, of the store or of the notification.
     pub(crate) async fn text_guard(&self, guard: &RuleGuard) -> Result<GuardOutcome, Error> {
         let outcome = self
             .once::<GuardOutcome, _>(STEP_GUARD, || {
@@ -131,6 +136,38 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 }
             })
             .await?;
+        if outcome.suspect && !self.notified_before(&outcome)? {
+            let message = guard_suspect_message(&self.input, &outcome);
+            (self.notify_at(GUARD_NOTIFY, Event::GuardSuspect, Level::Action, &message)).await?;
+        }
         Ok(outcome)
+    }
+
+    /// Reports whether an earlier attempt of this review delivered the same guard result.
+    ///
+    /// Each attempt is its own workflow; only a delivered message (`true`) counts, so a
+    /// message a backend dropped is sent again.
+    fn notified_before(&self, outcome: &GuardOutcome) -> Result<bool, Error> {
+        let step = format!("{NOTIFY_STEP_PREFIX}{GUARD_NOTIFY}");
+        let store = &self.engine.store;
+        for attempt in 0..self.input.attempt {
+            live(&self.cancel)?;
+            let workflow_id = self.input.pull_request.workflow_id(attempt);
+            if store.load_step::<bool>(&workflow_id, &step)? != Some(true) {
+                continue;
+            }
+            let earlier = store.load_step::<GuardOutcome>(&workflow_id, STEP_GUARD)?;
+            if earlier.is_some_and(|earlier| {
+                (earlier.signals, earlier.truncated, earlier.unscanned)
+                    == (
+                        outcome.signals.clone(),
+                        outcome.truncated,
+                        outcome.unscanned,
+                    )
+            }) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }

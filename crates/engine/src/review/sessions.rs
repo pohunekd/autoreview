@@ -430,10 +430,21 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         event: Event,
         message: &str,
     ) -> Result<(), Error> {
-        let step_name = format!("{NOTIFY_STEP_PREFIX}{name}");
         let Some(level) = self.input.level(event.clone()) else {
             return Err(Error::workflow("review_input_invalid", true, None));
         };
+        self.notify_at(name, event, level, message).await
+    }
+
+    /// Sends `message` as `notify` does, at `level` instead of the policy's level of `event`.
+    pub(crate) async fn notify_at(
+        &self,
+        name: &str,
+        event: Event,
+        level: Level,
+        message: &str,
+    ) -> Result<(), Error> {
+        let step_name = format!("{NOTIFY_STEP_PREFIX}{name}");
         let stored = live(&self.cancel).and_then(|()| {
             self.engine
                 .store
