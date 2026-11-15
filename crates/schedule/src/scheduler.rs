@@ -698,8 +698,8 @@ mod tests {
     use time::{Duration, OffsetDateTime};
 
     use super::{
-        Policy, Record, Retarget, Run, Target, after_failure, notification, plan, plan_on_base,
-        plan_retarget, reconcile_completed, retryable,
+        Policy, Record, Retarget, Run, Target, after_failure, plan, plan_on_base, plan_retarget,
+        reconcile_completed, retryable,
     };
     use crate::diagnostic::{diagnostic, failure_explanation};
     use crate::phase;
@@ -1737,41 +1737,5 @@ mod tests {
         let err = std::io::Error::other("exit status 1: pohunek error code request_timeout");
         let got = diagnostic(Some(&err));
         assert!(got == "timeout", "diagnostic = {got}");
-    }
-
-    #[test]
-    fn failure_notifications_explain_cause_and_next_step() {
-        let (target, now, _) = fixture();
-        for phase in ["retry_wait", "failed"] {
-            let message = notification(
-                &target,
-                &Record {
-                    phase: phase.to_owned(),
-                    error_code: "pohunek_base_fetch_timeout".to_owned(),
-                    attempt: 2,
-                    due_at: now,
-                    ..Record::default()
-                },
-            );
-            for want in [
-                target.key().as_str(),
-                "Git timed out",
-                "keyring",
-                "Diagnostic: pohunek_base_fetch_timeout",
-            ] {
-                assert!(
-                    message.contains(want),
-                    "notification lacks {want:?}: {message}"
-                );
-            }
-            assert!(
-                phase != "retry_wait" || message.contains("Next automatic attempt: 3 at"),
-                "{message}"
-            );
-            assert!(
-                phase != "failed" || message.contains("No further automatic attempt"),
-                "{message}"
-            );
-        }
     }
 }

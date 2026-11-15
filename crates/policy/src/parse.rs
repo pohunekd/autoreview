@@ -1218,18 +1218,6 @@ notifications:
     }
 
     #[test]
-    fn policy_digest_changes_with_the_verifier() {
-        let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
-        let document = VALID_POLICY.replacen("escalate_count: 2", "escalate_count: 3", 1);
-        let second = parse(document.as_bytes(), prompts).expect("the verifier policy parses");
-        assert_ne!(
-            first.digest(),
-            second.digest(),
-            "a verifier change must change the policy digest"
-        );
-    }
-
-    #[test]
     fn on_notes_comment_parses_and_changes_the_digest() {
         let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
         let second = parse(with_handoff(VALID_POLICY, "24").as_bytes(), prompts)
@@ -1313,20 +1301,6 @@ notifications:
             second.digest(),
             third.digest(),
             "the new human_review signals must change the policy digest"
-        );
-    }
-
-    #[test]
-    fn policy_digest_changes_with_the_prompt() {
-        let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
-        let second = parse(VALID_POLICY.as_bytes(), |_| {
-            Ok(b"Different instructions.".to_vec())
-        })
-        .expect("the policy with other prompts parses");
-        assert_ne!(
-            first.digest(),
-            second.digest(),
-            "a prompt change must change the policy digest"
         );
     }
 

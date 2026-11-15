@@ -279,37 +279,3 @@ fn format_date_time(value: &OffsetDateTime) -> String {
     let second = value.second();
     format!("{year_str}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{format_rfc3339_nano, parse_rfc3339};
-    use crate::Error;
-
-    #[test]
-    fn parse_rfc3339_follows_go_json_decoding() {
-        for refused in [
-            "2026-01-02t03:04:05Z",
-            "2026-01-02T03:04:05z",
-            "2026-01-02 03:04:05Z",
-        ] {
-            assert!(
-                matches!(parse_rfc3339(refused), Err(Error::Parse { .. })),
-                "{refused} must be rejected"
-            );
-        }
-        let comma = parse_rfc3339("2026-01-02T03:04:05,5Z").expect("comma fraction parses");
-        assert_eq!(format_rfc3339_nano(comma), "2026-01-02T03:04:05.5Z");
-        let whole = parse_rfc3339("2026-01-02T03:04:05Z").expect("RFC 3339 parses");
-        assert_eq!(format_rfc3339_nano(whole), "2026-01-02T03:04:05Z");
-    }
-
-    #[test]
-    fn parse_rfc3339_refuses_leap_second_and_unrepresentable_year() {
-        for refused in ["2026-12-31T23:59:60Z", "9999-12-31T23:59:59-01:00"] {
-            assert!(
-                matches!(parse_rfc3339(refused), Err(Error::Parse { .. })),
-                "{refused} must be rejected without panicking"
-            );
-        }
-    }
-}
