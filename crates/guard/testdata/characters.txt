@@ -197,3 +197,37 @@ Fix&#xE0041;&#xE0042;&#917571; and a&#x200B;&ZeroWidthSpace;b
 expect: none
 --- title
 Fix&#xE0041;&#xE0042;
+== zero_width_alternating_with_pdf
+expect: body:invisible_run=1
+score: 100
+--- body
+a<REP 50><U+200B><U+202C><U+200C><U+202C></REP>b
+== zero_width_alternating_with_pdi
+expect: comment:invisible_run=1
+score: 100
+--- comment
+<REP 50><U+200B><U+2069></REP>
+== marks_and_isolates_without_zero_width_stay_clean
+expect: none
+--- body
+<U+05E9> <U+2067><U+200F><U+2069> <U+05DC><U+202B><U+200F><U+202C>
+== zero_width_spread_over_whitespace
+expect: body:zero_width_run=1
+score: 100
+--- body
+a <U+200B> <U+200C><U+000A><U+200B><U+00A0><U+200C><U+2800><U+200B> b
+== selectors_spread_over_spaces
+expect: comment:variation_selector_run=1
+score: 100
+--- comment
+<U+1F600><U+FE01> <U+FE02> <U+FE03>
+== selectors_after_latin_letters
+expect: body:variation_selector_run=3
+score: 100
+--- body
+h<U+FE01>e<U+FE02>y<U+FE03> 0<U+FE0F><U+20E3>
+== mark_and_zero_width_spread_over_spaces
+expect: comment:invisible_run=1
+score: 100
+--- comment
+<U+200B> <U+200E> <U+200B> <U+200E>

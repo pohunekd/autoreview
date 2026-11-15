@@ -25,10 +25,22 @@ const FLAG_LETTERS_MAX: usize = 5;
 /// a row have no legitimate use and are how payloads are encoded in invisible characters.
 const RUN_MIN: usize = 2;
 
-/// Shortest run of invisible characters of several classes, or with a bidi mark, reported.
+/// Shortest mixed run of invisible characters and bidi marks or controls that is reported.
 ///
-/// The longest legitimate mix is two: VS16 then ZWJ inside an emoji sequence.
+/// The longest legitimate mixes are two long: VS16 then ZWJ inside an emoji sequence, or an
+/// isolate next to a mark in right-to-left prose.
 const MIXED_RUN_MIN: usize = 3;
+
+/// BRAILLE PATTERN BLANK: not whitespace, but shown as an empty cell.
+const BRAILLE_BLANK: char = '\u{2800}';
+
+/// Reports whether a character keeps a run of invisible characters open.
+///
+/// Whitespace and blank cells show nothing either, so characters spread over them still
+/// form one run.
+fn transparent(character: char) -> bool {
+    character.is_whitespace() || character == BRAILLE_BLANK
+}
 
 /// Reports whether a character is a Unicode tag character, U+E0000-E007F.
 pub(crate) const fn tag(character: char) -> bool {
@@ -143,7 +155,9 @@ impl TagRun {
     }
 }
 
-/// The state of one run of zero-width characters, variation selectors and bidi marks.
+/// The state of one run of zero-width characters, selectors, bidi marks and bidi controls.
+///
+/// The bidi controls are the embeddings and isolates; overrides have their own signal.
 #[derive(Debug, Default)]
 struct MixedRun {
     /// Characters in the run.
@@ -154,18 +168,29 @@ struct MixedRun {
     selector: bool,
     /// The run holds a bidi mark.
     mark: bool,
+    /// The run holds a bidi embedding or isolate.
+    control: bool,
 }
 
 impl MixedRun {
-    /// Reports whether the finished run is an `invisible_run`: long enough and not one class.
+    /// Reports whether the finished run is an `invisible_run`.
     ///
-    /// A run of zero-width characters only or of variation selectors only has its own signal.
+    /// It is when it has `MIXED_RUN_MIN` characters and either holds a zero-width character or
+    /// a selector together with another class, or consists of bidi marks only. A run of one
+    /// class of zero-width characters or selectors has its own signal; marks and controls
+    /// without them are right-to-left formatting.
     fn is_hit(&self) -> bool {
-        self.len >= MIXED_RUN_MIN && (self.mark || (self.zero_width && self.selector))
+        let classes = [self.zero_width, self.selector, self.mark, self.control];
+        let mixed = classes.iter().filter(|present| **present).count() > 1;
+        let marks_only = self.mark && !self.zero_width && !self.selector && !self.control;
+        self.len >= MIXED_RUN_MIN && (((self.zero_width || self.selector) && mixed) || marks_only)
     }
 }
 
 /// Reports the character signals of `text` to `add`: tags, runs and bidi controls.
+///
+/// A variation selector directly after an ASCII letter also counts as a
+/// `variation_selector_run`: no standardized sequence uses a Latin letter as its base.
 ///
 /// `in_patch` is set for added patch lines, where embeddings and isolates are reported too.
 pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)) {
@@ -173,18 +198,28 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
     let mut previous = '\n';
     let mut zero_width_len = 0_usize;
     let mut selector_len = 0_usize;
+    let mut selector_after_letter = false;
     let mut mixed = MixedRun::default();
     for character in text.chars() {
+        if transparent(character) {
+            if let Some(run) = tag_run.take() {
+                add(Signal::UnicodeTags, u32::from(!run.is_flag()));
+            }
+            previous = character;
+            continue;
+        }
         let (zero, selector, mark) = (
             zero_width(character),
             variation_selector(character),
             bidi_mark(character),
         );
-        if zero || selector || mark {
+        let control = bidi_embedding_or_isolate(character);
+        if zero || selector || mark || control {
             mixed.len = mixed.len.saturating_add(1);
             mixed.zero_width |= zero;
             mixed.selector |= selector;
             mixed.mark |= mark;
+            mixed.control |= control;
         } else {
             add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
             mixed = MixedRun::default();
@@ -212,7 +247,14 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
         } else {
             0
         };
-        if selector_len == RUN_MIN {
+        if selector_len == 1 {
+            selector_after_letter = previous.is_ascii_alphabetic();
+            add(
+                Signal::VariationSelectorRun,
+                u32::from(selector_after_letter),
+            );
+        }
+        if selector_len == RUN_MIN && !selector_after_letter {
             add(Signal::VariationSelectorRun, 1);
         }
         if bidi_override(character) {
