@@ -19,9 +19,12 @@ set it more often. Unlike a review, it keeps the comments of the reviewing accou
 The script only reads GitHub through the given gh and sends the texts nowhere. It writes
 a temporary file `.FILE.<random>.partial` next to FILE and links it to FILE only after
 the last pull request, so FILE exists only after a complete fetch. FILE must not exist
-yet, and one that appears during the run is never overwritten. It exits 2 on a usage
-error and 1 when a gh call or a write fails. On that, on Ctrl-C, SIGTERM, SIGHUP and any
-other error it removes the temporary file; only a signal such as SIGKILL leaves it.
+yet, and one that appears during the run is never overwritten. The directory of FILE
+must support hard links. It exits 2 on a usage error and 1 when a gh call, a write or
+the link fails. On that, on Ctrl-C, SIGTERM, SIGHUP and any other error it removes the
+temporary file. SIGKILL, or a signal in the moment between creating the temporary file
+and arming its cleanup, can leave it behind; FILE never holds a partial corpus. A
+SIGTERM or SIGHUP that the launcher ignores (nohup) stays ignored.
 """
 
 import argparse
@@ -155,7 +158,9 @@ def main():
         parser.error("--output cannot be created: File exists")
     fetch = Fetch(arguments.gh_binary, arguments.page_limit)
     for signum in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, stop_on_signal)
+        # A signal that the launcher ignores, as nohup does with SIGHUP, stays ignored.
+        if signal.getsignal(signum) is not signal.SIG_IGN:
+            signal.signal(signum, stop_on_signal)
     partial = os.path.join(directory, f".{name}.{secrets.token_hex(8)}.partial")
     try:
         # O_EXCL and mode 0o666 under the umask, as open(..., "x") creates a file.

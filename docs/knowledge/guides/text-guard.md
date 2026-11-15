@@ -125,8 +125,12 @@ output path only after the last pull request, so a corpus file exists only
 after a complete fetch: a run that fails, or that you stop with Ctrl-C,
 `kill`, `timeout` or by closing the terminal, leaves no file. The output file
 must not exist yet, and one that appears during the run is not overwritten.
-Only a run killed with `kill -9` can leave the temporary file behind, never
-the output file; delete it. It sets `truncated` by the rules of a review's
+The output directory must support hard links (not FAT or exFAT, for example);
+otherwise the run fails at the end and writes no output. A run killed with
+`kill -9`, or very rarely one stopped at the moment the temporary file is
+created, can leave the temporary file behind; delete it. The output path never
+holds a partial corpus. A run under `nohup` keeps running when the terminal
+closes. It sets `truncated` by the rules of a review's
 read, with `--page-limit` as your `schedule.search_page_limit`, and also for
 250 commits (the most the REST API lists) and for review comments past the
 page limit, where a review counts threads. It keeps the comments of the
