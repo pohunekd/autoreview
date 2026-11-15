@@ -1115,13 +1115,17 @@ fn valid_text(value: &str, maximum: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::io;
     use std::time::Duration;
+
+    use autoreview_guard::FieldKind;
 
     use super::{load, parse};
     use crate::Error;
     use crate::author_limit::{AuthorLimit, OverLimit};
     use crate::authors::{Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview};
+    use crate::guard::{OnSuspect, RuleGuard};
     use crate::types::{
         Event, IntentCheck, Level, MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy,
     };
@@ -1351,6 +1355,77 @@ notifications:
         );
     }
 
+    /// Sets guard on the approving acme/* rule.
+    fn with_guard(document: &str, value: &str) -> String {
+        document.replacen(
+            "on_findings: request_changes, on_clean: approve}",
+            &format!("on_findings: request_changes, on_clean: approve, guard: {value}}}"),
+            1,
+        )
+    }
+
+    #[test]
+    fn guard_parses_and_changes_the_digest() {
+        let digest = |document: &str| {
+            let policy = parse(document.as_bytes(), prompts).expect("the guard parses");
+            policy.digest().to_owned()
+        };
+        let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        // A policy without guard hashes no guard bytes, so its digest is pinned.
+        assert_eq!(
+            first.digest(),
+            "78ab635662e41adc871491ea70f495ce62d272870f22b730d69c694213c0433b",
+            "a policy without guard must keep its digest"
+        );
+        assert_eq!(first.guarded_rule(), None);
+        let set = "{fields: [patch, title], threshold: 100, on_suspect: await}";
+        let second = parse(with_guard(VALID_POLICY, set).as_bytes(), prompts).expect("guard");
+        let guard = RuleGuard {
+            fields: BTreeSet::from([FieldKind::Title, FieldKind::Patch]),
+            threshold: 100,
+            on_suspect: OnSuspect::Await,
+        };
+        let rule = second
+            .resolve("acme/other")
+            .expect("acme/* covers acme/other");
+        assert_eq!(rule.guard.as_ref(), Some(&guard));
+        let special = second
+            .resolve("acme/special")
+            .and_then(|rule| rule.guard.as_ref());
+        assert_eq!(special, None, "a rule without guard must not get one");
+        assert_eq!(second.guarded_rule(), Some("acme/*"));
+        let untrusted = UntrustedReview {
+            pipeline: rule.pipeline.clone(),
+            on_findings: OnFindings::Comment,
+            on_clean: OnClean::Await,
+        };
+        let kept = untrusted.rule(rule).guard;
+        assert_eq!(kept, Some(guard), "the untrusted rule must keep the guard");
+        assert_ne!(
+            first.digest(),
+            second.digest(),
+            "a guard must change the digest"
+        );
+        let reordered = "{fields: [title, patch], threshold: 100, on_suspect: await}";
+        assert_eq!(
+            digest(&with_guard(VALID_POLICY, reordered)),
+            second.digest(),
+            "the order of the fields must not change the digest"
+        );
+        for changed in [
+            "{fields: [title], threshold: 100, on_suspect: await}",
+            "{fields: [patch, title], threshold: 101, on_suspect: await}",
+            "{fields: [patch, title], threshold: 100, on_suspect: log}",
+        ] {
+            let changed_digest = digest(&with_guard(VALID_POLICY, changed));
+            assert_ne!(
+                changed_digest,
+                second.digest(),
+                "{changed} must change the digest"
+            );
+        }
+    }
+
     /// An absent or `off` intent check hashes nothing, so existing policies keep their digest.
     #[test]
     fn intent_check_parses_and_changes_the_digest_only_when_on() {
@@ -1525,6 +1600,19 @@ notifications:
             ("author_limit window over 720 hours", with_author_limit(valid, "{reviews: 3, window_hours: 721, over: wait}"), "author_limit.window_hours must be between"),
             ("bad author_limit outcome", with_author_limit(valid, "{reviews: 3, window_hours: 24, over: drop}"), "author_limit.over must be wait or skip"),
             ("unknown author_limit key", with_author_limit(valid, "{reviews: 3, window_hours: 24, over: wait, per: class}"), "field per not found"),
+            ("null guard", with_guard(valid, "null"), "repositories[1] (acme/*): guard must be a mapping with fields, threshold and on_suspect"),
+            ("guard without fields", with_guard(valid, "{threshold: 100, on_suspect: await}"), "guard.fields must name at least one field"),
+            ("guard with no field", with_guard(valid, "{fields: [], threshold: 100, on_suspect: await}"), "guard.fields must name at least one field"),
+            ("unknown guard field", with_guard(valid, "{fields: [diff], threshold: 100, on_suspect: await}"), "guard.fields: \"diff\" is not one of title, body, commit_message, comment, review_thread, patch"),
+            ("uppercase guard field", with_guard(valid, "{fields: [Title], threshold: 100, on_suspect: await}"), "guard.fields: \"Title\" is not one of"),
+            ("repeated guard field", with_guard(valid, "{fields: [body, title, body], threshold: 100, on_suspect: await}"), "guard.fields: \"body\" is listed twice"),
+            ("guard without threshold", with_guard(valid, "{fields: [body], on_suspect: await}"), "guard.threshold must be between 1 and 4294967295"),
+            ("guard threshold of zero", with_guard(valid, "{fields: [body], threshold: 0, on_suspect: await}"), "guard.threshold must be between 1 and 4294967295"),
+            ("negative guard threshold", with_guard(valid, "{fields: [body], threshold: -1, on_suspect: await}"), "guard.threshold must be between 1 and 4294967295"),
+            ("guard threshold over u32", with_guard(valid, "{fields: [body], threshold: 4294967296, on_suspect: await}"), "guard.threshold must be between 1 and 4294967295"),
+            ("guard without on_suspect", with_guard(valid, "{fields: [body], threshold: 100}"), "guard.on_suspect must be await, comment or log"),
+            ("bad guard outcome", with_guard(valid, "{fields: [body], threshold: 100, on_suspect: skip}"), "guard.on_suspect must be await, comment or log"),
+            ("unknown guard key", with_guard(valid, "{fields: [body], threshold: 100, on_suspect: await, mode: strict}"), "field mode not found"),
         ];
         for (name, document, want) in cases {
             assert_ne!(
