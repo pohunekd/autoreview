@@ -151,6 +151,19 @@ pub fn fetch_failure(detail: &str) -> (&'static str, bool) {
     }
 }
 
+/// Classifies the error code of a `session new` that failed its pull request head fetch.
+///
+/// Returns the failure code and whether the failure is permanent, or `None` for any other
+/// code. A head that is not the trusted one means the pull request moved.
+pub fn head_fetch_failure(code: &str) -> Option<(&'static str, bool)> {
+    match code {
+        "fetch_ref_not_found" => Some(("pohunek_head_fetch_ref_missing", true)),
+        "fetch_ref_failed" => Some(("pohunek_head_fetch_failed", false)),
+        "fetch_ref_commit_mismatch" => Some(("head_changed", true)),
+        _ => None,
+    }
+}
+
 /// Returns the published explanation of a failure code.
 ///
 /// The text never interpolates raw CLI output or credentials.
@@ -177,6 +190,12 @@ pub fn failure_explanation(code: &str) -> &'static str {
         "pohunek_base_fetch_ref_locked" => {
             "Another Git fetch in the same repository on the review host held a ref lock while the review base branch was fetched. The lock is released when that fetch ends, so the next attempt fetches again."
         }
+        "pohunek_head_fetch_ref_missing" => {
+            "The review host's project repository has no `origin`, or `origin` has no `refs/pull/<n>/head` for this pull request, so the session could not fetch its head. Check the project repository's remote on the review host, then retry this PR."
+        }
+        "pohunek_head_fetch_failed" => {
+            "Git could not fetch the pull request head on the review host: a network, authentication or timeout failure, or Git older than 2.29 there. Check GitHub access and the Git version on the review host."
+        }
         "pohunek_session_warning" => {
             "The reviewer session reported a warning other than a failed base fetch, for example an existing branch checked out instead of the review base, or a failed setup script or hook. The session was removed; check the project's setup scripts and hooks and stale branches under `session.branch_prefix` on the review host before retrying."
         }
@@ -196,7 +215,7 @@ pub fn failure_explanation(code: &str) -> &'static str {
             "The Pohunek review host did not answer within the CLI request timeout. The host was reachable; check its network latency and the size of its session list."
         }
         "review_head_unavailable" => {
-            "The pull request head commit is not in the review host's repository, so the reviewer on a base checkout could not read the change and its adapter stopped the run. Pohunek fetches only the base branch for a base checkout; on the review host run `git -C <project repository> fetch origin refs/pull/<n>/head`, then retry this PR."
+            "The pull request head commit is not in the review host's repository, so the reviewer on a base checkout could not read the change and its adapter stopped the run. Pohunek fetches the head at session start only when the pohunek CLI and the review host's daemon are 0.43.0 or later; upgrade them, or on the review host run `git -C <project repository> fetch origin refs/pull/<n>/head`, then retry this PR."
         }
         "github_request_failed" => {
             "A GitHub API request failed. Check GitHub availability, authentication, and rate limits."
@@ -212,8 +231,11 @@ pub fn failure_explanation(code: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{SessionLoss, diagnostic, failure_explanation, fetch_failure, start_diagnostic};
-    use crate::scheduler::retryable;
+    use super::{
+        SessionLoss, diagnostic, failure_explanation, fetch_failure, head_fetch_failure,
+        start_diagnostic,
+    };
+    use crate::scheduler::{retryable, superseded};
 
     /// A wrapper whose source is the error it wraps, as an engine error keeps its cause.
     #[derive(Debug, thiserror::Error)]
@@ -375,6 +397,38 @@ mod tests {
             assert!(
                 !explanation.contains("secret") && !explanation.contains("private"),
                 "raw diagnostic leaked"
+            );
+        }
+        // A failed head fetch of `session new` is classified by the pohunek error code (#255).
+        let generic = failure_explanation("");
+        let head_cases = [
+            (
+                "fetch_ref_not_found",
+                Some(("pohunek_head_fetch_ref_missing", true)),
+            ),
+            (
+                "fetch_ref_failed",
+                Some(("pohunek_head_fetch_failed", false)),
+            ),
+            ("fetch_ref_commit_mismatch", Some(("head_changed", true))),
+            ("fetch_ref_outcome_missing", None),
+            ("session_new_fetch_ref_unsupported", None),
+            ("branch_fetch_failed", None),
+            ("", None),
+        ];
+        for (pohunek_code, want) in head_cases {
+            let got = head_fetch_failure(pohunek_code);
+            assert_eq!(got, want, "{pohunek_code:?}");
+            let Some((code, permanent)) = got else {
+                continue;
+            };
+            assert!(
+                retryable(code) != permanent,
+                "incorrect scheduling retry policy for {code}"
+            );
+            assert!(
+                superseded(code) || failure_explanation(code) != generic,
+                "{code} has no explanation"
             );
         }
     }
