@@ -17,6 +17,13 @@ concurrency:
 
 permissions: {}
 
+# rustup never installs a toolchain by itself, so a cargo call before the
+# Toolchain step fails. That step's `rustup toolchain install` (rustup 1.28 or
+# later) installs the toolchain, profile and components of rust-toolchain.toml;
+# --no-self-update keeps the rustup of the runner image.
+env:
+  RUSTUP_AUTO_INSTALL: "0"
+
 jobs:
   # Reads the version and, for a tag, refuses one that is not v<workspace
   # version>. A tag push also renders the release notes from CHANGELOG.md, so a
@@ -51,7 +58,9 @@ jobs:
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Toolchain
         if: github.event_name == 'push'
-        run: rustup show active-toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          rustup --version
       - name: Release notes
         if: github.event_name == 'push'
         env:
@@ -104,6 +113,8 @@ jobs:
       - name: Toolchain
         run: |
           set -euo pipefail
+          rustup toolchain install --no-self-update
+          rustup --version
           cargo --version
           rustup target add "$TARGET"
       - name: Build

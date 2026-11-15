@@ -14,8 +14,7 @@ yanked = "warn"
 ignore = []
 
 [licenses]
-# Each licence names the crates whose licence expression needs it; the ones
-# marked #345 are needed only once crates/guard is in the tree. A crate that
+# Each licence names the crates whose licence expression needs it. A crate that
 # none of these satisfies fails the gate: extend the list in the pull request
 # that adds the crate. No copyleft licence is allowed.
 allow = [
@@ -23,7 +22,7 @@ allow = [
     "MIT",
     # ring, rmcp, ryu, sync_wrapper.
     "Apache-2.0",
-    # comrak (crates/guard, #345).
+    # comrak, a dependency of crates/guard.
     "BSD-2-Clause",
     # encoding_rs, subtle.
     "BSD-3-Clause",
@@ -33,9 +32,9 @@ allow = [
     "ISC",
     # The ICU4X crates (icu_*, litemap, potential_utf, tinystr, writeable,
     # yoke, zerofrom, zerotrie, zerovec), unicode-ident; unicode-normalization
-    # (crates/guard, #345).
+    # (through comrak and caseless).
     "Unicode-3.0",
-    # finl_unicode (crates/guard, #345).
+    # finl_unicode (through comrak).
     "Unicode-DFS-2016",
     # foldhash.
     "Zlib",
