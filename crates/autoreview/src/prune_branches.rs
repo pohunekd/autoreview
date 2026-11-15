@@ -18,7 +18,7 @@ use autoreview_engine::config::Config;
 use autoreview_engine::store::{ReviewFilter, Store};
 use autoreview_engine::{Error, error_code};
 use autoreview_external::{
-    branch_refs, host_is_local, project_roots, session_branches, worktrees,
+    branch_refs, delete_ref, host_is_local, project_roots, session_branches, worktrees,
 };
 use clap::Args;
 use serde::Serialize;
@@ -26,7 +26,7 @@ use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use crate::command_invalid;
-use plan::{BranchPlan, Owners, Rules};
+use plan::{BranchPlan, HEADS, Owners, Rules, Verdict};
 
 /// Reason of a host whose repositories are not on this machine.
 const HOST_NOT_LOCAL: &str = "host_not_local";
@@ -176,7 +176,9 @@ pub(crate) async fn run(
         };
         let mut repositories = Vec::new();
         for listing in listings {
-            repositories.push(plan_repository(&host, listing, &rules));
+            let report =
+                prune_repository(config, cancel, git, &host, listing, &rules, arguments.yes).await;
+            repositories.push(report);
         }
         reports.push(HostReport {
             host,
@@ -225,8 +227,19 @@ async fn list_host(
     Ok(listings)
 }
 
-/// Plans the branches of one repository; a repository whose git calls failed has none.
-fn plan_repository(host: &str, listing: Listing, rules: &Rules<'_>) -> RepositoryReport {
+/// Plans the branches of one repository and, when `delete` is set, deletes the `delete` ones.
+///
+/// Each deletion is logged with its branch and commit before it runs, and only succeeds while
+/// the branch still points at the listed commit.
+async fn prune_repository(
+    config: &Config,
+    cancel: &CancellationToken,
+    git: &str,
+    host: &str,
+    listing: Listing,
+    rules: &Rules<'_>,
+    delete: bool,
+) -> RepositoryReport {
     let (refs, trees) = match listing.output {
         Ok(output) => output,
         Err(error) => {
@@ -239,10 +252,36 @@ fn plan_repository(host: &str, listing: Listing, rules: &Rules<'_>) -> Repositor
             };
         }
     };
+    let mut branches = plan::plan(&refs, &trees, rules);
+    if delete {
+        let path = listing.path.as_str();
+        for branch in branches
+            .iter_mut()
+            .filter(|branch| branch.verdict == Verdict::Delete)
+        {
+            let (name, commit) = (branch.branch.as_str(), branch.commit.as_str());
+            tracing::info!(
+                host,
+                repository = path,
+                branch = name,
+                commit,
+                "branch delete"
+            );
+            let refname = format!("{HEADS}{name}");
+            match delete_ref(config, cancel, git, path, &refname, commit).await {
+                Ok(()) => branch.deleted = true,
+                Err(error) => {
+                    tracing::warn!(host, repository = path, branch = name, commit,
+                        error = %error, "branch delete failed");
+                    branch.error = error_code(&error).to_owned();
+                }
+            }
+        }
+    }
     RepositoryReport {
-        branches: plan::plan(&refs, &trees, rules),
         path: listing.path,
         error: String::new(),
+        branches,
     }
 }
 

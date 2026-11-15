@@ -47,6 +47,25 @@ pub async fn worktrees(
     git_call(config, cancel, git, root, &command).await
 }
 
+/// Deletes `refname` in the repository at `root` only while it still points at `commit`.
+///
+/// # Errors
+///
+/// Returns `git_command_failed` when the call fails, also when the ref moved.
+pub async fn delete_ref(
+    config: &Config,
+    cancel: &CancellationToken,
+    git: &str,
+    root: &str,
+    refname: &str,
+    commit: &str,
+) -> Result<(), Error> {
+    let command = ["update-ref", "-d", refname, commit];
+    git_call(config, cancel, git, root, &command)
+        .await
+        .map(|_| ())
+}
+
 /// Runs `git -C <root> <command>` and returns its stdout.
 ///
 /// The child gets the [`GIT_INHERITED`] variables without the secrets and is killed after
