@@ -42,6 +42,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried | [Reviewer output](#reviewer-output) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `pohunek_head_fetch_failed`, `pohunek_head_fetch_ref_missing` | The session start could not fetch the pull request head on the review host | [Head commit unavailable](#head-commit-unavailable) |
+| `pohunek_head_fetch_mismatch` | At every start the fetched `refs/pull/<n>/head` was at another commit than the pull request head | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request, or rejected it as invalid (HTTP 422); HTTP 401 is `credential_invalid` | Check the token's permissions and the `github` section |
 | `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
@@ -333,8 +334,18 @@ reviewer runs. `pohunek_head_fetch_failed` (a network, authentication or
 timeout failure, or Git older than 2.29 on the review host) is retried.
 `pohunek_head_fetch_ref_missing` (the project repository has no `origin`, or
 `origin` has no `refs/pull/<n>/head`) is not; fix the remote, then retry the
-pull request. A head that is not the trusted head SHA ends the run as
-`head_changed`, and the review is planned again after the debounce.
+pull request.
+
+A fetched `refs/pull/<n>/head` at another commit than the trusted head SHA ends
+the run as `pohunek_head_fetch_mismatch`. GitHub updates the ref a few seconds
+after a push, so the head starts again after the debounce, without a
+notification, once for each entry in `schedule.retry_delays_seconds`. When
+the next start still fetches another commit, the review stops with a
+`review_stopped` notification that names the expected and the fetched commit.
+Only consecutive mismatching starts of one head count: any other end of a run
+starts the count again, and a new head starts its own review. Check the pull
+request on GitHub, then retry it or push a new commit; a retry starts the head
+once and stops it again at once if the ref is still at the other commit.
 
 ### Review host checks
 

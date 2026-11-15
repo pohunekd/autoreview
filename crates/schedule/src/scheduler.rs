@@ -13,6 +13,9 @@ use crate::{Error, diagnostic::failure_explanation, phase};
 /// Characters of the head SHA that a notification shows: the first twelve.
 const NOTIFICATION_HEAD_CHARS: usize = 12;
 
+/// Failure code of a session start whose fetched pull request head is another commit.
+pub const HEAD_FETCH_MISMATCH: &str = "pohunek_head_fetch_mismatch";
+
 /// The pull request and head that a review request names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Target {
@@ -281,8 +284,12 @@ pub fn plan(
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             let code = failure_code(&latest_run.failure);
-            // A superseded run left nothing behind; the head is reviewed anew.
-            if superseded(&code) {
+            // A superseded run left nothing behind; the head is reviewed anew. So is a start
+            // whose fetched head was another commit, until the retry budget is spent.
+            let mismatches = head_mismatches(runs, &target_identity);
+            let again = superseded(&code)
+                || (code == HEAD_FETCH_MISMATCH && mismatches <= policy.retry_delays.len());
+            if again {
                 r.phase = phase::WAITING.to_owned();
                 r.attempt = latest_run.attempt.wrapping_add(1);
                 r.error_code = String::new();
@@ -515,6 +522,23 @@ pub fn plan_on_base(
     Ok(decision)
 }
 
+/// Counts the latest ended runs of `identity` that failed with [`HEAD_FETCH_MISMATCH`].
+///
+/// Runs are read from the highest attempt down; the first run with another ending stops the
+/// count, so only consecutive mismatching starts count.
+fn head_mismatches(runs: &[Run], identity: &str) -> usize {
+    let mut own: Vec<&Run> = runs
+        .iter()
+        .filter(|run| run.target.identity() == identity)
+        .collect();
+    own.sort_by_key(|run| std::cmp::Reverse(run.attempt));
+    own.iter()
+        .take_while(|run| {
+            !run.active() && !run.released && failure_code(&run.failure) == HEAD_FETCH_MISMATCH
+        })
+        .count()
+}
+
 /// Returns the next attempt of `identity` whose workflow is not the `published` one.
 ///
 /// The run of the published review may be pruned while its record is kept.
@@ -664,6 +688,34 @@ pub fn notification(target: &Target, record: &Record) -> String {
     }
 }
 
+/// Returns the notice that the review of `target` stopped on a fetched head of another commit.
+///
+/// It names the expected head SHA and the `fetched` commit, or says that pohunek named none.
+pub fn head_mismatch_notification(target: &Target, record: &Record, fetched: &str) -> String {
+    let description = failure_explanation(&record.error_code);
+    let head: String = target
+        .head_sha
+        .chars()
+        .take(NOTIFICATION_HEAD_CHARS)
+        .collect();
+    let fetched = if fetched.is_empty() {
+        "not reported"
+    } else {
+        fetched
+    };
+    format!(
+        "Review for {} at {} stopped after attempt {}. {} Expected commit: {}. Fetched commit: \
+         {}. No further automatic attempt is scheduled. Diagnostic: {}.",
+        target.key(),
+        head,
+        record.attempt.wrapping_add(1),
+        description,
+        target.head_sha,
+        fetched,
+        record.error_code
+    )
+}
+
 /// Returns the notice that reviews wait for a review host.
 ///
 /// It names the review of `target` as the first one that waits, the `hosts` whose outage it
@@ -699,8 +751,9 @@ mod tests {
     use time::{Duration, OffsetDateTime};
 
     use super::{
-        Policy, Record, Retarget, Run, Target, after_failure, plan, plan_on_base, plan_retarget,
-        reconcile_completed, retryable,
+        Decision, HEAD_FETCH_MISMATCH, Policy, Record, Retarget, Run, Target, after_failure,
+        head_mismatch_notification, plan, plan_on_base, plan_retarget, reconcile_completed,
+        retryable, wait_for_host,
     };
     use crate::diagnostic::{diagnostic, failure_explanation};
     use crate::phase;
@@ -1159,6 +1212,249 @@ mod tests {
             decision.record.phase == "retry_wait" && decision.record.retries == 1,
             "supersedes consumed the retry budget: {:?}",
             decision.record
+        );
+    }
+
+    /// Dispatches `record` and ends its run with `ending` (empty for a success).
+    ///
+    /// A new record is dispatched after its debounce. `host` makes the dispatch wait for a
+    /// review host first, then the run ends with a head fetch mismatch.
+    fn dispatch_and_end(
+        record: Record,
+        target: &Target,
+        runs: &mut Vec<Run>,
+        ending: &str,
+        now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let mut due = plan(record, target, runs, now, policy).expect("plan");
+        if !due.dispatch {
+            due = plan(due.record, target, runs, now + policy.debounce, policy).expect("plan");
+        }
+        assert!(due.dispatch, "not dispatched: {due:?}");
+        let mut ending = ending;
+        if ending == "host" {
+            let waiting = wait_for_host(due.record, "pohunek_request_failed");
+            due = plan(waiting, target, runs, now, policy).expect("plan");
+            assert!(due.dispatch, "not dispatched after the host wait: {due:?}");
+            ending = HEAD_FETCH_MISMATCH;
+        }
+        let mut record = due.record;
+        record.workflow_id = format!("w{}", record.attempt);
+        let result = if ending.is_empty() {
+            "success"
+        } else {
+            "failure"
+        };
+        runs.push(Run {
+            target: target.clone(),
+            workflow_id: record.workflow_id.clone(),
+            attempt: record.attempt,
+            status: "completed".to_owned(),
+            result: result.to_owned(),
+            failure: ending.to_owned(),
+            ..Run::default()
+        });
+        plan(record, target, runs, now, policy).expect("plan")
+    }
+
+    // A start whose fetched head is another commit is started again until the retry budget
+    // is spent, then the head stops with a notice; any other ending resets the count (#416).
+    #[test]
+    fn head_fetch_mismatch_restarts_until_the_retry_budget_then_stops() {
+        const M: &str = HEAD_FETCH_MISMATCH;
+        let wait = ("waiting", false);
+        let stop = ("failed", true);
+        // Each case: its name, the ending of each run, and the phase and notice after each.
+        type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool)]);
+        let cases: [Case<'_>; 7] = [
+            (
+                "stops after the retry budget",
+                &[M, M, M, M],
+                &[wait, wait, wait, stop],
+            ),
+            (
+                "superseded then success",
+                &[M, M, ""],
+                &[wait, wait, ("completed", false)],
+            ),
+            (
+                "fail then mismatch",
+                &["github_request_failed", M, M, M, M],
+                &[("retry_wait", true), wait, wait, wait, stop],
+            ),
+            (
+                "a failure resets the count",
+                &[M, M, "github_request_failed", M, M, M, M],
+                &[wait, wait, ("retry_wait", true), wait, wait, wait, stop],
+            ),
+            (
+                "a moved head resets the count and is not counted",
+                &[M, M, "head_changed", "head_changed", M, M, M, M],
+                &[wait, wait, wait, wait, wait, wait, wait, stop],
+            ),
+            (
+                "another superseded code resets the count",
+                &[M, M, M, "base_branch_changed", M, M, M, M],
+                &[wait, wait, wait, wait, wait, wait, wait, stop],
+            ),
+            (
+                "a host wait neither counts nor resets",
+                &[M, "host", M, M],
+                &[wait, wait, wait, stop],
+            ),
+        ];
+        for (name, endings, want) in cases {
+            let (target, mut now, policy) = fixture();
+            let mut runs = Vec::new();
+            let mut record = Record::default();
+            for (ending, (phase, notify)) in endings.iter().zip(want.iter()) {
+                now += Duration::hours(1);
+                let decision = dispatch_and_end(record, &target, &mut runs, ending, now, &policy);
+                assert!(
+                    decision.record.phase == *phase && decision.notify == *notify,
+                    "{name}: after {ending:?}: {decision:?}"
+                );
+                record = decision.record;
+            }
+            // A restart plans from the stored record again: no second notice, no new start.
+            let again = plan(
+                record.clone(),
+                &target,
+                &runs,
+                now + Duration::days(1),
+                &policy,
+            )
+            .expect("plan");
+            assert!(!again.notify, "{name}: notified twice: {again:?}");
+            if record.phase == "failed" {
+                assert!(
+                    !again.dispatch && again.record.error_code == M,
+                    "{name}: the stopped head started again: {again:?}"
+                );
+                let failures = endings.iter().filter(|ending| retryable(ending)).count();
+                assert_eq!(
+                    usize::try_from(record.retries).ok(),
+                    Some(failures),
+                    "{name}: the mismatches spent the retries"
+                );
+            }
+        }
+    }
+
+    // The mismatch count belongs to one head: a new head starts its own, a retarget keeps it,
+    // and the stop notice names both commits (#416).
+    #[test]
+    fn head_fetch_mismatch_count_follows_the_head() {
+        const M: &str = HEAD_FETCH_MISMATCH;
+        let wait = ("waiting", false);
+        let stop = ("failed", true);
+
+        // A new head seen by discovery is a new identity and starts its own count.
+        let (target, mut now, policy) = fixture();
+        let mut runs = Vec::new();
+        let mut record = Record::default();
+        for _ in 0..3 {
+            now += Duration::hours(1);
+            record = dispatch_and_end(record, &target, &mut runs, M, now, &policy).record;
+        }
+        let mut moved = target.clone();
+        moved.head_sha = "b".repeat(40);
+        for want in [wait, wait, wait, stop] {
+            now += Duration::hours(1);
+            let decision = dispatch_and_end(record, &moved, &mut runs, M, now, &policy);
+            assert!(
+                (decision.record.phase.as_str(), decision.notify) == want,
+                "new head: {decision:?}"
+            );
+            record = decision.record;
+        }
+
+        // A retarget while the head waits does not reset the count of the head.
+        let (target, mut now, policy) = fixture();
+        let mut runs = Vec::new();
+        let mut record = Record::default();
+        for _ in 0..3 {
+            now += Duration::hours(1);
+            record = dispatch_and_end(record, &target, &mut runs, M, now, &policy).record;
+        }
+        let mut run_bases: BTreeMap<String, String> = runs
+            .iter()
+            .map(|run| (run.workflow_id.clone(), "main".to_owned()))
+            .collect();
+        let workflow_id = |attempt: i64| format!("w{attempt}");
+        let planned = {
+            let retarget = Retarget {
+                base_branch: "dev",
+                run_bases: &run_bases,
+                published_workflow: "published",
+            };
+            now += Duration::hours(1);
+            let first = plan_retarget(
+                &record,
+                &target,
+                &runs,
+                &retarget,
+                workflow_id,
+                now,
+                &policy,
+            )
+            .expect("plan")
+            .expect("a mismatch on another base branch reviewed nothing here");
+            now += policy.debounce;
+            let waited = &first.record;
+            plan_retarget(waited, &target, &runs, &retarget, workflow_id, now, &policy)
+                .expect("plan")
+                .expect("a mismatch on another base branch reviewed nothing here")
+        };
+        assert!(planned.dispatch, "retarget not dispatched: {planned:?}");
+        let mut record = planned.record;
+        record.workflow_id = format!("w{}", record.attempt);
+        runs.push(Run {
+            target: target.clone(),
+            workflow_id: record.workflow_id.clone(),
+            attempt: record.attempt,
+            status: "completed".to_owned(),
+            result: "failure".to_owned(),
+            failure: M.to_owned(),
+            ..Run::default()
+        });
+        run_bases.insert(record.workflow_id.clone(), "dev".to_owned());
+        let retarget = Retarget {
+            base_branch: "dev",
+            run_bases: &run_bases,
+            published_workflow: "published",
+        };
+        let on_dev = plan_retarget(
+            &record,
+            &target,
+            &runs,
+            &retarget,
+            workflow_id,
+            now,
+            &policy,
+        )
+        .expect("plan");
+        assert!(
+            on_dev.is_none(),
+            "the mismatch on dev was skipped: {on_dev:?}"
+        );
+        let decision = plan_on_base(record, &target, &runs, &retarget, workflow_id, now, &policy)
+            .expect("plan");
+        assert!(
+            decision.record.phase == "failed" && decision.notify,
+            "the retargeted head did not stop: {decision:?}"
+        );
+        let fetched = "c".repeat(40);
+        let text = head_mismatch_notification(&target, &decision.record, &fetched);
+        assert!(
+            text.contains(&target.head_sha) && text.contains(&fetched) && text.contains(M),
+            "{text}"
+        );
+        let unknown = head_mismatch_notification(&target, &decision.record, "");
+        assert!(
+            unknown.contains("Fetched commit: not reported."),
+            "{unknown}"
         );
     }
 

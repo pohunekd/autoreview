@@ -288,6 +288,69 @@ pub(crate) fn failure_code(output: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Start of the message of pohunek's `fetch_ref_commit_mismatch`, before the ref name.
+const MISMATCH_START: &str = "fetching \"";
+
+/// Text of that message between the ref name and the fetched commit.
+const MISMATCH_FOUND: &str = "\" from origin found commit ";
+
+/// Text of that message between the fetched and the expected commit.
+const MISMATCH_EXPECTED: &str = " but the request expected ";
+
+/// Returns the commit that a `fetch_ref_commit_mismatch` failure reports as fetched.
+///
+/// pohunek 0.43 names it only in `err.message`: `fetching "<ref>" from origin found commit
+/// <fetched> but the request expected <expected>`. The commit is returned only for that shape,
+/// a full lowercase hex ID, and an expected commit equal to `expected`; otherwise it is empty.
+pub(crate) fn mismatch_commit(output: &str, expected: &str) -> String {
+    let Some(MismatchEnvelope {
+        err: MismatchDetail {
+            message: Some(Value::String(message)),
+        },
+    }) = decode_strict::<MismatchEnvelope>(output)
+    else {
+        return String::new();
+    };
+    message
+        .strip_prefix(MISMATCH_START)
+        .and_then(|rest| rest.split_once(MISMATCH_FOUND))
+        .and_then(|(_, rest)| rest.split_once(MISMATCH_EXPECTED))
+        .filter(|(fetched, want)| {
+            is_full_commit(fetched) && *want == expected && *fetched != expected
+        })
+        .map(|(fetched, _)| fetched.to_owned())
+        .unwrap_or_default()
+}
+
+/// The envelope of a failed head fetch; a key named twice refuses it.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct MismatchEnvelope {
+    /// The error of the call.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    err: MismatchDetail,
+}
+
+autoreview_go_compat::object_only_serde!(MismatchEnvelope);
+
+/// The error object of a failed head fetch; other keys are ignored.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct MismatchDetail {
+    /// The error message, as any JSON value; `None` when absent.
+    message: Option<Value>,
+}
+
+autoreview_go_compat::object_only_serde!(MismatchDetail);
+
+/// Reports whether `token` is a full lowercase hex commit ID of SHA-1 or SHA-256.
+fn is_full_commit(token: &str) -> bool {
+    (token.len() == 40 || token.len() == 64)
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// Returns the `pohunek_response_invalid` error.
 pub(crate) fn response_invalid() -> Error {
     Error::workflow("pohunek_response_invalid", true, None)
@@ -868,7 +931,7 @@ mod tests {
 
     use autoreview_engine::error_code;
 
-    use super::{fetch_ref_from_output, local_environment};
+    use super::{fetch_ref_from_output, local_environment, mismatch_commit};
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items
@@ -972,6 +1035,62 @@ mod tests {
             let got = fetch_ref_from_output(&output);
             let got = got.map_err(|error| error_code(&error).to_owned());
             assert_eq!(got, want.map_err(str::to_owned), "{output}");
+        }
+    }
+
+    /// A head fetch mismatch names the fetched commit only when pohunek's message has the
+    /// shape of pohunek 0.43 and expects the trusted head (#416).
+    #[test]
+    fn head_fetch_mismatch_names_the_fetched_commit() {
+        let expected = "a".repeat(40);
+        let fetched = "b".repeat(40);
+        let other = "c".repeat(40);
+        let message = |found: &str, want: &str| {
+            let text = format!(
+                "fetching \"refs/pull/12/head\" from origin found commit {found} \
+                 but the request expected {want}"
+            );
+            serde_json::to_string(&text).expect("a JSON string")
+        };
+        let failure = |message: &str| {
+            format!(
+                concat!(
+                    r#"{{"cli_version":"0.43.0","err":{{"code":"fetch_ref_commit_mismatch","#,
+                    r#""class":"runtime","message":{},"details":null,"#,
+                    r#""hint":"fetch the ref and pass the commit it points to"}}}}"#
+                ),
+                message
+            )
+        };
+        let exact = message(&fetched, &expected);
+        let cases = [
+            (failure(&exact), fetched.as_str()),
+            (failure(&message(&fetched, &other)), ""),
+            (failure(&message(&fetched[..12], &expected)), ""),
+            (failure(&message(&"B".repeat(40), &expected)), ""),
+            (failure(&message(&expected, &expected)), ""),
+            (failure(&message(&fetched, &format!("{expected}."))), ""),
+            (failure(&exact.replacen('"', "\"note: ", 1)), ""),
+            (
+                failure(&format!(r#""at {fetched}, expected {expected}""#)),
+                "",
+            ),
+            (failure("7"), ""),
+            (failure("null"), ""),
+            (
+                format!(r#"{{"err":{{"message":{exact},"message":{exact}}}}}"#),
+                "",
+            ),
+            (
+                format!(r#"{{"err":{{"message":{exact}}},"err":{{"message":{exact}}}}}"#),
+                "",
+            ),
+            (format!(r#"{{"Err":{{"message":{exact}}}}}"#), ""),
+            (exact.clone(), ""),
+            (String::new(), ""),
+        ];
+        for (output, want) in cases {
+            assert_eq!(mismatch_commit(&output, &expected), want, "{output}");
         }
     }
 }

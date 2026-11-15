@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use autoreview_policy::Level;
+use autoreview_schedule::scheduler::HEAD_FETCH_MISMATCH;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::json;
@@ -357,8 +358,10 @@ fn review_failures(h: &Harness, pr: &PullRequest) -> Vec<String> {
 
 /// A base-checkout session fetches the pull request head only where the host advertises it
 /// (#255). Without the capability, or when the host does not answer the capability read, the
-/// session starts as before and a missing head stops the review; with it, a moved head
-/// re-plans the review and a failed fetch is retried.
+/// session starts as before and a missing head stops the review; with it, a fetched head of
+/// another commit re-plans the review and a failed fetch is retried. A head whose fetched ref
+/// stays at another commit stops after the retry budget with one notice that names both
+/// commits, also across a restart (#416).
 #[tokio::test]
 async fn base_checkout_session_fetches_the_head_where_the_host_supports_it() {
     let mut h = start_harness(|_| {}).await;
@@ -408,7 +411,7 @@ async fn base_checkout_session_fetches_the_head_where_the_host_supports_it() {
         let mut state = h.fake.lock();
         state
             .start_failures
-            .push_back(("head_changed".to_owned(), true));
+            .push_back((HEAD_FETCH_MISMATCH.to_owned(), true));
         state
             .start_failures
             .push_back(("pohunek_head_fetch_failed".to_owned(), false));
@@ -424,7 +427,7 @@ async fn base_checkout_session_fetches_the_head_where_the_host_supports_it() {
         published.len() == 1
             && published[0].decision == Decision::Approve
             && heads == [sha("d")]
-            && review_failures(&h, &fetched) == ["head_changed", ""]
+            && review_failures(&h, &fetched) == [HEAD_FETCH_MISMATCH, ""]
             && review_failures(&h, &missing) == ["review_head_unavailable"]
             && review_failures(&h, &unknown) == ["review_head_unavailable"]
             && started.len() == 3
@@ -433,6 +436,55 @@ async fn base_checkout_session_fetches_the_head_where_the_host_supports_it() {
             && started[2].pull_request.number == fetched.number,
         "with the capability: failures={:?} started={started:?}",
         review_failures(&h, &fetched)
+    );
+    // Every start of this head fetches another commit; the third failure is used by a retry.
+    let lagging = sha("f");
+    {
+        let mut state = h.fake.lock();
+        state.fetched_head.clone_from(&lagging);
+        for _ in 0..3 {
+            let failure = (HEAD_FETCH_MISMATCH.to_owned(), true);
+            state.start_failures.push_back(failure);
+        }
+    }
+    let stuck = integration_pull_request("claude/base", &sha("9"));
+    let stopped = format!("Review for {} at", stuck.key());
+    let fake = Arc::clone(&h.fake);
+    let notes = move || count_notes(&fake.lock().notes, Level::Action, &stopped);
+    h.fake.open(stuck.clone(), h.rule(&stuck.repository));
+    h.poll_until("the stop of the lagging head", || notes() == 1)
+        .await;
+    h.settle().await;
+    h.stop_engine().await;
+    h.start();
+    h.settle().await;
+    h.settle().await;
+    let note = (h.fake.lock().notes.iter())
+        .find(|note| note.message.contains(&stuck.key()))
+        .map(|note| note.message.clone())
+        .unwrap_or_default();
+    let expected = format!("Expected commit: {}. Fetched commit: {lagging}.", sha("9"));
+    assert!(
+        notes() == 1
+            && note.contains(&expected)
+            && note.contains(HEAD_FETCH_MISMATCH)
+            && review_failures(&h, &stuck) == [HEAD_FETCH_MISMATCH, HEAD_FETCH_MISMATCH]
+            && h.fake.lock().start_failures.len() == 1
+            && h.publications() == 1,
+        "the lagging head: failures={:?} note={note}",
+        review_failures(&h, &stuck)
+    );
+    // A retry starts the stopped head once; a ref still at the other commit stops it at once.
+    h.retry(&stuck)
+        .await
+        .expect("the retry of the stopped head");
+    h.poll_until("the second stop of the lagging head", || notes() == 2)
+        .await;
+    assert!(
+        review_failures(&h, &stuck) == [HEAD_FETCH_MISMATCH; 3]
+            && h.fake.lock().start_failures.is_empty(),
+        "the retried head: failures={:?}",
+        review_failures(&h, &stuck)
     );
     h.stop_engine().await;
 }

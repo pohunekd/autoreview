@@ -22,7 +22,7 @@ use crate::model::{
     Candidate, Decision, PollResult, PublishResult, PublishedRecord, PullRequest, RetryRequest,
     ReviewInput,
 };
-use crate::review::input::{RenderOutcome, STEP_RENDERED};
+use crate::review::input::{RenderOutcome, STATE_FETCHED_HEAD, STEP_RENDERED};
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
 
 /// Start value of the latest attempt, below every stored attempt.
@@ -327,7 +327,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 );
             }
             if decision.notify {
-                let message = scheduler::notification(&target, &decision.record);
+                let message = self.failure_notification(&target, &decision.record)?;
                 notices.push(self.notice(record_event(&decision.record), key, message)?);
             }
             if decision.dispatch {
@@ -433,6 +433,26 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             self.store.save_discovery(transaction, &state)
         })?;
         Ok(Pass { result, notices })
+    }
+
+    /// Returns the notice of a failed review that the scheduler reports.
+    ///
+    /// A head stopped on a fetched head of another commit names that commit, which the run
+    /// stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error of the store.
+    fn failure_notification(&self, target: &Target, record: &Record) -> Result<String, Error> {
+        if record.error_code != scheduler::HEAD_FETCH_MISMATCH {
+            return Ok(scheduler::notification(target, record));
+        }
+        let fetched = (self.store)
+            .get_state::<String>(&record.workflow_id, STATE_FETCHED_HEAD)?
+            .unwrap_or_default();
+        Ok(scheduler::head_mismatch_notification(
+            target, record, &fetched,
+        ))
     }
 
     /// Returns the base branch of the stored input of each run of `target`, by workflow ID.

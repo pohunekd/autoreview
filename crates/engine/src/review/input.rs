@@ -48,6 +48,9 @@ pub(crate) const STATE_DEADLINE: &str = "collect_deadline";
 /// State that holds the deadline of the verifier, which runs after the reviewers.
 pub(crate) const STATE_VERIFIER_DEADLINE: &str = "verify_deadline";
 
+/// State that holds the commit of a fetched pull request head that was not the trusted head.
+pub(crate) const STATE_FETCHED_HEAD: &str = "fetched_head";
+
 /// State that holds the credential name a review stored before names adopted.
 pub(crate) const STATE_CREDENTIAL: &str = "credential";
 

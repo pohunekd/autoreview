@@ -14,6 +14,7 @@ use autoreview_policy::TriggerKind;
 use autoreview_policy::{
     Checkout, Level, Permission, Policy, Protocol, Rule, Trigger, VERIFIER_REVIEWER_ID,
 };
+use autoreview_schedule::scheduler::HEAD_FETCH_MISMATCH;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
@@ -21,7 +22,7 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Credential;
-use crate::error::{Error, WORKFLOW_FAILED};
+use crate::error::{BoxError, Error, WORKFLOW_FAILED};
 use crate::integrations::{
     ChangedFile, ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState,
     ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest, TokenAnswer,
@@ -136,6 +137,8 @@ pub(crate) struct FakeState {
     pub(crate) fetch_ref_failures: usize,
     /// Failures of the next session starts, in order, as error code and permanence.
     pub(crate) start_failures: VecDeque<(String, bool)>,
+    /// Commit that a failed start with a head fetch mismatch reports, or empty for none.
+    pub(crate) fetched_head: String,
 }
 
 impl FakeState {
@@ -448,7 +451,14 @@ impl Integrations for FakeIntegration {
                     reviewer_id: request.reviewer.id.clone(),
                 })
             } else if let Some((code, permanent)) = state.start_failures.pop_front() {
-                Err(Error::workflow(code, permanent, None))
+                let fetched = (code == HEAD_FETCH_MISMATCH && !state.fetched_head.is_empty()).then(
+                    || -> BoxError {
+                        let start =
+                            Box::new(Error::workflow("fetch_ref_commit_mismatch", true, None));
+                        Box::new(Error::fetched_head(state.fetched_head.clone(), start))
+                    },
+                );
+                Err(Error::workflow(code, permanent, fetched))
             } else {
                 state.next_session += 1;
                 let id = format!("s-{}", state.next_session);

@@ -669,7 +669,8 @@ def verify_base_checkout(prompt: str, cwd: Path | None = None) -> str:
     verify_checkout_clean(cwd)
     if not commit_available(base_sha, cwd):
         raise InputFrameError("trusted pull request base is unavailable in the review checkout")
-    # Pohunek fetches only the base branch; Codex reads the head through git and cannot fetch.
+    # Pohunek 0.43.0 or later fetches the head at session start, an older one only the base
+    # branch; Codex reads the head through git and cannot fetch.
     if not commit_available(expected_head_sha, cwd):
         raise HeadUnavailableError(
             "trusted pull request head is unavailable in the review checkout"

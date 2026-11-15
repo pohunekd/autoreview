@@ -17,13 +17,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::input::{
-    BACKEND_STEP_SEPARATOR, NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, SlotState, still_wanted,
+    BACKEND_STEP_SEPARATOR, NOTIFY_STEP_PREFIX, SLOT_STATE_PREFIX, STATE_FETCHED_HEAD, SlotState,
+    still_wanted,
 };
 use crate::config::Credential;
 use crate::discovery::poll::live;
 use crate::discovery::{SHUTDOWN, notification_span};
 use crate::engine::{Clock, Engine, StepRetryPolicy, retry_step};
-use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
+use crate::error::{
+    BoxError, Error, WORKFLOW_FAILED, error_code, fetched_head_commit, pohunek_error_code,
+};
 use crate::integrations::{Integrations, SessionRequest};
 use crate::messages::{
     SessionCleanupFailure, approved_review_failed_message, orphaned_session_message,
@@ -730,6 +733,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                     };
                     if permanent || attempt == limits.session_start_attempts {
                         self.remove_orphaned_sessions(&request, attempt).await?;
+                        // The failure keeps the commit of a fetched head for the stop notice.
+                        if fetched_head_commit(&err).is_some() {
+                            return Err(session_fault_from(err));
+                        }
                         return Err(session_fault(&code));
                     }
                     self.count_retry();
@@ -930,6 +937,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         }
         live(&self.cancel)?;
         let (store, id) = (&self.engine.store, self.workflow_id.as_str());
+        // The scheduler's stop notice names the commit of the last fetched head.
+        if let Some(commit) = fetched_head_commit(&cause) {
+            store.set_state(id, STATE_FETCHED_HEAD, commit)?;
+        }
         let Some(run) = run else {
             return store.complete_review(id, RESULT_FAILURE, &code, None);
         };
