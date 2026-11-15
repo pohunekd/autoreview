@@ -30,7 +30,8 @@ impl Policy {
 /// The hashed bytes must not change, because review inputs and logs store the digest. A rule
 /// with `trusted: any` adds nothing, so only a restricted authors section extends the bytes;
 /// `authors` holds the section of each rule, in the order of `rules`. Only a rule with an
-/// author limit hashes `author_limits`, so a policy without one keeps its digest.
+/// author limit hashes `author_limits`, and only a rule with a guard hashes it, so a policy
+/// without either keeps its digest.
 pub(crate) fn digest_of(
     rules: &[Rule],
     authors: &[Authors],
@@ -107,6 +108,16 @@ pub(crate) fn digest_of(
                 limit.reviews,
                 limit.window_hours,
                 limit.over.as_str()
+            ));
+        }
+        // Only a guarded rule adds bytes, so other policies keep their digest.
+        if let Some(guard) = &rule.guard {
+            let fields: Vec<&str> = guard.fields.iter().map(|kind| kind.as_str()).collect();
+            hasher.update(format!(
+                "guard\x00{}\x00{}\x00{}\x00",
+                fields.join(","),
+                guard.threshold,
+                guard.on_suspect.as_str()
             ));
         }
         hasher.update(b"\x00");

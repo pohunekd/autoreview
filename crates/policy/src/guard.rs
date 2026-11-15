@@ -9,6 +9,8 @@ use serde::de::{self, Deserializer};
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
+use crate::Error;
+
 /// What a pull request gets when its guard score reaches the threshold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OnSuspect {
@@ -52,11 +54,30 @@ pub struct RuleGuard {
     pub on_suspect: OnSuspect,
 }
 
+/// The guard section as written in the policy file; an absent key is refused.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct FileGuard {
+    /// Field codes; empty when absent.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    fields: Vec<String>,
+    /// Threshold; zero when absent.
+    threshold: i64,
+    /// Outcome name; empty when absent.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    on_suspect: String,
+}
+
 /// Returns the field kind of a policy file code.
 fn field_kind(code: &str) -> Option<FieldKind> {
     FieldKind::ALL
         .into_iter()
         .find(|kind| kind.as_str() == code)
+}
+
+/// Returns the codes of every field kind, comma separated, for error messages.
+fn field_codes() -> String {
+    FieldKind::ALL.map(FieldKind::as_str).join(", ")
 }
 
 /// Writes the fields as a list of their codes.
@@ -79,4 +100,49 @@ fn deserialize_fields<'de, D: Deserializer<'de>>(
                 .ok_or_else(|| de::Error::custom(format!("unknown guard field {code:?}")))
         })
         .collect()
+}
+
+/// Validates the guard section of a rule; an absent key sets no guard.
+///
+/// # Errors
+///
+/// Returns a guard error when the key is null or a field is missing, unknown or out of range.
+pub(crate) fn parse_guard(raw: Option<&Option<FileGuard>>) -> Result<Option<RuleGuard>, Error> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let Some(raw) = raw else {
+        return Err(Error::GuardNull);
+    };
+    if raw.fields.is_empty() {
+        return Err(Error::GuardFieldsEmpty);
+    }
+    let mut fields = BTreeSet::new();
+    for code in &raw.fields {
+        let kind = field_kind(code).ok_or_else(|| Error::GuardField {
+            field: code.clone(),
+            known: field_codes(),
+        })?;
+        if !fields.insert(kind) {
+            return Err(Error::GuardFieldRepeated {
+                field: code.clone(),
+            });
+        }
+    }
+    // Every score is at least zero, so zero would mark every pull request.
+    let threshold = u32::try_from(raw.threshold)
+        .ok()
+        .filter(|threshold| *threshold >= 1)
+        .ok_or(Error::GuardThreshold { max: u32::MAX })?;
+    let on_suspect = match raw.on_suspect.as_str() {
+        "await" => OnSuspect::Await,
+        "comment" => OnSuspect::Comment,
+        "log" => OnSuspect::Log,
+        _ => return Err(Error::GuardOnSuspect),
+    };
+    Ok(Some(RuleGuard {
+        fields,
+        threshold,
+        on_suspect,
+    }))
 }

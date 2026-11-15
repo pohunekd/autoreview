@@ -144,8 +144,8 @@ pub struct UntrustedReview {
 impl UntrustedReview {
     /// Returns the rule that the review of an untrusted author of `rule` runs under.
     ///
-    /// It keeps the match and the trigger, takes this pipeline and these outcomes, and has no
-    /// notes hand-off and no human review signals.
+    /// It keeps the match, the trigger and the guard, takes this pipeline and these outcomes, and
+    /// has no notes hand-off and no human review signals.
     #[must_use]
     pub fn rule(&self, rule: &Rule) -> Rule {
         Rule {
@@ -156,6 +156,7 @@ impl UntrustedReview {
             on_clean: self.on_clean.clone(),
             on_notes: OnNotes::Unset,
             human_review: None,
+            guard: rule.guard.clone(),
         }
     }
 }

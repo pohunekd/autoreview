@@ -17,6 +17,7 @@ use crate::Error;
 use crate::author_limit::{AuthorLimit, FileAuthorLimit, parse_author_limit, present};
 use crate::authors::{Authors, FileAuthors, parse_authors, user_login_valid};
 use crate::digest::digest_of;
+use crate::guard::{FileGuard, parse_guard};
 use crate::human_review::{FileHumanReview, parse_human_review};
 use crate::types::{
     Checkout, EVENTS, Event, IntentCheck, Level, MAX_APPROVAL_HOURS, MAX_POLICY_BYTES,
@@ -159,6 +160,9 @@ struct FileRule {
     /// Author limit; absent sets no limit, null is refused.
     #[serde(deserialize_with = "present")]
     author_limit: Option<Option<FileAuthorLimit>>,
+    /// Text guard; absent sets no guard, null is refused.
+    #[serde(deserialize_with = "present")]
+    guard: Option<Option<FileGuard>>,
 }
 
 /// The approval section of the policy file.
@@ -963,6 +967,7 @@ fn parse_rule(
     }
     let human_review = parse_human_review(value.human_review.as_ref(), on_clean.clone())?;
     let authors = parse_authors(value.authors.as_ref(), pipelines)?;
+    let guard = parse_guard(value.guard.as_ref())?;
     let rule = Rule {
         match_glob: value.match_glob.clone(),
         trigger,
@@ -971,6 +976,7 @@ fn parse_rule(
         on_clean,
         on_notes,
         human_review,
+        guard,
     };
     Ok((rule, authors))
 }
