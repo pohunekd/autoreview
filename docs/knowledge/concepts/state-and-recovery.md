@@ -110,16 +110,22 @@ These rules also apply to the layers:
   session start whose fetched `refs/pull/<n>/head` is at another commit than the
   trusted head (`pohunek_head_fetch_mismatch`) is planned again after the
   debounce, once for each entry in `schedule.retry_delays_seconds`, without a
-  notice and without spending the scheduler's retries. The next consecutive
-  mismatch stops the head with `review_stopped`. The count is read from the
+  notice and without spending the scheduler's retries. The mismatch after the
+  last entry stops the head with `review_stopped`. The count is read from the
   stored reviews of the head, so a restart neither resets it nor counts a start
   twice.
 - **A usage limit waits on its own delays.** A review that failed with
   `reviewer_usage_limited` is tried again after each delay of
   `schedule.usage_limit_retry_delays_seconds`, without spending the scheduler's
-  retries; the next consecutive limited attempt stops it with `review_stopped`.
-  Only the first limited attempt in a row and the stop send a notice. The count
-  is read from the stored reviews of the head, like the head fetch mismatches.
+  retries; the limited attempt after the last delay stops it with
+  `review_stopped`. Only the first limited attempt of a streak and the stop send
+  a notice. The count is read from the stored reviews of the head, like the head
+  fetch mismatches.
+- **Both counts share one streak.** The latest ended runs of a head that failed
+  with `pohunek_head_fetch_mismatch` or `reviewer_usage_limited` form its
+  streak, and each count is the number of its own code in it. Neither code
+  resets the other's count, and any other ending of a run ends the streak, so
+  a head that alternates the two stops at the first bound it reaches.
 - **A rule's author limit is read from the stored reviews.** A new start over a
   rule's `author_limit` waits for the window or is skipped (`author_limit_reached`).
   The count is the author's stored reviews of the window plus the starts of the

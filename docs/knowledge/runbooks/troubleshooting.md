@@ -307,12 +307,15 @@ run with a result message that has `is_error`, subtype `success` and
 model account on the review host. Only these fields count; the text of the
 result, such as `You've hit your session limit`, is never read, so a review
 that mentions a limit is not taken for one, and an error result with another
-status stays `review_wrapper_invalid`. The reviewer is not run again inside the
+status keeps its code (`review_wrapper_invalid`, or `claude_result_invalid` on
+exit 0). The reviewer is not run again inside the
 review, because a fresh session in the same minute meets the same limit. The
 scheduler tries the whole review again after each delay of
 [`schedule.usage_limit_retry_delays_seconds`](../../configuration.md#schedule),
-without spending `schedule.retry_delays_seconds`. The first limited attempt in
-a row sends a `retry_scheduled` notice; the next ones send none. When the
+without spending `schedule.retry_delays_seconds`. The first limited attempt
+sends a `retry_scheduled` notice; the next ones send none, also after a
+`pohunek_head_fetch_mismatch` between them, which keeps the count. Any other
+end of a run starts the count again. When the
 delays are spent, the review stops with a `review_stopped` notice; run
 `autoreview retry` after the limit resets. Such a retry continues the count of
 limited attempts, so a run that meets the limit again stops at once. The
@@ -368,8 +371,9 @@ after a push, so the head starts again after the debounce, without a
 notification, once for each entry in `schedule.retry_delays_seconds`. When
 the next start still fetches another commit, the review stops with a
 `review_stopped` notification that names the expected and the fetched commit.
-Only consecutive mismatching starts of one head count: any other end of a run
-starts the count again, and a new head starts its own review. Check the pull
+Only the latest mismatching starts of one head count: a
+`reviewer_usage_limited` end between them keeps the count, any other end of a
+run starts the count again, and a new head starts its own review. Check the pull
 request on GitHub, then retry it or push a new commit; a retry starts the head
 once and stops it again at once if the ref is still at the other commit.
 
