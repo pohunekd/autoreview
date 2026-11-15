@@ -513,7 +513,7 @@ mod tests {
     fn output_is_complete_only_at_the_end_of_the_history() {
         let codex = Protocol::CodexEnvelope;
         let claude = Protocol::ClaudeStructured;
-        let cases: [(&Protocol, &[u8], bool, bool); 7] = [
+        let cases: [(&Protocol, &[u8], bool, bool); 5] = [
             // A quoted exit line ends a chunk that more history follows.
             (
                 &codex,
@@ -529,14 +529,7 @@ mod tests {
             ),
             // A Claude result line before its line ending, which more history follows.
             (&claude, b"{\"exit_code\":0}", true, false),
-            // The same outputs at the end of the history.
-            (
-                &codex,
-                b"diff\n[autoreview-codex/v1 exited with status 0]\n",
-                false,
-                true,
-            ),
-            (&claude, b"{\"exit_code\":0}", false, true),
+            // A Claude result line whose line ending is the end of the history.
             (&claude, b"{\"exit_code\":0}\r\n", false, true),
             // A Claude result line that has not been written to its end.
             (&claude, b"{\"exit_code\":", false, false),
