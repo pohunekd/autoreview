@@ -149,6 +149,7 @@ one versioned JSON document for a dashboard of your own.
 | [Writing prompts](knowledge/guides/writing-prompts.md) | Review and verifier prompts |
 | [Approve from chat](knowledge/guides/hermes-approval.md) | A chat agent approves a waiting review through the MCP server |
 | [MCP server](knowledge/guides/mcp-server.md) | Reviews as MCP tools for any agent |
+| [Enable the text guard](knowledge/guides/text-guard.md) | Shadow mode and corpus measurement for the prompt-injection guard |
 
 | Operate | |
 |---|---|

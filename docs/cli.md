@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, approve, resolve, retry, review-queue, backup-db and prune-branches - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, approve, resolve, retry, review-queue, backup-db, prune-branches and guard scan - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -23,9 +23,9 @@ other one from the environment. The file holds `NAME=value` lines; see
 that fails a check is `configuration_invalid`; the message names the path, and the mode,
 the owner or the line number.
 
-Every command except `init` and `profiles install` reads the configuration from `--config` or
-`AUTOREVIEW_CONFIG` and validates it together with the policy before doing
-anything. Output is
+Every command except `init`, `profiles install` and `guard scan` reads the
+configuration from `--config` or `AUTOREVIEW_CONFIG` and validates it together
+with the policy before doing anything. Output is
 one JSON object (or array) on stdout, except the text summary of `stats` without
 `--json`; logs are JSON lines on stderr. A failed
 command prints `{"error": "<code>", ...}` with a stable error code and exits
@@ -307,6 +307,64 @@ credential and adds what GitHub answered, in file order:
 `expires_at` is the token's expiry in UTC; it is `null` when GitHub sends no
 expiry, as for a token that never expires. Token values are never printed.
 
+### `autoreview guard scan`
+
+```
+autoreview guard scan --lexicon <PATH> --max-input-bytes <BYTES> --threshold <SCORE>
+  --fields <LIST> <CORPUS>
+```
+
+Runs the [text guard](policy.md#guard) over a corpus of pull request texts, to
+measure a lexicon, fields and a threshold before a rule uses them; see
+[enable the text guard](knowledge/guides/text-guard.md). It reads no
+configuration, makes no network call and writes nothing. Every option is
+required and means what its key means: `--lexicon` as
+`guards.text.lexicon_file` (any path), `--max-input-bytes` as
+`guards.text.max_input_bytes` (1 to 4194304), `--threshold` as
+`guard.threshold` (at least 1) and `--fields` as `guard.fields`, comma
+separated, each once. A value out of range is `command_invalid`; a lexicon file
+that cannot be read or does not validate is `guard_lexicon_invalid`.
+
+`CORPUS` is a JSONL file: one object per pull request, each on one line, every
+key required (wrapped here):
+
+```json
+{"repository": "acme/widget", "number": 7, "truncated": false,
+ "texts": [{"kind": "body", "text": "Fix the parser."}]}
+```
+
+`kind` is a field code (`title`, `body`, `commit_message`, `comment`,
+`review_thread`, `patch`, where a `patch` text is the unified diff of one
+file), and `truncated` says that the fetch left text out.
+[`scripts/guard-corpus`](knowledge/guides/text-guard.md#fetch-a-false-positive-corpus)
+writes such a file. A file that cannot be read, has no line or a line that is
+not such an object (an empty line included) is `guard_corpus_invalid`; the
+log line names the line number and the kind of error, never its text.
+
+Each pull request is scanned as a review's guard step scans it: only the texts
+of `--fields`, bounded by `--max-input-bytes` in field order, with the same
+scan. It is suspect when its score reaches `--threshold` or its text was left
+out (`truncated` in the line, or cut at the bound). Prints signal codes only:
+
+```json
+{
+  "pull_requests": [
+    {"repository": "acme/widget", "number": 7, "score": 100,
+     "signals": [{"field": "body", "signal": "unicode_tags", "count": 1}],
+     "truncated": false, "suspect": true}
+  ],
+  "summary": {"pull_requests": 1, "flagged": 1, "flagged_percent": 100.0,
+              "hidden_text": 1, "truncated": 0, "signals": {"unicode_tags": 1}}
+}
+```
+
+`flagged` counts the suspect pull requests and `flagged_percent` is their share,
+rounded down to two decimals. `hidden_text` counts the pull requests with at
+least one signal of the hidden-text class (every signal except
+`bidi_control_in_patch`, `chat_template_token` and `lexicon_phrase`),
+`truncated` those whose text was left out, and `signals` the pull requests per
+signal code found.
+
 ## Service
 
 ### `autoreview serve`
@@ -525,6 +583,7 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `init_write_failed` | `init` could not check, create or write a path; the `configuration` field names it |
 | `profile_host_not_local`, `runtime_package_missing` | `profiles install` was run on the wrong host, or the official runtime package is missing |
 | `profile_foreign`, `profile_write_failed` | `profiles install` found a file it did not write, or could not write the path it names |
+| `guard_lexicon_invalid`, `guard_corpus_invalid` | `guard scan` could not read its lexicon file or it does not validate, or its corpus file cannot be read, has no line or has a malformed line; the log line names the cause and the line number |
 | `pohunek_command_failed` | `profiles install` could not read the answer of a pohunek command about the local daemon, or that command ran past `--pohunek-timeout-seconds`; a failed or timed-out check of a named `--host` is `profile_host_not_local` |
 | `repository_not_allowed`, `review_identity_invalid` | Malformed repository or pull request number, or an approval whose identity differs from the stored review |
 | `head_prefix_invalid` | `HEAD_PREFIX` of `retry` or `resolve` (`head_prefix` of the MCP tools) is not 12 to 40 lowercase hexadecimal characters |
@@ -571,7 +630,7 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `base_branch_changed` | The pull request's base branch changed while its review ran; the review ends as `superseded` and the pull request is reviewed again, see [incremental reviews](knowledge/concepts/incremental-reviews.md) |
 | `review_history_limit_exceeded` | The store holds more reviews than `schedule.state_entry_limit`; the discovery pass dispatches nothing rather than over a review it cannot see |
 | `review_request_event_missing` | GitHub lists no review request event for a pull request that asks for a review; `candidates` shows it as rejected with this code |
-| `base_branch_unsupported` | The pull request's base branch name is not 1 to 255 ASCII letters, digits, `.`, `_`, `/` and `-` without `..`; GitHub allows such names, autoreview does not, see [prompt injection](knowledge/safety/prompt-injection.md); `candidates` shows it as rejected with this code, and a review whose pull request moved to such a branch fails with it; not retried |
+| `base_branch_unsupported` | The pull request's base branch name is longer than 255 bytes, or has a character other than ASCII letters, digits, `.`, `_`, `/` and `-`, or `..` (an empty name is `github_response_invalid`); GitHub allows such names, autoreview does not, see [prompt injection](knowledge/safety/prompt-injection.md); `candidates` shows it as rejected with this code, and a review whose pull request moved to such a branch fails with it; not retried |
 | `pohunek_session_not_found`, `pohunek_response_invalid` | A pohunek call named a session that the review host does not have, or its answer did not read; a route lookup that fails this way waits for a review host, as after `pohunek_request_failed` |
 | `session_identity_ambiguous`, `session_identity_invalid` | The review host lists two sessions of the review's name, or the session of that name has another profile, project or branch, reports malformed IDs or runtime generation, or is not running live in a linked worktree; not retried |
 | `host_state_invalid`, `host_state_stale`, `host_state_unavailable` | The state read of a host did not read as `HostCapacity` v1, was older than `max_age_seconds`, or could not run; `pohunek.host_state.unknown_state` decides whether the host is used, see [configuration](configuration.md#pohunek) |

@@ -124,6 +124,45 @@ pub enum Signal {
 }
 
 impl Signal {
+    /// Every signal, in declaration order.
+    pub const ALL: [Self; 13] = [
+        Self::UnicodeTags,
+        Self::ZeroWidthRun,
+        Self::VariationSelectorRun,
+        Self::InvisibleRun,
+        Self::BidiOverride,
+        Self::BidiControlInPatch,
+        Self::HiddenCommentInstruction,
+        Self::CollapsedBlockInstruction,
+        Self::HiddenElementInstruction,
+        Self::LinkMetadataInstruction,
+        Self::ReferenceDefinitionInstruction,
+        Self::ChatTemplateToken,
+        Self::LexiconPhrase,
+    ];
+
+    /// Reports whether the signal marks text that a reader of the page does not see.
+    ///
+    /// These signals form the hidden-text class. A bidi control in a patch is not: code
+    /// with right-to-left text uses such controls. A chat-template token and a lexicon
+    /// phrase are visible text.
+    #[must_use]
+    pub const fn hides_text(self) -> bool {
+        match self {
+            Self::UnicodeTags
+            | Self::ZeroWidthRun
+            | Self::VariationSelectorRun
+            | Self::InvisibleRun
+            | Self::BidiOverride
+            | Self::HiddenCommentInstruction
+            | Self::CollapsedBlockInstruction
+            | Self::HiddenElementInstruction
+            | Self::LinkMetadataInstruction
+            | Self::ReferenceDefinitionInstruction => true,
+            Self::BidiControlInPatch | Self::ChatTemplateToken | Self::LexiconPhrase => false,
+        }
+    }
+
     /// Returns the stable code of the signal; stored and published, never renamed.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

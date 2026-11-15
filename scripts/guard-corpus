@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Fetches a corpus of closed pull requests for `autoreview guard scan`, as JSONL.
+
+Run as `python3 -I scripts/guard-corpus --gh-binary PATH --count N --page-limit PAGES
+--output FILE OWNER/REPO...`. For each repository it reads the N most recently created
+closed (merged or not) pull requests through `gh api`, with the login of that gh, and
+writes one line per pull request: its repository, number, the texts the text guard can
+scan (title, body, commit messages, comments and review bodies, review thread comments,
+the patch of each changed file) and `truncated`.
+
+`truncated` follows the rules of the review step's read, so `guard scan` treats such a
+pull request as suspect, as a review would: a list longer than PAGES pages of 100, a
+review thread of more than 100 comments, a changed file with added lines but no patch
+(GitHub leaves out large diffs), or a changed-files listing that reached 3000 files or has
+fewer files than the pull request. It also sets it for 250 commits, the most the REST API
+lists, and pages review comments one by one where a review pages threads, so it can only
+set it more often. Unlike a review, it keeps the comments of the reviewing account.
+
+The script only reads GitHub through the given gh; it sends the texts nowhere and writes
+only FILE, which must not exist yet. It exits 2 on a usage error and 1 when a gh call
+fails, and then removes FILE.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+PAGE_SIZE = 100
+# GitHub lists at most 3000 changed files of a pull request.
+FILES_MAX = 3000
+# The REST API lists at most 250 commits of a pull request.
+COMMITS_MAX = 250
+# The review step reads the first 100 comments of each review thread.
+THREAD_COMMENTS_MAX = 100
+
+
+class Fetch:
+    """Runs `gh api` GET calls for one corpus."""
+
+    def __init__(self, gh, page_limit):
+        self.gh = gh
+        self.page_limit = page_limit
+
+    def get(self, path, **fields):
+        """Returns the decoded JSON answer of one GET call."""
+        command = [self.gh, "api", "-X", "GET", path]
+        for name, value in fields.items():
+            command += ["-f", f"{name}={value}"]
+        done = subprocess.run(command, capture_output=True, check=False)
+        if done.returncode != 0:
+            raise RuntimeError(f"gh api {path} exited with {done.returncode}")
+        return json.loads(done.stdout)
+
+    def pages(self, path, limit=None, **fields):
+        """Returns the entries of a paged list and whether entries were left out."""
+        limit = self.page_limit if limit is None else limit
+        entries = []
+        for page in range(1, limit + 1):
+            batch = self.get(path, per_page=PAGE_SIZE, page=page, **fields)
+            entries += batch
+            if len(batch) < PAGE_SIZE:
+                return entries, False
+        return entries, True
+
+
+def texts_of(fetch, repository, pull):
+    """Returns the texts of one pull request and whether the read left text out."""
+    base = f"repos/{repository}"
+    number = pull["number"]
+    texts = [("title", pull["title"] or ""), ("body", pull["body"] or "")]
+    commits, cut_commits = fetch.pages(f"{base}/pulls/{number}/commits")
+    texts += [("commit_message", c["commit"]["message"] or "") for c in commits]
+    comments, cut_comments = fetch.pages(f"{base}/issues/{number}/comments")
+    texts += [("comment", c["body"] or "") for c in comments]
+    reviews, cut_reviews = fetch.pages(f"{base}/pulls/{number}/reviews")
+    texts += [("comment", r["body"] or "") for r in reviews]
+    threads, cut_threads = fetch.pages(f"{base}/pulls/{number}/comments")
+    texts += [("review_thread", c["body"] or "") for c in threads]
+    per_thread = {}
+    for comment in threads:
+        root = comment.get("in_reply_to_id") or comment["id"]
+        per_thread[root] = per_thread.get(root, 0) + 1
+    long_thread = any(count > THREAD_COMMENTS_MAX for count in per_thread.values())
+    detail = fetch.get(f"{base}/pulls/{number}")
+    file_pages = min(fetch.page_limit, FILES_MAX // PAGE_SIZE)
+    files, cut_files = fetch.pages(f"{base}/pulls/{number}/files", file_pages)
+    texts += [("patch", f.get("patch") or "") for f in files]
+    omitted = any(f["additions"] > 0 and not f.get("patch") for f in files)
+    truncated = (
+        cut_commits or len(commits) >= COMMITS_MAX or cut_comments or cut_reviews
+        or cut_threads or long_thread or omitted or cut_files
+        or len(files) < detail["changed_files"]
+    )
+    kept = [{"kind": kind, "text": text} for kind, text in texts if text]
+    return kept, truncated
+
+
+def write_corpus(fetch, repositories, count, out):
+    """Writes the corpus lines of every repository to `out`."""
+    for repository in repositories:
+        pages = -(-count // PAGE_SIZE)
+        pulls, _ = fetch.pages(f"repos/{repository}/pulls", pages, state="closed",
+                               sort="created", direction="desc")
+        for pull in pulls[:count]:
+            texts, truncated = texts_of(fetch, repository, pull)
+            record = {
+                "repository": repository,
+                "number": pull["number"],
+                "texts": texts,
+                "truncated": truncated,
+            }
+            out.write(json.dumps(record, ensure_ascii=True) + "\n")
+
+
+def positive(text):
+    """Parses a whole number above 0 for argparse."""
+    if not text.isdigit() or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number above 0")
+    return int(text)
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="guard-corpus", allow_abbrev=False)
+    parser.add_argument("--gh-binary", required=True, help="absolute path of gh")
+    parser.add_argument("--count", required=True, type=positive,
+                        help="closed pull requests read per repository")
+    parser.add_argument("--page-limit", required=True, type=positive,
+                        help="pages of 100 read per list, as schedule.search_page_limit")
+    parser.add_argument("--output", required=True, help="the JSONL file; must not exist")
+    parser.add_argument("repositories", nargs="+", metavar="OWNER/REPO")
+    arguments = parser.parse_args()
+    if not os.path.isabs(arguments.gh_binary):
+        parser.error("--gh-binary must be an absolute path")
+    for repository in arguments.repositories:
+        if not REPOSITORY.fullmatch(repository):
+            parser.error(f"{repository!r} is not OWNER/REPO")
+    try:
+        out = open(arguments.output, "x", encoding="ascii", newline="\n")
+    except OSError as error:
+        parser.error(f"--output cannot be created: {error.strerror}")
+    fetch = Fetch(arguments.gh_binary, arguments.page_limit)
+    try:
+        with out:
+            write_corpus(fetch, arguments.repositories, arguments.count, out)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
+        os.remove(arguments.output)
+        print(f"guard-corpus: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

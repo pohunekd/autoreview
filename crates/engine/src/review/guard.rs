@@ -9,6 +9,7 @@ use autoreview_policy::{Event, GuardField, Level, OnSuspect, RuleGuard};
 
 use super::input::{NOTIFY_STEP_PREFIX, STEP_GUARD};
 use super::sessions::Review;
+use crate::config::TextGuard;
 use crate::discovery::poll::live;
 use crate::engine::Clock;
 use crate::error::Error;
@@ -84,6 +85,27 @@ fn outcome_of(guard: &RuleGuard, report: &Report, truncated: bool) -> GuardOutco
     }
 }
 
+/// Bounds and scans the texts of `guard`'s fields as the review's guard step does.
+///
+/// The step and `autoreview guard scan` share it. Texts of other kinds are dropped. A read
+/// that left text out, or a text that `settings.max_input_bytes` cut, makes the outcome
+/// truncated and suspect.
+#[must_use]
+pub fn guard_outcome(guard: &RuleGuard, settings: &TextGuard, read: GuardTexts) -> GuardOutcome {
+    let texts: Vec<GuardText> = (read.texts.into_iter())
+        .filter(|text| guard.fields.contains(&GuardField::Kind(text.kind)))
+        .collect();
+    let (texts, cut) = bound_texts(texts, settings.max_input_bytes);
+    let fields: Vec<Field<'_>> = (texts.iter())
+        .map(|text| Field {
+            kind: text.kind,
+            text: &text.text,
+        })
+        .collect();
+    let report = scan(&fields, &settings.lexicon);
+    outcome_of(guard, &report, read.truncated || cut)
+}
+
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
     /// Runs the text guard of the rule once per review and notifies a suspect result.
     ///
@@ -124,15 +146,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                         ))
                         .await?
                     };
-                    let (texts, cut) = bound_texts(read.texts, settings.max_input_bytes);
-                    let fields: Vec<Field<'_>> = (texts.iter())
-                        .map(|text| Field {
-                            kind: text.kind,
-                            text: &text.text,
-                        })
-                        .collect();
-                    let report = scan(&fields, &settings.lexicon);
-                    Ok(outcome_of(guard, &report, read.truncated || cut))
+                    Ok(guard_outcome(guard, settings, read))
                 }
             })
             .await?;

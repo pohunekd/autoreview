@@ -421,12 +421,20 @@ guard:
   - `comment`: a request for changes on an untrusted author's pull request is
     published as a comment.
   - `log`: nothing changes; only the stored result and the notification remain.
-- A pull request is suspect when its score reaches `threshold`, when the read
-  stopped at `guards.text.max_input_bytes` or the page limit (the rest was not
-  scanned), when the changed-files listing has fewer files than the pull
-  request (GitHub lists at most 3000), or when the configuration has no
-  `guards.text` section. The last case and a stored guard this engine cannot
-  read behave as `await`.
+- A pull request is suspect when its score reaches `threshold`, when the
+  configuration has no `guards.text` section, or when the read left text out,
+  so the rest was not scanned:
+  - the text reached `guards.text.max_input_bytes`, or a list reached the page
+    limit (`schedule.search_page_limit` pages of 100);
+  - a review thread has more than 100 comments, or a comment GitHub does not
+    return;
+  - a changed file has added lines but no patch (GitHub leaves out the patch
+    of a large diff);
+  - the changed-files listing reached 3000 files, GitHub's limit, or has fewer
+    files than the pull request.
+
+  The missing section and a stored guard this engine cannot read behave as
+  `await`.
 - No outcome requests changes: the guard never blocks a pull request.
 - Every suspect pull request sends one `guard_suspect` message at level
   `action`, whatever the outcome. It names the signal codes, the score and the
