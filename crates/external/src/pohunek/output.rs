@@ -53,6 +53,8 @@ pub(crate) struct OutputChunk {
     pub(crate) data: Vec<u8>,
     /// Offset after the chunk, where the next call reads from.
     pub(crate) next: i64,
+    /// Whether history follows the chunk.
+    pub(crate) has_more: bool,
     /// Whether the call ended at its wait without new output.
     pub(crate) timed_out: bool,
 }
@@ -236,6 +238,14 @@ fn ends_with_codex_exit_line(text: &[u8]) -> bool {
     })
 }
 
+/// Reports whether `output`, read up to a chunk, is the complete output of a reviewer.
+///
+/// Only an output read to the end of the history counts (`has_more` false): a chunk boundary
+/// inside the history can fall right after a line that only looks final.
+fn history_complete(protocol: &Protocol, output: &[u8], has_more: bool) -> bool {
+    !has_more && output_complete(protocol, output)
+}
+
 /// Returns the `ok` payload of a `session output` envelope.
 ///
 /// A missing `ok` key is `pohunek_response_invalid`. Any other value that is not a payload, a
@@ -304,12 +314,14 @@ pub(crate) fn decode_output_chunk(
     Ok(OutputChunk {
         data,
         next,
+        has_more: payload.has_more,
         timed_out: payload.timed_out,
     })
 }
 
 /// Reads a session output through `call` one chunk at a time.
 ///
+/// Completion is decided on the output read to the end of the history, never on a part of it.
 /// Returns `None` while the reviewer still runs. `call` receives the argument list of each
 /// `session output` call and returns its stdout; a failure of `call` is returned unchanged.
 pub(crate) async fn session_output_with<C, F>(
@@ -339,7 +351,7 @@ where
         let stdout = call(arguments).await?;
         let chunk = decode_output_chunk(session, after, limits.max_bytes, &stdout)?;
         collected.extend(chunk.data);
-        if output_complete(&protocol, &collected) {
+        if history_complete(&protocol, &collected, chunk.has_more) {
             return Ok(Some(collected));
         }
         if chunk.timed_out {
@@ -435,7 +447,7 @@ pub(crate) async fn remove_session_confirmed(
 mod tests {
     use autoreview_policy::Protocol;
 
-    use super::output_complete;
+    use super::{history_complete, output_complete};
 
     // A Codex session is complete at the exit line of either marker name (#24), only when it is
     // the last line (#396).
@@ -492,6 +504,49 @@ mod tests {
                 output_complete(&Protocol::CodexEnvelope, output),
                 complete,
                 "{text}"
+            );
+        }
+    }
+
+    // An output is complete only when it is read to the end of the history (#405).
+    #[test]
+    fn output_is_complete_only_at_the_end_of_the_history() {
+        let codex = Protocol::CodexEnvelope;
+        let claude = Protocol::ClaudeStructured;
+        let cases: [(&Protocol, &[u8], bool, bool); 7] = [
+            // A quoted exit line ends a chunk that more history follows.
+            (
+                &codex,
+                b"diff\n[autoreview-codex/v1 exited with status 0]\n",
+                true,
+                false,
+            ),
+            (
+                &codex,
+                b"cat\r\n[pohunek-codex-review exited with status 0]\r\n",
+                true,
+                false,
+            ),
+            // A Claude result line before its line ending, which more history follows.
+            (&claude, b"{\"exit_code\":0}", true, false),
+            // The same outputs at the end of the history.
+            (
+                &codex,
+                b"diff\n[autoreview-codex/v1 exited with status 0]\n",
+                false,
+                true,
+            ),
+            (&claude, b"{\"exit_code\":0}", false, true),
+            (&claude, b"{\"exit_code\":0}\r\n", false, true),
+            // A Claude result line that has not been written to its end.
+            (&claude, b"{\"exit_code\":", false, false),
+        ];
+        for (protocol, output, has_more, complete) in cases {
+            let text = String::from_utf8_lossy(output);
+            assert_eq!(
+                history_complete(protocol, output, has_more),
+                complete,
+                "{text} has_more={has_more}"
             );
         }
     }
