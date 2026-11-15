@@ -111,3 +111,151 @@ pub enum Signal {
     /// A lexicon entry; the count is the number of distinct entries found.
     LexiconPhrase,
 }
+
+impl Signal {
+    /// Returns the stable code of the signal; stored and published, never renamed.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnicodeTags => "unicode_tags",
+            Self::ZeroWidthRun => "zero_width_run",
+            Self::VariationSelectorRun => "variation_selector_run",
+            Self::InvisibleRun => "invisible_run",
+            Self::BidiOverride => "bidi_override",
+            Self::BidiControlInPatch => "bidi_control_in_patch",
+            Self::HiddenCommentInstruction => "hidden_comment_instruction",
+            Self::CollapsedBlockInstruction => "collapsed_block_instruction",
+            Self::HiddenElementInstruction => "hidden_element_instruction",
+            Self::LinkMetadataInstruction => "link_metadata_instruction",
+            Self::ReferenceDefinitionInstruction => "reference_definition_instruction",
+            Self::ChatTemplateToken => "chat_template_token",
+            Self::LexiconPhrase => "lexicon_phrase",
+        }
+    }
+
+    /// Returns what one signal adds to the score; a lexicon entry carries its own weight.
+    const fn weight(self) -> u32 {
+        match self {
+            Self::BidiControlInPatch => BIDI_IN_PATCH_WEIGHT,
+            Self::ChatTemplateToken => CHAT_TEMPLATE_WEIGHT,
+            Self::LexiconPhrase => 0,
+            Self::UnicodeTags
+            | Self::ZeroWidthRun
+            | Self::VariationSelectorRun
+            | Self::InvisibleRun
+            | Self::BidiOverride
+            | Self::HiddenCommentInstruction
+            | Self::CollapsedBlockInstruction
+            | Self::HiddenElementInstruction
+            | Self::LinkMetadataInstruction
+            | Self::ReferenceDefinitionInstruction => HIDDEN_TEXT_WEIGHT,
+        }
+    }
+}
+
+/// One signal found in the fields of one kind, with how often it occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hit {
+    /// The kind of the fields the signal was found in.
+    pub field: FieldKind,
+    /// The signal.
+    pub signal: Signal,
+    /// Occurrences over all fields of that kind; distinct entries for `LexiconPhrase`.
+    pub count: u32,
+}
+
+/// The hits of a scan, ordered by field kind then signal, and their score.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    /// One hit per field kind and signal found, never with a zero count.
+    pub hits: Vec<Hit>,
+    /// The weights of the distinct signals plus those of the distinct lexicon entries found.
+    pub score: u32,
+}
+
+/// Errors of the guard crate: a lexicon that does not validate.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum Error {
+    /// A lexicon line does not start with a whole number from 1 to `LEXICON_MAX_WEIGHT`.
+    #[error("lexicon line {line}: the weight is not a number from 1 to {LEXICON_MAX_WEIGHT}")]
+    LexiconWeight {
+        /// The 1-based line number.
+        line: usize,
+    },
+    /// A lexicon line has no letter or digit after its weight.
+    #[error("lexicon line {line}: the phrase has no letter or digit")]
+    LexiconPhrase {
+        /// The 1-based line number.
+        line: usize,
+    },
+    /// A lexicon line holds the same phrase as an earlier line.
+    #[error("lexicon line {line}: the phrase repeats line {first}")]
+    LexiconDuplicate {
+        /// The 1-based line number of the repeat.
+        line: usize,
+        /// The 1-based line number of the first occurrence.
+        first: usize,
+    },
+    /// The lexicon has no entry.
+    #[error("the lexicon has no phrase")]
+    LexiconEmpty,
+}
+
+/// Scans the fields and scores what it found.
+///
+/// Signals found in several fields of one kind add up under that kind. The score counts each
+/// signal and each lexicon entry once, whatever the number of occurrences.
+#[must_use]
+pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
+    let mut counts: BTreeMap<(FieldKind, Signal), u32> = BTreeMap::new();
+    let mut entries_by_kind: BTreeMap<FieldKind, BTreeSet<usize>> = BTreeMap::new();
+    for field in fields {
+        let rendered = field.kind.renders_markdown();
+        let mut add = |signal: Signal, count: u32| {
+            if count > 0 {
+                let total = counts.entry((field.kind, signal)).or_insert(0);
+                *total = total.saturating_add(count);
+            }
+        };
+        let code = if rendered {
+            markdown::scan(field.text, &mut add)
+        } else {
+            Vec::new()
+        };
+        let shown = match field.kind {
+            FieldKind::Patch => added_lines(field.text),
+            _ if rendered => rendered_text(field.text, &code),
+            _ => field.text.to_owned(),
+        };
+        characters::scan(&shown, field.kind == FieldKind::Patch, &mut add);
+        add(Signal::ChatTemplateToken, template::count(&shown));
+        let normalized = words::normalize(&shown);
+        entries_by_kind
+            .entry(field.kind)
+            .or_default()
+            .extend(lexicon.found(&normalized));
+    }
+    let mut all_entries = BTreeSet::new();
+    for (kind, entries) in entries_by_kind {
+        let count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+        if count > 0 {
+            counts.insert((kind, Signal::LexiconPhrase), count);
+        }
+        all_entries.extend(entries);
+    }
+    let signals: BTreeSet<Signal> = counts.keys().map(|&(_, signal)| signal).collect();
+    let score = signals
+        .iter()
+        .map(|signal| signal.weight())
+        .chain(lexicon.weights(&all_entries))
+        .fold(0_u32, u32::saturating_add);
+    let hits = counts
+        .into_iter()
+        .map(|((field, signal), count)| Hit {
+            field,
+            signal,
+            count,
+        })
+        .collect();
+    Report { hits, score }
+}
