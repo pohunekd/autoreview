@@ -100,6 +100,9 @@ enum Invocation {
     /// Manages the pohunek agent profiles of the reviewers on this host.
     #[command(subcommand)]
     Profiles(profiles::ProfilesCommand),
+    /// Runs the text guard over a corpus of pull request texts, offline.
+    #[command(subcommand)]
+    Guard(guard_scan::GuardCommand),
     /// A command that loads the configuration first.
     #[command(flatten)]
     Configured(Command),
@@ -227,6 +230,11 @@ async fn main() -> ExitCode {
                 .and_then(|done| print_json(&done)),
             Ok(Cli {
                 config,
+                command: Invocation::Guard(command),
+                ..
+            }) => guard_scan::run(config.as_deref(), &command).and_then(|done| print_json(&done)),
+            Ok(Cli {
+                config,
                 env_file,
                 command: Invocation::Configured(command),
             }) => run(config, env_file, command).await,
@@ -249,7 +257,7 @@ async fn main() -> ExitCode {
 /// # Errors
 ///
 /// Returns the clap error; a `--` argument is an `UnknownArgument` error, and `--env-file`
-/// with `init` or `profiles`, which read no secret, an `ArgumentConflict` error.
+/// with `init`, `profiles` or `guard`, which read no secret, an `ArgumentConflict` error.
 fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
     if arguments.iter().skip(1).any(|argument| argument == ESCAPE) {
         return Err(Cli::command().error(
@@ -261,7 +269,7 @@ fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
     if cli.env_file.is_some() && !matches!(cli.command, Invocation::Configured(_)) {
         return Err(Cli::command().error(
             ErrorKind::ArgumentConflict,
-            format!("{ENV_FILE_FLAG} is not an option of init and profiles"),
+            format!("{ENV_FILE_FLAG} is not an option of init, profiles and guard"),
         ));
     }
     Ok(cli)

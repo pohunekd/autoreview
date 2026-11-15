@@ -3,24 +3,58 @@
 //! It reads a JSONL corpus, one pull request per line, and scans each with the bound and the
 //! scan of the review step. It makes no network call and prints signal codes, never text.
 
-#![expect(dead_code, reason = "called by guard scan from round 3")]
-
 // Rust guideline compliant 2026-11-15
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::BufRead;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::num::NonZeroU64;
+use std::path::{Path, PathBuf};
 
 use autoreview_engine::config::TextGuard;
 use autoreview_engine::integrations::{GuardText, GuardTexts};
 use autoreview_engine::model::GuardSignal;
 use autoreview_engine::{Error, guard_outcome};
 use autoreview_guard::{FieldKind, Signal};
-use autoreview_policy::RuleGuard;
+use autoreview_policy::{GuardField, OnSuspect, RuleGuard};
+use clap::{Args, Subcommand};
 use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::command_invalid;
+use crate::config_file::{GUARD_INPUT_MAX_BYTES, read_lexicon};
 
 /// Error code of an unreadable, empty or malformed corpus file.
 const GUARD_CORPUS_INVALID: &str = "guard_corpus_invalid";
+
+/// Error code of a lexicon file that cannot be read or fails the guard's validation.
+const GUARD_LEXICON_INVALID: &str = "guard_lexicon_invalid";
+
+/// The subcommands of `guard`.
+#[derive(Debug, Subcommand)]
+pub(crate) enum GuardCommand {
+    /// Scans a JSONL corpus of pull request texts and prints each result and a summary.
+    Scan(ScanArguments),
+}
+
+/// The options of `guard scan`; every one is required.
+#[derive(Debug, Args)]
+pub(crate) struct ScanArguments {
+    /// Path of the lexicon file, in the format of `guards.text.lexicon_file`.
+    #[arg(long, value_name = "PATH")]
+    lexicon: PathBuf,
+    /// Largest amount of text scanned per pull request, as `guards.text.max_input_bytes`.
+    #[arg(long, value_name = "BYTES")]
+    max_input_bytes: usize,
+    /// The score from which a pull request counts as suspect, as `guard.threshold`.
+    #[arg(long, value_name = "SCORE", value_parser = clap::value_parser!(u32).range(1..))]
+    threshold: u32,
+    /// The texts to scan, comma separated, as `guard.fields`.
+    #[arg(long, value_name = "LIST", value_delimiter = ',', required = true)]
+    fields: Vec<String>,
+    /// Path of the JSONL corpus.
+    #[arg(value_name = "CORPUS")]
+    corpus: PathBuf,
+}
 
 /// One line of the corpus: one pull request; every key is required.
 #[derive(Debug, Deserialize)]
@@ -96,6 +130,57 @@ fn field_kind<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FieldKind, D
     (FieldKind::ALL.into_iter())
         .find(|kind| kind.as_str() == code)
         .ok_or_else(|| serde::de::Error::custom("unknown field kind"))
+}
+
+/// Runs `guard scan`.
+///
+/// # Errors
+///
+/// Returns `command_invalid` for `--config`, a field outside the field kinds, a repeated field
+/// or a bound out of range, `guard_lexicon_invalid` and `guard_corpus_invalid`.
+pub(crate) fn run(config: Option<&Path>, command: &GuardCommand) -> Result<ScanResult, Error> {
+    let GuardCommand::Scan(arguments) = command;
+    if config.is_some() {
+        return Err(command_invalid(Some(
+            "--config is not an option of guard; it reads no configuration".into(),
+        )));
+    }
+    let mut fields = BTreeSet::new();
+    for code in &arguments.fields {
+        let kind = FieldKind::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == code);
+        let Some(kind) = kind else {
+            let known = FieldKind::ALL.map(FieldKind::as_str).join(", ");
+            return Err(command_invalid(Some(
+                format!("--fields: {code:?} is not one of {known}").into(),
+            )));
+        };
+        if !fields.insert(GuardField::Kind(kind)) {
+            return Err(command_invalid(Some(
+                format!("--fields: {code:?} is listed twice").into(),
+            )));
+        }
+    }
+    let max_input_bytes = arguments.max_input_bytes;
+    if max_input_bytes == 0 || max_input_bytes > GUARD_INPUT_MAX_BYTES {
+        return Err(command_invalid(Some(
+            format!("--max-input-bytes must be from 1 to {GUARD_INPUT_MAX_BYTES}").into(),
+        )));
+    }
+    let lexicon = read_lexicon(&arguments.lexicon)
+        .map_err(|cause| Error::workflow(GUARD_LEXICON_INVALID, true, Some(cause)))?;
+    let guard = RuleGuard {
+        fields,
+        threshold: arguments.threshold,
+        on_suspect: OnSuspect::Log,
+    };
+    let settings = TextGuard {
+        max_input_bytes,
+        lexicon,
+    };
+    let corpus = File::open(&arguments.corpus).map_err(corpus_invalid)?;
+    scan_corpus(BufReader::new(corpus), &guard, &settings)
 }
 
 /// Returns the `guard_corpus_invalid` error with `cause`.

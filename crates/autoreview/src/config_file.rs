@@ -91,7 +91,7 @@ const CLI_REPLY_HEADROOM_SECONDS: u64 = 1;
 const GUARDS_TEXT_KEY: &str = "guards.text";
 
 /// Largest `guards.text.max_input_bytes`: the guard's scan time is measured up to 4 MiB.
-const GUARD_INPUT_MAX_BYTES: usize = 4 << 20;
+pub(crate) const GUARD_INPUT_MAX_BYTES: usize = 4 << 20;
 
 /// Largest lexicon file, in bytes; the scan time grows with the number of entries.
 const LEXICON_MAX_BYTES: usize = 64 << 10;
@@ -729,7 +729,9 @@ fn text_guard(guards: Option<&GuardsFile>) -> Result<Option<TextGuard>, Error> {
 /// # Errors
 ///
 /// Returns the read error, a size error, or the guard crate's lexicon error.
-fn read_lexicon(path: &Path) -> Result<Lexicon, Box<dyn std::error::Error + Send + Sync>> {
+pub(crate) fn read_lexicon(
+    path: &Path,
+) -> Result<Lexicon, Box<dyn std::error::Error + Send + Sync>> {
     let file = File::open(path)?;
     let limit = u64::try_from(LEXICON_MAX_BYTES)?;
     let mut bytes = Vec::new();
