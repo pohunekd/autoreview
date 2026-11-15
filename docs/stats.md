@@ -28,10 +28,11 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   changes nothing. Both forms read the discovery state. Without `--since` they read the
   reviews that are not completed, through the status index. With `--since` they read the
   whole `reviews` and `review_step_runs` tables (the cost grows with
-  `store.review_retention_seconds`, which decides how many reviews the store keeps) and the
-  rollup rows of the range's days (see [History](#history)). The reviews, the step runs,
-  the rollup and the discovery state come from one read transaction, so all counts
-  describe the same moment.
+  `store.review_retention_seconds`, which decides how many reviews the store keeps), the
+  stored publication plans of the reviews completed in the range, and the rollup rows of
+  the range's days (see [History](#history)). The reviews, the plans, the step runs, the
+  rollup and the discovery state come from one read transaction, so all counts describe
+  the same moment.
 - `autoreview serve` can serve the same numbers to Prometheus; see
   [Prometheus metrics](#prometheus-metrics).
 
@@ -70,6 +71,7 @@ autoreview stats [--since DATE [--until DATE]] [--json]
       "approved_without_human": 1, "approved_after_wait": 1,
       "changes_requested": 1, "commented": 0,
       "superseded": 0, "approval_expired": 0, "failed": 1,
+      "notes_to_author": 0, "stopped": 1,
       "publication_median_seconds": 750, "publication_p90_seconds": 9000
     },
     "days": [{"key": "2026-11-09", "started": 2, "...": "the counters of totals"}],
@@ -86,7 +88,7 @@ autoreview stats [--since DATE [--until DATE]] [--json]
 }
 ```
 
-The `"..."` entries stand for the twelve counters of `totals` and the seven counts of a
+The `"..."` entries stand for the fourteen counters of `totals` and the seven counts of a
 step; the real document always writes all of them.
 
 ### Top level
@@ -171,8 +173,9 @@ autoreview stats --since 2026-11-01 --json \
 ### Counters
 
 One stored review is one attempt: a retry is a new attempt, so `started` and `failed` count
-attempts, not pull requests. `started` counts on the UTC day the attempt was created; every
-other counter counts on the UTC day it completed, and only inside the range.
+attempts, not pull requests. `started` counts on the UTC day the attempt was created and
+`stopped` on the UTC day the pull request stopped; every other counter counts on the UTC
+day the attempt completed, and only inside the range.
 
 - `started`: attempts created.
 - `completed`: attempts completed, whatever their result.
@@ -190,6 +193,17 @@ other counter counts on the UTC day it completed, and only inside the range.
   publication.
 - `failed`: attempts that failed for any other reason. A failure that is retried counts
   again with its next attempt.
+- `notes_to_author`: published attempts that handed their non-blocking notes to the author
+  in a comment (`on_notes: comment`), so the author's renewed request asks for approval.
+  Each also counts in `commented`. A kept attempt counts from its stored publication plan,
+  a pruned one from the rollup, which the prune fills from the same plan.
+- `stopped`: pull requests whose schedule record entered `failed` that day, the stops of
+  [`current.stopped`](#current-state); not attempts, and not part of `completed`. A stop
+  is recorded in the rollup when it happens, under its repository, so the prune does not
+  change it. A pull request that is retried and stops again counts again. A schedule record
+  names no rule or reviewer, so `stopped` is `0` in `by_rule` and `by_reviewer`, and a
+  repository with only stops in the range has a `by_repository` entry. Stops while an
+  engine without the rollup ran are not counted.
 - `publication_median_seconds`, `publication_p90_seconds`: the median and the 90th
   percentile of the seconds from creation to completion of the published attempts, by
   nearest rank (the `ceil(p × n / 100)`-th smallest); `null` without a published attempt.
@@ -257,10 +271,6 @@ autoreview stats --since 2026-11-01 --json \
 
 The document leaves these out:
 
-- notes handed off per day, and stops per day. The store records both in the rollup:
-  `notes_to_author` for a published review that handed its notes to the author, counted
-  when the review is pruned, and `stopped` for a schedule record that enters `failed`,
-  counted by day and repository when it happens. The document does not show them yet;
 - the duration of each reviewer on its own: the `reviewers` step covers every reviewer of
   a review, and the work between the steps (combining, anchoring, rendering) is in no step;
 - token or cost data, which pohunek does not report to autoreview.
@@ -277,6 +287,7 @@ Pull requests stopped: 1
 History 2026-11-09 to 2026-11-10 (UTC days):
   started 6, completed 4, published 3, superseded 0, approval expired 0, failed 1
   published: approved without a human 1, approved after a wait 1, changes requested 1, commented 0
+  notes handed to the author 0, pull requests stopped 1
   failed by code: pohunek_session_start_failed 1
   time to publication: median 750 s, p90 9000 s
   step publication: 3 runs, 0 failed, 0 superseded, 0 retries, median 1200 ms, p90 2100 ms
