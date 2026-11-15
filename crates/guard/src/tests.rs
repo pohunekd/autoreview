@@ -97,3 +97,123 @@ fn expand(text: &str) -> String {
     out.push_str(rest);
     out
 }
+
+/// Parses a corpus file into rows.
+fn rows(corpus: &str) -> Vec<Row> {
+    assert!(
+        corpus
+            .bytes()
+            .all(|byte| byte == b'\n' || (b' '..=b'~').contains(&byte)),
+        "corpus files are printable ASCII; write other characters as <U+XXXX>"
+    );
+    let mut rows: Vec<Row> = Vec::new();
+    let mut text: Option<Vec<&str>> = None;
+    let mut repeat = 1;
+    let close = |rows: &mut Vec<Row>, text: &mut Option<Vec<&str>>, repeat: usize| {
+        if let (Some(lines), Some(row)) = (text.take(), rows.last_mut()) {
+            let field = row.fields.last_mut().expect("open field");
+            field.1 = decode(&expand(&lines.join("\n"))).repeat(repeat);
+        }
+    };
+    for line in corpus.lines() {
+        if let Some(name) = line.strip_prefix("== ") {
+            close(&mut rows, &mut text, repeat);
+            let expected = Report {
+                hits: Vec::new(),
+                score: 0,
+            };
+            rows.push(Row {
+                name: name.to_owned(),
+                expected,
+                fields: Vec::new(),
+            });
+        } else if let Some(header) = line.strip_prefix("--- ") {
+            close(&mut rows, &mut text, repeat);
+            let (name, times) = header.split_once(" x").unwrap_or((header, "1"));
+            repeat = times.parse().expect("repeat count");
+            let row = rows.last_mut().expect("field inside a row");
+            row.fields.push((kind(name), String::new()));
+            text = Some(Vec::new());
+        } else if let Some(lines) = text.as_mut() {
+            lines.push(line);
+        } else if let Some(row) = rows.last_mut() {
+            if let Some(hits) = line.strip_prefix("expect: ") {
+                row.expected.hits = expected_hits(hits);
+            } else if let Some(score) = line.strip_prefix("score: ") {
+                row.expected.score = score.parse().expect("score");
+            } else {
+                assert!(
+                    line.starts_with('#'),
+                    "row {}: unknown line {line:?}",
+                    row.name
+                );
+            }
+        }
+    }
+    close(&mut rows, &mut text, repeat);
+    rows
+}
+
+/// Parses `kind:code=count ...` or `none` into hits in report order.
+fn expected_hits(text: &str) -> Vec<Hit> {
+    let mut hits: Vec<Hit> = text
+        .split_whitespace()
+        .filter(|item| *item != "none")
+        .map(|item| {
+            let (field, rest) = item.split_once(':').expect("kind:code=count");
+            let (code, count) = rest.split_once('=').expect("code=count");
+            let signal = *SIGNALS
+                .iter()
+                .find(|signal| signal.as_str() == code)
+                .expect("code");
+            Hit {
+                field: kind(field),
+                signal,
+                count: count.parse().expect("count"),
+            }
+        })
+        .collect();
+    hits.sort_by_key(|hit| (hit.field, hit.signal));
+    hits
+}
+
+/// Scans every row of a corpus file and compares the reports.
+fn table(corpus: &str) {
+    let lexicon = Lexicon::parse(include_str!("../testdata/phrases.txt")).expect("lexicon");
+    let rows = rows(corpus);
+    assert!(!rows.is_empty(), "corpus has rows");
+    for row in rows {
+        let fields: Vec<Field<'_>> = row
+            .fields
+            .iter()
+            .map(|(kind, text)| Field { kind: *kind, text })
+            .collect();
+        assert_eq!(scan(&fields, &lexicon), row.expected, "row {}", row.name);
+    }
+}
+
+#[test]
+fn character_scanners_report_hidden_character_shapes_and_spare_legitimate_use() {
+    table(include_str!("../testdata/characters.txt"));
+}
+
+#[test]
+fn hidden_markdown_reports_instructions_that_rendering_hides() {
+    table(include_str!("../testdata/markdown.txt"));
+    table(include_str!("../testdata/benign.txt"));
+}
+
+#[test]
+fn chat_template_tokens_are_counted_in_every_field() {
+    table(include_str!("../testdata/template.txt"));
+}
+
+#[test]
+fn lexicon_phrases_match_whole_normalized_words() {
+    table(include_str!("../testdata/lexicon.txt"));
+}
+
+#[test]
+fn score_counts_each_signal_and_lexicon_entry_once() {
+    table(include_str!("../testdata/scoring.txt"));
+}
