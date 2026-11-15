@@ -404,9 +404,9 @@ status 64 on a host without it. It has two parts:
   A `head` checkout whose skill folders on disk differ from the trusted base
   (see [the Claude adapter](#the-claude-adapter) section) gets the
   line `[autoreview-codex/v2 <nonce> refused:repository_skills]` right before
-  the exit line, before Codex starts. The engine reads it as
-  `review_result_invalid`, so each fresh session is refused the same way and
-  nothing is published.
+  the exit line, before Codex starts. The engine stops the review with
+  `review_head_skills_refused` without a fresh session, and nothing is
+  published.
   An invalid argument, Codex path file or input frame, or a host without
   Linux's `PR_SET_CHILD_SUBREAPER`, stops the adapter before that: it prints
   the reason and exits with status 64 at once, without the exit line.

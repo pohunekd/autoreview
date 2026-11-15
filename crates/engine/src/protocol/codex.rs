@@ -9,7 +9,8 @@ use crate::error::{BoxError, Error};
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
 use crate::protocol::reason::leading_reason;
 use crate::protocol::validate::{
-    count_over, review_adapter_outdated, review_head_unavailable, sort_findings,
+    count_over, review_adapter_outdated, review_head_skills_refused, review_head_unavailable,
+    sort_findings,
 };
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
@@ -46,6 +47,8 @@ struct Markers {
     refused_exit_line: String,
     /// Line of the adapter, right before its exit line, when the pull request head is missing.
     head_unavailable: String,
+    /// Line of the adapter, right before its exit line, when a head checkout changes skills.
+    repository_skills: String,
     /// Opens the exit line of a Codex session; the status and `]` follow.
     exit_line_prefix: String,
     /// Opens the adapter's base64 reason line before the exit line of a failed run.
@@ -61,6 +64,7 @@ impl Markers {
             exit_line: format!("{open}exited with status 0]"),
             refused_exit_line: format!("{open}exited with status 64]"),
             head_unavailable: format!("{open}refused:head_unavailable]"),
+            repository_skills: format!("{open}refused:repository_skills]"),
             exit_line_prefix: format!("{open}exited with status "),
             reason: format!("{open}reason:"),
         }
@@ -183,8 +187,10 @@ autoreview_go_compat::object_only_serde!(CodexVerdict);
 /// Returns `review_nonce_mismatch` for an output that does not end with the exit line of
 /// `nonce`, `review_result_invalid` for an output, report or head that the engine refuses,
 /// `review_adapter_outdated` for a report without `prior_findings` or a finding without
-/// `blocking`, and `review_head_unavailable` when the adapter refused a missing head. A
-/// `review_result_invalid` of a failed Codex run carries the adapter's reason line as its cause.
+/// `blocking`, `review_head_unavailable` when the adapter refused a missing head, and
+/// `review_head_skills_refused` when it refused a head checkout whose repository skills differ
+/// from the trusted base. A `review_result_invalid` of a failed Codex run carries the adapter's
+/// reason line as its cause.
 pub(crate) fn parse_codex_output(
     cfg: &Config,
     pr: &PullRequest,
@@ -192,8 +198,11 @@ pub(crate) fn parse_codex_output(
     raw: &str,
 ) -> Result<ReviewerResult, Error> {
     let markers = Markers::new(nonce);
-    if refused_for_missing_head(&markers, raw) {
+    if refused_with(&markers, &markers.head_unavailable, raw) {
         return Err(review_head_unavailable());
+    }
+    if refused_with(&markers, &markers.repository_skills, raw) {
+        return Err(review_head_skills_refused());
     }
     let encoded =
         envelope_payload(&markers, raw).ok_or_else(|| exit_without_result(&markers, raw))?;
@@ -259,13 +268,13 @@ pub(crate) fn parse_codex_output(
     })
 }
 
-/// Reports whether `raw` ends with the adapter's marker of a missing head and the exit line
-/// with status 64, both of `markers`.
+/// Reports whether `raw` ends with the adapter's refusal line `refusal` and the exit line with
+/// status 64 of `markers`.
 ///
-/// The marker must come right before the exit line, separated by one of `SEPARATORS`, as the
-/// adapter writes both at once. A run could print the marker too, but a run that exits with
+/// The line must come right before the exit line, separated by one of `SEPARATORS`, as the
+/// adapter writes both at once. A run could print the line too, but a run that exits with
 /// status 64 is a refusal anyway, so it stops the review and never publishes.
-fn refused_for_missing_head(markers: &Markers, raw: &str) -> bool {
+fn refused_with(markers: &Markers, refusal: &str, raw: &str) -> bool {
     ENDINGS
         .iter()
         .filter_map(|ending| raw.strip_suffix(ending))
@@ -274,7 +283,7 @@ fn refused_for_missing_head(markers: &Markers, raw: &str) -> bool {
             SEPARATORS
                 .iter()
                 .filter_map(|separator| head.strip_suffix(separator))
-                .any(|before| before.ends_with(markers.head_unavailable.as_str()))
+                .any(|before| before.ends_with(refusal))
         })
 }
 
@@ -593,6 +602,15 @@ mod tests {
                 ),
                 Some("ERROR: model-x is not supported".to_owned()),
             ),
+            (
+                "skills marker before the reason",
+                format!(
+                    "{}\n{reason}\n{}64]\n",
+                    marker("refused:repository_skills]"),
+                    marker(EXIT)
+                ),
+                Some("ERROR: model-x is not supported".to_owned()),
+            ),
         ];
         for (name, output, reason) in cases {
             let err = parse_codex_output(&test_config(), &pr, NONCE, &output).expect_err(name);
@@ -609,11 +627,14 @@ mod tests {
     }
 
     // The adapter's marker right before the exit line with status 64 means the head is not in
-    // the review checkout; a fresh run on the same repository cannot find it either (#253).
+    // the review checkout (#253), or a head checkout changes repository skills (#457); a fresh
+    // run of the same head is refused the same way.
     #[test]
-    fn adapter_refusal_of_a_missing_head_is_not_retried() {
+    fn adapter_refusals_of_the_head_are_not_retried() {
         let pr = test_pull_request(3);
         let head = marker("refused:head_unavailable]");
+        let skills = marker("refused:repository_skills]");
+        let other = "ffeeddccbbaa99887766554433221100";
         let message = "codex-adapter: trusted pull request head is unavailable in the review \
 checkout";
         let refused = format!("{}64]", marker(EXIT));
@@ -649,6 +670,36 @@ checkout";
             (
                 "other refusal",
                 format!("codex-adapter: review checkout is not clean\n\n{refused}\n"),
+                "review_result_invalid",
+            ),
+            (
+                "skills refusal on the terminal",
+                format!("codex-adapter: x\r\n\r\n{skills}\r\n{refused}\r\n"),
+                "review_head_skills_refused",
+            ),
+            (
+                "skills refusal",
+                format!("{skills}\n{refused}"),
+                "review_head_skills_refused",
+            ),
+            (
+                "skills marker after the head marker",
+                format!("{head}\n{skills}\n{refused}\n"),
+                "review_head_skills_refused",
+            ),
+            (
+                "text after the skills marker",
+                format!("{skills}\nmore\n{refused}\n"),
+                "review_result_invalid",
+            ),
+            (
+                "skills marker before status 0",
+                format!("{skills}\n{}0]\n", marker(EXIT)),
+                "review_result_invalid",
+            ),
+            (
+                "skills marker of another nonce",
+                format!("{}\n{refused}\n", skills.replace(NONCE, other)),
                 "review_result_invalid",
             ),
         ];
