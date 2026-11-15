@@ -42,7 +42,7 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 | Trusted author | Trusted by the rule | Pull requests the rule accepts from them; can still write bad code |
 | Pull request author, untrusted | Not trusted | The diff, the description, the commit messages, files in the head |
 | Fork contributor | Not trusted unless listed in `logins` | Everything an untrusted author controls, from a fork |
-| Other comment authors | Not trusted | Comments and review threads, which are read as discussion of earlier findings |
+| Other comment authors | Not trusted | Comments and review threads, which are read as discussion of earlier findings and, on a rule with `guard`, scanned by the text guard |
 | Reviewer model | Untrusted output | The text it returns; it can be steered by the content it reads |
 | GitHub | Trusted platform | Stores the reviews; its search results bound discovery |
 | MCP client with the `write` scope | Semi-trusted | `resolve`, `approve` and `retry`, and the read tools. An agent client reads review text that pull request authors and models wrote, so injected text can steer it |
@@ -90,6 +90,7 @@ the engine publishes.
 | 17 | An agent with an MCP `write` token is steered into `approve` or `retry` by text injected into a pull request | Tool results carry review text as neutralized data inside an untrusted-data notice; `approve` publishes only a clean review that waits at the exact head. Give the `write` scope only to agents that keep review text out of their instructions | Operator choice; see the [MCP server guide](../guides/mcp-server.md#untrusted-output) |
 | 18 | Another process, a host on the network or a web page reads or floods the metrics endpoint | The endpoint is off without its `metrics` section and checks no token, so keep `listen` on loopback and put a reverse proxy with authentication in front of a scraper on another host. It serves only `GET /metrics`, only for a `Host` in `allowed_hosts` (against DNS rebinding), and refuses any request with an `Origin` header. `max_connections` bounds the connections at once, `header_timeout_seconds` the time to send a request head, and `request_timeout_seconds` each connection, which serves one request, and the wait for them at shutdown; each scrape is one indexed read of the store. The text names repositories, hosts, rules and error codes, which a reader learns | Engine behaviour; `listen` and the proxy are the operator's |
 | 19 | A Codex transcript forges the adapter's result frame and exit line, printed by the model or by tool output steered from the pull request, while the model pauses | Every Codex marker carries a nonce that the engine draws from the OS random source for each run; the adapter removes the nonce line before Codex reads the prompt, and the engine reads only the markers with the run's nonce. Before the adapter prints a marker, it ends every process that the Codex run left (it is their reaper, so a double fork or a new session does not escape) and stops copying Codex's stderr, so no process of the run can append a tail once the nonce is in the output | Engine and adapter behaviour; tests `codex_output_is_read_only_with_the_markers_of_the_request_nonce` and `test_a_process_that_codex_leaves_behind_cannot_write_after_the_markers`; a process started outside the adapter's process tree is a residual risk. An adapter from an earlier release refuses such a request before Codex runs, so the nonce never reaches the model; install the profiles before the engine |
+| 20 | Hidden text in the pull request steers a reviewer into a clean verdict on an `on_clean: approve` rule | A rule with `guard` scans the fields it names before any reviewer runs, without a model and without sending the text anywhere. A suspect pull request (its score reaches the threshold, or the read left text out) with `on_suspect: await` waits for a person instead of being approved, and every suspect result sends a `guard_suspect` message with signal codes only | Engine behaviour, opt-in per rule; tests `text_guard_holds_a_clean_approval_and_never_blocks` and `text_guard_holds_a_suspect_approval_and_log_changes_nothing`; see [prompt injection](prompt-injection.md#the-text-guard) |
 
 ## Residual risks
 
@@ -159,6 +160,13 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   hosts. Limit who can trigger a review.
 - **Notifier channels.** Matrix rooms receive review text.
   Choose rooms and channels with the same audience as the repository.
+- **The text guard catches hidden text, not every injection.** An instruction
+  in visible prose scores only by the lexicon; one below the threshold, in a
+  file that the pull request does not change, or in an image is not found. A
+  rule without `guard`, or with `on_suspect: log` or `comment`, still approves
+  a clean review automatically. Enable it as
+  [the guide](../guides/text-guard.md) describes and keep the verifier and the
+  `escalate_*` settings on approving rules.
 
 ## Recommended host isolation
 

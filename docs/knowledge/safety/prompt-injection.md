@@ -44,8 +44,10 @@ none of them holds a character that a reader takes as a line break.
 
 The trusted context also holds the base branch name, which anyone with push
 access to the repository chooses. Discovery accepts only a name of 1 to 255
-ASCII letters, digits, `.`, `_`, `/` and `-` without `..`, and refuses any
-other pull request with `base_branch_unsupported`. A review whose stored input
+ASCII letters, digits, `.`, `_`, `/` and `-` without `..`. It refuses a pull
+request with a longer name, another character or `..` with
+`base_branch_unsupported`, and one with an empty name, a malformed answer, with
+`github_response_invalid`. A review whose stored input
 names another base branch fails with `review_input_invalid` before it builds a
 request, so no trusted line holds a line break from a branch name. The same
 holds for the base SHA, which must be 40 lowercase hex digits, and for the pull
@@ -100,14 +102,52 @@ Whatever the model reads and returns, the engine does the following.
 | Human approval | `on_clean: await` leaves the final approval to a person, who approves an exact head SHA, or to an MCP client with the `write` scope. Give that scope only to agents that keep review text out of their instructions, see the [MCP server guide](../guides/mcp-server.md#untrusted-output). |
 | AI signature | Every body and inline comment ends with `publish.signature`. A reader knows it is machine-written. Comments that match `publish.ai_signed_pattern` never count as a human decision on an earlier finding. |
 | Own pull requests | A review of a pull request by the reviewing account is always a comment, so an injected "approve" cannot approve it. |
+| Text guard (opt-in) | On a rule with `guard`, hidden instructions in the pull request text hold a clean automatic approval for a person (`on_suspect: await`), see [the text guard](#the-text-guard). |
 
 Each row is a control in the engine. An injected instruction that gets through
 the model can change the verdict the model returns. That verdict is then checked
 by the verifier and the escalation rule and, on `await` rules, by a person. It
 cannot publish directly, reach a secret, or produce an approval for an untrusted
 author. On an auto-approve rule for a trusted author, a model that is steered into
-a clean verdict can approve; that is why such rules need the verifier and
-`escalate_*` settings, and why `await` is the safer default.
+a clean verdict can approve; that is why such rules need the verifier, the
+`escalate_*` settings and the text guard, and why `await` is the safer default.
+
+## The text guard
+
+The one outcome that no check above catches is a wrong approval on an
+`on_clean: approve` rule: the verifier re-checks only blocking findings. The
+published attacks on review agents hide their instructions from the human
+reader: invisible Unicode, HTML comments, collapsed blocks, alt text. The text
+guard looks for exactly that, before any reviewer runs, without a model and
+without sending the text anywhere. It is off unless a rule sets
+[`guard`](../../policy.md#guard).
+
+- **What it reads.** The fields that the rule names: title, body, commit
+  messages, comments and review bodies, review thread comments, and the added
+  lines of the changed files. The engine reads them with extra GitHub calls
+  for that rule only, up to `guards.text.max_input_bytes`. Comments of the
+  reviewing account are not scanned.
+- **What it finds.** Fixed signal codes: Unicode tag characters, zero-width
+  and variation-selector runs, other invisible runs, bidi overrides (and bidi
+  controls on added code lines), HTML comments, `<details>` blocks, hidden
+  elements, alt text, link titles and reference definitions whose text
+  instructs a reviewer, chat-template and role tokens, and the phrases of the
+  operator's lexicon. Each signal and each lexicon phrase adds its weight once
+  to the score.
+- **What it decides.** A pull request is suspect when the score reaches the
+  rule's `threshold`, or when the read left text out (fail closed). Then
+  `on_suspect: await` holds a clean review that the rule would approve for a
+  person, `comment` publishes a request for changes on an untrusted author as
+  a comment, and `log` changes nothing. The guard never blocks a pull request.
+- **What it tells.** Each suspect result sends one `guard_suspect` message at
+  level `action` with the codes, the score and the outcome. With `await` or
+  `comment`, the published review names the codes in one line. Neither ever
+  holds the matched text, so they cannot carry the injection further.
+
+The guard is a tripwire for hidden text, not a filter for every injection: an
+instruction in plain visible prose scores only by the lexicon, and the
+reviewers still read the full pull request. Enable it in shadow mode first and
+measure it on a corpus, see [enable the text guard](../guides/text-guard.md).
 
 ## What the model can still do
 
@@ -162,6 +202,14 @@ attack it models. `scripts/gates` runs them with the other Rust tests.
 - Decision planning (`publish::plan`): a finding that asks for an approval is
   planned by its blocking flag only, so on an `on_clean: await` rule the
   approval still waits for a person.
+- Text guard (`autoreview-guard`): the fixtures under `crates/guard/testdata/`
+  hide instructions in the ways the guard detects, next to legitimate text
+  that must stay clean, such as emoji, flags and right-to-left prose. The planning table `text_guard_holds_a_clean_approval_and_never_blocks`
+  and the review scenario `text_guard_holds_a_suspect_approval_and_log_changes_nothing`
+  check that a suspect clean review waits and that `log` changes nothing.
+- Synthetic injection corpus (`testdata/guard/injection-corpus.jsonl`): one
+  pull request per hidden-text technique, for `autoreview guard scan`; see
+  [enable the text guard](../guides/text-guard.md#check-the-synthetic-injection-corpus).
 
 ### Run the fixtures on your own setup
 
