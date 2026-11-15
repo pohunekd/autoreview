@@ -215,7 +215,7 @@ pub fn failure_explanation(code: &str) -> &'static str {
             "The Pohunek review host did not answer within the CLI request timeout. The host was reachable; check its network latency and the size of its session list."
         }
         "review_head_unavailable" => {
-            "The pull request head commit is not in the review host's repository, so the reviewer on a base checkout could not read the change and its adapter stopped the run. Pohunek fetches the head at session start only when the pohunek CLI and the review host's daemon are 0.43.0 or later; upgrade them, or on the review host run `git -C <project repository> fetch origin refs/pull/<n>/head`, then retry this PR."
+            "The pull request head commit is not in the review host's repository, so the reviewer on a base checkout could not read the change and its adapter stopped the run. Pohunek fetches the head at session start only when the pohunek CLI and the review host's daemon are 0.43.0 or later. On 0.43.0 or later, the service log shows `head fetch capability unknown, starting without the fetch` when autoreview could not read that capability; retry this PR. With an older pohunek, upgrade it, or on the review host run `git -C <project repository> fetch origin refs/pull/<n>/head`, then retry this PR."
         }
         "github_request_failed" => {
             "A GitHub API request failed. Check GitHub availability, authentication, and rate limits."

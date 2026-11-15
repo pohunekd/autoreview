@@ -413,6 +413,16 @@ fn host_inspect_arguments(host: &str) -> Vec<String> {
         .to_vec()
 }
 
+/// The `ok` object of `pohunek host inspect --json`; other keys are ignored.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct HostCapabilities {
+    /// Whether `session new` takes `--fetch-ref`, as any JSON value; `None` when absent.
+    session_new_fetch_ref_supported: Option<Value>,
+}
+
+autoreview_go_compat::object_only_serde!(HostCapabilities);
+
 /// Reports whether the `host inspect` `output` advertises the fetch of an extra ref.
 ///
 /// Only the JSON value `true` is support: an absent, `null`, `false`, text or number value is
@@ -420,13 +430,11 @@ fn host_inspect_arguments(host: &str) -> Vec<String> {
 ///
 /// # Errors
 ///
-/// Returns `pohunek_response_invalid` when the output holds no `ok` object.
+/// Returns `pohunek_response_invalid` when the output holds no `ok` object, or one that names
+/// the capability twice.
 pub(crate) fn fetch_ref_from_output(output: &str) -> Result<bool, Error> {
-    let capabilities: Value = decode_ok(output).ok_or_else(response_invalid)?;
-    let Value::Object(map) = capabilities else {
-        return Err(response_invalid());
-    };
-    Ok(map.get(FETCH_REF_CAPABILITY) == Some(&Value::Bool(true)))
+    let capabilities: HostCapabilities = decode_ok(output).ok_or_else(response_invalid)?;
+    Ok(capabilities.session_new_fetch_ref_supported == Some(Value::Bool(true)))
 }
 
 /// Reports whether the daemon of `host` fetches an extra ref when a session starts.
