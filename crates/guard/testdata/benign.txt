@@ -353,3 +353,441 @@ expect: none
 expect: none
 --- body
 <U+182D><U+180B><U+1820> Mongolian sample.
+== benign_entities_plain
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Fish &amp; chips, 5&nbsp;km, &copy; 2024, a &lt;b&gt; tag, &quot;quoted&quot;.
+== benign_entities_math
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Use &le; and &ge; or &ne; in the docs; &caps; is a math symbol.
+== benign_entities_in_code_span
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Write `&ZeroWidthSpace;` to insert a break hint... no, we dropped that.
+== benign_ci_log_fenced
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+```
+$ cargo test
+running 42 tests
+test ai::client::reports_errors ... ok
+test skip_flaky ... ignored
+test result: ok. 41 passed; 0 failed; 1 ignored
+```
+== benign_ci_log_details
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<details><summary>Test output</summary>
+
+```
+PASS src/report.test.ts
+SKIP src/ai.test.ts (flaky)
+```
+
+</details>
+== benign_ci_summary_plain
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI is green. The lint job reports 3 warnings, all pre-existing.
+== benign_release_notes_details
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps example-lib from 1.2.0 to 1.3.0.
+<details>
+<summary>Release notes</summary>
+<blockquote>
+<h2>1.3.0</h2>
+<ul>
+<li>Faster parser.</li>
+<li>Fix a crash on empty input.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Commits</summary>
+<ul>
+<li><a href="https://example.com/c/1"><code>1a2b3c4</code></a> Release 1.3.0</li>
+</ul>
+</details>
+== benign_renovate_table
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+This PR contains the following updates:
+
+| Package | Change |
+|---|---|
+| example-lib | `1.2.0` -> `1.3.0` |
+
+<!-- renovate-debug:eyJjcmVhdGVkSW5WZXIiOiIzNy4wLjAifQ== -->
+== benign_html_block_div
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<div align="center">
+  <img src="https://example.com/logo.png" alt="Project logo" width="120">
+  <h3>Example</h3>
+</div>
+== benign_sup_sub
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Water is H<sub>2</sub>O and E = mc<sup>2</sup>.
+== benign_kbd
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to skip the prompt.
+== benign_autolinks
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Docs: <https://example.com/ai/follow-up> and <mailto:ai@example.com>.
+== benign_percent_text
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Coverage rose to 91% and memory fell by 12%.
+== benign_url_with_words
+# Everyday text: no hidden-text signal.
+expect: body:lexicon_phrase=1
+score: 40
+--- body
+See https://example.com/blog/how-to-ignore-previous-instructions-attacks for background.
+== benign_version_brackets
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[v2.0.0] - 2024-05-01: dropped Node 16. [WIP] not merged yet.
+== benign_quoted_reply
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+> Could the AI panel skip empty reports?
+Yes, done in the last commit.
+== benign_nested_list
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+- API
+  - add `report` endpoint
+  - skip auth for health checks
+- UI
+  1. new settings page
+== benign_heading_hashes
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+### System
+Linux x86_64, Rust 1.99.
+== benign_conventional
+# Everyday text: no hidden-text signal.
+expect: none
+--- commit_message
+feat(ai): add a Claude provider
+
+The provider follows the existing interface. Skip it when no key is set.
+== benign_revert
+# Everyday text: no hidden-text signal.
+expect: none
+--- commit_message
+Revert "Ignore the previous cache key"
+
+This reverts commit 1a2b3c4.
+== benign_plain
+# Everyday text: no hidden-text signal.
+expect: none
+--- title
+Ignore generated files in coverage
+== benign_model
+# Everyday text: no hidden-text signal.
+expect: none
+--- title
+Add Copilot instructions file for contributors
+== benign_suggestion
+# Everyday text: no hidden-text signal.
+expect: none
+--- review_thread
+```suggestion
+if (!enabled) return report;
+```
+== benign_nit
+# Everyday text: no hidden-text signal.
+expect: none
+--- review_thread
+nit: the assistant prompt must not exceed 200 tokens; maybe skip the example.
+== benign_vue_component
+# Everyday text: no hidden-text signal.
+expect: none
+--- patch
+@@ -1,3 +1,8 @@
++<template>
++  <div hidden>{{ report }}</div>
++</template>
++<script setup>
++// Claude, follow the style guide here.
++</script>
+== benign_markdown_doc
+# Everyday text: no hidden-text signal.
+expect: none
+--- patch
+@@ -0,0 +1,4 @@
++<!-- AI agents: follow AGENTS.md when you change this file. -->
++# Contributing
++Run `make test` before you open a pull request.
+== benign_php_file
+# Everyday text: no hidden-text signal.
+expect: none
+--- patch
+@@ -0,0 +1,3 @@
++<?php
++// skip the report when the AI flag is off
++declare(strict_types=1);
+== benign_release_notes_serde
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps serde from 1.0.0 to 1.1.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the serde releases.</em></p>
+<blockquote>
+<h2>v1.1.0</h2>
+<ul>
+<li>Faster startup on cold caches.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for serde 1.1.0.</p>
+</details>
+== benign_release_notes_tokio
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps tokio from 1.1.0 to 1.2.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the tokio releases.</em></p>
+<blockquote>
+<h2>v1.2.0</h2>
+<ul>
+<li>Fix a panic when the input is empty.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for tokio 1.2.0.</p>
+</details>
+== benign_release_notes_lodash
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps lodash from 1.2.0 to 1.3.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the lodash releases.</em></p>
+<blockquote>
+<h2>v1.3.0</h2>
+<ul>
+<li>Drop support for an end-of-life runtime.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for lodash 1.3.0.</p>
+</details>
+== benign_release_notes_react
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps react from 1.3.0 to 1.4.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the react releases.</em></p>
+<blockquote>
+<h2>v1.4.0</h2>
+<ul>
+<li>New option to follow symlinks.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for react 1.4.0.</p>
+</details>
+== benign_release_notes_django
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps django from 1.4.0 to 1.5.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the django releases.</em></p>
+<blockquote>
+<h2>v1.5.0</h2>
+<ul>
+<li>Improve the error report when a file is skipped.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for django 1.5.0.</p>
+</details>
+== benign_release_notes_requests
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps requests from 1.5.0 to 1.6.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the requests releases.</em></p>
+<blockquote>
+<h2>v1.6.0</h2>
+<ul>
+<li>Faster startup on cold caches.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for requests 1.6.0.</p>
+</details>
+== benign_release_notes_pytest
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps pytest from 1.6.0 to 1.7.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the pytest releases.</em></p>
+<blockquote>
+<h2>v1.7.0</h2>
+<ul>
+<li>Fix a panic when the input is empty.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for pytest 1.7.0.</p>
+</details>
+== benign_release_notes_eslint
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps eslint from 1.7.0 to 1.8.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the eslint releases.</em></p>
+<blockquote>
+<h2>v1.8.0</h2>
+<ul>
+<li>Drop support for an end-of-life runtime.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for eslint 1.8.0.</p>
+</details>
+== benign_release_notes_webpack
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps webpack from 1.8.0 to 1.9.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the webpack releases.</em></p>
+<blockquote>
+<h2>v1.9.0</h2>
+<ul>
+<li>New option to follow symlinks.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for webpack 1.9.0.</p>
+</details>
+== benign_release_notes_rails
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps rails from 1.9.0 to 1.10.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the rails releases.</em></p>
+<blockquote>
+<h2>v1.10.0</h2>
+<ul>
+<li>Improve the error report when a file is skipped.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for rails 1.10.0.</p>
+</details>
+== benign_release_notes_spring-boot
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps spring-boot from 1.10.0 to 1.11.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the spring-boot releases.</em></p>
+<blockquote>
+<h2>v1.11.0</h2>
+<ul>
+<li>Faster startup on cold caches.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for spring-boot 1.11.0.</p>
+</details>
+== benign_release_notes_numpy
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps numpy from 1.11.0 to 1.12.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the numpy releases.</em></p>
+<blockquote>
+<h2>v1.12.0</h2>
+<ul>
+<li>Fix a panic when the input is empty.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for numpy 1.12.0.</p>
+</details>
