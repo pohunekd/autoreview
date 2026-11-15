@@ -6,7 +6,7 @@
 // Rust guideline compliant 2026-06-26
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::{Future, ready};
+use std::future::{Future, Ready, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -152,20 +152,6 @@ pub(crate) struct FakeState {
     pub(crate) requests: Vec<ReviewRequest>,
     /// Every queue digest that was posted.
     pub(crate) queued: Vec<QueuedDigest>,
-    /// Number of queue digest send attempts.
-    pub(crate) queue_sends: usize,
-    /// Transaction ID of every send attempt.
-    pub(crate) queue_transactions: Vec<String>,
-    /// Number of leading send attempts that fail transiently.
-    pub(crate) queue_failures: usize,
-    /// Text of the notifications to hold, and the gate they wait on. `None` holds none.
-    pub(crate) held_notes: Option<(String, Arc<Semaphore>)>,
-    /// Error code that every notification fails with; `None` lets notifications succeed.
-    pub(crate) notify_fail: Option<String>,
-    /// Error code that the notifications and queue posts of each backend fail with, by name.
-    pub(crate) backend_fail: BTreeMap<String, String>,
-    /// Number of notification attempts, failed or not.
-    pub(crate) notify_attempts: usize,
     /// Error code that the project list of each host fails with, keyed by host.
     pub(crate) host_fail: BTreeMap<String, String>,
     /// Every host whose project list was asked for, in order.
@@ -304,66 +290,16 @@ impl FakeIntegration {
         count_notes(&notes, level, fragment) > 0
     }
 
-    /// Records one notification attempt and answers as the Matrix notifier does.
-    ///
-    /// A failure is `notify_fail`, else the entry of `backend` in `backend_fail`. With `muted`,
-    /// a failure of a level other than action that
-    /// the notifier mutes is dropped, as `notify` drops it, and the note is not recorded.
-    fn send_note(
-        &self,
-        backend: &str,
-        notification: &Notification,
-        muted: bool,
-    ) -> impl Future<Output = Result<(), Error>> + Send + use<> {
-        let (level, message) = (notification.level.clone(), notification.text.as_str());
-        let (outcome, gate) = {
-            let mut state = self.lock();
-            state.notify_attempts += 1;
-            let failure =
-                (state.notify_fail.clone()).or_else(|| state.backend_fail.get(backend).cloned());
-            let outcome = match failure {
-                Some(code)
-                    if muted && level != Level::Action && MUTED_CODES.contains(&code.as_str()) =>
-                {
-                    Some(Ok(()))
-                }
-                Some(code) => Some(Err(Error::workflow(code, false, None))),
-                None => None,
-            };
-            if outcome.is_none() {
-                state.notes.push(Note {
-                    level,
-                    backend: backend.to_owned(),
-                    message: message.to_string(),
-                });
-            }
-            let gate = state
-                .held_notes
-                .as_ref()
-                .filter(|(fragment, _)| message.contains(fragment.as_str()))
-                .map(|(_, gate)| Arc::clone(gate));
-            (outcome, gate)
-        };
-        async move {
-            if let Some(outcome) = outcome {
-                return outcome;
-            }
-            if let Some(gate) = gate {
-                // The permit goes back when it drops, so one permit releases every held note.
-                let _permit = gate.acquire().await;
-            }
-            Ok(())
-        }
+    /// Records one notification on `backend`; every notification is delivered.
+    fn send_note(&self, backend: &str, notification: &Notification) -> Ready<Result<(), Error>> {
+        self.lock().notes.push(Note {
+            level: notification.level.clone(),
+            backend: backend.to_owned(),
+            message: notification.text.clone(),
+        });
+        ready(Ok(()))
     }
 }
-
-/// Error codes that the Matrix and webhook notifiers drop for a level other than action.
-const MUTED_CODES: [&str; 4] = [
-    "matrix_unavailable",
-    "matrix_request_rejected",
-    "webhook_unavailable",
-    "webhook_request_rejected",
-];
 
 /// Counts notes of a level whose message contains a fragment.
 pub(crate) fn count_notes(notes: &[Note], level: Level, fragment: &str) -> usize {
@@ -860,25 +796,13 @@ impl Integrations for FakeIntegration {
         plain: &str,
         formatted: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        let result = {
-            let mut state = self.lock();
-            state.queue_sends += 1;
-            state.queue_transactions.push(transaction.to_string());
-            if state.queue_sends <= state.queue_failures {
-                Err(Error::workflow("matrix_unavailable", false, None))
-            } else if let Some(code) = state.backend_fail.get(backend).cloned() {
-                Err(Error::workflow(code, false, None))
-            } else {
-                state.queued.push(QueuedDigest {
-                    backend: backend.to_owned(),
-                    transaction: transaction.to_string(),
-                    plain: plain.to_string(),
-                    formatted: formatted.to_string(),
-                });
-                Ok(())
-            }
-        };
-        ready(result)
+        self.lock().queued.push(QueuedDigest {
+            backend: backend.to_owned(),
+            transaction: transaction.to_string(),
+            plain: plain.to_string(),
+            formatted: formatted.to_string(),
+        });
+        ready(Ok(()))
     }
 
     fn notify(
@@ -887,7 +811,7 @@ impl Integrations for FakeIntegration {
         backend: &str,
         notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.send_note(backend, notification, true)
+        self.send_note(backend, notification)
     }
 
     fn notify_unmuted(
@@ -896,7 +820,7 @@ impl Integrations for FakeIntegration {
         backend: &str,
         notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.send_note(backend, notification, false)
+        self.send_note(backend, notification)
     }
 }
 
