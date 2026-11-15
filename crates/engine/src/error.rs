@@ -53,6 +53,15 @@ pub enum Error {
         #[source]
         cause: BoxError,
     },
+    /// A session start fetched the pull request head at another commit than the trusted one.
+    #[error("{cause}: fetched pull request head {commit}")]
+    FetchedHead {
+        /// The full commit ID that pohunek reported for the fetched ref.
+        commit: String,
+        /// The error of the failed start.
+        #[source]
+        cause: BoxError,
+    },
 }
 
 impl Error {
@@ -101,6 +110,14 @@ impl Error {
             cause,
         }
     }
+
+    /// Wraps the error of a failed start together with the commit its fetched head was at.
+    pub fn fetched_head(commit: impl Into<String>, cause: BoxError) -> Self {
+        Self::FetchedHead {
+            commit: commit.into(),
+            cause,
+        }
+    }
 }
 
 /// Renders `head`, followed by `: cause` when there is a cause.
@@ -143,6 +160,16 @@ pub fn error_code<'a>(err: &'a (dyn StdError + 'static)) -> &'a str {
 pub fn pohunek_error_code<'a>(err: &'a (dyn StdError + 'static)) -> Option<&'a str> {
     engine_errors(err).find_map(|error| match error {
         Error::PohunekCode { code, .. } => Some(code.as_str()),
+        _ => None,
+    })
+}
+
+/// Returns the commit that the fetched pull request head of a failed start was at.
+///
+/// The outermost such commit in the chain, or `None` when pohunek reported none.
+pub fn fetched_head_commit<'a>(err: &'a (dyn StdError + 'static)) -> Option<&'a str> {
+    engine_errors(err).find_map(|error| match error {
+        Error::FetchedHead { commit, .. } => Some(commit.as_str()),
         _ => None,
     })
 }

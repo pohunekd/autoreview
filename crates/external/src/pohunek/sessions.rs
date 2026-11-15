@@ -17,12 +17,13 @@ use autoreview_engine::{Error, error_code};
 use autoreview_go_compat::{null_default, null_entries};
 use autoreview_schedule::diagnostic::{SessionLoss, fetch_failure, head_fetch_failure};
 use autoreview_schedule::metadata::{WorkSession, metadata_args};
+use autoreview_schedule::scheduler::HEAD_FETCH_MISMATCH;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::{
-    decode_ok, failure_code, is_identifier, pohunek_arguments, pohunek_call, pohunek_environment,
-    response_invalid,
+    decode_ok, failure_code, is_identifier, mismatch_commit, pohunek_arguments, pohunek_call,
+    pohunek_environment, response_invalid,
 };
 use crate::process::run;
 
@@ -357,11 +358,17 @@ where
             let code = failure_code(&output);
             let (name, permanent) =
                 head_fetch_failure(&code).unwrap_or((SESSION_START_FAILED, false));
-            let cause: BoxError = if code.is_empty() {
+            let mut cause: BoxError = if code.is_empty() {
                 Box::new(error)
             } else {
                 Box::new(Error::pohunek_code(code, Box::new(error)))
             };
+            if name == HEAD_FETCH_MISMATCH {
+                let fetched = mismatch_commit(&output, &request.pull_request.head_sha);
+                if !fetched.is_empty() {
+                    cause = Box::new(Error::fetched_head(fetched, cause));
+                }
+            }
             Err(Error::workflow(name, permanent, Some(cause)))
         }
         Ok(_) => Err(response_invalid()),
