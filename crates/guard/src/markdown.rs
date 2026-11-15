@@ -26,9 +26,15 @@ const HIDING_STYLES: [&str; 2] = ["display:none", "visibility:hidden"];
 /// usually prose that names the tag.
 const HIDDEN_ELEMENTS: [&str; 3] = ["script", "style", "template"];
 
+/// The opener of an HTML comment.
+const COMMENT_OPEN: &str = "<!--";
+
+/// The closer of an HTML comment.
+const COMMENT_CLOSE: &str = "-->";
+
 /// Raw HTML that is never shown besides tags: opener, closer and how the opener is matched.
 const HIDDEN_MARKUP: [(&str, &str); 4] = [
-    ("<!--", "-->"),
+    (COMMENT_OPEN, COMMENT_CLOSE),
     ("<![cdata[", "]]>"),
     ("<?", "?>"),
     ("<!", ">"),
@@ -238,14 +244,14 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
     fn raw_html(&mut self, html: &str, inline: bool) {
         let mut rest = html;
         if self.comment.is_some() {
-            let Some(end) = rest.find("-->") else {
+            let Some(end) = rest.find(COMMENT_CLOSE) else {
                 self.text(rest, false);
                 return;
             };
             let (inside, after) = split(rest, end);
             self.text(inside, false);
             self.close_comment();
-            rest = split(after, 3).1;
+            rest = split(after, COMMENT_CLOSE.len()).1;
         }
         while let Some(start) = rest.find('<') {
             let (before, from) = split(rest, start);
@@ -259,7 +265,7 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
             });
             if let Some((open, close)) = markup {
                 let body = split(from, open.len()).1;
-                if *open == "<!--" && !inline && !body.contains(close) {
+                if *open == COMMENT_OPEN && !inline && !body.contains(close) {
                     self.comment = Some(body.to_owned());
                     rest = "";
                     continue;
