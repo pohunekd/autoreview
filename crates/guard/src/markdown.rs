@@ -425,3 +425,74 @@ fn leave<F: FnMut(Signal, u32)>(walk: &mut Walk<'_, F>, node: &AstNode<'_>) {
         _ => {}
     }
 }
+
+/// Reports the runs of non-blank source lines that no rendered block covers.
+///
+/// They are reference definitions and unreferenced footnote definitions, which render
+/// nothing; a line that starts a definition after its container markers starts a new run.
+fn unrendered_lines(text: &str, covered: &[bool], add: &mut impl FnMut(Signal, u32)) {
+    let mut run = String::new();
+    let mut flush = |run: &mut String| {
+        if !run.is_empty() && words::instructs(run) {
+            add(Signal::ReferenceDefinitionInstruction, 1);
+        }
+        run.clear();
+    };
+    for (index, line) in text.split('\n').enumerate() {
+        let rendered = covered
+            .get(index.saturating_add(1))
+            .copied()
+            .unwrap_or_default();
+        let blank = line.trim().is_empty();
+        let starts_definition = line
+            .trim_start_matches(|character: char| {
+                character.is_ascii_whitespace()
+                    || character.is_ascii_digit()
+                    || matches!(character, '>' | '-' | '*' | '+' | '.' | ')')
+            })
+            .starts_with('[');
+        if rendered || blank || starts_definition {
+            flush(&mut run);
+        }
+        if !rendered && !blank {
+            run.push_str(line);
+            run.push('\n');
+        }
+    }
+    flush(&mut run);
+}
+
+/// Reports the hidden Markdown signals of a rendered field to `add`.
+///
+/// Returns the byte ranges of its code: fenced and indented code blocks and code spans.
+pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Vec<(usize, usize)> {
+    let arena = Arena::new();
+    let root = parse_document(&arena, text, &options());
+    let lines = Lines::new(text);
+    let mut covered = vec![false; lines.starts.len().saturating_add(1)];
+    let mut code = Vec::new();
+    let mut walk = Walk {
+        add,
+        frames: Vec::new(),
+        open: BTreeMap::new(),
+        alt: None,
+    };
+    for edge in root.traverse() {
+        match edge {
+            NodeEdge::Start(node) => {
+                if matches!(
+                    node.data().value,
+                    NodeValue::CodeBlock(_) | NodeValue::Code(_)
+                ) {
+                    code.push(lines.range(node.data().sourcepos));
+                }
+                enter(&mut walk, node, &mut covered);
+            }
+            NodeEdge::End(node) => leave(&mut walk, node),
+        }
+    }
+    walk.close_all();
+    unrendered_lines(text, &covered, walk.add);
+    code.sort_unstable();
+    code
+}
