@@ -96,6 +96,20 @@ pub struct Record {
     /// The retry count before the failure of `handled_workflow` was handled.
     #[serde(skip_serializing_if = "is_zero")]
     pub handled_retries: i64,
+    /// The [`REVIEWER_USAGE_LIMITED`] runs of the current streak of runs that spend no retry.
+    ///
+    /// The record keeps the count, so pruned runs never shorten the streak.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub usage_limited: i64,
+    /// The [`HEAD_FETCH_MISMATCH`] runs of the current streak of runs that spend no retry.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub fetch_mismatches: i64,
+    /// `usage_limited` before the failure of `handled_workflow` was handled.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub handled_usage_limited: i64,
+    /// `fetch_mismatches` before the failure of `handled_workflow` was handled.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub handled_fetch_mismatches: i64,
     /// Marks a dispatch that continues a review the author limit let through.
     ///
     /// A host wait keeps it, so the dispatch after the wait is not held as a new start.
@@ -124,6 +138,10 @@ impl Default for Record {
             awaits_host: false,
             handled_workflow: String::new(),
             handled_retries: 0,
+            usage_limited: 0,
+            fetch_mismatches: 0,
+            handled_usage_limited: 0,
+            handled_fetch_mismatches: 0,
             continues: false,
             skip_notified: false,
         }
@@ -261,6 +279,10 @@ pub fn plan(
             awaits_host: false,
             handled_workflow: String::new(),
             handled_retries: 0,
+            usage_limited: 0,
+            fetch_mismatches: 0,
+            handled_usage_limited: 0,
+            handled_fetch_mismatches: 0,
             continues: false,
             skip_notified: false,
         }
@@ -318,6 +340,7 @@ pub fn plan(
             r.phase = phase::COMPLETED.to_owned();
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
+            (r.usage_limited, r.fetch_mismatches) = (0, 0);
             return Ok(Decision {
                 record: r,
                 dispatch: false,
@@ -329,11 +352,36 @@ pub fn plan(
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             let code = failure_code(&latest_run.failure);
+            // A failure handled before a retarget away and back gets the same state again, from
+            // the same retry and streak counts, and no second notice. A running record follows a
+            // new run. A superseded run is no failure, so it is never the handled one.
+            let repeated = r.phase != phase::RUNNING
+                && !r.handled_workflow.is_empty()
+                && r.handled_workflow == latest_run.workflow_id;
+            if !superseded(&code) {
+                if repeated {
+                    r.retries = r.handled_retries;
+                    r.usage_limited = r.handled_usage_limited;
+                    r.fetch_mismatches = r.handled_fetch_mismatches;
+                } else {
+                    r.handled_workflow = latest_run.workflow_id.clone();
+                    r.handled_retries = r.retries;
+                    r.handled_usage_limited = r.usage_limited;
+                    r.handled_fetch_mismatches = r.fetch_mismatches;
+                }
+            }
+            // The runs that spend no retry form one streak, counted on the record; any other
+            // ending ends it.
+            match code.as_str() {
+                REVIEWER_USAGE_LIMITED => r.usage_limited = r.usage_limited.saturating_add(1),
+                HEAD_FETCH_MISMATCH => r.fetch_mismatches = r.fetch_mismatches.saturating_add(1),
+                _ => (r.usage_limited, r.fetch_mismatches) = (0, 0),
+            }
             // A superseded run left nothing behind; the head is reviewed anew. So is a start
             // whose fetched head was another commit, until the retry budget is spent.
-            let mismatches = streak_failures(runs, &target_identity, HEAD_FETCH_MISMATCH);
+            let restarts = usize::try_from(r.fetch_mismatches).unwrap_or(usize::MAX);
             let again = superseded(&code)
-                || (code == HEAD_FETCH_MISMATCH && mismatches <= policy.retry_delays.len());
+                || (code == HEAD_FETCH_MISMATCH && restarts <= policy.retry_delays.len());
             if again {
                 r.phase = phase::WAITING.to_owned();
                 r.attempt = latest_run.attempt.wrapping_add(1);
@@ -345,23 +393,11 @@ pub fn plan(
                     notify: false,
                 });
             }
-            // A failure handled before a retarget away and back gets the same state again, from
-            // the same retry count, and no second notice. A running record follows a new run.
-            let repeated = r.phase != phase::RUNNING
-                && !r.handled_workflow.is_empty()
-                && r.handled_workflow == latest_run.workflow_id;
-            if repeated {
-                r.retries = r.handled_retries;
-            } else {
-                r.handled_workflow = latest_run.workflow_id.clone();
-                r.handled_retries = r.retries;
-            }
             // A usage limit notifies on the first limited run of its streak and when it stops.
             let mut notify = !repeated;
             if code == REVIEWER_USAGE_LIMITED {
-                let limited = streak_failures(runs, &target_identity, REVIEWER_USAGE_LIMITED);
-                r = after_usage_limit(r, limited, now, policy)?;
-                notify = notify && (limited <= 1 || r.phase == phase::FAILED);
+                r = after_usage_limit(r, now, policy)?;
+                notify = notify && (r.usage_limited <= 1 || r.phase == phase::FAILED);
             } else {
                 r = after_failure(r, &code, now, policy)?;
             }
@@ -450,8 +486,9 @@ pub fn plan_retarget(
 /// that follows a running run of the head keeps that run's attempt, which [`plan`] matches
 /// against the run history. Any other record gets an attempt above every run of the head,
 /// skipping the attempt whose `workflow_id` is the published workflow. A record that starts
-/// afresh keeps `handled_workflow` and `handled_retries`, so [`plan`] handles that failure
-/// again without a notice when the pull request returns to the base branch of its run.
+/// afresh keeps `handled_workflow`, `handled_retries` and the streak counts with their
+/// snapshots, so [`plan`] handles that failure again without a notice when the pull request
+/// returns to the base branch of its run.
 ///
 /// # Errors
 ///
@@ -484,19 +521,24 @@ pub fn plan_unreviewed(
         .retain(|id| !ended.contains(id.as_str()));
     // A record that follows a run of the head starts afresh. The record of the retarget names
     // no workflow until it dispatches; it is kept, so its debounce runs once.
-    let mut handled = None;
+    let mut kept = None;
     if record.identity == identity && !record.workflow_id.is_empty() {
-        handled = Some((record.handled_workflow, record.handled_retries));
+        kept = Some(record.clone());
         record = Record {
             blocking_workflows: record.blocking_workflows,
             ..Record::default()
         };
     }
     let mut decision = plan(record, target, &visible, now, policy)?;
-    // The handled failure is never this record's workflow; it only stops a second notice.
-    if let Some((workflow, retries)) = handled {
-        decision.record.handled_workflow = workflow;
-        decision.record.handled_retries = retries;
+    // The handled failure is never this record's workflow; it only stops a second notice. The
+    // streak counts stay, so a retarget neither resets nor repeats them.
+    if let Some(kept) = kept {
+        decision.record.handled_workflow = kept.handled_workflow;
+        decision.record.handled_retries = kept.handled_retries;
+        decision.record.handled_usage_limited = kept.handled_usage_limited;
+        decision.record.handled_fetch_mismatches = kept.handled_fetch_mismatches;
+        decision.record.usage_limited = kept.usage_limited;
+        decision.record.fetch_mismatches = kept.fetch_mismatches;
     }
     // A higher attempt on a running record would hide the end of its run from `plan`.
     let follows_run = !decision.dispatch
@@ -643,29 +685,6 @@ pub fn limit_author(
     Ok(decision)
 }
 
-/// Failure codes whose runs spend no retry; they form one streak of a review identity.
-const STREAK_CODES: [&str; 2] = [HEAD_FETCH_MISMATCH, REVIEWER_USAGE_LIMITED];
-
-/// Counts the runs that failed with `code` in the latest streak of `identity`.
-///
-/// Runs are read from the highest attempt down while each one ended and failed with a code of
-/// [`STREAK_CODES`]; the first run with another ending ends the streak. Neither streak code
-/// resets the other's count, so a head that alternates them still stops at either bound.
-fn streak_failures(runs: &[Run], identity: &str, code: &str) -> usize {
-    let mut own: Vec<&Run> = runs
-        .iter()
-        .filter(|run| run.target.identity() == identity)
-        .collect();
-    own.sort_by_key(|run| std::cmp::Reverse(run.attempt));
-    own.iter()
-        .map(|run| (run, failure_code(&run.failure)))
-        .take_while(|(run, failed)| {
-            !run.active() && !run.released && STREAK_CODES.contains(&failed.as_str())
-        })
-        .filter(|(_, failed)| failed == code)
-        .count()
-}
-
 /// Returns the next attempt of `identity` whose workflow is not the `published` one.
 ///
 /// The run of the published review may be pruned while its record is kept.
@@ -714,7 +733,7 @@ pub fn after_failure(
     Ok(r)
 }
 
-/// Records a run that a usage limit ended; `limited` counts the limited runs of its streak.
+/// Records a run that a usage limit ended; `usage_limited` of `r` already counts it.
 ///
 /// The review waits for the delay at that count in `usage_limit_delays` and keeps its retry
 /// budget, so a later transient fault still gets every retry. With the delays spent it fails.
@@ -723,15 +742,11 @@ pub fn after_failure(
 ///
 /// Returns `Error::TimeOutOfRange` when adding the delay to the current
 /// instant leaves the range that `time` can represent.
-fn after_usage_limit(
-    mut r: Record,
-    limited: usize,
-    now: OffsetDateTime,
-    policy: &Policy,
-) -> Result<Record, Error> {
+fn after_usage_limit(mut r: Record, now: OffsetDateTime, policy: &Policy) -> Result<Record, Error> {
     r.error_code = REVIEWER_USAGE_LIMITED.to_owned();
     r.awaits_host = false;
-    let delay = (limited.checked_sub(1)).and_then(|i| policy.usage_limit_delays.get(i));
+    let index = usize::try_from(r.usage_limited.saturating_sub(1)).ok();
+    let delay = index.and_then(|i| policy.usage_limit_delays.get(i));
     let Some(delay) = delay else {
         r.phase = phase::FAILED.to_owned();
         return Ok(r);
@@ -1504,21 +1519,46 @@ mod tests {
         }
     }
 
+    /// Retargets the head of `record` from `main` to `dev` and back before it starts again.
+    fn away_and_back(
+        record: Record,
+        target: &Target,
+        runs: &[Run],
+        now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let bases: BTreeMap<String, String> = (runs.iter())
+            .map(|run| (run.workflow_id.clone(), "main".to_owned()))
+            .collect();
+        let workflow_id = |attempt: i64| format!("w{attempt}");
+        let retarget = |base_branch| Retarget {
+            base_branch,
+            run_bases: &bases,
+            published_workflow: "published",
+        };
+        let (dev, main) = (retarget("dev"), retarget("main"));
+        let away = plan_retarget(&record, target, runs, &dev, workflow_id, now, policy)
+            .expect("plan")
+            .expect("no run reviewed dev");
+        plan_on_base(away.record, target, runs, &main, workflow_id, now, policy).expect("plan")
+    }
+
     // A run that a usage limit ended waits on the usage limit delays and keeps the retry budget;
     // it notifies on the first limited run of its streak and when the delays are spent. A
-    // fetch mismatch and a usage limit share one streak, so neither resets the other's count
-    // (#461).
+    // fetch mismatch and a usage limit share one streak, so neither resets the other's count;
+    // pruned runs and a retarget away and back keep both counts (#461).
     #[test]
     fn usage_limit_retries_on_its_own_delays_then_stops() {
         const U: &str = REVIEWER_USAGE_LIMITED;
         const G: &str = "github_request_failed";
         const M: &str = HEAD_FETCH_MISMATCH;
+        const BACK: &str = "retarget away and back";
         let wait = |notify: bool, minutes: i64| ("retry_wait", notify, minutes);
         let stop = ("failed", true, 0);
         // Each case: its name, the ending of each run, the phase, notice and delay after each, and
         // the retries spent at the end.
         type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool, i64)], i64);
-        let cases: [Case<'_>; 6] = [
+        let cases: [Case<'_>; 9] = [
             (
                 "stops after its own delays",
                 &[U, U, U, U],
@@ -1584,6 +1624,42 @@ mod tests {
                 ],
                 0,
             ),
+            (
+                "pruned runs keep the usage count",
+                &[U, M, U, M, U, U],
+                &[
+                    wait(true, 15),
+                    ("waiting", false, 2),
+                    wait(false, 30),
+                    ("waiting", false, 2),
+                    wait(false, 60),
+                    stop,
+                ],
+                0,
+            ),
+            (
+                "pruned runs keep the mismatch count",
+                &[M, M, M, M],
+                &[
+                    ("waiting", false, 2),
+                    ("waiting", false, 2),
+                    ("waiting", false, 2),
+                    stop,
+                ],
+                0,
+            ),
+            (
+                "a retarget away and back keeps the count",
+                &[U, U, BACK, U, U],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(false, 30),
+                    wait(false, 60),
+                    stop,
+                ],
+                0,
+            ),
         ];
         for (name, endings, want, retries) in cases {
             let (target, mut now, policy) = fixture();
@@ -1591,7 +1667,15 @@ mod tests {
             let mut record = Record::default();
             for (ending, (phase, notify, minutes)) in endings.iter().zip(want.iter()) {
                 now += Duration::hours(1);
-                let decision = dispatch_and_end(record, &target, &mut runs, ending, now, &policy);
+                // A pruned row keeps only the latest run, as if the store pruned the others.
+                if name.starts_with("pruned") {
+                    runs.drain(..runs.len().saturating_sub(1));
+                }
+                let decision = if *ending == BACK {
+                    away_and_back(record, &target, &runs, now, &policy)
+                } else {
+                    dispatch_and_end(record, &target, &mut runs, ending, now, &policy)
+                };
                 let due = decision.record.due_at == now + Duration::minutes(*minutes);
                 assert!(
                     decision.record.phase == *phase
