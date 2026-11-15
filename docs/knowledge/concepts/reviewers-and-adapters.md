@@ -278,7 +278,8 @@ them in the available-skills catalog, and a prompt that names a skill gets its
 whole `SKILL.md` as instructions (`codex-rs/core/src/session/turn.rs`). The
 adapter passes `skills.include_instructions=false`, which drops the catalog
 only. On a `checkout: head` run it therefore compares those folders on disk
-with the trusted base tree before Codex starts, without asking git's index, so
+with the trusted base tree before Codex starts and again after the run (a
+skill that the run leaves fails the run), without asking git's index, so
 index flags, ignore rules and nested repositories hide nothing. It refuses the
 run with `refused:repository_skills` when an entry there is a link or another
 non-regular file, a folder or file that the base lacks (a `.git` entry too), or
@@ -404,7 +405,8 @@ status 64 on a host without it. It has two parts:
   A `head` checkout whose skill folders on disk differ from the trusted base
   (see [the Claude adapter](#the-claude-adapter) section) gets the
   line `[autoreview-codex/v2 <nonce> refused:repository_skills]` right before
-  the exit line, before Codex starts. The engine stops the review with
+  the exit line, before Codex starts, or after the run when the run left such
+  a skill (then after the reason line). The engine stops the review with
   `review_head_skills_refused` without a fresh session, and nothing is
   published.
   An invalid argument, Codex path file or input frame, or a host without
