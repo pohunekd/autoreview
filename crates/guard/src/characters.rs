@@ -31,10 +31,11 @@ const RUN_MIN: usize = 2;
 /// isolate next to a mark in right-to-left prose.
 const MIXED_RUN_MIN: usize = 3;
 
-/// Shortest run of bidi marks alone that is reported.
+/// Shortest run of bidi marks and controls alone that is reported.
 ///
-/// Arabic, Hebrew and Persian text puts marks around numbers and Latin words, at most two or
-/// three in a row; a payload of marks needs many more.
+/// Arabic, Hebrew and Persian text puts marks and isolates around numbers and Latin words, at
+/// most two or three in a row (`PDI PDI RLM` in nested isolates); a payload needs many more.
+/// Whitespace keeps such a run open, so marks spread over spaces count together.
 const MARKS_ONLY_MIN: usize = 6;
 
 /// BRAILLE PATTERN BLANK: not whitespace, but shown as an empty cell.
@@ -205,21 +206,22 @@ impl MixedRun {
     ///
     /// It is when it has `MIXED_RUN_MIN` characters and holds a zero-width character or a
     /// selector together with another class, or when it has `MARKS_ONLY_MIN` bidi marks and
-    /// nothing else. A run of one class of zero-width characters or selectors has its own
-    /// signal; marks and controls without them are right-to-left formatting.
+    /// controls and nothing else. A run of one class of zero-width characters or selectors
+    /// has its own signal; shorter runs of marks and controls are right-to-left formatting.
     fn is_hit(&self) -> bool {
         let classes = [self.zero_width, self.selector, self.mark, self.control];
         let mixed = classes.iter().filter(|present| **present).count() > 1;
-        let marks_only = self.mark && !self.zero_width && !self.selector && !self.control;
+        let bidi_only = (self.mark || self.control) && !self.zero_width && !self.selector;
         (self.len >= MIXED_RUN_MIN && (self.zero_width || self.selector) && mixed)
-            || (marks_only && self.len >= MARKS_ONLY_MIN)
+            || (bidi_only && self.len >= MARKS_ONLY_MIN)
     }
 }
 
 /// Reports the character signals of `text` to `add`: tags, runs and bidi controls.
 ///
 /// A variation selector whose base is text (`text_base`) also counts as a
-/// `variation_selector_run`, whitespace between them included.
+/// `variation_selector_run`. The base is the last visible character before it, so neither
+/// whitespace nor invisible characters between them hide it.
 ///
 /// `in_patch` is set for added patch lines, where embeddings and isolates are reported too.
 pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)) {
@@ -228,6 +230,7 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
     let mut zero_width_len = 0_usize;
     let mut selector_len = 0_usize;
     let mut selector_after_text = false;
+    let mut last_visible = '\n';
     let mut mixed = MixedRun::default();
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
@@ -235,7 +238,8 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
             if let Some(run) = tag_run.take() {
                 add(Signal::UnicodeTags, u32::from(!run.is_flag()));
             }
-            if !mixed.unnatural {
+            let bidi_run = (mixed.mark || mixed.control) && !mixed.zero_width && !mixed.selector;
+            if !mixed.unnatural && !bidi_run {
                 add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
                 mixed = MixedRun::default();
                 zero_width_len = 0;
@@ -285,7 +289,7 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
             0
         };
         if selector_len == 1 {
-            selector_after_text = text_base(previous, characters.peek().copied());
+            selector_after_text = text_base(last_visible, characters.peek().copied());
             add(Signal::VariationSelectorRun, u32::from(selector_after_text));
         }
         if selector_len == RUN_MIN && !selector_after_text {
@@ -297,6 +301,9 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
             add(Signal::BidiControlInPatch, 1);
         }
         previous = character;
+        if !invisible(character) {
+            last_visible = character;
+        }
     }
     if let Some(run) = tag_run {
         add(Signal::UnicodeTags, u32::from(!run.is_flag()));
