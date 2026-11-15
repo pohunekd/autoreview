@@ -124,9 +124,9 @@ struct PullNode {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Page {
-    /// Paging of the list.
-    #[serde(rename = "pageInfo", deserialize_with = "null_default::deserialize")]
-    page_info: PageInfo,
+    /// Paging of the list; a missing one makes the response invalid.
+    #[serde(rename = "pageInfo")]
+    page_info: Option<PageInfo>,
     /// The entries; a `null` entry makes the response invalid.
     #[serde(deserialize_with = "null_default::deserialize")]
     nodes: Vec<Option<Node>>,
@@ -148,14 +148,14 @@ struct PageInfo {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Node {
-    /// The commit of a commit entry.
+    /// The commit of a commit entry; a missing one makes the response invalid.
     commit: Option<Commit>,
     /// The author; `null` for a deleted account.
     author: Option<Author>,
     /// The text of a comment or a review; `null` reads as empty.
     #[serde(deserialize_with = "null_default::deserialize")]
     body: String,
-    /// The comments of a review thread.
+    /// The comments of a review thread; missing ones make the response invalid.
     comments: Option<Page>,
 }
 
@@ -192,8 +192,15 @@ pub(super) struct GuardRead {
 
 impl GuardRead {
     /// Reports whether the bound is reached, so any further text is left out.
-    fn full(&self) -> bool {
+    pub(super) fn full(&self) -> bool {
         self.bytes >= self.max_bytes
+    }
+
+    /// Reports whether more text cannot change the read.
+    ///
+    /// It holds once the bound is reached and text was left out.
+    pub(super) fn settled(&self) -> bool {
+        self.truncated && self.full()
     }
 
     /// Adds one text, or marks the read truncated once the bound is reached.
@@ -278,21 +285,21 @@ fn decode_pull_node(output: &str) -> Result<PullNode, Error> {
         .ok_or_else(|| response_invalid(None))
 }
 
-/// Adds the texts of one entry of `list`, leaving out what `publisher` wrote.
+/// Adds the texts of one entry of `list`, leaving out what the publisher `login` wrote.
 ///
-/// A thread with more comments than one page, or with a missing comment, marks the read
-/// truncated.
-fn take_entry(list: List, entry: Node, publisher: &str, read: &mut GuardRead) {
+/// The publisher's review-thread comments are left out too. A thread with more comments than
+/// one page, or with a missing comment, marks the read truncated. An entry without its commit,
+/// comments or their paging is `github_response_invalid`.
+fn take_entry(list: List, entry: Node, login: &str, read: &mut GuardRead) -> Result<(), Error> {
     let own = |author: &Option<Author>| {
         author
             .as_ref()
-            .is_some_and(|author| author.login.eq_ignore_ascii_case(publisher))
+            .is_some_and(|author| author.login.eq_ignore_ascii_case(login))
     };
     match list {
         List::Commits => {
-            if let Some(commit) = entry.commit {
-                read.push(list.kind(), &commit.message);
-            }
+            let commit = entry.commit.ok_or_else(|| response_invalid(None))?;
+            read.push(list.kind(), &commit.message);
         }
         List::Comments | List::Reviews => {
             if !own(&entry.author) {
@@ -300,8 +307,9 @@ fn take_entry(list: List, entry: Node, publisher: &str, read: &mut GuardRead) {
             }
         }
         List::Threads => {
-            let comments = entry.comments.unwrap_or_default();
-            if comments.page_info.has_next_page {
+            let comments = entry.comments.ok_or_else(|| response_invalid(None))?;
+            let page_info = (comments.page_info).ok_or_else(|| response_invalid(None))?;
+            if page_info.has_next_page {
                 read.cut();
             }
             for comment in comments.nodes {
@@ -316,14 +324,15 @@ fn take_entry(list: List, entry: Node, publisher: &str, read: &mut GuardRead) {
             }
         }
     }
+    Ok(())
 }
 
 impl GitHub {
     /// Reads the texts of `fields` for the text guard, bounded by `max_bytes`.
     ///
-    /// Each list is paged until it ends. The page limit, the bound, a changed file with added
-    /// lines whose patch GitHub omits and a changed-files listing that left files out mark the
-    /// read truncated.
+    /// Each list is paged until it ends or the bound stops it. The page limit, the bound, a
+    /// changed file with added lines whose patch GitHub omits and a changed-files listing that
+    /// left files out mark the read truncated.
     pub(crate) async fn guard_texts(
         &self,
         cancel: &CancellationToken,
@@ -363,7 +372,7 @@ impl GitHub {
             self.read_list(cancel, credential, pull_request, list, publisher, &mut read)
                 .await?;
         }
-        if fields.contains(&patch) {
+        if fields.contains(&patch) && !read.settled() {
             self.guard_patches(cancel, credential, pull_request, changed_files, &mut read)
                 .await?;
         }
@@ -373,7 +382,10 @@ impl GitHub {
         })
     }
 
-    /// Reads every page of `list` into `read` until it ends, the bound or the page limit.
+    /// Reads the pages of `list` into `read` until it ends, the read settles or the page limit.
+    ///
+    /// Past the bound one page is still read, so a list without text does not set `truncated`;
+    /// a further page then cuts the read.
     async fn read_list(
         &self,
         cancel: &CancellationToken,
@@ -386,8 +398,7 @@ impl GitHub {
         let query = list_query(list);
         let mut after = String::new();
         for _ in 1..=self.search_page_limit {
-            if read.full() {
-                read.cut();
+            if read.settled() {
                 return Ok(());
             }
             let args = guard_args(pull_request, &query, &after);
@@ -395,17 +406,22 @@ impl GitHub {
             let page = decode_pull_node(&output)?
                 .page
                 .ok_or_else(|| response_invalid(None))?;
+            let page_info = page.page_info.ok_or_else(|| response_invalid(None))?;
             for entry in page.nodes {
                 let entry = entry.ok_or_else(|| response_invalid(None))?;
-                take_entry(list, entry, publisher, read);
+                take_entry(list, entry, publisher, read)?;
             }
-            if !page.page_info.has_next_page {
+            if !page_info.has_next_page {
                 return Ok(());
             }
-            if page.page_info.end_cursor.is_empty() {
+            if read.full() {
+                read.cut();
+                return Ok(());
+            }
+            if page_info.end_cursor.is_empty() {
                 return Err(response_invalid(None));
             }
-            after = page.page_info.end_cursor;
+            after = page_info.end_cursor;
         }
         read.cut();
         Ok(())
