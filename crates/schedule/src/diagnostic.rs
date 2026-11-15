@@ -4,6 +4,8 @@
 
 use std::error::Error as StdError;
 
+use crate::scheduler::HEAD_FETCH_MISMATCH;
+
 /// Lowercase substrings of an error message and the diagnostic code each one maps to.
 ///
 /// The first match wins, so `permission denied (publickey)` precedes `permission denied`.
@@ -160,7 +162,7 @@ pub fn head_fetch_failure(code: &str) -> Option<(&'static str, bool)> {
     match code {
         "fetch_ref_not_found" => Some(("pohunek_head_fetch_ref_missing", true)),
         "fetch_ref_failed" => Some(("pohunek_head_fetch_failed", false)),
-        "fetch_ref_commit_mismatch" => Some(("pohunek_head_fetch_mismatch", true)),
+        "fetch_ref_commit_mismatch" => Some((HEAD_FETCH_MISMATCH, true)),
         _ => None,
     }
 }
@@ -197,7 +199,7 @@ pub fn failure_explanation(code: &str) -> &'static str {
         "pohunek_head_fetch_failed" => {
             "Git could not fetch the pull request head on the review host: a network, authentication or timeout failure, or Git older than 2.29 there. Check GitHub access and the Git version on the review host."
         }
-        "pohunek_head_fetch_mismatch" => {
+        HEAD_FETCH_MISMATCH => {
             "At every start of the review, `refs/pull/<n>/head` fetched on the review host was at another commit than the head GitHub reports for the pull request, so GitHub did not update the ref. Check the pull request on GitHub, then retry this PR or push a new commit."
         }
         "pohunek_session_warning" => {
