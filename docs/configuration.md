@@ -586,16 +586,17 @@ the engine lock, so a second `serve` with the same section fails with
 ## guards
 
 Optional. `guards.text` holds the settings of the prompt-injection guard that a
-policy rule turns on with [`guard`](policy.md#guard). This release reads and
-validates the section, the lexicon file included, but no review runs the guard
-yet; a later release turns it on. When `guards` is present, `guards.text` and
+policy rule turns on with [`guard`](policy.md#guard). Only reviews of such a
+rule read and scan text, with extra GitHub read calls; a review whose stored
+rule has a guard while this section is missing is held as suspect without a
+scan. When `guards` is present, `guards.text` and
 both its keys are required; `guards:` without a value is refused with
 `configuration_missing: guards.text`. Every command reads the lexicon file once
 at load, so a broken file stops `serve` and `validate` alike.
 
 | Key | Meaning |
 |---|---|
-| `text.max_input_bytes` | Largest amount of pull request text the guard reads for one review, in bytes. From 1 to 4194304 (4 MiB, the size up to which the guard's scan time is measured) |
+| `text.max_input_bytes` | Largest amount of pull request text the guard reads for one review, in bytes. From 1 to 4194304 (4 MiB, the size up to which the guard's scan time is measured). Text is read in field order (title, body, commit messages, comments, review threads, patches); a review whose text reaches the bound is suspect, because the rest was not scanned |
 | `text.lexicon_file` | Clean absolute path of the phrase lexicon: UTF-8, at most 65536 bytes. Each line is a weight from 1 to 100, whitespace and a phrase; blank lines and lines that start with `#` are skipped. A file without a phrase, or with a weight out of range, a phrase without a letter or digit or a repeated phrase, is refused with the line number |
 
 ```yaml

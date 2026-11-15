@@ -222,7 +222,7 @@ repositories before their owner wildcard.
 | `on_notes` | Optional. `comment`: a review whose findings are all notes goes to the author as a comment first, see [notes hand-off](knowledge/concepts/decisions.md#notes-hand-off). Pull requests authored by bots skip the hand-off and wait for approval directly |
 | `authors` | Required. Who counts as a trusted author and what an untrusted author gets, see below |
 | `author_limit` | Optional. How many reviews one author may start under the rule in a window, see [author limit](#author-limit). Without it the rule sets no limit |
-| `guard` | Optional. The prompt-injection guard of the rule, see [guard](#guard). No review runs the guard in this release |
+| `guard` | Optional. The prompt-injection guard of the rule, see [guard](#guard). Without it the rule runs no guard |
 | `human_review` | Optional, needs `on_clean: approve`. The signals that hold a clean review for a person, see [human review signals](#human-review-signals) |
 
 Validation rules:
@@ -396,10 +396,11 @@ the label or requested the review.
 ### Guard
 
 `guard` opts the rule in to the prompt-injection guard, a deterministic scan of
-the pull request text for instructions hidden from a human reader. This release
-validates the section and adds it to the policy digest, but no review runs the
-guard yet; a later release turns it on. Without the key the rule has no guard.
-With it, every field is required, and `guard: null` is an error.
+the pull request text for instructions hidden from a human reader. It runs once
+per review, before the reviewers start, and stores its result with the review,
+so a resumed review keeps it. Without the key the rule has no guard and the
+review is unchanged. With it, every field is required, and `guard: null` is an
+error.
 
 ```yaml
 guard:
@@ -413,8 +414,28 @@ guard:
   (the added lines of the changed files). Their order does not matter.
 - `threshold`: the guard score from which a pull request counts as suspect.
   Scores start at 0, so 0 is refused: it would mark every pull request.
-- `on_suspect`: the outcome for a suspect pull request, `await`, `comment` or
-  `log`. Until the guard runs, no value changes a review.
+- `on_suspect`: the outcome for a suspect pull request:
+  - `await`: a clean review that the rule would approve waits for a human
+    approval, as with [human review signals](#human-review-signals); nothing is
+    posted before the approval. Other reviews are published as usual.
+  - `comment`: a request for changes on an untrusted author's pull request is
+    published as a comment.
+  - `log`: nothing changes; only the stored result and the notification remain.
+- A pull request is suspect when its score reaches `threshold`, when the read
+  stopped at `guards.text.max_input_bytes` or the page limit (the rest was not
+  scanned), or when the configuration has no `guards.text` section. The last
+  case and a stored guard this engine cannot read behave as `await`.
+- No outcome requests changes: the guard never blocks a pull request.
+- Every suspect pull request sends one `guard_suspect` message at level
+  `action`, whatever the outcome. It names the signal codes, the score and the
+  outcome, never the matched text. A retry of the same review that finds the
+  same signals sends none. With `await` or `comment`, the published review
+  names the signal codes in one line.
+- The guard reads its fields with extra GitHub calls, only for a rule with
+  `guard`: a GraphQL query for the title and body, one paged query per list
+  (commits, comments and reviews, review threads) and the changed-files
+  listing for `patch`. Comments and reviews of the reviewing account are not
+  scanned.
 - A rule with `guard` needs the [`guards.text`](configuration.md#guards)
   section of the configuration; without it the configuration fails to load.
 - A rule with `guard` changes the policy digest; a policy without one keeps its
@@ -462,6 +483,9 @@ events have their own route, is configured in [config.yaml](configuration.md#not
 `credential_invalid`, `credential_restored` and `credential_expiring` are
 optional: a policy without them sends them at level `action`, and its digest
 stays the same. A level set for one is used and changes the policy digest.
+
+`guard_suspect` (a rule's [guard](#guard) found a pull request suspect) is
+always sent at level `action`; a policy cannot name it.
 
 A message the notifier cannot deliver is dropped with a warning in the log, at
 every level; neither the review nor discovery waits for it or sends it again
