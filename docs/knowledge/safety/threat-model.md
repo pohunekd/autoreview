@@ -95,14 +95,26 @@ the engine publishes.
 
 These are not solved by autoreview. Operators must accept or mitigate them.
 
-- **pohunek project setup and hooks run on the worktree.** They run in every
-  session's worktree. With `checkout: head`, that worktree holds the pull
-  request's code, so its hooks are code the author controls. Run reviews on a
-  dedicated review host with a project that has no setup hooks. autoreview has
-  no option that requires a hook-free project (#399).
-- **The head checkout runs nothing by itself, but the agent reads it.** For
-  `checkout: head`, the agent reads untrusted files. Use `checkout: base` for
-  every rule that accepts outside authors.
+- **pohunek runs the hooks of the review worktree.** pohunek reads the in-repo
+  hooks (`.pohunek/hooks/<event>`, and `.pohunek/setup` for `post-create`) from
+  the session's worktree and runs them as its daemon user for `post-create`,
+  `session-start`, `session-stop`, `agent-state` and `pre-remove`. With
+  `checkout: head`, that worktree holds the pull request's code, so the pull
+  request can add or change a hook, which then runs even when the project's own
+  repository has none; a project or review host without hooks does not prevent
+  it. With `checkout: base`, the worktree is the base branch tip, so the
+  author's hooks never reach it; every untrusted author that a rule reviews
+  gets it. A head checkout runs only for the authors that `authors.trusted`
+  names, so on a rule whose pipeline uses `checkout: head`, trust only authors
+  who may run code on the review host, and never use `trusted: any` on a
+  repository with outside contributors. A trigger that only maintainers use
+  helps only when they check the pull request's `.pohunek/` directory before
+  they trigger the review. A pohunek switch that skips the in-repo hooks is
+  requested in [zajca/pohunek#2366](https://github.com/zajca/pohunek/issues/2366),
+  and #399 tracks the autoreview option that uses it.
+- **Apart from its hooks, the head checkout runs nothing, but the agent reads
+  it.** For `checkout: head`, the agent reads untrusted files. Use
+  `checkout: base` for every rule that accepts outside authors.
 - **A Codex run can start a process outside the adapter's process tree.** The
   Codex adapter ends only the processes below it (attack 19). A tool command
   that has another service start a process, for example a user service
@@ -136,3 +148,8 @@ These are not solved by autoreview. Operators must accept or mitigate them.
 - Run untrusted-author reviews on a review host without secrets in its
   environment, as far as the host allows. autoreview chooses the host per repository
   with `route_overrides`; see [untrusted authors](untrusted-authors.md#separate-review-host).
+- pohunek's host-global hooks (`hooks/<event>` in its config directory) run
+  before the in-repo ones, with the session's worktree as their working
+  directory. On a host that serves `checkout: head` reviews, a global hook that
+  runs project tooling, such as an install or a build, runs the pull request's
+  code.

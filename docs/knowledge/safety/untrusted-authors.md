@@ -71,7 +71,8 @@ Validation enforces these rules, and the errors name them:
 
 - **The pipeline must use `checkout: base`.** Otherwise the error is
   `untrusted pipeline must use checkout base`. The reviewer's worktree starts at
-  the base branch tip, so code from the pull request never becomes the working tree.
+  the base branch tip, so code from the pull request never becomes the working tree,
+  and pohunek never runs a hook that the pull request adds or changes under `.pohunek/`.
 - **`on_clean` is `comment` or `await`, never `approve`.** An untrusted author
   can never get an automatic approval. With `await`, a human may still approve
   the head after reading it, which is the intended way to accept such a change.
