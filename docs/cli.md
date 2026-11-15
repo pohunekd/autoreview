@@ -457,6 +457,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
 | `stats_range_invalid` | `--since` or `--until` of `stats` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
 | `stats_range_too_long` | The `stats` range covers more than 366 days |
+| `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start the review: its author started the most reviews the rule allows in the window. `retry` starts it |
 | `project_route_not_found`, `project_route_ambiguous` | The repository is registered on no review host that answered, or as two projects on the host that serves it |
 | `pohunek_request_failed`, `pohunek_request_timeout`, `pohunek_session_start_failed` | The review host did not answer or could not start a session |
 | `pohunek_version_invalid`, `pohunek_version_unsupported` | `pohunek --version` of `pohunek.bin` failed or printed no `pohunek X.Y.Z`, or the release is outside the supported range, see [`validate`](#autoreview-validate) |

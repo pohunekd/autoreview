@@ -4,7 +4,7 @@
 
 use std::error::Error as StdError;
 
-use crate::scheduler::HEAD_FETCH_MISMATCH;
+use crate::scheduler::{AUTHOR_LIMIT_REACHED, HEAD_FETCH_MISMATCH};
 
 /// Lowercase substrings of an error message and the diagnostic code each one maps to.
 ///
@@ -225,6 +225,12 @@ pub fn failure_explanation(code: &str) -> &'static str {
         }
         "github_request_failed" => {
             "A GitHub API request failed. Check GitHub availability, authentication, and rate limits."
+        }
+        AUTHOR_LIMIT_REACHED => {
+            "The pull request author started as many reviews under this rule as its \
+             `author_limit` allows in its window, and the rule skips reviews over the bound, so \
+             this head is not reviewed. A later commit is reviewed if it comes after the window \
+             frees a slot; retry this PR to review this head now."
         }
         "credential_invalid" => {
             "GitHub refused the token of the review's credential: revoked, expired or never valid. Replace the token in the variable that its `token_env` names and restart autoreview, then retry this PR; it is not retried automatically."

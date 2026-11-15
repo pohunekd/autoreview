@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+use crate::author_limit::AuthorLimit;
 use crate::authors::Authors;
 use crate::parse::{cut, matches};
 use crate::types::{Event, Level, OPTIONAL_EVENTS, Policy, Rule, TriggerKind};
@@ -28,6 +29,25 @@ impl Policy {
             .iter()
             .zip(&self.authors)
             .find(|(rule, _)| matches(&rule.match_glob, repository))
+    }
+
+    /// Returns the author limit of the first rule that matches the lowercase repository.
+    ///
+    /// `None` means no rule covers the repository or its rule sets no limit.
+    #[must_use]
+    pub fn author_limit(&self, repository: &str) -> Option<&AuthorLimit> {
+        self.rules
+            .iter()
+            .zip(&self.author_limits)
+            .find(|(rule, _)| matches(&rule.match_glob, repository))
+            .and_then(|(_, limit)| limit.as_ref())
+    }
+
+    /// Returns the longest window of any rule's author limit; zero when no rule sets one.
+    #[must_use]
+    pub fn longest_author_window(&self) -> Duration {
+        let windows = self.author_limits.iter().flatten();
+        windows.map(AuthorLimit::window).max().unwrap_or_default()
     }
 
     /// Returns the match patterns of the repository rules, in file order.

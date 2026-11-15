@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize, Serializer};
 
+use crate::author_limit::AuthorLimit;
 use crate::authors::Authors;
 use crate::human_review::HumanReview;
 
@@ -551,6 +552,8 @@ pub struct Policy {
     pub(crate) rules: Vec<Rule>,
     /// The authors section of each rule, in the order of `rules`.
     pub(crate) authors: Vec<Authors>,
+    /// The author limit of each rule, in the order of `rules`; `None` sets no limit.
+    pub(crate) author_limits: Vec<Option<AuthorLimit>>,
     /// Sorted logins whose draft pull requests are marked ready for review.
     pub(crate) ready_draft_authors: Vec<String>,
     /// The level of every required event and of each optional event the file names.

@@ -187,6 +187,12 @@ That also limits who can spend model time. If you want strangers reviewed,
 replace `skip` with the mapping from the previous example, and keep
 `checkout: base` in its pipeline.
 
+Every new commit of a reviewed pull request starts a review, so an author who
+pushes often spends model time on each push. Add an
+[`author_limit`](../../policy.md#author-limit) to the rule to bound the reviews
+started for one author in a window. It counts per author login, so one account
+cannot use up the budget of the others.
+
 ## Separate review host
 
 Untrusted reviews should run on a review host that holds no other secrets.

@@ -42,6 +42,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried | [Reviewer output](#reviewer-output) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `pohunek_head_fetch_failed`, `pohunek_head_fetch_ref_missing` | The session start could not fetch the pull request head on the review host | [Head commit unavailable](#head-commit-unavailable) |
+| `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start a review: its author started the most reviews the rule allows in the window | Wait for the window, or `retry` the pull request; see [author limit](../../policy.md#author-limit) |
 | `pohunek_head_fetch_mismatch` | At every start the fetched `refs/pull/<n>/head` was at another commit than the pull request head | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request, or rejected it as invalid (HTTP 422); HTTP 401 is `credential_invalid` | Check the token's permissions and the `github` section |

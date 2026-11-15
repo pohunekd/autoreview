@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
+use crate::author_limit::AuthorLimit;
 use crate::authors::{Authors, Untrusted};
 use crate::types::{Event, Level, Pipeline, Policy, Reviewer, Rule};
 
@@ -28,10 +29,12 @@ impl Policy {
 ///
 /// The hashed bytes must not change, because review inputs and logs store the digest. A rule
 /// with `trusted: any` adds nothing, so only a restricted authors section extends the bytes;
-/// `authors` holds the section of each rule, in the order of `rules`.
+/// `authors` holds the section of each rule, in the order of `rules`. Only a rule with an
+/// author limit hashes `author_limits`, so a policy without one keeps its digest.
 pub(crate) fn digest_of(
     rules: &[Rule],
     authors: &[Authors],
+    author_limits: &[Option<AuthorLimit>],
     notifications: &BTreeMap<Event, Level>,
     timeout_hours: i64,
     reminder_hours: i64,
@@ -97,6 +100,14 @@ pub(crate) fn digest_of(
                     hash_pipeline_body(&mut hasher, pipeline);
                 }
             }
+        }
+        if let Some(Some(limit)) = author_limits.get(index) {
+            hasher.update(format!(
+                "author_limit\x00{}\x00{}\x00{}\x00",
+                limit.reviews,
+                limit.window_hours,
+                limit.over.as_str()
+            ));
         }
         hasher.update(b"\x00");
     }

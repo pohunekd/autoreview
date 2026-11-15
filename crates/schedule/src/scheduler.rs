@@ -16,6 +16,9 @@ const NOTIFICATION_HEAD_CHARS: usize = 12;
 /// Failure code of a session start whose fetched pull request head is another commit.
 pub const HEAD_FETCH_MISMATCH: &str = "pohunek_head_fetch_mismatch";
 
+/// Error code of a review start that the author limit of its rule holds or skips.
+pub const AUTHOR_LIMIT_REACHED: &str = "author_limit_reached";
+
 /// The pull request and head that a review request names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Target {
@@ -88,6 +91,11 @@ pub struct Record {
     /// The retry count before the failure of `handled_workflow` was handled.
     #[serde(skip_serializing_if = "is_zero")]
     pub handled_retries: i64,
+    /// Marks a dispatch that continues a review the author limit let through.
+    ///
+    /// A host wait keeps it, so the dispatch after the wait is not held as a new start.
+    #[serde(skip_serializing_if = "is_false")]
+    pub continues: bool,
 }
 
 autoreview_go_compat::object_only_serde!(Record);
@@ -106,6 +114,7 @@ impl Default for Record {
             awaits_host: false,
             handled_workflow: String::new(),
             handled_retries: 0,
+            continues: false,
         }
     }
 }
@@ -144,6 +153,12 @@ pub struct Run {
     pub released: bool,
     /// Whether workflow cleanup is still pending.
     pub cleanup_pending: bool,
+    /// The login of the pull request author.
+    pub author: String,
+    /// The match pattern of the rule the run was dispatched under.
+    pub rule: String,
+    /// When the run was dispatched; `None` when its stored time does not parse.
+    pub started_at: Option<OffsetDateTime>,
 }
 
 impl Run {
@@ -206,6 +221,10 @@ pub fn plan(
         if previous.phase == phase::RUNNING && !previous.workflow_id.is_empty() {
             blocking.push(previous.workflow_id.clone());
         }
+        // A new head of a pull request whose start the author limit skipped keeps the code, so
+        // a skip of the new head sends no second notice.
+        let skipped =
+            previous.phase == phase::FAILED && previous.error_code == AUTHOR_LIMIT_REACHED;
         Record {
             identity: target_identity.clone(),
             phase: phase::WAITING.to_owned(),
@@ -214,10 +233,15 @@ pub fn plan(
             attempt: 0,
             retries: 0,
             workflow_id: String::new(),
-            error_code: String::new(),
+            error_code: if skipped {
+                AUTHOR_LIMIT_REACHED.to_owned()
+            } else {
+                String::new()
+            },
             awaits_host: false,
             handled_workflow: String::new(),
             handled_retries: 0,
+            continues: false,
         }
     } else {
         previous
@@ -334,6 +358,9 @@ pub fn plan(
         });
     }
     r.phase = phase::RUNNING.to_owned();
+    if r.error_code == AUTHOR_LIMIT_REACHED {
+        r.error_code = String::new();
+    }
     Ok(Decision {
         record: r,
         dispatch: true,
@@ -518,6 +545,69 @@ pub fn plan_on_base(
         || decision.record.phase == phase::RETRY_WAIT;
     if waits {
         decision.record.attempt = decision.record.attempt.max(attempt);
+    }
+    Ok(decision)
+}
+
+/// How many reviews one author may start in a window, and what a start over it gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthorBound {
+    /// The most reviews the author may start in the window.
+    pub reviews: usize,
+    /// The length of the window.
+    pub window: Duration,
+    /// Skips a start over the bound instead of waiting for a free slot.
+    pub skip: bool,
+}
+
+/// Holds a dispatch of a new start that the author's earlier `starts` leave no slot for.
+///
+/// Starts inside the window count; a start at the window's first instant has left it. Only a
+/// dispatch from a `retry_wait` record of the same identity goes through over the bound, an
+/// automatic retry or an operator `retry`, when it waits for no host or its delayed dispatch
+/// was such a continuation; the dispatch keeps that mark in `continues`. Over the bound, a
+/// `skip` bound fails the record with [`AUTHOR_LIMIT_REACHED`] and notifies, unless the
+/// `previous` record carries that code from a skip of the pull request; otherwise the record
+/// waits until a start leaves the window.
+///
+/// # Errors
+///
+/// Returns `Error::TimeOutOfRange` when the window leaves the range of `time`.
+pub fn limit_author(
+    mut decision: Decision,
+    previous: &Record,
+    starts: &[OffsetDateTime],
+    bound: &AuthorBound,
+    now: OffsetDateTime,
+) -> Result<Decision, Error> {
+    let continues = previous.identity == decision.record.identity
+        && previous.phase == phase::RETRY_WAIT
+        && (!previous.awaits_host || previous.continues);
+    if !decision.dispatch {
+        return Ok(decision);
+    }
+    decision.record.continues = continues;
+    if continues {
+        return Ok(decision);
+    }
+    let opens = now.checked_sub(bound.window).ok_or(Error::TimeOutOfRange)?;
+    let mut inside: Vec<OffsetDateTime> = starts.iter().copied().filter(|t| *t > opens).collect();
+    if inside.len() < bound.reviews {
+        return Ok(decision);
+    }
+    inside.sort();
+    // A slot frees when the start that leaves `reviews - 1` inside the window leaves it.
+    let leaving = (inside.len().checked_sub(bound.reviews)).and_then(|index| inside.get(index));
+    let free_at = due_after(leaving.copied().unwrap_or(now), bound.window)?;
+    decision.dispatch = false;
+    decision.record.awaits_host = false;
+    if bound.skip {
+        decision.record.phase = phase::FAILED.to_owned();
+        decision.record.error_code = AUTHOR_LIMIT_REACHED.to_owned();
+        decision.notify = previous.error_code != AUTHOR_LIMIT_REACHED;
+    } else {
+        decision.record.phase = phase::WAITING.to_owned();
+        decision.record.due_at = free_at;
     }
     Ok(decision)
 }
@@ -751,9 +841,9 @@ mod tests {
     use time::{Duration, OffsetDateTime};
 
     use super::{
-        Decision, HEAD_FETCH_MISMATCH, Policy, Record, Retarget, Run, Target, after_failure,
-        head_mismatch_notification, plan, plan_on_base, plan_retarget, reconcile_completed,
-        retryable, wait_for_host,
+        AUTHOR_LIMIT_REACHED, AuthorBound, Decision, HEAD_FETCH_MISMATCH, Policy, Record, Retarget,
+        Run, Target, after_failure, head_mismatch_notification, limit_author, notification, plan,
+        plan_on_base, plan_retarget, reconcile_completed, retryable, wait_for_host,
     };
     use crate::diagnostic::{diagnostic, failure_explanation};
     use crate::phase;
@@ -1340,6 +1430,214 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// One row of the author limit table: what `limit_author` makes of a due dispatch.
+    struct LimitCase {
+        name: &'static str,
+        previous: Record,
+        skip: bool,
+        /// The author's earlier starts, in hours before now.
+        ago: &'static [i64],
+        /// Dispatch, phase, notify, error code, and for a wait the hours until it is due.
+        want: (bool, &'static str, bool, &'static str, i64),
+    }
+
+    // The author limit holds a new start over the bound until a start leaves the window, or
+    // skips it with one notice; a retry of an admitted review is not held (#401).
+    #[test]
+    fn author_limit_holds_new_starts_over_the_bound() {
+        let (target, now, policy) = fixture();
+        let record = |phase: &str, attempt: i64, awaits_host: bool| Record {
+            identity: target.identity(),
+            phase: phase.to_owned(),
+            attempt,
+            awaits_host,
+            due_at: now,
+            ..Record::default()
+        };
+        let old_head = Record {
+            identity: format!("{}@{}@0", target.key(), "b".repeat(40)),
+            ..record(phase::FAILED, 0, false)
+        };
+        let skipped = Record {
+            error_code: AUTHOR_LIMIT_REACHED.to_owned(),
+            ..old_head.clone()
+        };
+        let route_failed = Record {
+            error_code: "project_route_not_found".to_owned(),
+            ..old_head.clone()
+        };
+        let carried = Record {
+            error_code: AUTHOR_LIMIT_REACHED.to_owned(),
+            ..record(phase::WAITING, 0, false)
+        };
+        let old_retry = Record {
+            phase: phase::RETRY_WAIT.to_owned(),
+            ..old_head.clone()
+        };
+        let retry_on_host = Record {
+            continues: true,
+            ..record(phase::RETRY_WAIT, 1, true)
+        };
+        let (run, wait, failed) = (phase::RUNNING, phase::WAITING, phase::FAILED);
+        let code = AUTHOR_LIMIT_REACHED;
+        #[rustfmt::skip]
+        let cases = [
+            LimitCase { name: "a first start under the bound",
+                previous: record(wait, 0, false), skip: false, ago: &[1],
+                want: (true, run, false, "", 0) },
+            LimitCase { name: "at the bound it waits for the oldest start",
+                previous: record(wait, 0, false), skip: false, ago: &[1, 5],
+                want: (false, wait, false, "", 19) },
+            LimitCase { name: "over the bound it waits for the start that frees a slot",
+                previous: record(wait, 0, false), skip: false, ago: &[10, 1, 5],
+                want: (false, wait, false, "", 19) },
+            LimitCase { name: "starts outside the window do not count",
+                previous: record(wait, 0, false), skip: false, ago: &[24, 30, 1],
+                want: (true, run, false, "", 0) },
+            LimitCase { name: "a start dated after now counts",
+                previous: record(wait, 0, false), skip: false, ago: &[-1, 2],
+                want: (false, wait, false, "", 22) },
+            LimitCase { name: "a skip stops the head with a notice",
+                previous: record(wait, 0, false), skip: true, ago: &[1, 2],
+                want: (false, failed, true, code, 0) },
+            LimitCase { name: "a skip after a skip of the pull request sends no notice",
+                previous: skipped.clone(), skip: true, ago: &[1, 2],
+                want: (false, failed, false, code, 0) },
+            LimitCase { name: "a skip after a route failure notifies",
+                previous: route_failed, skip: true, ago: &[1, 2],
+                want: (false, failed, true, code, 0) },
+            LimitCase { name: "an automatic retry is not held",
+                previous: record(phase::RETRY_WAIT, 1, false), skip: true, ago: &[1, 2],
+                want: (true, run, false, "", 0) },
+            LimitCase { name: "a retry after a host wait is held",
+                previous: record(phase::RETRY_WAIT, 0, true), skip: false, ago: &[1, 2],
+                want: (false, wait, false, "", 22) },
+            LimitCase { name: "a retry that waited for a host is not held",
+                previous: retry_on_host.clone(), skip: false, ago: &[1, 2],
+                want: (true, run, false, "", 0) },
+            LimitCase { name: "a retry that waited for a host is not skipped",
+                previous: retry_on_host, skip: true, ago: &[1, 2],
+                want: (true, run, false, "", 0) },
+            LimitCase { name: "a restart after a superseded run is held",
+                previous: record(wait, 1, false), skip: false, ago: &[1, 2],
+                want: (false, wait, false, "", 22) },
+            LimitCase { name: "a retry wait of another head is held",
+                previous: old_retry, skip: false, ago: &[1, 2],
+                want: (false, wait, false, "", 22) },
+            LimitCase { name: "a review after a retarget is held",
+                previous: record(phase::COMPLETED, 1, false), skip: true, ago: &[1, 2],
+                want: (false, failed, true, code, 0) },
+            LimitCase { name: "a skip of a new head of a skipped pull request sends no notice",
+                previous: carried, skip: true, ago: &[1, 2],
+                want: (false, failed, false, code, 0) },
+        ];
+        let bound = |skip: bool| AuthorBound {
+            reviews: 2,
+            window: Duration::hours(24),
+            skip,
+        };
+        for case in cases {
+            let decision = Decision {
+                record: record(phase::RUNNING, case.previous.attempt, false),
+                dispatch: true,
+                notify: false,
+            };
+            let starts: Vec<OffsetDateTime> = (case.ago.iter())
+                .map(|hours| now - Duration::hours(*hours))
+                .collect();
+            let got = limit_author(decision, &case.previous, &starts, &bound(case.skip), now)
+                .expect("limit");
+            let (dispatch, phase, notify, error_code, due_in_hours) = case.want;
+            let due = now + Duration::hours(due_in_hours);
+            assert!(
+                got.dispatch == dispatch
+                    && got.record.phase == phase
+                    && got.notify == notify
+                    && got.record.error_code == error_code
+                    && !got.record.awaits_host
+                    && (phase != wait || got.record.due_at == due),
+                "{}: {got:?}",
+                case.name
+            );
+        }
+        // A planned dispatch passes through when it is not a dispatch.
+        let running = Decision {
+            record: record(phase::RUNNING, 0, false),
+            dispatch: false,
+            notify: false,
+        };
+        let starts = [now, now];
+        let got = limit_author(
+            running.clone(),
+            &Record::default(),
+            &starts,
+            &bound(true),
+            now,
+        );
+        assert_eq!(got.expect("limit"), running);
+        // The window slides: the held head is due when the oldest start leaves the window.
+        let starts = [now - Duration::hours(23), now - Duration::hours(1)];
+        let planned = plan(record(wait, 0, false), &target, &[], now, &policy).expect("plan");
+        let held = limit_author(
+            planned,
+            &record(wait, 0, false),
+            &starts,
+            &bound(false),
+            now,
+        );
+        let held = held.expect("limit").record;
+        let early = plan(
+            held.clone(),
+            &target,
+            &[],
+            now + Duration::minutes(59),
+            &policy,
+        );
+        assert!(
+            !early.expect("plan").dispatch,
+            "dispatched before a slot freed"
+        );
+        let later = now + Duration::hours(1);
+        let due = plan(held.clone(), &target, &[], later, &policy).expect("plan");
+        let admitted = limit_author(due, &held, &starts, &bound(false), later).expect("limit");
+        assert!(
+            admitted.dispatch,
+            "the freed slot was not used: {admitted:?}"
+        );
+        // A new head of a skipped pull request carries the code through its debounce, and a
+        // dispatch drops it.
+        let fresh = plan(skipped.clone(), &target, &[], now, &policy).expect("plan");
+        let due = plan(fresh.record.clone(), &target, &[], later, &policy).expect("plan");
+        assert!(
+            fresh.record.error_code == code && due.dispatch && due.record.error_code.is_empty(),
+            "the skip was not carried: {fresh:?} {due:?}"
+        );
+        // A retry or an operator `retry` over the bound that meets a host outage, under both
+        // outcomes, starts once the host is back, with no notice.
+        for skip in [false, true] {
+            let retry = record(phase::RETRY_WAIT, 1, false);
+            let due = plan(retry.clone(), &target, &[], now, &policy).expect("plan");
+            let first = limit_author(due, &retry, &starts, &bound(skip), now).expect("limit");
+            let waiting = wait_for_host(first.record.clone(), "pohunek_request_failed");
+            let back = plan(waiting.clone(), &target, &[], now, &policy).expect("plan");
+            let second = limit_author(back, &waiting, &starts, &bound(skip), now).expect("limit");
+            assert!(
+                first.dispatch && !first.notify && second.dispatch && !second.notify,
+                "skip={skip}: the retry was held after the host wait: {second:?}"
+            );
+        }
+        // A skip notice is the review_stopped text with the explanation of the code.
+        let stopped = Record {
+            error_code: AUTHOR_LIMIT_REACHED.to_owned(),
+            ..record(failed, 0, false)
+        };
+        let text = notification(&target, &stopped);
+        assert!(
+            text.contains("as its `author_limit` allows") && text.ends_with(&format!("{code}.")),
+            "{text}"
+        );
     }
 
     // The mismatch count belongs to one head: a new head starts its own, a retarget keeps it,
