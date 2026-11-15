@@ -152,7 +152,8 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   `untrusted` route, which never falls back to the trusted host; see
   [untrusted authors](untrusted-authors.md#separate-review-host).
 - pohunek's host-global hooks (`hooks/<event>` in its config directory) run
-  before the in-repo ones, with the session's worktree as their working
-  directory. On a host that serves `checkout: head` reviews, a global hook that
-  runs project tooling, such as an install or a build, runs the pull request's
-  code.
+  before the in-repo ones: in the session's worktree for `post-create`,
+  `pre-remove` and the session events, and in the repository for `pre-create`
+  and `post-remove`, which never see the pull request's code. On a host that
+  serves `checkout: head` reviews, a global hook that runs project tooling,
+  such as an install or a build, runs the pull request's code.

@@ -261,9 +261,13 @@ A `route_overrides` entry asks only its host.
 Its `untrusted` route is taken by every pull request whose author the rule does
 not trust, and by one whose class is not known; it asks only its own host, so a
 failing host or a missing project never moves such a review to the entry's host.
-Without `untrusted` all authors take the entry's route. When `untrusted` is
-present both its keys are required, also when its value is null
-(`configuration_missing: pohunek.route_overrides.untrusted.host`).
+Without `untrusted` all authors take the entry's route. With it the entry still
+pins the trusted reviews of the repository, so they have no failover and skip
+`pohunek.host_state`. A review queued or running when `untrusted` is added
+keeps the route stored in its input, also after a restart; the new route
+applies from the next dispatch of the pull request (a new head, a retry, a
+retarget). When `untrusted` is present both its keys are required, also when
+its value is null (`configuration_missing: pohunek.route_overrides.untrusted.host`).
 See [run on several hosts](knowledge/guides/multihost.md) and
 [untrusted authors](knowledge/safety/untrusted-authors.md#separate-review-host).
 

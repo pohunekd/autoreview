@@ -355,9 +355,10 @@ author_limit:
   enough starts left the window. `over: skip`: the review of that head is not
   started, and a `review_stopped` notice with the code `author_limit_reached`
   names it. A later commit of a skipped pull request is planned again and, when
-  it is skipped too, sends no second notice; a pull request that stops asking
-  for a review and asks again is notified again. `retry` starts the skipped
-  head at once.
+  it is skipped too, sends no second notice, also after it waited for a review
+  host. The pull request is notified again after one of its reviews started or
+  failed, and after it stops asking for a review and asks again. `retry`
+  starts the skipped head at once.
 - Each held review logs `review held by the author limit` with the author, the
   rule, the outcome and, for a wait, when it is due.
 - `window_hours` must not be longer than `store.review_retention_seconds`,
