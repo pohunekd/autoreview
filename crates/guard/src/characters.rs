@@ -216,3 +216,97 @@ impl MixedRun {
             || (bidi_only && self.len >= MARKS_ONLY_MIN)
     }
 }
+
+/// Reports the character signals of `text` to `add`: tags, runs and bidi controls.
+///
+/// A variation selector whose base is text (`text_base`) also counts as a
+/// `variation_selector_run`. The base is the last visible character before it, so neither
+/// whitespace nor invisible characters between them hide it.
+///
+/// `in_patch` is set for added patch lines, where embeddings and isolates are reported too.
+pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)) {
+    let mut tag_run: Option<TagRun> = None;
+    let mut previous = '\n';
+    let mut zero_width_len = 0_usize;
+    let mut selector_len = 0_usize;
+    let mut selector_after_text = false;
+    let mut last_visible = '\n';
+    let mut mixed = MixedRun::default();
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        if transparent(character) {
+            if let Some(run) = tag_run.take() {
+                add(Signal::UnicodeTags, u32::from(!run.is_flag()));
+            }
+            let bidi_run = (mixed.mark || mixed.control) && !mixed.zero_width && !mixed.selector;
+            if !mixed.unnatural && !bidi_run {
+                add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
+                mixed = MixedRun::default();
+                zero_width_len = 0;
+                selector_len = 0;
+            }
+            previous = character;
+            continue;
+        }
+        let (zero, selector, mark) = (
+            zero_width(character),
+            variation_selector(character),
+            bidi_mark(character),
+        );
+        let control = bidi_embedding_or_isolate(character);
+        if zero || selector || mark || control {
+            mixed.len = mixed.len.saturating_add(1);
+            mixed.zero_width |= zero;
+            mixed.selector |= selector;
+            mixed.mark |= mark;
+            mixed.control |= control;
+            mixed.unnatural |= !(mark || control || matches!(character, '\u{200C}' | '\u{200D}'));
+        } else {
+            add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
+            mixed = MixedRun::default();
+        }
+        if tag(character) {
+            tag_run
+                .get_or_insert_with(|| TagRun {
+                    after_flag_base: previous == FLAG_BASE,
+                    ..TagRun::default()
+                })
+                .push(character);
+        } else if let Some(run) = tag_run.take() {
+            add(Signal::UnicodeTags, u32::from(!run.is_flag()));
+        }
+        zero_width_len = if zero {
+            zero_width_len.saturating_add(1)
+        } else {
+            0
+        };
+        if zero_width_len == RUN_MIN {
+            add(Signal::ZeroWidthRun, 1);
+        }
+        selector_len = if selector {
+            selector_len.saturating_add(1)
+        } else {
+            0
+        };
+        if selector_len == 1 {
+            selector_after_text = text_base(last_visible, characters.peek().copied());
+            add(Signal::VariationSelectorRun, u32::from(selector_after_text));
+        }
+        if selector_len == RUN_MIN && !selector_after_text {
+            add(Signal::VariationSelectorRun, 1);
+        }
+        if bidi_override(character) {
+            add(Signal::BidiOverride, 1);
+        } else if in_patch && bidi_embedding_or_isolate(character) {
+            add(Signal::BidiControlInPatch, 1);
+        }
+        previous = character;
+        if !invisible(character) {
+            last_visible = character;
+        }
+    }
+    if let Some(run) = tag_run {
+        add(Signal::UnicodeTags, u32::from(!run.is_flag()));
+    }
+    add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
+}
