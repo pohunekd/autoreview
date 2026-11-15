@@ -363,6 +363,18 @@ pub struct GuardOutcome {
 
 autoreview_go_compat::object_only_serde!(GuardOutcome);
 
+impl GuardOutcome {
+    /// Reports whether a clean approval waits for the user; an unknown outcome waits.
+    pub(crate) fn holds(&self) -> bool {
+        self.suspect && !matches!(self.outcome, OnSuspect::Comment | OnSuspect::Log)
+    }
+
+    /// Reports whether a request for changes on an untrusted author becomes a comment.
+    pub(crate) fn comments(&self) -> bool {
+        self.suspect && self.outcome == OnSuspect::Comment
+    }
+}
+
 /// One signal of the text guard in the fields of one kind.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]

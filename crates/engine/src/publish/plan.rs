@@ -6,7 +6,7 @@ use autoreview_policy::{Event, OnClean, OnFindings, OnNotes};
 use serde::{Deserialize, Serialize};
 
 use crate::model::finding::is_false;
-use crate::model::{Artifact, Decision, ReviewInput};
+use crate::model::{Artifact, Decision, GuardOutcome, ReviewInput};
 use crate::verify::escalates;
 
 /// What the workflow does with a finished review.
@@ -39,10 +39,12 @@ pub(crate) fn blocking_count(input: &ReviewInput, artifact: &Artifact) -> usize 
 ///
 /// A review whose findings are all notes, and that leaves no prior finding open, is clean and
 /// follows the rule's clean outcome. A clean review that the rule would approve without the user
-/// waits for them when the verifier demoted findings the policy wants them to see, or when the
-/// pull request matched a human review signal of the rule. A rule with on_notes comment hands a
-/// review of notes only to a human author first, unless the author already had them. An
-/// untrusted author never gets notes handed off and is approved only by the user.
+/// waits for them when the verifier demoted findings the policy wants them to see, when the
+/// pull request matched a human review signal of the rule, or when its text guard holds it. A
+/// rule with on_notes comment hands a review of notes only to a human author first, unless the
+/// author already had them. An untrusted author never gets notes handed off and is approved only
+/// by the user; a guard with `comment` turns a request for changes on such an author into a
+/// comment.
 pub(crate) fn plan_publication(
     input: &ReviewInput,
     artifact: &Artifact,
@@ -61,7 +63,9 @@ pub(crate) fn plan_publication(
         plan.decision = Decision::Comment;
     } else if input.rule.on_clean == OnClean::Approve {
         plan.decision = Decision::Approve;
-        plan.await_approval = escalates(input, artifact) || !artifact.human_review.is_empty();
+        plan.await_approval = escalates(input, artifact)
+            || !artifact.human_review.is_empty()
+            || artifact.guard.as_ref().is_some_and(GuardOutcome::holds);
     } else if input.rule.on_notes == OnNotes::Comment
         && !notes.is_empty()
         && input.handoff.is_none()
@@ -75,6 +79,13 @@ pub(crate) fn plan_publication(
         plan.decision = Decision::Approve;
         plan.await_approval = true;
     } else {
+        plan.decision = Decision::Comment;
+    }
+    if input.author_class.untrusted()
+        && plan.decision == Decision::RequestChanges
+        && artifact.guard.as_ref().is_some_and(GuardOutcome::comments)
+    {
+        // The guard never blocks; for an untrusted author it softens a request for changes.
         plan.decision = Decision::Comment;
     }
     if input.author_class.untrusted() && plan.decision == Decision::Approve && !plan.await_approval
