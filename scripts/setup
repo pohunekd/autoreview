@@ -207,9 +207,16 @@ path_trust() {
     esac
 }
 
-# Checks the pure functions above against fixed tables; reads nothing else.
+# Checks the pure functions of this script against fixed tables; reads nothing
+# else. The profile tables are local, so the functions under test read them.
 self_test() {
-    local checks=0 failures=0
+    local checks=0 failures=0 expected
+    local autoreview_bin=/h/.local/bin/autoreview
+    local -a install_command=()
+    local -A profile_agent=([one]=claude [two]=codex) profile_model=([one]=m-1 [two]=m.2)
+    local -A profile_effort=([one]=max [two]=xhigh) profile_input=([one]=1048576 [two]=2048)
+    local -A profile_binary=([one]="/opt/my tools/claude" [two]=/usr/bin/codex)
+    local -A profile_result=([two]=4096) profile_retention=([two]=7200)
     check() {
         checks=$((checks + 1))
         if [ "$2" != "$3" ]; then
@@ -304,6 +311,17 @@ self_test() {
         "$(path_trust '1000 755 directory' 1000 0 file || echo error)"
     check "trust of a malformed stat line" error \
         "$(path_trust 'x 755 directory' 1000 0 dir || echo error)"
+    expected="/h/.local/bin/autoreview profiles install --host local --agent claude --name one"
+    expected+=" --model m-1 --effort max --agent-binary /opt/my\\ tools/claude"
+    expected+=" --maximum-input-bytes 1048576 --pohunek-timeout-seconds 45 "
+    profile_install_command one
+    check "printed install command of a Claude profile" "$expected" "$(install_command_text)"
+    expected="/h/.local/bin/autoreview profiles install --host local --agent codex --name two"
+    expected+=" --model m.2 --effort xhigh --agent-binary /usr/bin/codex"
+    expected+=" --maximum-input-bytes 2048 --maximum-result-bytes 4096"
+    expected+=" --maximum-retention-seconds 7200 --pohunek-timeout-seconds 45 "
+    profile_install_command two
+    check "printed install command of a Codex profile" "$expected" "$(install_command_text)"
     if [ "$failures" -ne 0 ]; then
         echo "self-test: $failures of $checks checks failed"
         return 1
@@ -953,6 +971,11 @@ profile_install_command() {
     fi
 }
 
+# Prints install_command as step_profiles shows it, each word quoted for the shell.
+install_command_text() {
+    printf '%q ' "${install_command[@]}"
+}
+
 # Reads the state of every profile, asks for the absent ones and sets agents to
 # the runtimes the profiles need.
 collect_profiles() {
@@ -1042,7 +1065,7 @@ step_profiles() {
             continue
         fi
         profile_install_command "$name"
-        approve "agent profile $name" "$(printf '%q ' "${install_command[@]}")"
+        approve "agent profile $name" "$(install_command_text)"
         if ! output=$("${install_command[@]}"); then
             printf '%s\n' "$output" >&2
             fail 8 "autoreview profiles install failed: $(error_code_of "$output")"
