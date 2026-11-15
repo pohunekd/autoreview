@@ -732,13 +732,13 @@ fn text_guard(guards: Option<&GuardsFile>) -> Result<Option<TextGuard>, Error> {
 fn read_lexicon(path: &Path) -> Result<Lexicon, Box<dyn std::error::Error + Send + Sync>> {
     let file = File::open(path)?;
     let limit = u64::try_from(LEXICON_MAX_BYTES)?;
-    let mut text = String::new();
-    let read = file
-        .take(limit.saturating_add(1))
-        .read_to_string(&mut text)?;
+    let mut bytes = Vec::new();
+    let read = file.take(limit.saturating_add(1)).read_to_end(&mut bytes)?;
+    // The size comes first: the bounded read may cut a character at the limit.
     if read > LEXICON_MAX_BYTES {
         return Err(Box::from("the lexicon file must be at most 65536 bytes"));
     }
+    let text = String::from_utf8(bytes)?;
     Ok(Lexicon::parse(&text)?)
 }
 
@@ -3464,6 +3464,7 @@ pub(crate) mod tests {
             assert_eq!(error(text), format!("configuration_missing: {key}"));
         }
         let in_directory = |name: &str| format!("{}/{name}", directory.path().display());
+        let straddling = [[b'#'; 65_535].as_slice(), "\u{20ac}".as_bytes()].concat();
         let cases = [
             (
                 section("0", &lexicon),
@@ -3498,10 +3499,15 @@ pub(crate) mod tests {
             ),
             (
                 section("1", &file("binary.txt", b"40 ignore \xff\n")),
-                "lexicon_file: stream did not contain valid UTF-8",
+                "lexicon_file: invalid utf-8 sequence of 1 bytes from index 10",
             ),
             (
                 section("1", &file("large.txt", &[b'#'; 65_537])),
+                "lexicon_file: the lexicon file must be at most 65536 bytes",
+            ),
+            (
+                // Byte 65537 is inside the three-byte character, so the bounded read cuts it.
+                section("1", &file("cut.txt", &straddling)),
                 "lexicon_file: the lexicon file must be at most 65536 bytes",
             ),
         ];
