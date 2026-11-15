@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::{Future, Ready, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use autoreview_policy::TriggerKind;
 use autoreview_policy::{
@@ -76,8 +76,6 @@ pub(crate) struct FakeState {
     pub(crate) policy: Option<Policy>,
     /// Current state of each pull request by `repository#number`.
     pub(crate) current: BTreeMap<String, PullRequest>,
-    /// Read errors of pull requests that left the search, by `repository#number`.
-    pub(crate) lapsed: BTreeMap<String, String>,
     /// Pull requests that were closed, by `repository#number`.
     pub(crate) closed: BTreeSet<String>,
     /// Output of each reviewer session; `None` until a test sets it.
@@ -92,18 +90,12 @@ pub(crate) struct FakeState {
     pub(crate) commentable: CommentableLines,
     /// Changed files that the fake returns.
     pub(crate) changed: Vec<ChangedFile>,
-    /// Whether the fake's changed-files listing reports a truncation.
-    pub(crate) changed_truncated: bool,
-    /// Number of reads of the changed files.
-    pub(crate) changed_reads: usize,
     /// Discussion that the fake returns.
     pub(crate) discussion: Discussion,
     /// Prior findings of each discussion read, in order.
     pub(crate) discussion_reads: Vec<Vec<PriorFinding>>,
     /// Pull requests whose newer head is a rewritten history, by head SHA.
     pub(crate) rewritten: BTreeSet<String>,
-    /// Until this instant, reads and searches fail transiently; `None` never fails them.
-    pub(crate) transient_until: Option<Instant>,
     /// Refused candidates that the candidate search returns.
     pub(crate) rejected: Vec<RejectedCandidate>,
     /// Every review submission that was published.
@@ -112,8 +104,6 @@ pub(crate) struct FakeState {
     pub(crate) published_heads: Vec<String>,
     /// Login of the credential that posted each review in `published`, in the same order.
     pub(crate) publisher_logins: Vec<String>,
-    /// Every pull request read, as `repository#number credential`, in order.
-    pub(crate) pull_request_reads: Vec<String>,
     /// Indexes into `published` of the reviews that GitHub dismissed.
     pub(crate) dismissed: BTreeSet<usize>,
     /// Number of lookups of a published review without a post.
@@ -229,7 +219,6 @@ impl FakeIntegration {
             },
         );
         state.current.insert(key.clone(), pr);
-        state.lapsed.remove(&key);
         state.answered.remove(&key);
     }
 
@@ -297,13 +286,6 @@ impl FakeState {
         let code = self.failing_credentials.get(&credential.name)?;
         Some(Error::workflow(code.clone(), true, None))
     }
-
-    fn transient(&self) -> bool {
-        match self.transient_until {
-            Some(until) => Instant::now() < until,
-            None => false,
-        }
-    }
 }
 
 impl Integrations for FakeIntegration {
@@ -315,7 +297,7 @@ impl Integrations for FakeIntegration {
         let result = {
             let mut state = self.lock();
             state.listings += 1;
-            if state.transient() || state.transient_credentials.contains(&credential.name) {
+            if state.transient_credentials.contains(&credential.name) {
                 Err(transient_error())
             } else if let Some(err) = state.search_error(credential) {
                 Err(err)
@@ -349,12 +331,9 @@ impl Integrations for FakeIntegration {
     ) -> impl Future<Output = Result<PullRequest, Error>> + Send {
         let key = format!("{repository}#{number}");
         let result = {
-            let mut state = self.lock();
-            (state.pull_request_reads).push(format!("{key} {}", credential.name));
-            if state.transient() || state.failing_credentials.contains_key(&credential.name) {
+            let state = self.lock();
+            if state.failing_credentials.contains_key(&credential.name) {
                 Err(transient_error())
-            } else if let Some(code) = state.lapsed.get(&key) {
-                Err(Error::workflow(code.clone(), true, None))
             } else if let Some(pr) = state.current.get(&key) {
                 // The open state is checked before the trigger, as `decode_pull_request` does.
                 if trigger.kind == TriggerKind::ReviewRequested && state.answered.contains(&key) {
@@ -588,13 +567,9 @@ impl Integrations for FakeIntegration {
         _credential: &Credential,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send {
-        let result = {
-            let mut state = self.lock();
-            state.changed_reads += 1;
-            ChangedFiles {
-                files: state.changed.clone(),
-                truncated: state.changed_truncated,
-            }
+        let result = ChangedFiles {
+            files: self.lock().changed.clone(),
+            truncated: false,
         };
         ready(Ok(result))
     }
