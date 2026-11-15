@@ -14,14 +14,15 @@ use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
 use autoreview_engine::integrations::{ReadiedDraft, ReviewRequest, ReviewRequestList};
 use autoreview_engine::model::{
-    Candidate, CandidateList, PullRequest, RejectedCandidate, repository_valid,
+    Candidate, CandidateList, PullRequest, RejectedCandidate, pull_request_url_valid,
+    repository_valid,
 };
 use autoreview_go_compat::{null_default, null_entries};
 use autoreview_policy::{Authors, Policy, Rule, Trigger, TriggerKind};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use super::pull_request::{GitHubPullRequest, decode_pull_request, ready_draft_id, url_matches};
+use super::pull_request::{GitHubPullRequest, decode_pull_request, ready_draft_id};
 use super::{GitHub, graphql_search, response_invalid};
 
 /// Query that marks a draft pull request ready for review (`graphQLMarkReady`).
@@ -410,7 +411,7 @@ fn decode_review_request_search(
         let repository = repository_name(&item.repository).to_ascii_lowercase();
         if !repository_valid(&repository)
             || item.number <= 0
-            || !url_matches(&item.url, host, &repository, item.number)
+            || !pull_request_url_valid(&item.url, host, &repository, item.number)
         {
             tracing::warn!(
                 repository = %repository,
