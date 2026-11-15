@@ -791,3 +791,467 @@ Bumps numpy from 1.11.0 to 1.12.0.
 <summary>Changelog</summary>
 <p>See the full changelog for numpy 1.12.0.</p>
 </details>
+== benign_release_notes_axios
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps axios from 1.12.0 to 1.13.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the axios releases.</em></p>
+<blockquote>
+<h2>v1.13.0</h2>
+<ul>
+<li>Drop support for an end-of-life runtime.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for axios 1.13.0.</p>
+</details>
+== benign_release_notes_vue
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps vue from 1.13.0 to 1.14.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the vue releases.</em></p>
+<blockquote>
+<h2>v1.14.0</h2>
+<ul>
+<li>New option to follow symlinks.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for vue 1.14.0.</p>
+</details>
+== benign_release_notes_laravel
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps laravel from 1.14.0 to 1.15.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the laravel releases.</em></p>
+<blockquote>
+<h2>v1.15.0</h2>
+<ul>
+<li>Improve the error report when a file is skipped.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for laravel 1.15.0.</p>
+</details>
+== benign_release_notes_express
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps express from 1.15.0 to 1.16.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the express releases.</em></p>
+<blockquote>
+<h2>v1.16.0</h2>
+<ul>
+<li>Faster startup on cold caches.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for express 1.16.0.</p>
+</details>
+== benign_release_notes_openai
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps openai from 1.16.0 to 1.17.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the openai releases.</em></p>
+<blockquote>
+<h2>v1.17.0</h2>
+<ul>
+<li>Fix a panic when the input is empty.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for openai 1.17.0.</p>
+</details>
+== benign_release_notes_anthropic-sdk
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps anthropic-sdk from 1.17.0 to 1.18.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the anthropic-sdk releases.</em></p>
+<blockquote>
+<h2>v1.18.0</h2>
+<ul>
+<li>Drop support for an end-of-life runtime.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for anthropic-sdk 1.18.0.</p>
+</details>
+== benign_release_notes_langchain
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps langchain from 1.18.0 to 1.19.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the langchain releases.</em></p>
+<blockquote>
+<h2>v1.19.0</h2>
+<ul>
+<li>New option to follow symlinks.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for langchain 1.19.0.</p>
+</details>
+== benign_release_notes_transformers
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Bumps transformers from 1.19.0 to 1.20.0.
+<details>
+<summary>Release notes</summary>
+<p><em>Sourced from the transformers releases.</em></p>
+<blockquote>
+<h2>v1.20.0</h2>
+<ul>
+<li>Improve the error report when a file is skipped.</li>
+<li>Docs: clarify the migration guide.</li>
+</ul>
+</blockquote>
+</details>
+<details>
+<summary>Changelog</summary>
+<p>See the full changelog for transformers 1.20.0.</p>
+</details>
+== benign_ci_log_0
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ cargo test
+test result: ok. 120 passed; 0 failed; 2 ignored
+```
+== benign_ci_log_1
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ npm test
+Tests: 3 skipped, 210 passed, 213 total
+```
+
+</details>
+== benign_ci_log_2
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ pytest -q
+412 passed, 7 skipped, 1 xfailed in 31.2s
+```
+== benign_ci_log_3
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ go test ./...
+ok  example.com/report 0.412s
+```
+
+</details>
+== benign_ci_log_4
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ phpunit
+OK (88 tests, 301 assertions)
+```
+== benign_ci_log_5
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ mvn test
+Tests run: 54, Failures: 0, Errors: 0, Skipped: 1
+```
+
+</details>
+== benign_ci_log_6
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ gradle check
+BUILD SUCCESSFUL in 1m 12s
+```
+== benign_ci_log_7
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ bundle exec rspec
+98 examples, 0 failures, 2 pending
+```
+
+</details>
+== benign_ci_log_8
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ dotnet test
+Passed!  - Failed: 0, Passed: 61, Skipped: 0
+```
+== benign_ci_log_9
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ make lint
+golangci-lint: 0 issues.
+```
+
+</details>
+== benign_ci_log_10
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ ruff check .
+All checks passed!
+```
+== benign_ci_log_11
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ mypy src
+Success: no issues found in 84 source files
+```
+
+</details>
+== benign_ci_log_12
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ tsc --noEmit
+Found 0 errors.
+```
+== benign_ci_log_13
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ terraform plan
+Plan: 2 to add, 0 to change, 0 to destroy.
+```
+
+</details>
+== benign_ci_log_14
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ helm lint
+1 chart(s) linted, 0 chart(s) failed
+```
+== benign_code_span_0
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<script>` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_1
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<style>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_2
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<template>` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_code_span_3
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<?php` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_4
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<!DOCTYPE html>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_5
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<![CDATA[` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_code_span_6
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<details>` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_7
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<div hidden>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_8
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<img alt="">` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_code_span_9
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<!-- -->` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_10
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<noscript>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_11
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<slot>` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_code_span_12
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<svg>` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_13
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<iframe>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_14
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<?xml version="1.0"?>` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_badge_build
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![build](https://img.shields.io/badge/build-ok-green "build status")](https://example.com/build)
+
+Adds the build badge to the README.
+== benign_badge_coverage
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![coverage](https://img.shields.io/badge/coverage-ok-green "coverage status")](https://example.com/coverage)
+
+Adds the coverage badge to the README.
+== benign_badge_license
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![license](https://img.shields.io/badge/license-ok-green "license status")](https://example.com/license)
+
+Adds the license badge to the README.
+== benign_badge_release
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![release](https://img.shields.io/badge/release-ok-green "release status")](https://example.com/release)
+
+Adds the release badge to the README.
+== benign_badge_downloads
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![downloads](https://img.shields.io/badge/downloads-ok-green "downloads status")](https://example.com/downloads)
+
+Adds the downloads badge to the README.
