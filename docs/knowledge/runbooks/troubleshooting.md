@@ -42,6 +42,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried | [Reviewer output](#reviewer-output) |
 | `reviewer_usage_limited` | Claude Code ended a reviewer run on the rate or usage limit of its model account | [Reviewer usage limit](#reviewer-usage-limit) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
+| `review_head_skills_refused` | The Codex adapter refused a `head` checkout whose repository skills differ from the trusted base | [Codex checkout refused](#codex-checkout-refused) |
 | `pohunek_head_fetch_failed`, `pohunek_head_fetch_ref_missing` | The session start could not fetch the pull request head on the review host | [Head commit unavailable](#head-commit-unavailable) |
 | `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start a review: its author started the most reviews the rule allows in the window | Wait for the window, or `retry` the pull request; see [author limit](../../policy.md#author-limit) |
 | `pohunek_head_fetch_mismatch` | At each of the latest starts that a usage limit did not end, the fetched `refs/pull/<n>/head` was at another commit than the pull request head | [Head commit unavailable](#head-commit-unavailable) |
@@ -225,7 +226,7 @@ The adapter checks the worktree against the trusted lines of the request before
 and after the Codex run. The Claude adapter runs the same `base` checks with
 the same messages, and on a `head` checkout only the `HEAD` check; its refusal
 is one result line whose `stderr_base64` holds the message. Every refusal but a
-missing head is `review_result_invalid`:
+missing head and changed repository skills is `review_result_invalid`:
 
 | Message | Cause | Fix |
 |---|---|---|
@@ -234,7 +235,7 @@ missing head is `review_result_invalid`:
 | `review checkout HEAD does not descend from the trusted pull request base`, `trusted pull request base is unavailable in the review checkout` | The base branch was force-pushed since GitHub recorded the pull request's base | A push to the pull request (or a rebase) records the new base; then `autoreview retry` |
 | `review checkout HEAD is the pull request head or contains it` | A `base` request in a worktree at the pull request code | Check the pipeline's `checkout` and the session's branch on the review host |
 | `review checkout is not clean`, `review checkout HEAD changed during the review` | Something changed the worktree before or during the run | Find the process that writes into the reviewer worktree |
-| `review checkout adds or changes repository skills that Codex would load` | A Codex `head` request whose `.agents/skills/` or `.codex/skills/` (of the checkout root or a directory down to the working directory) differs on disk from the trusted base: an entry that is a symbolic link or another non-regular file, a folder or file that the base lacks (also an ignored file, a nested repository or a `.git` entry), or a file whose mode or content differs from the base (also one hidden by `--assume-unchanged` or `--skip-worktree`). The line `refused:repository_skills` comes right before the exit line, and every fresh session is refused the same way | Review such pull requests on a `checkout: base` pipeline. When the head only has an older copy of a skill that the base branch changed, merge or rebase the pull request onto the current base branch and push |
+| `review checkout adds or changes repository skills that Codex would load` | A Codex `head` request whose `.agents/skills/` or `.codex/skills/` (of the checkout root or a directory down to the working directory) differs on disk from the trusted base: an entry that is a symbolic link or another non-regular file, a folder or file that the base lacks (also an ignored file, a nested repository or a `.git` entry), or a file whose mode or content differs from the base (also one hidden by `--assume-unchanged` or `--skip-worktree`). The line `refused:repository_skills` comes right before the exit line, and the review stops with `review_head_skills_refused` without a fresh session | Review such pull requests on a `checkout: base` pipeline, or have a maintainer review the skill change. When the head only has an older copy of a skill that the base branch changed, merge or rebase the pull request onto the current base branch and push |
 | `review checkout skills are unavailable`, `review checkout directory is unavailable` | Git could not list the skill folders of the trusted base, the adapter could not read an entry of the skill folders of a Codex `head` checkout, or those folders hold more than 10000 entries in all | Run `git status` in the reviewer worktree on the review host and look for unreadable or extra files in its skill folders |
 
 For a Claude refusal, the engine logs the message in the `error` field of the
@@ -497,6 +498,10 @@ list):
   the pull request head commit is not in the review host's repository (see
   [Head commit unavailable](#head-commit-unavailable)). The review stops
   without a fresh session.
+- `review_head_skills_refused`: the Codex adapter refused a `head` checkout
+  whose repository skills differ from the trusted base (see
+  [Codex checkout refused](#codex-checkout-refused)). The review stops without
+  a fresh session, and the scheduler does not retry it.
 - `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
   finding without `blocking`, or a Claude result line of protocol
   `autoreview-claude/v1` (or legacy) without a `refusal` has no `checked_checkout`

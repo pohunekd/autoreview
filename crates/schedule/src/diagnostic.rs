@@ -223,6 +223,14 @@ pub fn failure_explanation(code: &str) -> &'static str {
         "review_head_unavailable" => {
             "The pull request head commit is not in the review host's repository, so the reviewer on a base checkout could not read the change and its adapter stopped the run. Pohunek fetches the head at session start only when the pohunek CLI and the review host's daemon are 0.43.0 or later. On 0.43.0 or later, the service log shows `head fetch capability unknown, starting without the fetch` when autoreview could not read that capability; retry this PR. With an older pohunek, upgrade it, or on the review host run `git -C <project repository> fetch origin refs/pull/<n>/head`, then retry this PR."
         }
+        "review_head_skills_refused" => {
+            "The pull request adds or changes repository skills (`.agents/skills/` or \
+             `.codex/skills/`) that Codex would load from the head checkout, so the Codex \
+             adapter refused the review before Codex started. Review the pull request on a \
+             `checkout: base` pipeline, or have a maintainer review the skill change. When the \
+             head only has an older copy of a skill that the base branch changed, rebase the \
+             pull request onto the base branch and push."
+        }
         "github_request_failed" => {
             "A GitHub API request failed. Check GitHub availability, authentication, and rate limits."
         }

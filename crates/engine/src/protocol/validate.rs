@@ -249,6 +249,14 @@ pub(crate) fn review_head_unavailable() -> Error {
     Error::workflow("review_head_unavailable", true, None)
 }
 
+/// The error of a run that the adapter refused because a head checkout changes skills.
+///
+/// The repository skills of the pull request head differ from the trusted base, so a fresh run
+/// of the same head is refused the same way. It is permanent.
+pub(crate) fn review_head_skills_refused() -> Error {
+    Error::workflow("review_head_skills_refused", true, None)
+}
+
 /// The error of a result from an adapter older than the one the engine ships.
 ///
 /// It is not retried: a fresh run of the same adapter writes the same result.
