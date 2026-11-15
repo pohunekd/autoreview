@@ -6,7 +6,8 @@ use autoreview_engine::store::StoredReview;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::plan::{Owners, Rules, Verdict, plan};
+use super::plan::{BranchPlan, Owners, Rules, Verdict, plan};
+use super::{HostReport, RepositoryReport, incomplete};
 
 const PREFIX: &str = "autoreview/review/";
 
@@ -129,5 +130,47 @@ fn plan_keeps_every_branch_a_review_session_or_worktree_needs() {
             assert_eq!(plan.commit, format!("{index:040}"));
             assert!(!plan.deleted && plan.error.is_empty());
         }
+    }
+}
+
+fn host(skipped: &str, repository_error: &str, delete_error: &str) -> HostReport {
+    let branch = BranchPlan {
+        branch: branch('5', "-opus-run1"),
+        commit: format!("{:040}", 0),
+        verdict: Verdict::Delete,
+        deleted: delete_error.is_empty(),
+        error: delete_error.to_owned(),
+    };
+    let repository = RepositoryReport {
+        path: "/srv/repos/example".to_owned(),
+        error: repository_error.to_owned(),
+        branches: vec![branch],
+    };
+    HostReport {
+        host: "review-a".to_owned(),
+        skipped: skipped.to_owned(),
+        repositories: vec![repository],
+    }
+}
+
+#[test]
+fn a_failed_deletion_or_a_skipped_named_host_fails_the_run() {
+    let clean = || host("", "", "");
+    let skipped = || host("host_not_local", "", "");
+    let unread = || host("", "git_command_failed", "");
+    let failed = || host("", "", "git_command_failed");
+    let cases = [
+        (vec![], false, false),
+        (vec![clean()], false, false),
+        (vec![clean()], true, false),
+        (vec![clean(), skipped()], false, false),
+        (vec![skipped()], true, true),
+        (vec![clean(), unread()], false, false),
+        (vec![unread()], true, true),
+        (vec![clean(), failed()], false, true),
+        (vec![failed()], true, true),
+    ];
+    for (index, (hosts, named, want)) in cases.into_iter().enumerate() {
+        assert_eq!(incomplete(&hosts, named), want, "case {index}");
     }
 }
