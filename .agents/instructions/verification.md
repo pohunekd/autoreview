@@ -17,8 +17,9 @@ Docs group:
    `PATH`, except in CI (`CI` set), where it fails.
 3. `setup-self-test` (`scripts/setup --self-test`): the version comparison,
    the target choice, the running-binary check, the path trust rule, the
-   timeout check, the printed `profiles install` command and the `UMask` of
-   the user units of the setup script, over fixed tables; it reads nothing else.
+   timeout check, the printed `profiles install` command, the `UMask` of the
+   user units and the Codex reinstall notice of the setup script, over fixed
+   tables; it reads nothing else.
 4. `install-rerun` (`scripts/check-install rerun`): `deploy/install.sh --root`
    into a temporary directory twice; the first run places the expected files
    and modes, the second changes nothing.
