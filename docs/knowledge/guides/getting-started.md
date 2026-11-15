@@ -41,8 +41,8 @@ described in [several review hosts](multihost.md#deployment-layout).
 |---|---|
 | autoreview, from the release archive | `~/.local/bin/autoreview` |
 | pohunek and its login service, from the release archive | `~/.local/bin/pohunek`, the systemd user unit `pohunek-<ns>-daemon.service` |
-| The configuration, the policy and the prompts (`autoreview init`) | the directory you name, for example `~/autoreview` |
-| The store | `autoreview.db` in that directory |
+| The configuration, the policy and the prompts (`autoreview init`, run under `umask 077`) | the directory you name, for example `~/autoreview`, mode 0700 |
+| The store, private to your user (the units set `UMask=0077`) | `autoreview.db` in that directory |
 | The secrets file, empty, mode 0600 | `$XDG_CONFIG_HOME/autoreview/autoreview.env` (`~/.config/...`) |
 | The official runtime packages and hooks of the agents | pohunek's own directories |
 | The agent profiles and their adapters (`autoreview profiles install`) | `~/.config/pohunek/agents/`, `~/.local/share/autoreview/adapters/` |
@@ -220,5 +220,12 @@ A third run with the same `--dir` on the finished setup prints every step as
   same flags for each profile, and `--pohunek-timeout-seconds`, which 0.3.0 and
   earlier did not take; the script keeps a profile it wrote and does not know
   the flags of an earlier run.
+- A directory made by an earlier setup run may have mode 0755 and its store
+  0644, which lets other local users read the review history. From the first
+  release after 0.4.0, `validate`, and with it the script, stops on such a store
+  with exit code 9 and prints the `chmod` command for each path. Run
+  `chmod 700 <dir>` and `chmod 600 <dir>/autoreview.db*`, with the `--dir` you
+  gave the script, before the upgrade or when it stops, then run the script
+  again.
 - Before you leave it running, read the
   [threat model](../safety/threat-model.md).

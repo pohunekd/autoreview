@@ -210,11 +210,13 @@ path_trust() {
 }
 
 # Checks the pure functions of this script against fixed tables; reads nothing
-# else. The profile tables are local, so the functions under test read them.
+# else. The profile tables and the paths are local, so the functions under
+# test read them.
 self_test() {
     local checks=0 failures=0 expected
     local autoreview_bin=/h/.local/bin/autoreview pohunek_timeout=45
-    local -a install_command=()
+    local dir=/h/autoreview env_file=/h/.config/autoreview/autoreview.env
+    local -a install_command=() unit_names=() unit_texts=()
     local -A profile_agent=([one]=claude [two]=codex) profile_model=([one]=m-1 [two]=m.2)
     local -A profile_effort=([one]=max [two]=xhigh) profile_input=([one]=1048576 [two]=2048)
     local -A profile_binary=([one]="/opt/my tools/claude" [two]=/usr/bin/codex)
@@ -343,6 +345,9 @@ self_test() {
     expected+=" --maximum-retention-seconds 7200 --pohunek-timeout-seconds 45 "
     profile_install_command two
     check "printed install command of a Codex profile" "$expected" "$(install_command_text)"
+    render_units
+    check "umask of the review service" 1 "$(grep -cx 'UMask=0077' <<<"${unit_texts[0]}")"
+    check "umask of the queue service" 1 "$(grep -cx 'UMask=0077' <<<"${unit_texts[1]}")"
     if [ "$failures" -ne 0 ]; then
         echo "self-test: $failures of $checks checks failed"
         return 1
@@ -915,8 +920,10 @@ step_config() {
         --gh-bin "$gh_bin" --pohunek-bin "$pohunek_bin" --pohunek-state-home "$state_home"
         --pohunek-runtime-dir "$runtime_dir" --matrix-homeserver-url "$matrix_url"
         --matrix-room "$matrix_room" --matrix-mention-user "$matrix_user")
-    approve "configuration" "$(printf '%q ' "${command[@]}")"
-    if ! output=$("${command[@]}"); then
+    approve "configuration" "umask 077" "$(printf '%q ' "${command[@]}")"
+    # $dir holds the store too. The umask keeps it 0700 also when the installed
+    # release's init creates it with the mode of the umask.
+    if ! output=$(umask 077 && "${command[@]}"); then
         printf '%s\n' "$output" >&2
         fail 8 "autoreview init failed: $(error_code_of "$output")"
     fi
@@ -1117,7 +1124,8 @@ step_profiles() {
 }
 
 # Sets the unit names and their texts. The paths were checked with
-# unit_path_safe, so each line holds them as they are.
+# unit_path_safe, so each line holds them as they are. UMask=0077 keeps the
+# store files that a service creates private to the user.
 render_units() {
     unit_names=(autoreview.service autoreview-queue.service autoreview-queue.timer)
     unit_texts=()
@@ -1130,6 +1138,7 @@ ExecStart=$autoreview_bin --config $dir/config.yaml serve
 EnvironmentFile=$env_file
 Restart=on-failure
 RestartSec=10
+UMask=0077
 NoNewPrivileges=yes
 
 [Install]
@@ -1142,6 +1151,7 @@ Description=autoreview review queue notice
 Type=oneshot
 ExecStart=$autoreview_bin --config $dir/config.yaml review-queue
 EnvironmentFile=$env_file
+UMask=0077
 NoNewPrivileges=yes
 ")
     unit_texts+=("[Unit]

@@ -48,7 +48,7 @@ These flags are required:
 
 | Flag | Meaning |
 |---|---|
-| `--dir` | Clean absolute directory whose parent exists; it and `prompts/` are created when absent |
+| `--dir` | Clean absolute directory whose parent exists; it and `prompts/` are created when absent. A created `--dir` gets mode 0700 when `store.path` (`--store-path`, or the reference value) lies inside it, as in the `scripts/setup` layout, and the umask's mode otherwise, so the service user can read a `/etc/autoreview` that root creates; `prompts/` always gets the umask's mode, and an existing `--dir` keeps its mode |
 | `--login` | Lowercase GitHub user login of the one credential, such as `review-bot`, or `mona-cat_octo` for an Enterprise Managed User |
 | `--pohunek-host` | The pohunek host that runs the reviewers |
 | `--example` | The example directory under `examples/`, for example `single-repo-comment` |
@@ -283,6 +283,17 @@ The supported pohunek releases are 0.41.0 or later, before 1.0.0. A release
 outside that range fails with `pohunek_version_unsupported`; a run that fails
 or an output other than `pohunek X.Y.Z` fails with `pohunek_version_invalid`.
 Both name `pohunek.bin`.
+
+Before that, it checks that the store is private to the service user: the
+directory of `store.path` must grant the group and other users nothing (mode
+0700 or narrower), and so must the database and its `-wal` and `-shm` files
+(0600 or narrower). A path that does not exist yet passes: the store creates a
+missing directory with mode 0700 and a missing database with mode 0600, whatever
+the umask, and SQLite gives `-wal` and `-shm` the mode of the database. A wider
+mode fails with
+`configuration_invalid` naming `store.path`; the message names each path with
+the `chmod 700` or `chmod 600` that fixes it. `validate` never changes a mode
+itself: run the commands as the owner of the store.
 
 `--check-credentials` also runs the [startup check](#autoreview-serve) of every
 credential and adds what GitHub answered, in file order:

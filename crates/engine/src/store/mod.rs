@@ -48,6 +48,9 @@ const DIRECTORY_MODE: u32 = 0o700;
 /// Mode of the discovery lock file.
 const LOCK_FILE_MODE: u32 = 0o600;
 
+/// Mode of the database file when `open` creates it; SQLite gives `-wal` and `-shm` the same.
+const DATABASE_FILE_MODE: u32 = 0o600;
+
 /// Suffix appended to the database path to name the discovery lock file.
 const DISCOVERY_LOCK_SUFFIX: &str = ".discovery.lock";
 
@@ -145,6 +148,16 @@ impl Store {
         let mut builder = DirBuilder::new();
         builder.recursive(true).mode(DIRECTORY_MODE);
         if let Err(err) = builder.create(parent) {
+            return Err(store_error("store_unavailable", true, err));
+        }
+        // A command run by hand may have umask 022; SQLite would create the file 0644.
+        if let Err(err) = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .mode(DATABASE_FILE_MODE)
+            .open(path)
+        {
             return Err(store_error("store_unavailable", true, err));
         }
         let connection = Self::open_connection(path, false)?;

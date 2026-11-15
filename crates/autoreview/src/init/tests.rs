@@ -52,7 +52,7 @@ fn init_then_validate_loads_every_example() {
         let text = directory.to_str().expect("a UTF-8 temporary path");
         let files = render(&arguments(&directory, example), text).expect("the files render");
         let profiles = agent_profiles(&files).expect("the embedded policy loads");
-        let written = write(&directory, &files).expect("init writes into a new directory");
+        let written = write(&directory, &files, false).expect("init writes into a new directory");
         let relative: Vec<&str> = files.iter().map(|file| file.relative).collect();
         let expected: Vec<String> = relative
             .iter()
@@ -82,7 +82,7 @@ fn init_login_follows_the_user_login_grammar() {
     // An Enterprise Managed User login is `handle_shortcode`.
     init.login = "mona-cat_octo".to_owned();
     let files = render(&init, text).expect("a managed user's login renders");
-    write(&directory, &files).expect("init writes into a new directory");
+    write(&directory, &files, false).expect("init writes into a new directory");
     let config = fs::read_to_string(directory.join("config.yaml")).expect("config.yaml");
     let loaded = config_file::parse(&config, config_file::tests::secret, |path| {
         autoreview_policy::load(path).map_err(|error| Box::new(error) as _)

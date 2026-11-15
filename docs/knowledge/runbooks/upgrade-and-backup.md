@@ -49,7 +49,15 @@ retention settings (`store.review_retention_seconds`,
    ```
 
    `validate` loads `config.yaml`, the policy and every prompt. A new key or a changed
-   policy rule shows up here as a named error. Fix it before the restart.
+   policy rule shows up here as a named error. Fix it before the restart. After
+   0.4.0 it also refuses a store directory or store file that grants the group
+   or other users any access, and names the `chmod` that fixes each path. A
+   store that a command run by hand created, such as a first
+   `sudo -u autoreview autoreview poll` under umask 022, has 0644 files; run
+   `sudo -u autoreview sh -c 'chmod 600 /var/lib/autoreview/autoreview.db*'`
+   before the upgrade, or `deploy/install.sh` stops at its `validate` step with
+   exit code 4 and replaces nothing. The glob is inside `sh -c` because only
+   `autoreview` can list the 0700 directory.
 4. Compare `agent_profiles` in the output with the profiles on each review host.
    On each review host, install the new binary as well and run
    [`autoreview profiles install`](../../cli.md#autoreview-profiles-install)
