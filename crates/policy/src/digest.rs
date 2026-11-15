@@ -112,7 +112,9 @@ pub(crate) fn digest_of(
         }
         // Only a guarded rule adds bytes, so other policies keep their digest.
         if let Some(guard) = &rule.guard {
-            let fields: Vec<&str> = guard.fields.iter().map(|kind| kind.as_str()).collect();
+            // Sorted by the stable codes, so the variant order of `FieldKind` is not hashed.
+            let mut fields: Vec<&str> = guard.fields.iter().map(|kind| kind.as_str()).collect();
+            fields.sort_unstable();
             hasher.update(format!(
                 "guard\x00{}\x00{}\x00{}\x00",
                 fields.join(","),

@@ -1406,6 +1406,12 @@ notifications:
             second.digest(),
             "a guard must change the digest"
         );
+        // The fields hash as `patch,title`, sorted by code, whatever the order of the variants.
+        assert_eq!(
+            second.digest(),
+            "537b8fda4a21c720b1303710936fb852e45be8b2f19005dc224c91ae7ee91b5b",
+            "the guard bytes must not change"
+        );
         let reordered = "{fields: [title, patch], threshold: 100, on_suspect: await}";
         assert_eq!(
             digest(&with_guard(VALID_POLICY, reordered)),
