@@ -141,3 +141,109 @@ const CONFUSABLES: [(char, char); 25] = [
 
 /// Offset from a fullwidth form U+FF01-FF5E to its ASCII character.
 const FULLWIDTH_OFFSET: u32 = 0xFEE0;
+
+/// Returns `text` as lowercase words, each preceded and followed by one space.
+///
+/// Letters and digits form words; every other character separates them, and so does a
+/// percent escape such as `%20`. Invisible characters are dropped, so that a word split by
+/// them still matches. Fullwidth forms count as their ASCII characters, and a word whose
+/// other letters all look like Latin ones (`CONFUSABLES`) is spelled in Latin. An empty text
+/// gives `" "`. There is no other folding: decomposed accents still differ.
+pub(crate) fn normalize(text: &str) -> String {
+    let mut out = String::with_capacity(text.len().saturating_add(2));
+    out.push(' ');
+    let mut word = String::new();
+    let mut at = 0_usize;
+    while let Some(raw) = text.get(at..).and_then(|rest| rest.chars().next()) {
+        let next = at.saturating_add(raw.len_utf8());
+        at = next;
+        if characters::invisible(raw) {
+            continue;
+        }
+        let escape = text.get(next..next.saturating_add(2));
+        if raw == '%' && escape.is_some_and(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            push_word(&mut out, &mut word);
+            at = next.saturating_add(2);
+            continue;
+        }
+        let character = match u32::from(raw) {
+            0xFF01..=0xFF5E => char::from_u32(u32::from(raw) - FULLWIDTH_OFFSET).unwrap_or(raw),
+            _ => raw,
+        };
+        if character.is_alphanumeric() {
+            word.extend(character.to_lowercase());
+        } else {
+            push_word(&mut out, &mut word);
+        }
+    }
+    push_word(&mut out, &mut word);
+    out
+}
+
+/// Moves `word` and a space to `out`, spelled in Latin when it can be.
+fn push_word(out: &mut String, word: &mut String) {
+    if word.is_empty() {
+        return;
+    }
+    let confusable = |character: char| {
+        CONFUSABLES
+            .iter()
+            .find(|(other, _)| *other == character)
+            .map(|(_, latin)| *latin)
+    };
+    if word
+        .chars()
+        .all(|character| character.is_ascii() || confusable(character).is_some())
+    {
+        out.extend(
+            word.chars()
+                .map(|character| confusable(character).unwrap_or(character)),
+        );
+    } else {
+        out.push_str(word);
+    }
+    out.push(' ');
+    word.clear();
+}
+
+/// Verbs that start an override: a qualifier and an object follow within `OVERRIDE_WINDOW`.
+const OVERRIDE_VERBS: [&str; 8] = [
+    "ignore",
+    "ignoring",
+    "disregard",
+    "disregarding",
+    "forget",
+    "forgetting",
+    "override",
+    "overriding",
+];
+
+/// Words that point an override at instructions that came before.
+const OVERRIDE_QUALIFIERS: [&str; 8] = [
+    "previous",
+    "prior",
+    "above",
+    "earlier",
+    "preceding",
+    "original",
+    "system",
+    "your",
+];
+
+/// Words that name what an override replaces.
+const OVERRIDE_OBJECTS: [&str; 10] = [
+    "instruction",
+    "instructions",
+    "rule",
+    "rules",
+    "guideline",
+    "guidelines",
+    "prompt",
+    "prompts",
+    "directions",
+    "directives",
+];
+
+/// Most words after an override verb that may hold its qualifier and object.
+const OVERRIDE_WINDOW: usize = 5;
