@@ -182,7 +182,10 @@ findings.
 
 With `intent_check: issues`, the engine reads the GitHub issues that the pull
 request closes (its closing references, up to ten) once per review, with the
-credential of the review, so only issues that credential can read are seen.
+credential of the review. Only issues of the pull request's own repository are
+read: an issue of another repository may be private while the review is
+public, so its text is never requested, and the published review says only
+that issues of other repositories were not compared, without naming them.
 Their titles and bodies share `limits.max_issue_characters` characters
 ([configuration](configuration.md#limits)); a text over the limit is cut, ends
 with `…` and is marked `truncated`, and an issue past the limit keeps its

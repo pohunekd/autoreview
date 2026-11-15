@@ -153,7 +153,7 @@ the GitHub documentation assigns to it.
 | Pull request read | `GET /repos/{owner}/{repo}/pulls/{number}` and GraphQL pull request query | Pull requests: read |
 | Review request events | `GET /repos/{owner}/{repo}/issues/{number}/events` | Pull requests: read, or Issues: read |
 | Changed lines | `GET /repos/{owner}/{repo}/pulls/{number}/files` | Pull requests: read |
-| Closed issues (`intent_check: issues`) | GraphQL `closingIssuesReferences` of the pull request | Pull requests: read, and Issues: read on each repository whose issues it closes; without it the review states that the issues could not be read |
+| Closed issues (`intent_check: issues`) | GraphQL `closingIssuesReferences` of the pull request | Pull requests: read, and Issues: read on the pull request's repository (issues of other repositories are never read); without it the review states that the issues could not be read |
 | Linear history check | `GET /repos/{owner}/{repo}/compare/{previous}...{head}` | Contents: read |
 | Existing reviews (idempotency check) | `GET /repos/{owner}/{repo}/pulls/{number}/reviews` | Pull requests: read |
 | Publish review | `POST /repos/{owner}/{repo}/pulls/{number}/reviews` | Pull requests: write |
