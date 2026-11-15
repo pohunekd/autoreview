@@ -2,6 +2,8 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::collections::BTreeSet;
+
 use autoreview_policy::{Event, Level, OnSuspect, Trigger};
 use serde::{Deserialize, Serialize};
 use time::Duration;
@@ -372,6 +374,11 @@ impl GuardOutcome {
     /// Reports whether a request for changes on an untrusted author becomes a comment.
     pub(crate) fn comments(&self) -> bool {
         self.suspect && self.outcome == OnSuspect::Comment
+    }
+
+    /// Returns the distinct signal codes, sorted.
+    pub(crate) fn codes(&self) -> BTreeSet<&str> {
+        self.signals.iter().map(|hit| hit.signal.as_str()).collect()
     }
 }
 

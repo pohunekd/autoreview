@@ -13,7 +13,7 @@ use crate::model::{
 };
 use crate::publish::neutralize::{single_line, visible_excerpt};
 use crate::publish::plan::{PublicationPlan, blocking_count};
-use crate::publish::render::{head_prefix, human_review_text, reviewer_labels};
+use crate::publish::render::{guard_text, head_prefix, human_review_text, reviewer_labels};
 use crate::verify::{VERDICT_NOT_BLOCKING, VERDICT_REFUTED, demoted, escalates, verification_line};
 
 /// Title of the approval request. An approval is accepted only as a reply to a message that
@@ -141,6 +141,13 @@ pub(crate) fn approval_requested_message(
             excerpt_characters,
         ));
         message.push('.');
+    }
+    if let Some(guard) = artifact.guard.as_ref().filter(|guard| guard.holds()) {
+        message.push_str(&format!(
+            "\nThis rule approves clean reviews without you, \
+             but the text guard flagged the pull request: {}.",
+            guard_text(guard)
+        ));
     }
     if escalates(input, artifact) {
         let demoted_findings: Vec<Finding> = notes
