@@ -920,8 +920,10 @@ step_config() {
         --gh-bin "$gh_bin" --pohunek-bin "$pohunek_bin" --pohunek-state-home "$state_home"
         --pohunek-runtime-dir "$runtime_dir" --matrix-homeserver-url "$matrix_url"
         --matrix-room "$matrix_room" --matrix-mention-user "$matrix_user")
-    approve "configuration" "$(printf '%q ' "${command[@]}")"
-    if ! output=$("${command[@]}"); then
+    approve "configuration" "umask 077" "$(printf '%q ' "${command[@]}")"
+    # $dir holds the store too. The umask keeps it 0700 also when the installed
+    # release's init creates it with the mode of the umask.
+    if ! output=$(umask 077 && "${command[@]}"); then
         printf '%s\n' "$output" >&2
         fail 8 "autoreview init failed: $(error_code_of "$output")"
     fi
@@ -1122,7 +1124,8 @@ step_profiles() {
 }
 
 # Sets the unit names and their texts. The paths were checked with
-# unit_path_safe, so each line holds them as they are.
+# unit_path_safe, so each line holds them as they are. UMask=0077 keeps the
+# store files that a service creates private to the user.
 render_units() {
     unit_names=(autoreview.service autoreview-queue.service autoreview-queue.timer)
     unit_texts=()
@@ -1135,6 +1138,7 @@ ExecStart=$autoreview_bin --config $dir/config.yaml serve
 EnvironmentFile=$env_file
 Restart=on-failure
 RestartSec=10
+UMask=0077
 NoNewPrivileges=yes
 
 [Install]
@@ -1147,6 +1151,7 @@ Description=autoreview review queue notice
 Type=oneshot
 ExecStart=$autoreview_bin --config $dir/config.yaml review-queue
 EnvironmentFile=$env_file
+UMask=0077
 NoNewPrivileges=yes
 ")
     unit_texts+=("[Unit]

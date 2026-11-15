@@ -4,8 +4,9 @@
 
 // Rust guideline compliant 2026-11-09
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, DirBuilder, OpenOptions};
 use std::io::{self, Write};
+use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 use autoreview_engine::config::identifier_valid;
@@ -67,6 +68,9 @@ const MENTION_LINE: (&str, &str) = (
     "      mention_user: \"@you:example.org\"\n",
     "      mention_user: ",
 );
+
+/// Mode of the `--dir` that `init` creates: only its owner may enter it.
+const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 
 /// Name of the written configuration file.
 const CONFIG_NAME: &str = "config.yaml";
@@ -496,7 +500,7 @@ pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>
         }
     }
     let mut created = Created::default();
-    let result = create_all(&missing, files, &targets, &mut created);
+    let result = create_all(directory, &missing, files, &targets, &mut created);
     if result.is_err() {
         created.remove();
     }
@@ -505,16 +509,22 @@ pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>
 
 /// Creates the missing directories, then each file, and records what it created.
 ///
-/// A directory that appears between the check and its creation is not recorded, so it is
+/// `directory` gets mode 0700 when this call creates it: it often holds the store as well. A
+/// directory that appears between the check and its creation is not recorded, so it is
 /// never removed; it is used only when it is a real directory.
 fn create_all(
+    directory: &Path,
     missing: &[PathBuf],
     files: &[SetupFile],
     targets: &[PathBuf],
     created: &mut Created,
 ) -> Result<Vec<String>, Error> {
     for path in missing {
-        match fs::create_dir(path) {
+        let mut builder = DirBuilder::new();
+        if path == directory {
+            builder.mode(PRIVATE_DIRECTORY_MODE);
+        }
+        match builder.create(path) {
             Ok(()) => created.directories.push(path.clone()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 match fs::symlink_metadata(path) {
