@@ -81,6 +81,20 @@ impl Lines {
         start.saturating_add(column.saturating_sub(1)).min(self.len)
     }
 
+    /// Returns the text of a 1-based source line, without its line break.
+    fn line<'t>(&self, text: &'t str, line: usize) -> &'t str {
+        let start = self.offset(line, 1);
+        let end = self
+            .starts
+            .get(line)
+            .copied()
+            .unwrap_or(self.len)
+            .max(start);
+        text.get(start..end)
+            .unwrap_or_default()
+            .trim_end_matches('\n')
+    }
+
     /// Returns the byte range of a source position, whose end column is inclusive.
     fn range(&self, position: Sourcepos) -> (usize, usize) {
         let start = self.offset(position.start.line, position.start.column);
@@ -409,15 +423,98 @@ fn renders_lines(value: &NodeValue) -> bool {
     )
 }
 
+/// Returns how many lines a block shows: its line breaks plus one, plus a setext underline
+/// or a table delimiter row. `None` for blocks whose lines are all shown.
+fn shown_lines<'a>(node: &'a AstNode<'a>) -> Option<usize> {
+    let breaks = || {
+        node.descendants()
+            .filter(|inner| {
+                matches!(
+                    inner.data().value,
+                    NodeValue::SoftBreak | NodeValue::LineBreak
+                )
+            })
+            .count()
+    };
+    match &node.data().value {
+        NodeValue::Paragraph => Some(breaks().saturating_add(1)),
+        NodeValue::Heading(heading) => Some(
+            breaks()
+                .saturating_add(1)
+                .saturating_add(usize::from(heading.setext)),
+        ),
+        NodeValue::Table(_) => Some(
+            node.children()
+                .filter(|row| matches!(row.data().value, NodeValue::TableRow(_)))
+                .count()
+                .saturating_add(1),
+        ),
+        _ => None,
+    }
+}
+
+/// Reports whether a source line starts a reference definition after its container
+/// markers: `[`, then a `]` followed by `:`, or no `]` on the line (a label over lines).
+fn starts_definition(line: &str) -> bool {
+    let rest = line.trim_start_matches(|character: char| {
+        character.is_ascii_whitespace()
+            || character.is_ascii_digit()
+            || matches!(character, '>' | '-' | '*' | '+' | '.' | ')')
+    });
+    let Some(label) = rest.strip_prefix('[') else {
+        return false;
+    };
+    !label.starts_with('^')
+        && label.find(']').is_none_or(|close| {
+            label
+                .get(close.saturating_add(1)..)
+                .is_some_and(|after| after.starts_with(':'))
+        })
+}
+
 /// Reads one node on entry; marks the lines it renders in `covered`.
-fn enter<F: FnMut(Signal, u32)>(walk: &mut Walk<'_, F>, node: &AstNode<'_>, covered: &mut [bool]) {
-    let data = node.data();
-    if renders_lines(&data.value) {
-        let (first, last) = (data.sourcepos.start.line, data.sourcepos.end.line);
-        for slot in covered.iter_mut().take(last.saturating_add(1)).skip(first) {
+///
+/// comrak counts the reference definitions that open a paragraph, a setext heading or a
+/// table into its source lines, and moves its inline positions onto them. Such a block
+/// renders only its last lines, so the leading ones stay unrendered and are checked as
+/// definitions, and the field's code positions are no longer trusted (`*shifted`). Only a
+/// block whose first line starts a definition can hold such lines, and that line is always
+/// checked, also when the parser shows it (a table that splits off the paragraph). A line
+/// break that the tree does not show (in a title, a code span or inline HTML) makes more
+/// lines count as definitions, never fewer; when the counts do not fit, every line is
+/// checked (fail closed).
+fn enter<'a, F: FnMut(Signal, u32)>(
+    walk: &mut Walk<'_, F>,
+    node: &'a AstNode<'a>,
+    source: (&str, &Lines),
+    covered: &mut [bool],
+    shifted: &mut bool,
+) {
+    if renders_lines(&node.data().value) {
+        let (first, last) = (
+            node.data().sourcepos.start.line,
+            node.data().sourcepos.end.line,
+        );
+        let span = last.saturating_add(1).saturating_sub(first);
+        let (text, lines) = source;
+        let shown = if starts_definition(lines.line(text, first)) {
+            shown_lines(node)
+                .unwrap_or(span)
+                .min(span.saturating_sub(1))
+        } else {
+            span
+        };
+        let start = if shown <= span {
+            first.saturating_add(span - shown)
+        } else {
+            last.saturating_add(1)
+        };
+        *shifted |= start != first;
+        for slot in covered.iter_mut().take(last.saturating_add(1)).skip(start) {
             *slot = true;
         }
     }
+    let data = node.data();
     match &data.value {
         NodeValue::Text(text) => walk.text(text, false),
         NodeValue::Code(code) => walk.text(&code.literal, true),
@@ -536,6 +633,7 @@ pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Option<Vec<
     let mut covered = vec![false; lines.starts.len().saturating_add(1)];
     let mut code = Vec::new();
     let mut code_checked = true;
+    let mut shifted = false;
     let mut walk = Walk {
         add,
         frames: Vec::new(),
@@ -556,7 +654,7 @@ pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Option<Vec<
                         None => code_checked = false,
                     }
                 }
-                enter(&mut walk, node, &mut covered);
+                enter(&mut walk, node, (text, &lines), &mut covered, &mut shifted);
             }
             NodeEdge::End(node) => leave(&mut walk, node),
         }
@@ -569,5 +667,5 @@ pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Option<Vec<
         [(_, end), (start, _)] => end <= start,
         _ => true,
     });
-    (code_checked && disjoint).then_some(code)
+    (code_checked && disjoint && !shifted).then_some(code)
 }
