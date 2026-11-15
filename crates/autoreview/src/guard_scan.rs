@@ -7,12 +7,20 @@
 
 // Rust guideline compliant 2026-11-15
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::BufRead;
 use std::num::NonZeroU64;
 
+use autoreview_engine::config::TextGuard;
+use autoreview_engine::integrations::{GuardText, GuardTexts};
 use autoreview_engine::model::GuardSignal;
-use autoreview_guard::FieldKind;
+use autoreview_engine::{Error, guard_outcome};
+use autoreview_guard::{FieldKind, Signal};
+use autoreview_policy::RuleGuard;
 use serde::{Deserialize, Deserializer, Serialize};
+
+/// Error code of an unreadable, empty or malformed corpus file.
+const GUARD_CORPUS_INVALID: &str = "guard_corpus_invalid";
 
 /// One line of the corpus: one pull request; every key is required.
 #[derive(Debug, Deserialize)]
@@ -88,4 +96,86 @@ fn field_kind<'de, D: Deserializer<'de>>(deserializer: D) -> Result<FieldKind, D
     (FieldKind::ALL.into_iter())
         .find(|kind| kind.as_str() == code)
         .ok_or_else(|| serde::de::Error::custom("unknown field kind"))
+}
+
+/// Returns the `guard_corpus_invalid` error with `cause`.
+fn corpus_invalid(cause: impl Into<autoreview_engine::BoxError>) -> Error {
+    Error::workflow(GUARD_CORPUS_INVALID, true, Some(cause.into()))
+}
+
+/// Scans every line of `corpus` with `guard` and `settings` and counts the results.
+///
+/// A malformed line names its number and the kind of error, never the text of the line.
+///
+/// # Errors
+///
+/// Returns `guard_corpus_invalid` for a read error, a malformed line, an empty line or a
+/// corpus without a line.
+fn scan_corpus(
+    corpus: impl BufRead,
+    guard: &RuleGuard,
+    settings: &TextGuard,
+) -> Result<ScanResult, Error> {
+    let hidden: BTreeSet<&str> = (Signal::ALL.into_iter())
+        .filter(|signal| signal.hides_text())
+        .map(Signal::as_str)
+        .collect();
+    let mut pull_requests = Vec::new();
+    let mut signals: BTreeMap<String, u64> = BTreeMap::new();
+    let (mut flagged, mut hidden_text, mut truncated) = (0_u64, 0_u64, 0_u64);
+    for (index, line) in corpus.lines().enumerate() {
+        let number = index.saturating_add(1);
+        let line =
+            line.map_err(|cause| corpus_invalid(format!("corpus line {number}: {cause}")))?;
+        let record: Record = serde_json::from_str(&line).map_err(|cause| {
+            let (kind, column) = (cause.classify(), cause.column());
+            corpus_invalid(format!(
+                "corpus line {number}: {kind:?} error at column {column}"
+            ))
+        })?;
+        let read = GuardTexts {
+            texts: (record.texts.into_iter())
+                .map(|text| GuardText {
+                    kind: text.kind,
+                    text: text.text,
+                })
+                .collect(),
+            truncated: record.truncated,
+        };
+        let outcome = guard_outcome(guard, settings, read);
+        let codes: BTreeSet<&str> = (outcome.signals.iter())
+            .map(|signal| signal.signal.as_str())
+            .collect();
+        for code in &codes {
+            *signals.entry((*code).to_owned()).or_insert(0) += 1;
+        }
+        flagged += u64::from(outcome.suspect);
+        hidden_text += u64::from(codes.iter().any(|code| hidden.contains(code)));
+        truncated += u64::from(outcome.truncated);
+        pull_requests.push(PullRequestScan {
+            repository: record.repository,
+            number: record.number.get(),
+            score: outcome.score,
+            signals: outcome.signals,
+            truncated: outcome.truncated,
+            suspect: outcome.suspect,
+        });
+    }
+    let count = u64::try_from(pull_requests.len()).unwrap_or(u64::MAX);
+    if count == 0 {
+        return Err(corpus_invalid("the corpus has no pull request"));
+    }
+    // Basis points never exceed 10000, so the conversion to `u32` is exact.
+    let basis_points = u32::try_from(flagged.saturating_mul(10_000) / count).unwrap_or(u32::MAX);
+    Ok(ScanResult {
+        pull_requests,
+        summary: Summary {
+            pull_requests: count,
+            flagged,
+            flagged_percent: f64::from(basis_points) / 100.0,
+            hidden_text,
+            truncated,
+            signals,
+        },
+    })
 }
