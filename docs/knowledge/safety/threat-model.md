@@ -73,7 +73,7 @@ the engine publishes.
 |---|---|---|---|
 | 1 | Untrusted code runs in the reviewer's worktree | Untrusted authors and forks are reviewed from `checkout: base`, so their code is not checked out as the working tree | Engine behaviour; test `untrusted_input_needs_a_base_checkout_and_no_approval` |
 | 2 | Untrusted author gets an auto-approval | Untrusted sections may use `on_clean: comment` or `await`, never `approve`; `validate` rejects `approve` there, and publication never approves an untrusted author without the user | `validate` rule and engine behaviour; test `clean_review_of_an_untrusted_author_is_never_approved_without_the_user` |
-| 3 | Prompt injection through the diff, description, comments or files | Prompts declare PR content as data; reviewer runs are read-only and keep out the MCP servers of the host's agent configuration (Claude Code runs with `--strict-mcp-config` and no `--mcp-config`, Codex with `--ignore-user-config`), so injected text reaches no mail, chat or autoreview MCP tool registered there; Codex reads no `AGENTS.md` of the checkout (`project_doc_max_bytes=0`); the engine validates the output and publishes it | See [prompt injection](prompt-injection.md); adapter tests `test_claude_arguments_end_with_the_fixed_read_only_tail` and `test_codex_arguments_are_the_fixed_read_only_command` |
+| 3 | Prompt injection through the diff, description, comments or files | Prompts declare PR content as data; reviewer runs are read-only and keep out the MCP servers of the host's agent configuration (Claude Code runs with `--strict-mcp-config` and no `--mcp-config`, Codex with `--ignore-user-config`), so injected text reaches no mail, chat or autoreview MCP tool registered there; Codex reads no `AGENTS.md` of the checkout (`project_doc_max_bytes=0`), lists no skills catalog (`skills.include_instructions=false`), and the Codex adapter refuses a `checkout: head` run whose skill folders differ from the trusted base (`repository_skills`); the engine validates the output and publishes it | See [prompt injection](prompt-injection.md); adapter tests `test_claude_arguments_end_with_the_fixed_read_only_tail`, `test_codex_arguments_are_the_fixed_read_only_command` and `test_head_checkout_refuses_skills_that_codex_would_load` |
 | 4 | Model output forges the review marker or pings people | Output is neutralized: no `@mentions`, no raw HTML, no images that GitHub would fetch, no references to another repository's issues, pull requests or discussions, no link reference definitions, HTML comment delimiters defused | Engine behaviour |
 | 5 | Reviewer reads a GitHub token | Tokens are passed only to the `gh` calls of their repositories, as `GH_TOKEN`; the `gh` and `pohunek` processes autoreview starts inherit no token variable and no pohunek session identity variables | Engine behaviour |
 | 6 | Reviewer reads backend secrets or pohunek profile secrets | The `gh` and `pohunek` processes autoreview starts inherit only an allowlist of variables, never an `AUTOREVIEW_*` variable or an `*_env` name. Review agents run with the pohunek daemon's environment, which autoreview does not control: keep secrets out of it and out of the profile | Engine behaviour for autoreview's processes; the daemon and the profile are the operator's; see [secrets](secrets.md#what-child-processes-receive) |
@@ -135,15 +135,17 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   A host configuration that trusts a review worktree or its repository gives a
   `checkout: head` pull request that file. Another Codex version may load it
   differently; autoreview does not pin one.
-- **A Codex run loads the repository skills of the checkout.** Neither
-  `project_doc_max_bytes=0` nor host trust covers skills: Codex 0.167.0 loads
-  the skills under `.agents/skills/` and `.codex/skills/` of the checkout,
-  lists their names and descriptions in the skills catalog of every turn, and
-  injects the whole `SKILL.md` of a skill that the prompt names. The prompt
-  carries the pull request description and comments, so a `checkout: head`
-  pull request that adds or changes a skill still adds instructions to the
-  Codex reviewer and verifier runs (#454). Use `checkout: base` for authors
-  whose skills must not reach a Codex review.
+- **A Codex run loads the repository skills that the trusted base has.**
+  Codex 0.167.0 loads the skills under `.agents/skills/` and `.codex/skills/`
+  of the checkout without host trust and injects the whole `SKILL.md` of a
+  skill that the prompt names; no Codex setting turns that off. The adapter
+  drops the skills catalog and refuses a `checkout: head` run whose skill
+  folders add or change a skill against the trusted base (#454), so only skills
+  of the base branch reach a run. It also refuses a head whose skill folders
+  hold a symbolic link, even one that the base has, and a head that still has
+  the older copy of a skill that the base branch changed after the fork, until
+  the pull request merges or rebases onto the base branch. Another Codex
+  version may load skills from other places; autoreview does not pin one.
 - **Model mistakes.** A reviewer can miss a bug or invent one. The verifier
   reduces false blocking findings and the human approval step catches the rest,
   but neither is a guarantee.

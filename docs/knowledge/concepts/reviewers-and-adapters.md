@@ -75,7 +75,8 @@ updated (see below); a rollback of the engine needs no reinstall.
   the nonce, and writes it into every marker:
   `[autoreview-codex/v2 <nonce> result:<base64>]`,
   `[autoreview-codex/v2 <nonce> reason:<base64>]`,
-  `[autoreview-codex/v2 <nonce> refused:head_unavailable]` and
+  `[autoreview-codex/v2 <nonce> refused:head_unavailable]`,
+  `[autoreview-codex/v2 <nonce> refused:repository_skills]` and
   `[autoreview-codex/v2 <nonce> exited with status N]`. The engine reads only
   the markers with the nonce of the request, so markers that the Codex
   transcript prints, for example while the model pauses, never pass for the
@@ -94,7 +95,8 @@ updated (see below); a rollback of the engine needs no reinstall.
   `[autoreview-codex/v1 result:<base64>]` and so on, and a request without the
   line in the legacy markers `[pohunek-codex-review-result-v1:<base64>]`,
   `[pohunek-codex-review-reason-v1:<base64>]`,
-  `[pohunek-codex-review-refused-v1:head_unavailable]` and
+  `[pohunek-codex-review-refused-v1:head_unavailable]`,
+  `[pohunek-codex-review-refused-v1:repository_skills]` and
   `[pohunek-codex-review exited with status N]`. A nonce line under either, a
   second protocol line or nonce line, a missing or malformed nonce under
   `autoreview-codex/v2`, or another name stops the run with status 64 and the
@@ -265,15 +267,22 @@ managed configuration. Codex reads the `AGENTS.md` files of the checkout as
 instructions unless the project is marked untrusted, so the adapter passes
 `project_doc_max_bytes=0` and Codex reads none (`codex-rs/core/src/agents_md.rs`).
 The prompt tells the reviewer to read the guidance from the trusted base.
-Skills are not covered: Codex 0.167.0 loads the repository skills of the
-checkout (`.agents/skills/` and `.codex/skills/`) without host trust. Every
-turn lists their names and descriptions in the available-skills catalog, and a
-prompt that names a skill gets its whole `SKILL.md` as instructions
-(`codex-rs/core/src/session/turn_context.rs`, `codex-rs/core/src/session/turn.rs`).
-The prompt carries the pull request description and comments, so a
-`checkout: head` pull request that adds or changes a skill still adds
-instructions to a Codex run; #454 tracks this. This is checked against Codex
-0.167.0 only; autoreview does not pin a Codex version.
+Codex 0.167.0 also loads the repository skills of the checkout without host
+trust: `.agents/skills/` and `.codex/skills/` of every directory from the
+project root to the working directory, through folder links
+(`codex-rs/ext/skills/src/host_roots.rs`, `loader/host.rs`). Every turn lists
+them in the available-skills catalog, and a prompt that names a skill gets its
+whole `SKILL.md` as instructions (`codex-rs/core/src/session/turn.rs`). The
+adapter passes `skills.include_instructions=false`, which drops the catalog
+only. On a `checkout: head` run it therefore compares those folders with the
+trusted base before Codex starts and refuses the run with
+`refused:repository_skills` when the head adds or changes a path there, links
+one, or the worktree holds an ignored file there; a deleted skill is no
+refusal (#454). No `features.skip_host_skill_discovery` is passed: the app
+server that `codex exec` runs always installs a host skill provider, which
+keeps discovery on (`codex-rs/app-server/src/extensions.rs`). A `checkout: base`
+run reads the skills of the base branch. This is checked against Codex 0.167.0
+only; autoreview does not pin a Codex version.
 
 Configuration comes from the profile and a file next to the program, never from
 a default in the code:
@@ -339,7 +348,8 @@ status 64 on a host without it. It has two parts:
     with `git diff <base>...<head>` and `git show <head>:<path>`.
 
   It runs `codex exec` once with `--sandbox read-only`,
-  `approval_policy="never"`, `project_doc_max_bytes=0`, `--ignore-user-config`,
+  `approval_policy="never"`, `project_doc_max_bytes=0`,
+  `skills.include_instructions=false`, `--ignore-user-config`,
   `--ignore-rules`, `--ephemeral` and an output schema. It checks the report (status `completed`,
   the reviewed head, a blocking flag on every finding, well-formed prior
   findings, the result limit) and prints it as one frame,
@@ -386,6 +396,12 @@ status 64 on a host without it. It has two parts:
   `[autoreview-codex/v2 <nonce> refused:head_unavailable]` comes right before the
   exit line, and the engine stops the review with `review_head_unavailable`
   without a fresh session.
+  A `head` checkout whose skill folders add or change a skill that the trusted
+  base lacks (see [the Claude adapter](#the-claude-adapter) section) gets the
+  line `[autoreview-codex/v2 <nonce> refused:repository_skills]` right before
+  the exit line, before Codex starts. The engine reads it as
+  `review_result_invalid`, so each fresh session is refused the same way and
+  nothing is published.
   An invalid argument, Codex path file or input frame, or a host without
   Linux's `PR_SET_CHILD_SUBREAPER`, stops the adapter before that: it prints
   the reason and exits with status 64 at once, without the exit line.

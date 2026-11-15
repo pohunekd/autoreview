@@ -233,6 +233,8 @@ missing head is `review_result_invalid`:
 | `review checkout HEAD does not descend from the trusted pull request base`, `trusted pull request base is unavailable in the review checkout` | The base branch was force-pushed since GitHub recorded the pull request's base | A push to the pull request (or a rebase) records the new base; then `autoreview retry` |
 | `review checkout HEAD is the pull request head or contains it` | A `base` request in a worktree at the pull request code | Check the pipeline's `checkout` and the session's branch on the review host |
 | `review checkout is not clean`, `review checkout HEAD changed during the review` | Something changed the worktree before or during the run | Find the process that writes into the reviewer worktree |
+| `review checkout adds or changes repository skills that Codex would load` | A Codex `head` request whose `.agents/skills/` or `.codex/skills/` (of the checkout root or a directory down to the working directory) adds or changes a path against the trusted base, holds a symbolic link, or has an ignored file. The line `refused:repository_skills` comes right before the exit line, and every fresh session is refused the same way | Review such pull requests on a `checkout: base` pipeline. When the head only has an older copy of a skill that the base branch changed, merge or rebase the pull request onto the current base branch and push |
+| `review checkout skills are unavailable`, `review checkout directory is unavailable` | Git could not list the skill folders of a Codex `head` checkout | Run `git status` in the reviewer worktree on the review host |
 
 For a Claude refusal, the engine logs the message in the `error` field of the
 warnings "retrying reviewer after unusable output" and "rejecting reviewer
