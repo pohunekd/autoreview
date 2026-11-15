@@ -189,3 +189,82 @@ pub(crate) async fn run(
         hosts: reports,
     })
 }
+
+/// Returns the git output of every repository of `host`, or why the host is skipped.
+///
+/// The host must be the daemon of this machine, so that the repository roots it reports are
+/// paths here.
+async fn list_host(
+    config: &Config,
+    cancel: &CancellationToken,
+    git: &str,
+    host: &str,
+) -> Result<Vec<Listing>, String> {
+    let roots = match host_is_local(config, cancel, host).await {
+        Ok(true) => project_roots(config, cancel, host).await,
+        Ok(false) => {
+            tracing::warn!(host, "prune host skipped: not local");
+            return Err(HOST_NOT_LOCAL.to_owned());
+        }
+        Err(error) => Err(error),
+    };
+    let roots = roots.map_err(|error| {
+        tracing::warn!(host, error = %error, "prune host skipped");
+        error_code(&error).to_owned()
+    })?;
+    let mut listings = Vec::new();
+    for path in roots {
+        let output = match branch_refs(config, cancel, git, &path).await {
+            Ok(refs) => worktrees(config, cancel, git, &path)
+                .await
+                .map(|trees| (refs, trees)),
+            Err(error) => Err(error),
+        };
+        listings.push(Listing { path, output });
+    }
+    Ok(listings)
+}
+
+/// Plans the branches of one repository; a repository whose git calls failed has none.
+fn plan_repository(host: &str, listing: Listing, rules: &Rules<'_>) -> RepositoryReport {
+    let (refs, trees) = match listing.output {
+        Ok(output) => output,
+        Err(error) => {
+            let path = listing.path.as_str();
+            tracing::warn!(host, repository = path, error = %error, "prune repository skipped");
+            return RepositoryReport {
+                error: error_code(&error).to_owned(),
+                path: listing.path,
+                branches: Vec::new(),
+            };
+        }
+    };
+    RepositoryReport {
+        branches: plan::plan(&refs, &trees, rules),
+        path: listing.path,
+        error: String::new(),
+    }
+}
+
+/// Returns `pohunek.hosts`, then each other host that a route override names, without repeats.
+///
+/// An override, also an `untrusted` one, may name a host that `pohunek.hosts` does not list.
+fn review_hosts(config: &Config) -> Vec<String> {
+    let mut hosts = config.pohunek_hosts.clone();
+    let routes = config.route_overrides.values();
+    for route in routes.chain(config.untrusted_route_overrides.values()) {
+        if !hosts.contains(&route.host) {
+            hosts.push(route.host.clone());
+        }
+    }
+    hosts
+}
+
+/// Returns the report of a skipped host.
+fn skipped(host: String, reason: String) -> HostReport {
+    HostReport {
+        host,
+        skipped: reason,
+        repositories: Vec::new(),
+    }
+}
