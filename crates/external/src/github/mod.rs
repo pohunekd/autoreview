@@ -8,6 +8,7 @@
 mod candidates;
 mod discussion;
 mod files;
+mod guard;
 mod issues;
 mod permission;
 mod pull_request;
