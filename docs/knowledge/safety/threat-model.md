@@ -135,6 +135,15 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   A host configuration that trusts a review worktree or its repository gives a
   `checkout: head` pull request that file. Another Codex version may load it
   differently; autoreview does not pin one.
+- **A Codex run loads the repository skills of the checkout.** Neither
+  `project_doc_max_bytes=0` nor host trust covers skills: Codex 0.167.0 loads
+  the skills under `.agents/skills/` and `.codex/skills/` of the checkout,
+  lists their names and descriptions in the skills catalog of every turn, and
+  injects the whole `SKILL.md` of a skill that the prompt names. The prompt
+  carries the pull request description and comments, so a `checkout: head`
+  pull request that adds or changes a skill still adds instructions to the
+  Codex reviewer and verifier runs (#454). Use `checkout: base` for authors
+  whose skills must not reach a Codex review.
 - **Model mistakes.** A reviewer can miss a bug or invent one. The verifier
   reduces false blocking findings and the human approval step catches the rest,
   but neither is a guarantee.

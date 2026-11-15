@@ -264,8 +264,16 @@ Do not mark a review worktree or its repository trusted in the system or
 managed configuration. Codex reads the `AGENTS.md` files of the checkout as
 instructions unless the project is marked untrusted, so the adapter passes
 `project_doc_max_bytes=0` and Codex reads none (`codex-rs/core/src/agents_md.rs`).
-The prompt tells the reviewer to read the guidance from the trusted base. This
-is checked against Codex 0.167.0 only; autoreview does not pin a Codex version.
+The prompt tells the reviewer to read the guidance from the trusted base.
+Skills are not covered: Codex 0.167.0 loads the repository skills of the
+checkout (`.agents/skills/` and `.codex/skills/`) without host trust. Every
+turn lists their names and descriptions in the available-skills catalog, and a
+prompt that names a skill gets its whole `SKILL.md` as instructions
+(`codex-rs/core/src/session/turn_context.rs`, `codex-rs/core/src/session/turn.rs`).
+The prompt carries the pull request description and comments, so a
+`checkout: head` pull request that adds or changes a skill still adds
+instructions to a Codex run; #454 tracks this. This is checked against Codex
+0.167.0 only; autoreview does not pin a Codex version.
 
 Configuration comes from the profile and a file next to the program, never from
 a default in the code:
