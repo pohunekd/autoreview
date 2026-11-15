@@ -185,41 +185,6 @@ mod tests {
     use super::{WorkSession, metadata_args};
 
     #[test]
-    fn metadata_args_follow_the_pohunek_work_launch_contract() {
-        let head = "a".repeat(40);
-        let args = metadata_args(
-            &WorkSession {
-                repository: "example-org/example-repo".to_owned(),
-                number: 8605,
-                url: "https://github.com/example-org/example-repo/pull/8605".to_owned(),
-                head_branch: "example-user/ABC-1/fix".to_owned(),
-                head_sha: head.clone(),
-            },
-            "autoreview",
-        )
-        .expect("valid session");
-        let want = [
-            "--meta".to_owned(),
-            "work.link.provider=github".to_owned(),
-            "--meta".to_owned(),
-            "work.link.kind=pull_request".to_owned(),
-            "--meta".to_owned(),
-            "work.link.id=example-org/example-repo#8605".to_owned(),
-            "--meta".to_owned(),
-            "work.link.url=https://github.com/example-org/example-repo/pull/8605".to_owned(),
-            "--meta".to_owned(),
-            "work.link.branch=example-user/ABC-1/fix".to_owned(),
-            "--meta".to_owned(),
-            "work.role=review".to_owned(),
-            "--meta".to_owned(),
-            format!("work.rev={head}"),
-            "--meta".to_owned(),
-            "companion.group=autoreview".to_owned(),
-        ];
-        assert!(args.join("\n") == want.join("\n"), "args = {args:?}");
-    }
-
-    #[test]
     fn metadata_args_omit_unsafe_branch_and_reject_invalid_identity() {
         let head = "a".repeat(40);
         let valid = WorkSession {

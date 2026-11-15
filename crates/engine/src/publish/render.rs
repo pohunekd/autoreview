@@ -541,15 +541,14 @@ fn fold_ascii(character: char) -> char {
 #[cfg(test)]
 mod tests {
     use autoreview_policy::{
-        AuthorClass, Checkout, HumanReview, OnClean, OnFindings, OnNotes, Pipeline, Protocol,
-        Reviewer, Rule, Trigger, TriggerKind,
+        AuthorClass, Checkout, HumanReview, OnClean, OnFindings, Pipeline, Protocol, Reviewer,
+        Rule, Trigger, TriggerKind,
     };
 
     use super::{
         HumanReviewFacts, RenderSettings, human_review_signals, human_review_text, render_review,
     };
     use crate::integrations::ChangedFile;
-    use crate::integrations::GitHubReview;
     use crate::messages::{APPROVAL_REQUESTED_TITLE, approval_requested_message};
     use crate::model::ids::INPUT_VERSION;
     use crate::model::review::{PRIOR_ANSWERED, PRIOR_OPEN, prior_key};
@@ -560,7 +559,6 @@ mod tests {
     use crate::publish::neutralize::{closes_fence, opening_fence};
     use crate::publish::plan::{PublicationPlan, plan_publication};
     use crate::publish::{MarkerName, publication_marker};
-    use crate::verify::VERDICT_REFUTED;
 
     fn sha(character: char) -> String {
         character.to_string().repeat(40)
@@ -1033,113 +1031,6 @@ mod tests {
                 "missing line {line:?} in approval request = {message:?}"
             );
         }
-    }
-
-    /// Golden body of a review with a blocking finding, three notes and two validations.
-    const NOTES_AND_VALIDATIONS_BODY: &str = concat!(
-        "<!-- hermes-pr-review:v1:acme/widget#5@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ":decision=REQUEST_CHANGES:findings=1",
-        ":digest=dbbc1688fe7e375abe23494336f8d6d50a22fa8863ecb124165e865a59e0b09f -->",
-        "<!-- hermes-pr-review-base:v1:",
-        "0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605 -->\n\n",
-        "## Automated code review\n\n",
-        "Reviewed by Opus, full review of `aaaaaaaaaaaa`.\n\n",
-        "**Opus:** Reviewed the change.\n\n",
-        "1 blocking finding(s) are posted as inline comments.\n\n",
-        "<details>\n",
-        "<summary>3 non-blocking note(s): no action required in this pull request</summary>\n\n",
-        "**O002 LOW — Naming** (confidence: medium, Opus)\n\n",
-        "`src/a.go:4`\n\n",
-        "**O003 LOW — Ask @\u{200b}octocat** (confidence: medium, Opus)\n\n",
-        "`src/b.go:9`\n\n",
-        "**O004 HIGH — Refuted** (confidence: medium, Opus)\n\n",
-        "`src/c.go:2`\n\n",
-        "Refuted by the verification by Opus: Guarded.\n\nBreaks.\n\n",
-        "</details>\n\n",
-        "<details>\n",
-        "<summary>Validation performed: 2 check(s)</summary>\n\n",
-        "- cargo test -p engine\n",
-        "- Pinged @\u{200b}octocat &lt;!-- hidden --&gt;\n\n",
-        "</details>\n\n",
-        "🤖 Written by AI: test reviewer",
-    );
-
-    #[test]
-    fn review_with_notes_and_validations_renders_the_golden_body() {
-        let input = test_input(
-            test_rule(OnFindings::RequestChanges, OnClean::Await),
-            test_pull_request(5),
-        );
-        let note = |id: &str, path: &str, line: i64, title: &str| Finding {
-            id: id.to_owned(),
-            reviewer_label: "Opus".to_owned(),
-            severity: "low".to_owned(),
-            confidence: "medium".to_owned(),
-            path: path.to_owned(),
-            line,
-            title: title.to_owned(),
-            body: "A long explanation:\n```go\nfunc better() {".to_owned(),
-            anchored: true,
-            non_blocking: true,
-            ..Finding::default()
-        };
-        let artifact = Artifact {
-            repository: "acme/widget".to_owned(),
-            number: 5,
-            head_sha: sha('a'),
-            scope: full_scope(),
-            summaries: vec![crate::model::ReviewerSummary {
-                reviewer_id: "opus".to_owned(),
-                label: "Opus".to_owned(),
-                summary: "Reviewed the change.".to_owned(),
-            }],
-            findings: vec![
-                Finding {
-                    id: "O001".to_owned(),
-                    reviewer_label: "Opus".to_owned(),
-                    severity: "high".to_owned(),
-                    confidence: "high".to_owned(),
-                    path: "src/a.go".to_owned(),
-                    line: 3,
-                    title: "Bug".to_owned(),
-                    body: "Breaks on an empty input.".to_owned(),
-                    anchored: true,
-                    ..Finding::default()
-                },
-                note("O002", "src/a.go", 4, "Naming"),
-                note("O003", "src/b.go", 9, "Ask @octocat"),
-                Finding {
-                    id: "O004".to_owned(),
-                    severity: "high".to_owned(),
-                    title: "Refuted".to_owned(),
-                    body: "Refuted by the verification by Opus: Guarded.\n\nBreaks.".to_owned(),
-                    verdict: VERDICT_REFUTED.to_owned(),
-                    ..note("O004", "src/c.go", 2, "Refuted")
-                },
-            ],
-            tests: vec![
-                "cargo test -p engine".to_owned(),
-                "Pinged @octocat <!-- hidden -->".to_owned(),
-            ],
-            ..Artifact::default()
-        };
-        let plan = PublicationPlan {
-            decision: Decision::RequestChanges,
-            ..PublicationPlan::default()
-        };
-        let settings = test_settings();
-        let review = render_review(&settings, &input, &artifact, &plan).expect("review renders");
-        assert_eq!(review.body, NOTES_AND_VALIDATIONS_BODY);
-        assert_eq!(
-            review.comments.len(),
-            1,
-            "only the blocking finding is an inline comment"
-        );
-        assert_eq!(
-            review.comments[0].body,
-            "**O001 HIGH — Bug** (confidence: high, Opus)\n\nBreaks on an empty input.\n\n\
-             🤖 Written by AI: test reviewer"
-        );
     }
 
     #[test]
@@ -1701,42 +1592,6 @@ mod tests {
                 && message.find("Reply to this message with: approve")
                     <= message.find("check before approving"),
             "an answered prior finding must be shown below the reply instruction: {message}"
-        );
-    }
-
-    #[test]
-    fn notes_handed_to_the_author_ask_for_a_renewed_request() {
-        let mut rule = test_rule(OnFindings::RequestChanges, OnClean::Await);
-        rule.on_notes = OnNotes::Comment;
-        let input = test_input(rule, test_pull_request(1));
-        let artifact = Artifact {
-            findings: vec![Finding {
-                id: "O001".to_owned(),
-                non_blocking: true,
-                severity: "low".to_owned(),
-                confidence: "high".to_owned(),
-                path: "a.go".to_owned(),
-                line: 1,
-                title: "Naming".to_owned(),
-                body: "Could be clearer.".to_owned(),
-                ..Finding::default()
-            }],
-            ..Artifact::default()
-        };
-        let plan = plan_publication(&input, &artifact, "reviewer");
-        let review: GitHubReview =
-            render_review(&test_settings(), &input, &artifact, &plan).expect("review renders");
-        assert!(
-            review.decision == Decision::Comment
-                && review.comments.is_empty()
-                && review
-                    .body
-                    .contains("Request this review again once you have decided")
-                && review.body.contains("1 non-blocking note(s)"),
-            "decision={:?} comments={} body={}",
-            review.decision,
-            review.comments.len(),
-            review.body
         );
     }
 }

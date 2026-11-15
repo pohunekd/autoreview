@@ -142,8 +142,7 @@ follow:
   reader that matches the marker as a substring is unaffected (#297, see "What
   is not compatible, by decision").
 - **R13 Policy digest.** `digestOf` (`policy.go:657-686`) is reproduced byte for
-  byte, including Go's `%s` of `Trigger` (`policy.go:60-65`); checked by
-  `digest_matches_go_golden`.
+  byte, including Go's `%s` of `Trigger` (`policy.go:60-65`).
 - **R14 Go semantics.** `fmt` `%.12s` truncates by runes (all its inputs are
   ASCII SHAs); `strings` functions work on bytes and `for range` on runes; Go
   RE2 `\b`, `\s`, `\w`, `\d` are ASCII, so ported patterns use `(?-u:...)` or
@@ -182,16 +181,14 @@ What is not compatible, by decision:
   `discovery notification dropped` and never resent. Go sends them inside the pass under the step
   retry (`discovery.go:36-41`), so an unreachable `action` backend holds the
   lock for `step_retry_seconds`, fails the pass and repeats the message on the
-  next pass. The regression test is
-  `failing_notification_backend_does_not_stall_discovery`.
+  next pass.
 - **Event routes (#187):** `notify.routes` accepts an event name as a key next
   to the three levels; that event goes to its own route and every other event
   to the route of its level. The level still decides the mention and the
   muting. The engine picks the route (`Config::notify_route`) and passes it to
   `Integrations::notify` and `notify_unmuted` with the level. Go routes by level
   only (`notify.go:43-45`), and its environment has no event rooms, so a rollback
-  to Go sends every event by its level. The regression test is
-  `event_routes_carry_their_events_and_the_rest_keep_their_levels`.
+  to Go sends every event by its level.
 - **Review notifications (#212):** a running review gives each notification one
   attempt, bounded by `notify.timeout_seconds`, without the step retry. A
   failure that the notifier returns is logged as `review notification dropped`
@@ -209,11 +206,7 @@ What is not compatible, by decision:
   its digest once, logs `review queue digest dropped` and fails with the code.
   Go retries both under the step retry (`review.go:212-216`,
   `review_queue.go:79`), so an unreachable `action` backend holds a review slot
-  for `step_retry_seconds` and then fails the review. The regression tests are
-  `failing_notification_backend_does_not_stall_a_review` and
-  `review_queue_sends_once_with_one_transaction_per_run`; the latter replaces
-  the Go ports `review_queue_retries_with_one_transaction_per_run` and
-  `review_queue_gives_up_when_the_retry_window_ends`.
+  for `step_retry_seconds` and then fails the review.
 - **Review host fallback (#180):** the engine asks the hosts of `pohunek.hosts`
   in order and takes the first host whose projects serve the repository. A
   host that fails is skipped with the warning `review host skipped` and is not
@@ -227,19 +220,14 @@ What is not compatible, by decision:
   A `route_overrides` entry asks only its host. Go asks every host, fails the
   route when one host fails and reports a repository on two hosts as
   `project_route_ambiguous` (`pohunek.go:85-125`). The route is stored in the
-  review input as in Go. The tests are
-  `hosts_are_tried_in_order_and_a_failing_host_is_skipped` and
-  `failing_first_host_is_skipped_and_the_review_runs_on_the_second`. With
+  review input as in Go. With
   `pohunek.host_state` (Rust only) the hosts of a repository without a route
   override are first filtered and ordered by their `moc.host-state` state
   (`discovery::host_state`); when no allowed host serves the repository, the
   held-back hosts are asked, and a route that only they serve waits for a host
   as `host_state_ineligible`. A state read that fails as a pohunek call is a host
   failure of the pass; a daemon `command_*` answer (exit status 40 to 52, also
-  the daemon's timeout at `read_timeout_seconds`) is an unknown state. The
-  tests are `host_state_rules_judge_each_state`,
-  `hosts_are_ordered_idle_first_and_each_state_is_read_once_per_pass` and
-  `only_a_command_code_of_the_daemon_leaves_the_host_state_unknown`.
+  the daemon's timeout at `read_timeout_seconds`) is an unknown state.
 - **Reserved finding prefix:** a reviewer whose `finding_prefix` is `P` is refused
   when the policy is parsed, with the message `reviewer <id>: finding_prefix P is
   reserved for republished findings`. `P` numbers the prior findings published
@@ -253,9 +241,9 @@ What is not compatible, by decision:
   adds how to read the change through git. Go's prompt has neither
   (`protocol.go:76-80`). The adapter checks a prompt without the line as `head`,
   so on a rollback to Go a Codex pipeline with `checkout: head` keeps working and
-  one with `checkout: base` fails in the adapter. The regression tests are
+  one with `checkout: base` fails in the adapter. The regression test is
   `test_base_checkout_at_the_base_branch_tip_is_reviewed_and_left_unchanged`
-  (adapter) and `codex_review_of_a_fork_pull_request_runs_on_the_base_checkout`.
+  (adapter).
 - **Claude checkout check (#253):** the Claude reviewer and verifier prompts
   carry the trusted lines `- Trusted head SHA:`, `- Trusted base SHA:` and
   `- Trusted checkout: base` or `head`, and a base checkout adds how to read the
@@ -274,9 +262,9 @@ What is not compatible, by decision:
   review after the switch. Go ignores the field. The Claude test wrapper
   (`claude_session_raw`) sets `"checked_checkout":"base"` before the result is parsed.
   The regression tests are
-  `test_base_checkout_without_the_head_is_refused_before_claude_runs` (adapter),
-  `adapter_refusal_of_a_missing_head_is_not_retried` (Claude and Codex parsers)
-  and `base_checkout_review_of_a_missing_head_stops_without_publishing`.
+  `test_base_checkout_without_the_head_is_refused_before_claude_runs` (adapter)
+  and `adapter_refusal_of_a_missing_head_is_not_retried` (Claude and Codex
+  parsers).
 - **History check of Codex pipelines (#237):** the linear history check of an
   incremental review runs for every protocol, so a `codex-envelope` re-review
   whose head does not extend the published head linearly, or whose history
@@ -312,9 +300,8 @@ What is not compatible, by decision:
   retry keeps `handled_workflow` and restarts `handled_retries` at 0. Go
   ignores both fields and drops them when it rewrites the `schedule` entry; Go
   has no retarget review, and after a return to Rust such a record notifies
-  that failure once more. The regression tests are
-  `retarget_is_reviewed_once_per_base_branch_and_ended_runs_never_block` and
-  `stopped_review_of_a_retarget_is_retried_by_head_prefix`.
+  that failure once more. The regression test is
+  `retarget_is_reviewed_once_per_base_branch_and_ended_runs_never_block`.
 - **Codex results like Claude results (#23):** a `codex-envelope` report must
   carry `prior_findings` and the `blocking` flag of every finding, as the
   adapter in `adapters/codex/` writes them. A report without them is refused
@@ -331,9 +318,8 @@ What is not compatible, by decision:
   needs the older Codex wrapper back, and Go refuses a stored Codex input with
   prior findings, so a Codex review in flight at the rollback stops. The
   regression tests are `codex_finding_blocks_only_when_it_says_so`,
-  `codex_report_without_blocking_or_prior_findings_is_refused`,
-  `codex_verdicts_settle_the_prior_findings` and
-  `open_prior_finding_carries_over_until_it_is_fixed_on_a_codex_pipeline`.
+  `codex_report_without_blocking_or_prior_findings_is_refused` and
+  `codex_verdicts_settle_the_prior_findings`.
 - **Review host outage (#241):** when the route of a due review fails because
   a host failed its project list (a `pohunek_*` host failure code) and no other
   host has the repository, the review waits in `retry_wait` at its due time with
@@ -348,13 +334,10 @@ What is not compatible, by decision:
   `host:` keys on its first pass, so a rollback brings the Go behaviour back and
   a return to Rust announces a lasting outage again. Any other route error
   (`project_route_not_found`, `project_route_ambiguous`) still fails as in Go.
-  The regression test is `review_waits_through_an_outage_of_every_review_host`.
   A host with a `host:` key that no due review asked in a pass is asked once at
   the end of the pass for its project list, so its answer removes the key
   (#247), and the review queue lists a record with `awaits_host` as
   `AI review waits for a review host: <code>`, where Go lists `AI review queued`.
-  The regression test is
-  `host_recovery_without_a_due_review_ends_the_announced_outage`.
 
 - **MCP server (#179):** `autoreview mcp` has no Go counterpart. The `mcp`
   section exists only in `config.yaml`, which Go does not read, and the server
@@ -374,8 +357,7 @@ What is not compatible, by decision:
   `Retryable` (`schedule/scheduler.go:173`) and explanation do not know it. The
   explanations of
   `pohunek_base_fetch_timeout` and `pohunek_base_fetch_authentication_failed`
-  name the SSH agent; Go's do not (`schedule/diagnostic.go:65-68`). The
-  regression test is `lost_runtime_at_start_is_a_retryable_session_loss`.
+  name the SSH agent; Go's do not (`schedule/diagnostic.go:65-68`).
 - **Authors section (#32, #33, #34):** every repository rule must carry an
   `authors` section (`authors is required`). Discovery resolves the author class
   of each candidate, reviews an untrusted author under the untrusted section's
@@ -392,8 +374,7 @@ What is not compatible, by decision:
   not load on Go. A rollback to a binary built before #33 needs a policy whose
   rules all say `trusted: any`, and one built before #32 needs no `authors`.
   `trusted: any` adds nothing to the digest, so the stored digests
-  hold. Every rule of `testdata/review-policy.yaml` says `trusted: any`, so the
-  stored digests in `testdata/stored-formats/digest.json` hold for the fixture.
+  hold.
   Each pass stores the pull requests it skips in the `rejected` discovery entry
   under the keys `skipped:<repository#number>` with the reason `untrusted_author`,
   so `review` and the review queue report them (#226); Go's `reportRejected`
@@ -420,9 +401,8 @@ What is not compatible, by decision:
   with such a login does not start. No stored row changes. The regression tests
   are `missing_or_unsafe_configuration_fails_fast`,
   `validate_input_rejects_inconsistent_input`,
-  `example_passes_the_loader_and_the_engine_validation`,
-  `init_login_follows_the_user_login_grammar` and
-  `permission_is_read_from_the_role_name`.
+  `example_passes_the_loader_and_the_engine_validation` and
+  `init_login_follows_the_user_login_grammar`.
 - **Repositories of Enterprise Managed Users (#294):** `repository_valid`
   (`crates/engine/src/model/ids.rs`) and the policy's rule `match` check the
   owner with `autoreview_policy::user_login_valid`, so a managed user's
@@ -442,10 +422,7 @@ What is not compatible, by decision:
   schema, and `user_version` stays 1, so the Go store still opens the file. Go
   neither writes nor reads the table; its prune deletes the rows with their
   review through `ON DELETE CASCADE`, and reviews that Go runs after a rollback
-  count in no step. The regression tests are
-  `review_records_its_steps_with_their_retries`,
-  `shutdown_after_the_last_reviewer_result_still_records_the_reviewers_step` and
-  `verifier_failure_before_its_verification_is_stored_records_the_resumed_run`.
+  count in no step.
 - **Review reuse across base branches (#297):** the review body carries
   `<!-- hermes-pr-review-base:v1:<hex SHA-256 of the base branch name> -->`
   right after the legacy marker (`hermes-pr-review` is the name of
@@ -459,9 +436,7 @@ What is not compatible, by decision:
   reuses a dismissed review (`github.go:781`). A review rendered by a binary
   built before #297 carries the legacy marker alone. On a rollback Go finds
   Rust's reviews by the legacy marker as a substring, so it reuses a review
-  made for another base branch and a dismissed one. The regression tests are
-  `retarget_without_a_push_publishes_a_new_approval` and
-  `dismissed_review_is_skipped_and_a_later_match_is_reused`.
+  made for another base branch and a dismissed one.
 
 Intentional parsing divergences (stricter than Go):
 

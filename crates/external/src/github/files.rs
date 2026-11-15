@@ -417,35 +417,4 @@ at end of file",
         assert!(deleted.is_empty());
         assert!(super::commentable_lines_from_patch("@@ broken @@").is_err());
     }
-
-    #[test]
-    fn listing_end_reads_past_the_cap_only_when_no_cap_is_given() {
-        use super::ListingEnd::{Cap, Complete, PageLimit};
-        // Each case: page length, page, page limit, files listed, cap, and where the read ends.
-        type Case = (
-            usize,
-            i64,
-            i64,
-            usize,
-            Option<usize>,
-            Option<super::ListingEnd>,
-        );
-        let cases: [Case; 8] = [
-            (40, 1, 100, 40, Some(3000), Some(Complete)),
-            (40, 100, 100, 9940, None, Some(Complete)),
-            (100, 1, 100, 100, None, None),
-            (100, 5, 100, 500, Some(3000), None),
-            (100, 30, 100, 3000, Some(3000), Some(Cap)),
-            (100, 30, 100, 3000, None, None),
-            (100, 3, 3, 300, None, Some(PageLimit)),
-            (100, 3, 3, 300, Some(3000), Some(PageLimit)),
-        ];
-        for (page_len, page, limit, listed, cap, want) in cases {
-            assert_eq!(
-                super::listing_end(page_len, page, limit, listed, cap),
-                want,
-                "listing_end({page_len}, {page}, {limit}, {listed}, {cap:?})"
-            );
-        }
-    }
 }

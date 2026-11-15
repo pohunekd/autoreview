@@ -6,9 +6,9 @@
 // Rust guideline compliant 2026-06-26
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::{Future, ready};
+use std::future::{Future, Ready, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use autoreview_policy::TriggerKind;
 use autoreview_policy::{
@@ -18,8 +18,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Credential;
@@ -41,15 +39,8 @@ use crate::verify::{
     ClaimFinding, ClaimPrior, VERDICT_CONFIRMED, VERDICT_UPHELD, VerificationClaims,
 };
 
-/// Message of both adapters when the pull request head is not in the review checkout.
-const HEAD_UNAVAILABLE_MESSAGE: &str =
-    "trusted pull request head is unavailable in the review checkout";
-
 /// Produces the output of a reviewer session from its request.
 type OutputFn = Arc<dyn Fn(&SessionRequest) -> String + Send + Sync>;
-
-/// Decides whether a session start fails.
-type StartFailFn = Arc<dyn Fn(&SessionRequest) -> Result<(), Error> + Send + Sync>;
 
 /// A notification the engine sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,8 +75,6 @@ pub(crate) struct FakeState {
     pub(crate) policy: Option<Policy>,
     /// Current state of each pull request by `repository#number`.
     pub(crate) current: BTreeMap<String, PullRequest>,
-    /// Read errors of pull requests that left the search, by `repository#number`.
-    pub(crate) lapsed: BTreeMap<String, String>,
     /// Pull requests that were closed, by `repository#number`.
     pub(crate) closed: BTreeSet<String>,
     /// Output of each reviewer session; `None` until a test sets it.
@@ -94,54 +83,32 @@ pub(crate) struct FakeState {
     pub(crate) sessions: BTreeMap<String, SessionRequest>,
     /// Every session that was started, in order.
     pub(crate) started: Vec<SessionRequest>,
-    /// Fails a session start when it returns an error; `None` lets every start succeed.
-    pub(crate) start_fail: Option<StartFailFn>,
-    /// Every start request, failed or not.
-    pub(crate) attempts: Vec<SessionRequest>,
-    /// Session IDs whose removal fails.
-    pub(crate) remove_failing: BTreeSet<String>,
     /// Session IDs that were removed, in order.
     pub(crate) removed: Vec<String>,
     /// Commentable lines that the fake returns.
     pub(crate) commentable: CommentableLines,
     /// Changed files that the fake returns.
     pub(crate) changed: Vec<ChangedFile>,
-    /// Whether the fake's changed-files listing reports a truncation.
-    pub(crate) changed_truncated: bool,
-    /// Number of reads of the changed files.
-    pub(crate) changed_reads: usize,
     /// Discussion that the fake returns.
     pub(crate) discussion: Discussion,
     /// Prior findings of each discussion read, in order.
     pub(crate) discussion_reads: Vec<Vec<PriorFinding>>,
     /// Pull requests whose newer head is a rewritten history, by head SHA.
     pub(crate) rewritten: BTreeSet<String>,
-    /// Head SHAs that the review host's repository lacks, so base checkout runs are refused.
-    pub(crate) missing_heads: BTreeSet<String>,
-    /// Error code that every publication fails with; `None` lets publications succeed.
-    pub(crate) publish_fail: Option<String>,
-    /// Until this instant, reads and searches fail transiently; `None` never fails them.
-    pub(crate) transient_until: Option<Instant>,
     /// Refused candidates that the candidate search returns.
     pub(crate) rejected: Vec<RejectedCandidate>,
     /// Every review submission that was published.
     pub(crate) published: Vec<GitHubReview>,
     /// Head SHA of each review in `published`, in the same order.
     pub(crate) published_heads: Vec<String>,
-    /// Name of the credential that posted each review in `published`, in the same order.
-    pub(crate) publishers: Vec<String>,
     /// Login of the credential that posted each review in `published`, in the same order.
     pub(crate) publisher_logins: Vec<String>,
-    /// Every pull request read, as `repository#number credential`, in order.
-    pub(crate) pull_request_reads: Vec<String>,
     /// Indexes into `published` of the reviews that GitHub dismissed.
     pub(crate) dismissed: BTreeSet<usize>,
     /// Number of lookups of a published review without a post.
     pub(crate) lookups: usize,
     /// Pull requests whose review request a posted review answered, by `repository#number`.
     pub(crate) answered: BTreeSet<String>,
-    /// Gate that every posted review waits on before it returns; `None` holds none.
-    pub(crate) held_publications: Option<Arc<Semaphore>>,
     /// Every notification that was sent.
     pub(crate) notes: Vec<Note>,
     /// Counter of session IDs.
@@ -152,36 +119,6 @@ pub(crate) struct FakeState {
     pub(crate) requests: Vec<ReviewRequest>,
     /// Every queue digest that was posted.
     pub(crate) queued: Vec<QueuedDigest>,
-    /// Number of queue digest send attempts.
-    pub(crate) queue_sends: usize,
-    /// Transaction ID of every send attempt.
-    pub(crate) queue_transactions: Vec<String>,
-    /// Number of leading send attempts that fail transiently.
-    pub(crate) queue_failures: usize,
-    /// Text of the notifications to hold, and the gate they wait on. `None` holds none.
-    pub(crate) held_notes: Option<(String, Arc<Semaphore>)>,
-    /// Error code that every notification fails with; `None` lets notifications succeed.
-    pub(crate) notify_fail: Option<String>,
-    /// Error code that the notifications and queue posts of each backend fail with, by name.
-    pub(crate) backend_fail: BTreeMap<String, String>,
-    /// Number of notification attempts, failed or not.
-    pub(crate) notify_attempts: usize,
-    /// Error code that the project list of each host fails with, keyed by host.
-    pub(crate) host_fail: BTreeMap<String, String>,
-    /// Every host whose project list was asked for, in order.
-    pub(crate) route_queries: Vec<String>,
-    /// State that the host-state call of each host returns, keyed by host; an absent host fails.
-    ///
-    /// The fake stamps each answer with the current time.
-    pub(crate) capacities: BTreeMap<String, HostCapacity>,
-    /// Every host whose state was asked for, in order.
-    pub(crate) capacity_queries: Vec<String>,
-    /// Repository permission of each author, keyed by `repository login`; absent is below write.
-    pub(crate) permissions: BTreeMap<String, Permission>,
-    /// Every permission read, as `repository login`, in order.
-    pub(crate) permission_reads: Vec<String>,
-    /// Error code of each failing permission read, keyed by `repository login`.
-    pub(crate) permission_fail: BTreeMap<String, String>,
     /// Error code of each failing credential's searches, keyed by credential name.
     ///
     /// Its reads fail transiently as `github_request_failed`.
@@ -265,16 +202,7 @@ impl FakeIntegration {
             },
         );
         state.current.insert(key.clone(), pr);
-        state.lapsed.remove(&key);
         state.answered.remove(&key);
-    }
-
-    /// Marks a pull request as lapsed with an error code.
-    pub(crate) fn lapse(&self, pr: PullRequest, code: &str) {
-        let mut state = self.lock();
-        let key = pr.key();
-        state.candidates.remove(&key);
-        state.lapsed.insert(key, code.to_string());
     }
 
     /// Marks a pull request as closed.
@@ -312,84 +240,16 @@ impl FakeIntegration {
         count_notes(&notes, level, fragment) > 0
     }
 
-    /// Records one notification attempt and answers as the Matrix notifier does.
-    ///
-    /// A failure is `notify_fail`, else the entry of `backend` in `backend_fail`. With `muted`,
-    /// a failure of a level other than action that
-    /// the notifier mutes is dropped, as `notify` drops it, and the note is not recorded.
-    fn send_note(
-        &self,
-        backend: &str,
-        notification: &Notification,
-        muted: bool,
-    ) -> impl Future<Output = Result<(), Error>> + Send + use<> {
-        let (level, message) = (notification.level.clone(), notification.text.as_str());
-        let (outcome, gate) = {
-            let mut state = self.lock();
-            state.notify_attempts += 1;
-            let failure =
-                (state.notify_fail.clone()).or_else(|| state.backend_fail.get(backend).cloned());
-            let outcome = match failure {
-                Some(code)
-                    if muted && level != Level::Action && MUTED_CODES.contains(&code.as_str()) =>
-                {
-                    Some(Ok(()))
-                }
-                Some(code) => Some(Err(Error::workflow(code, false, None))),
-                None => None,
-            };
-            if outcome.is_none() {
-                state.notes.push(Note {
-                    level,
-                    backend: backend.to_owned(),
-                    message: message.to_string(),
-                });
-            }
-            let gate = state
-                .held_notes
-                .as_ref()
-                .filter(|(fragment, _)| message.contains(fragment.as_str()))
-                .map(|(_, gate)| Arc::clone(gate));
-            (outcome, gate)
-        };
-        async move {
-            if let Some(outcome) = outcome {
-                return outcome;
-            }
-            if let Some(gate) = gate {
-                // The permit goes back when it drops, so one permit releases every held note.
-                let _permit = gate.acquire().await;
-            }
-            Ok(())
-        }
-    }
-
-    /// Holds every notification that contains `fragment` after it is recorded.
-    ///
-    /// A held notification returns once the returned gate has a permit.
-    pub(crate) fn hold_notes(&self, fragment: &str) -> Arc<Semaphore> {
-        let gate = Arc::new(Semaphore::new(0));
-        self.lock().held_notes = Some((fragment.to_owned(), Arc::clone(&gate)));
-        gate
-    }
-
-    /// Holds every posted review after it is recorded.
-    ///
-    /// A held publication returns once the returned gate has a permit.
-    pub(crate) fn hold_publications(&self) -> Arc<Semaphore> {
-        let gate = Arc::new(Semaphore::new(0));
-        self.lock().held_publications = Some(Arc::clone(&gate));
-        gate
+    /// Records one notification on `backend`; every notification is delivered.
+    fn send_note(&self, backend: &str, notification: &Notification) -> Ready<Result<(), Error>> {
+        self.lock().notes.push(Note {
+            level: notification.level.clone(),
+            backend: backend.to_owned(),
+            message: notification.text.clone(),
+        });
+        ready(Ok(()))
     }
 }
-
-/// Error codes that the Matrix and webhook notifiers drop for a level other than action.
-const MUTED_CODES: [&str; 4] = [
-    "matrix_unavailable",
-    "matrix_request_rejected",
-    "webhook_unavailable",
-    "webhook_request_rejected",
-];
 
 /// Counts notes of a level whose message contains a fragment.
 pub(crate) fn count_notes(notes: &[Note], level: Level, fragment: &str) -> usize {
@@ -409,13 +269,6 @@ impl FakeState {
         let code = self.failing_credentials.get(&credential.name)?;
         Some(Error::workflow(code.clone(), true, None))
     }
-
-    fn transient(&self) -> bool {
-        match self.transient_until {
-            Some(until) => Instant::now() < until,
-            None => false,
-        }
-    }
 }
 
 impl Integrations for FakeIntegration {
@@ -427,7 +280,7 @@ impl Integrations for FakeIntegration {
         let result = {
             let mut state = self.lock();
             state.listings += 1;
-            if state.transient() || state.transient_credentials.contains(&credential.name) {
+            if state.transient_credentials.contains(&credential.name) {
                 Err(transient_error())
             } else if let Some(err) = state.search_error(credential) {
                 Err(err)
@@ -461,12 +314,9 @@ impl Integrations for FakeIntegration {
     ) -> impl Future<Output = Result<PullRequest, Error>> + Send {
         let key = format!("{repository}#{number}");
         let result = {
-            let mut state = self.lock();
-            (state.pull_request_reads).push(format!("{key} {}", credential.name));
-            if state.transient() || state.failing_credentials.contains_key(&credential.name) {
+            let state = self.lock();
+            if state.failing_credentials.contains_key(&credential.name) {
                 Err(transient_error())
-            } else if let Some(code) = state.lapsed.get(&key) {
-                Err(Error::workflow(code.clone(), true, None))
             } else if let Some(pr) = state.current.get(&key) {
                 // The open state is checked before the trigger, as `decode_pull_request` does.
                 if trigger.kind == TriggerKind::ReviewRequested && state.answered.contains(&key) {
@@ -514,17 +364,11 @@ impl Integrations for FakeIntegration {
     fn author_permission(
         &self,
         _cancel: &CancellationToken,
-        repository: &str,
-        login: &str,
+        _repository: &str,
+        _login: &str,
     ) -> impl Future<Output = Result<Option<Permission>, Error>> + Send {
-        let key = format!("{repository} {login}");
-        let mut state = self.lock();
-        let result = match state.permission_fail.get(&key) {
-            Some(code) => Err(Error::workflow(code, true, None)),
-            None => Ok(state.permissions.get(&key).copied()),
-        };
-        state.permission_reads.push(key);
-        ready(result)
+        // The fake holds no permission, so every author reads as below write.
+        ready(Ok(None))
     }
 
     fn check_token(
@@ -549,38 +393,20 @@ impl Integrations for FakeIntegration {
         _repository: &str,
         _sources: &[String],
     ) -> impl Future<Output = Result<Vec<ProjectRoute>, Error>> + Send {
-        let result = {
-            let mut state = self.lock();
-            state.route_queries.push(host.to_owned());
-            match state.host_fail.get(host) {
-                Some(code) => Err(Error::workflow(code.clone(), false, None)),
-                None => Ok(vec![ProjectRoute {
-                    host: host.to_owned(),
-                    project_id: "project".to_owned(),
-                }]),
-            }
-        };
-        ready(result)
+        ready(Ok(vec![ProjectRoute {
+            host: host.to_owned(),
+            project_id: "project".to_owned(),
+        }]))
     }
 
     fn host_capacity(
         &self,
         _cancel: &CancellationToken,
-        host: &str,
+        _host: &str,
         _timeout: Duration,
     ) -> impl Future<Output = Result<HostCapacity, Error>> + Send {
-        let result = {
-            let mut state = self.lock();
-            state.capacity_queries.push(host.to_owned());
-            match state.capacities.get(host) {
-                Some(capacity) => Ok(HostCapacity {
-                    timestamp: OffsetDateTime::now_utc(),
-                    ..capacity.clone()
-                }),
-                None => Err(Error::workflow("pohunek_request_failed", false, None)),
-            }
-        };
-        ready(result)
+        // The fake holds no host state, so every read fails and the state stays unknown.
+        ready(Err(Error::workflow("pohunek_request_failed", false, None)))
     }
 
     fn ensure_session(
@@ -590,38 +416,12 @@ impl Integrations for FakeIntegration {
     ) -> impl Future<Output = Result<SessionIdentity, Error>> + Send {
         let result = {
             let mut state = self.lock();
-            state.attempts.push(request.clone());
-            let fail = state.start_fail.clone();
             let existing = state
                 .sessions
                 .iter()
                 .find(|(_, existing)| existing.name() == request.name())
                 .map(|(id, _)| id.clone());
-            if let Some(fail) = fail {
-                if let Err(error) = fail(request) {
-                    Err(error)
-                } else if let Some(id) = existing {
-                    Ok(SessionIdentity {
-                        host: request.route.host.clone(),
-                        session_id: id,
-                        worker_instance_id: "worker".to_string(),
-                        runtime_generation: "1".to_string(),
-                        reviewer_id: request.reviewer.id.clone(),
-                    })
-                } else {
-                    state.next_session += 1;
-                    let id = format!("s-{}", state.next_session);
-                    state.sessions.insert(id.clone(), request.clone());
-                    state.started.push(request.clone());
-                    Ok(SessionIdentity {
-                        host: request.route.host.clone(),
-                        session_id: id,
-                        worker_instance_id: "worker".to_string(),
-                        runtime_generation: "1".to_string(),
-                        reviewer_id: request.reviewer.id.clone(),
-                    })
-                }
-            } else if let Some(id) = existing {
+            if let Some(id) = existing {
                 Ok(SessionIdentity {
                     host: request.route.host.clone(),
                     session_id: id,
@@ -670,7 +470,7 @@ impl Integrations for FakeIntegration {
                         .output
                         .clone()
                         .expect("a test sets the fake's output before a session runs");
-                    let refusal = adapter_refusal(&request, &state.missing_heads);
+                    let refusal = adapter_refusal(&request);
                     Ok((request, output, refusal))
                 }
             }
@@ -700,21 +500,11 @@ impl Integrations for FakeIntegration {
                 Some("context canceled".into()),
             )));
         }
-        let result = {
-            let mut state = self.lock();
-            if state.remove_failing.contains(&session.session_id) {
-                Err(Error::pohunek_code(
-                    "runtime_supervision_ambiguous",
-                    Box::new(Error::workflow("pohunek_request_failed", false, None)),
-                ))
-            } else {
-                if state.sessions.remove(&session.session_id).is_some() {
-                    state.removed.push(session.session_id.clone());
-                }
-                Ok(())
-            }
-        };
-        ready(result)
+        let mut state = self.lock();
+        if state.sessions.remove(&session.session_id).is_some() {
+            state.removed.push(session.session_id.clone());
+        }
+        ready(Ok(()))
     }
 
     fn list_commentable_lines(
@@ -736,13 +526,9 @@ impl Integrations for FakeIntegration {
         _credential: &Credential,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send {
-        let result = {
-            let mut state = self.lock();
-            state.changed_reads += 1;
-            ChangedFiles {
-                files: state.changed.clone(),
-                truncated: state.changed_truncated,
-            }
+        let result = ChangedFiles {
+            files: self.lock().changed.clone(),
+            truncated: false,
         };
         ready(Ok(result))
     }
@@ -786,42 +572,29 @@ impl Integrations for FakeIntegration {
         // An earlier review is reused when its body carries the marker and it is not dismissed,
         // as the GitHub client finds it. A posted review answers the review request of the
         // login, as on GitHub.
-        let (result, gate) = {
+        let result = {
             let mut state = self.lock();
-            if let Some(code) = state.publish_fail.clone() {
-                (Err(Error::workflow(code, true, None)), None)
-            } else if let Some(index) =
-                state.standing_review(&review.marker, None, &credential.login)
-            {
-                let reused = PublishResult {
+            if let Some(index) = state.standing_review(&review.marker, None, &credential.login) {
+                PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,
                     review_url: format!("{}#review", pull_request.url),
                     reused: true,
-                };
-                (Ok(reused), None)
+                }
             } else {
                 state.published.push(review.clone());
                 state.published_heads.push(pull_request.head_sha.clone());
-                state.publishers.push(credential.name.clone());
                 state.publisher_logins.push(credential.login.clone());
                 state.answered.insert(pull_request.key());
-                let posted = PublishResult {
+                PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: state.published.len() as i64,
                     review_url: format!("{}#review", pull_request.url),
                     reused: false,
-                };
-                (Ok(posted), state.held_publications.clone())
+                }
             }
         };
-        async move {
-            if let Some(gate) = gate {
-                // The permit goes back when it drops, so one permit releases every held review.
-                let _permit = gate.acquire().await;
-            }
-            result
-        }
+        ready(Ok(result))
     }
 
     fn find_published_review(
@@ -886,25 +659,13 @@ impl Integrations for FakeIntegration {
         plain: &str,
         formatted: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        let result = {
-            let mut state = self.lock();
-            state.queue_sends += 1;
-            state.queue_transactions.push(transaction.to_string());
-            if state.queue_sends <= state.queue_failures {
-                Err(Error::workflow("matrix_unavailable", false, None))
-            } else if let Some(code) = state.backend_fail.get(backend).cloned() {
-                Err(Error::workflow(code, false, None))
-            } else {
-                state.queued.push(QueuedDigest {
-                    backend: backend.to_owned(),
-                    transaction: transaction.to_string(),
-                    plain: plain.to_string(),
-                    formatted: formatted.to_string(),
-                });
-                Ok(())
-            }
-        };
-        ready(result)
+        self.lock().queued.push(QueuedDigest {
+            backend: backend.to_owned(),
+            transaction: transaction.to_string(),
+            plain: plain.to_string(),
+            formatted: formatted.to_string(),
+        });
+        ready(Ok(()))
     }
 
     fn notify(
@@ -913,7 +674,7 @@ impl Integrations for FakeIntegration {
         backend: &str,
         notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.send_note(backend, notification, true)
+        self.send_note(backend, notification)
     }
 
     fn notify_unmuted(
@@ -922,7 +683,7 @@ impl Integrations for FakeIntegration {
         backend: &str,
         notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.send_note(backend, notification, false)
+        self.send_note(backend, notification)
     }
 }
 
@@ -1037,46 +798,18 @@ pub(crate) fn request_claims(prompt: &str) -> VerificationClaims {
 
 /// Returns the output of the adapter when it refuses the checkout of `request`.
 ///
-/// Like the adapters in `adapters/`, both protocols refuse a base checkout whose head is in
-/// `missing_heads` as `head_unavailable`. The Codex adapter also reads the checkout from the
-/// one trusted checkout line of the prompt, `head` when there is none, and refuses one that
-/// differs from the session's: no result frame, the exit line with status 64.
-fn adapter_refusal(request: &SessionRequest, missing_heads: &BTreeSet<String>) -> Option<String> {
+/// Like the Codex adapter in `adapters/`, it reads the checkout from the one trusted checkout
+/// line of the prompt, `head` when there is none, and refuses one that differs from the
+/// session's: no result frame, the exit line with status 64.
+fn adapter_refusal(request: &SessionRequest) -> Option<String> {
+    if request.reviewer.protocol != Protocol::CodexEnvelope {
+        return None;
+    }
     let session = if request.checkout == Checkout::Head {
         "head"
     } else {
         "base"
     };
-    let missing = session == "base" && missing_heads.contains(&request.pull_request.head_sha);
-    match request.reviewer.protocol {
-        Protocol::ClaudeStructured => missing.then(claude_head_refusal),
-        Protocol::CodexEnvelope => codex_checkout_refusal(request, session, missing),
-        Protocol::Unset | Protocol::Other(_) => None,
-    }
-}
-
-/// Returns the refusal envelope of the Claude adapter for a head that is not in the repository.
-fn claude_head_refusal() -> String {
-    let wrapper = go_json(&json!({
-        "protocol": CLAUDE_RESULT_PROTOCOL,
-        "mode": "structured",
-        "exit_code": 64,
-        "stdout_base64": "",
-        "stderr_base64": STANDARD.encode(format!("claude-adapter: {HEAD_UNAVAILABLE_MESSAGE}\n")),
-        "refusal": "head_unavailable",
-    }))
-    .expect("the fake encodes the Claude refusal");
-    format!("{wrapper}\n")
-}
-
-/// Returns the output of the Codex adapter when it refuses the checkout of `request`.
-///
-/// `session` names the worktree's checkout; `missing` says its head is not in the repository.
-fn codex_checkout_refusal(
-    request: &SessionRequest,
-    session: &str,
-    missing: bool,
-) -> Option<String> {
     let lines: Vec<&str> = request
         .prompt
         .lines()
@@ -1087,16 +820,7 @@ fn codex_checkout_refusal(
         [line] => Some(*line),
         _ => None,
     };
-    if named != Some(session) {
-        return Some("[pohunek-codex-review exited with status 64]\n".to_owned());
-    }
-    missing.then(|| {
-        format!(
-            "codex-adapter: {HEAD_UNAVAILABLE_MESSAGE}\n\n\
-[pohunek-codex-review-refused-v1:head_unavailable]\n\
-[pohunek-codex-review exited with status 64]\n"
-        )
-    })
+    (named != Some(session)).then(|| "[pohunek-codex-review exited with status 64]\n".to_owned())
 }
 
 /// Returns the output of a Codex reviewer run with `findings` and the verdicts `prior`.
@@ -1278,23 +1002,6 @@ fn verifier_output(
             "prior_findings": priors,
         }),
     )
-}
-
-/// Returns a session output that answers verifier requests by the claim verdicts.
-///
-/// Every other request goes to `reviewers`.
-pub(crate) fn verifying(
-    reviewers: impl Fn(&SessionRequest) -> String + Send + Sync + 'static,
-    finding: impl Fn(&ClaimFinding) -> &'static str + Send + Sync + 'static,
-    prior: impl Fn(&ClaimPrior) -> &'static str + Send + Sync + 'static,
-) -> impl Fn(&SessionRequest) -> String + Send + Sync + 'static {
-    move |request: &SessionRequest| {
-        if request.reviewer.id == VERIFIER_REVIEWER_ID {
-            verifier_output(request, &finding, &prior)
-        } else {
-            reviewers(request)
-        }
-    }
 }
 
 /// Policy document of the integration tests: pipelines, repositories and notifications.

@@ -588,14 +588,9 @@ impl GitHub {
 
 #[cfg(test)]
 mod tests {
-    use std::future::Future;
-    use std::pin::pin;
-    use std::task::{Context, Poll, Waker};
-
-    use autoreview_engine::error::Error;
     use autoreview_engine::model::{PriorFinding, PullRequest, prior_key};
 
-    use super::{decode_linear_history, read_discussion, read_linear_history};
+    use super::{DiscussionReader, decode_linear_history};
 
     /// A captured page of the discussion query.
     const CAPTURED_PAGE: &str = concat!(
@@ -636,16 +631,6 @@ mod tests {
     const CAPTURED_INCOMPLETE: &str =
         r#"{"commits":[{"parents":[{"sha":"x"}]}],"status":"ahead","total_commits":300}"#;
 
-    /// Runs a future whose fetches complete on their first poll.
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = pin!(future);
-        let mut context = Context::from_waker(Waker::noop());
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(value) => value,
-            Poll::Pending => panic!("a captured fetch completes on its first poll"),
-        }
-    }
-
     #[test]
     fn discussion_matches_threads_by_review_and_finding_in_both_comment_layouts() {
         let head = "c".repeat(40);
@@ -671,18 +656,13 @@ mod tests {
             author: "colleague".to_owned(),
             ..PullRequest::default()
         };
-        let fetch =
-            |_args: Vec<String>| std::future::ready(Ok::<String, Error>(CAPTURED_PAGE.to_owned()));
-        let discussion = block_on(read_discussion(
-            fetch,
-            &pull_request,
-            &prior,
-            140,
-            "reviewer",
-            "🤖 Written by AI:",
-            5,
-        ))
-        .expect("the captured page reads");
+        let mut reader =
+            DiscussionReader::new(&pull_request, "reviewer", "🤖 Written by AI:", &prior, 140);
+        let step = reader
+            .absorb_page(1, CAPTURED_PAGE)
+            .expect("the captured page reads");
+        assert!(!step.has_next_page);
+        let discussion = reader.finish();
 
         assert_eq!(discussion.threads.len(), 2);
         assert_eq!(discussion.threads[0].key, prior[0].key);
@@ -719,21 +699,16 @@ mod tests {
 
     #[test]
     fn linear_history_needs_an_ahead_head_of_single_parent_commits() {
-        let previous = "a".repeat(40);
-        let head = "c".repeat(40);
         let cases = [
             (CAPTURED_OWN, true),
             (CAPTURED_MERGE, false),
             (CAPTURED_REBASE, false),
             (CAPTURED_INCOMPLETE, false),
+            ("null", false),
         ];
         for (output, want) in cases {
-            let fetch =
-                |_args: Vec<String>| std::future::ready(Ok::<String, Error>(output.to_owned()));
-            let linear = block_on(read_linear_history(fetch, "acme/widget", &previous, &head))
-                .expect("the captured comparison reads");
+            let linear = decode_linear_history(output).expect("the captured comparison decodes");
             assert_eq!(linear, want, "{output}");
         }
-        assert_eq!(decode_linear_history("null").ok(), Some(false));
     }
 }

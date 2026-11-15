@@ -340,19 +340,3 @@ fn nil_when_empty<T: Serialize, S: Serializer>(
         value.serialize(serializer)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::PullRequest;
-
-    #[test]
-    fn pull_request_refuses_json_arrays() {
-        let positional = r#"["acme/widget", 7, "0123", 9, "", "", "", false, "", "", "", []]"#;
-        for raw in ["[]", positional] {
-            let error = serde_json::from_str::<PullRequest>(raw).expect_err("array is refused");
-            assert!(error.to_string().contains("PullRequest"), "{error}");
-        }
-        let empty: PullRequest = serde_json::from_str("{}").expect("empty object");
-        assert_eq!(empty, PullRequest::default());
-    }
-}

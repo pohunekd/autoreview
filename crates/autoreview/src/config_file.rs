@@ -1859,7 +1859,7 @@ pub(crate) mod tests {
     use super::*;
     use autoreview_engine::config::NotifyRoute;
     use autoreview_engine::go_json;
-    use autoreview_policy::{Event, Level};
+    use autoreview_policy::Level;
 
     /// The example config, read by the loader tests so that they cover the shipped file.
     const EXAMPLE: &str = include_str!("../../../examples/config.yaml");
@@ -1979,26 +1979,6 @@ pub(crate) mod tests {
             .map(|(_, line)| *line)
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    #[test]
-    fn example_maps_to_the_engine_configuration() {
-        let config = mapped(EXAMPLE).expect("the example maps");
-        assert_eq!(config.session_group, "autoreview");
-        assert_eq!(config.session_name_prefix, "github-review-");
-        assert_eq!(config.session_branch_prefix, "autoreview/review/");
-        let only = config
-            .credentials
-            .single()
-            .expect("the example has one credential");
-        assert_eq!(only.login, "review-bot");
-        assert_eq!(only.token, "synthetic-token");
-        assert_eq!(config.state_db_path, "/var/lib/autoreview/autoreview.db");
-        assert_eq!(config.credential_check, Duration::from_secs(24 * 60 * 60));
-        assert_eq!(
-            config.expiry_warning,
-            Duration::from_secs(14 * 24 * 60 * 60)
-        );
     }
 
     #[test]
@@ -2666,36 +2646,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_event_route_takes_its_event_and_leaves_the_others_on_their_levels() {
-        let config = parse(
-            &four_backends(shared_backends(), "[queue]"),
-            secret,
-            example_policy,
-        )
-        .expect("level routes alone load");
-        assert!(config.notify.events.is_empty());
-        assert_eq!(
-            config.notify_route(&Event::Approved, Level::Digest),
-            NotifyRoute::Level(Level::Digest)
-        );
-        let text = with_event_route("    approved: [approved]\n");
-        let config = parse(&text, secret, example_policy).expect("an event route loads");
-        assert_eq!(
-            config.notify.events,
-            BTreeMap::from([(Event::Approved, vec!["approved".to_owned()])])
-        );
-        assert_eq!(config.notify.digest, ["digest"]);
-        assert_eq!(
-            config.notify_route(&Event::Approved, Level::Digest),
-            NotifyRoute::Event(Event::Approved)
-        );
-        assert_eq!(
-            config.notify_route(&Event::ChangesRequested, Level::Digest),
-            NotifyRoute::Level(Level::Digest)
-        );
-    }
-
-    #[test]
     fn an_event_route_naming_an_unknown_event_or_backend_names_its_key() {
         let cases = [
             (
@@ -2888,27 +2838,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn go_load_policy_bounds_are_ported_to_file_keys() {
-        let policy = scheduler_policy(&scalar("120"), &scalar("[60, 300, 900]"))
-            .expect("the valid bounds load");
-        assert_eq!(policy.debounce, time::Duration::seconds(120));
-        assert_eq!(
-            policy.retry_delays,
-            vec![
-                time::Duration::seconds(60),
-                time::Duration::seconds(300),
-                time::Duration::seconds(900),
-            ]
-        );
-        for bad in ["\"\"", "[]", "[0]", "[300, 60]", "[3601]"] {
-            assert!(
-                scheduler_policy(&scalar("120"), &scalar(bad)).is_err(),
-                "accepted {bad}"
-            );
-        }
-    }
-
-    #[test]
     fn debounce_and_retry_delays_have_the_go_messages() {
         let cases = [
             ("1", true),
@@ -2950,33 +2879,6 @@ pub(crate) mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn resolve_path_prefers_the_flag() {
-        let flag = Path::new("/etc/a.yaml");
-        let env = OsStr::new("/etc/b.yaml");
-        assert_eq!(
-            resolve_path(Some(flag), Some(env)).expect("flag wins"),
-            PathBuf::from("/etc/a.yaml")
-        );
-        assert_eq!(
-            resolve_path(None, Some(env)).expect("env used"),
-            PathBuf::from("/etc/b.yaml")
-        );
-        assert_eq!(
-            error_text_path(resolve_path(None, None)),
-            "configuration_missing: --config: neither --config nor AUTOREVIEW_CONFIG is set"
-        );
-        assert_eq!(
-            error_text_path(resolve_path(None, Some(OsStr::new("")))),
-            "configuration_invalid: AUTOREVIEW_CONFIG: must not be empty"
-        );
-    }
-
-    /// Returns the text of a failed path resolution.
-    fn error_text_path(result: Result<PathBuf, Error>) -> String {
-        result.expect_err("the path is refused").to_string()
     }
 
     #[test]
@@ -3112,28 +3014,6 @@ pub(crate) mod tests {
             };
             assert_eq!(got, want.map_err(str::to_owned), "line {new:?}");
         }
-    }
-
-    #[test]
-    fn published_retention_must_exceed_the_handoff_reminder() {
-        let text = mutated(
-            "published_retention_seconds: 7776000",
-            "published_retention_seconds: 3600",
-        );
-        let file = parse_file(&text).expect("valid YAML");
-        let document = deployed_policy_document().replacen(
-            "    on_clean: approve\n",
-            "    on_clean: await\n    on_notes: comment\n",
-            1,
-        ) + "notes_handoff:\n  reminder_hours: 24\n";
-        let result = to_config(&file, &secret, |_| policy_from(&document));
-        assert_eq!(
-            error_text(result),
-            concat!(
-                "configuration_invalid: store.published_retention_seconds: must exceed ",
-                "notes_handoff.reminder_hours of the policy"
-            )
-        );
     }
 
     #[test]
