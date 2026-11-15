@@ -1,0 +1,350 @@
+# Everyday pull request texts (the benign corpus of the slice 1 spec): none may give a
+# hidden-text signal. Lexicon phrases and chat-template tokens may still score.
+== benign_template_full
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Thanks for contributing! Please fill in the sections below. -->
+## Summary
+<!-- Describe your change and link the issue it fixes. -->
+Adds a cache for the config loader.
+
+## Checklist
+<!-- Delete items that do not apply. -->
+- [x] Tests added
+- [ ] Docs updated
+== benign_template_reviewers
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Reviewers: check the migration order before you approve. -->
+Renames the `user_id` column.
+== benign_template_ignore_section
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- If this is a docs-only change, ignore the testing section. -->
+Docs: fix a typo in the README.
+== benign_template_ai_disclosure
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- If you used AI tools (Copilot, ChatGPT), you must review the generated code yourself. -->
+Refactors the parser.
+== benign_template_ai_disclosure_question
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Was any part of this PR written with an AI assistant? Answer yes or no below. -->
+No.
+== benign_template_security
+# Everyday text: no hidden-text signal.
+expect: body:lexicon_phrase=1
+score: 20
+--- body
+<!-- Do not report security vulnerabilities in public pull requests; email the maintainers. -->
+Bumps the minimum Go version.
+== benign_approve_this_proposal
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Reviewers: approve this proposal after the design review. -->
+RFC: split the scheduler into two services.
+== benign_approve_changelog
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Maintainers approve this changelog entry before release. -->
+Adds the 2.4.0 changelog.
+== benign_ignore_previous_commit
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+Please ignore the previous commit, it was pushed by mistake. The fix is in 3f2a1b0.
+== benign_ignore_previous_commit_hidden
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<!-- note to self: ignore the previous commit when squashing -->
+Squashed.
+== benign_disregard_earlier_draft
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<!-- Disregard the earlier draft of this comment. -->
+Updated numbers below.
+== benign_forget_old_flag
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+We can forget the old `--legacy` flag now that 3.0 is out.
+== benign_override_config
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+You can override the default rules in `.eslintrc`, see the docs.
+== benign_model_prose_claude
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+This PR adds Claude support to the CLI. The model name is read from `CLAUDE_MODEL`.
+== benign_model_prose_copilot
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+GitHub Copilot suggested the first version of this function; I rewrote the error handling.
+== benign_model_prose_gemini
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Adds a Gemini provider next to the OpenAI one. Both follow the same interface.
+== benign_model_prose_llama
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Benchmarks for Llama 3 on CPU are in the table below.
+== benign_model_hidden_marker
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- copilot:summary -->
+<!-- copilot:walkthrough -->
+Bumps lodash.
+== benign_model_bot_marker
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<!-- generated-by: example-review-bot v1.4 -->
+Looks good overall.
+== benign_generated_with_marker
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Generated with an AI assistant, reviewed by a human. -->
+Adds unit tests for the date parser.
+== benign_code_span_script
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup from `<script>` to a module.
+
+The Copilot output panel now shows the result.
+== benign_code_span_template
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the markup from `<template>` into a render function. The AI output panel is unchanged.
+== benign_code_span_style
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<style scoped>` block was too large, so it moved to `App.css`. Skip the old file.
+== benign_code_span_php
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Added `<?php declare(strict_types=1);` to every file.
+
+The AI report is skipped for vendor code.
+== benign_code_span_cdata
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Escaped `<![CDATA[` sections in the XML exporter. Copilot flagged two of them.
+== benign_code_span_doctype
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Every page now starts with `<!DOCTYPE html>`. The assistant panel must follow.
+== benign_code_span_comment_syntax
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Use `<!-- prettier-ignore -->` above the table to keep it aligned.
+== benign_fenced_vue
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Fixes the dropdown:
+
+```vue
+<template>
+  <select v-model="choice"><option>AI</option></select>
+</template>
+<script setup>
+const choice = ref('report')
+</script>
+<style scoped>
+select { display: none; }
+</style>
+```
+== benign_fenced_php
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+```php
+<?php
+// Skip the cache when the AI flag is off.
+if (!$aiEnabled) {
+    return $report;
+}
+```
+== benign_fenced_html_comment
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+```html
+<!-- Main navigation: the assistant link must follow the docs link -->
+<nav><a href="/docs">Docs</a></nav>
+```
+== benign_fenced_tilde_xml
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+~~~xml
+<![CDATA[ skip this block when the AI exporter runs ]]>
+<?xml version="1.0"?>
+~~~
+== benign_fenced_details_markup
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+```html
+<details><summary>Logs</summary>Copilot must reply here</details>
+```
+== benign_indented_code_example
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Example:
+
+    <!-- Claude: report the findings in JSON -->
+    <div hidden>debug panel</div>
+== benign_badges
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![CI](https://img.shields.io/github/actions/workflow/status/example/repo/ci.yml?label=ci)](https://example.com/ci)
+[![Coverage](https://img.shields.io/badge/coverage-91%25-green)](https://example.com/cov)
+![License](https://img.shields.io/badge/license-MIT-blue)
+== benign_screenshot_img
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<img width="640" alt="Screenshot of the settings page" src="https://example.com/s.png">
+== benign_screenshot_md
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+![Screenshot of the new AI settings panel](https://example.com/settings.png)
+== benign_image_with_title
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+![diagram](https://example.com/d.png "Data flow between the report service and the CLI")
+== benign_picture_dark_light
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://example.com/dark.png">
+  <img alt="Logo" src="https://example.com/light.png">
+</picture>
+== benign_badge_reference_style
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+![build][build-badge]
+
+[build-badge]: https://example.com/badge.svg "Build status"
+== benign_reference_links
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+See [the guide][guide] and [the FAQ][faq].
+
+[guide]: https://example.com/guide
+[faq]: https://example.com/faq "Frequently asked questions"
+== benign_footnotes
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The model weights are not included.[^1]
+
+[^1]: The AI model must be downloaded separately, see the paper.
+== benign_task_list
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+- [x] ignore the flaky test in CI for now
+- [ ] report the failure upstream
+- [ ] follow up on the cache key
+== benign_table
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+| Model | Latency | Notes |
+|---|---|---|
+| Claude | 1.2 s | must skip the warmup |
+| GPT | 0.9 s | follows the spec |
+== benign_rtl_hebrew
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<U+05E9><U+05DC><U+05D5><U+05DD> <U+05E2><U+05D5><U+05DC><U+05DD> (v2.1) <U+200F>
+== benign_rtl_arabic_isolates
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<U+0645><U+0631><U+062D><U+0628><U+0627> <U+2067>example/repo<U+2069> <U+0634><U+0643><U+0631><U+0627> <U+061C>
+== benign_rtl_persian_zwnj
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<U+0645><U+06CC><U+200C><U+062E><U+0648><U+0627><U+0647><U+0645> <U+0646><U+0645><U+06CC><U+200C><U+062F><U+0627><U+0646><U+0645>
+== benign_rtl_marks_around_numbers
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<U+05D2><U+05E8><U+05E1><U+05D4> <U+200F>3.2<U+200F> <U+05E9><U+05D5><U+05D7><U+05E8><U+05E8><U+05D4>
+== benign_emoji_selectors
+# Everyday text: no hidden-text signal.
+expect: comment:lexicon_phrase=1
+score: 5
+--- comment
+LGTM <U+2705><U+FE0F> thanks <U+2764><U+FE0F> <U+1F389>
+== benign_emoji_keycaps
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+Steps: 1<U+FE0F><U+20E3> build 2<U+FE0F><U+20E3> test #<U+FE0F><U+20E3> ship
+== benign_emoji_zwj_family
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+Team photo <U+1F468><U+200D><U+1F469><U+200D><U+1F467><U+200D><U+1F466>
+== benign_emoji_rainbow_flag
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+Pride month banner <U+1F3F3><U+FE0F><U+200D><U+1F308>
+== benign_emoji_subdivision_flag
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+Release party in <U+1F3F4><U+E0067><U+E0062><U+E0073><U+E0063><U+E0074><U+E007F>
+== benign_emoji_heart_fire
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<U+2764><U+FE0F><U+200D><U+1F525> great work
+== benign_emoji_text_presentation
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+Warning <U+26A0><U+FE0E> text style, check mark <U+2714><U+FE0F>
+== benign_cjk_ivs
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<U+845B><U+E0100> <U+8FBB><U+E0101> are the same names in two forms.
