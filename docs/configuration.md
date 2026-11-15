@@ -583,6 +583,36 @@ authentication in front of it when a scraper on another host reads it; see the
 the engine lock, so a second `serve` with the same section fails with
 `metrics_listen_failed`; see [`autoreview serve`](cli.md#autoreview-serve).
 
+## guards
+
+Optional. `guards.text` holds the settings of the prompt-injection guard that a
+policy rule turns on with [`guard`](policy.md#guard). This release reads and
+validates the section, the lexicon file included, but no review runs the guard
+yet; a later release turns it on. When `guards` is present, `guards.text` and
+both its keys are required; `guards:` without a value is refused with
+`configuration_missing: guards.text`. Every command reads the lexicon file once
+at load, so a broken file stops `serve` and `validate` alike.
+
+| Key | Meaning |
+|---|---|
+| `text.max_input_bytes` | Largest amount of pull request text the guard reads for one review, in bytes. From 1 to 4194304 (4 MiB, the size up to which the guard's scan time is measured) |
+| `text.lexicon_file` | Clean absolute path of the phrase lexicon: UTF-8, at most 65536 bytes. Each line is a weight from 1 to 100, whitespace and a phrase; blank lines and lines that start with `#` are skipped. A file without a phrase, or with a weight out of range, a phrase without a letter or digit or a repeated phrase, is refused with the line number |
+
+```yaml
+guards:
+  text:
+    max_input_bytes: 1048576
+    lexicon_file: /etc/autoreview/guard-lexicon.txt
+```
+
+A lexicon file:
+
+```text
+# weight phrase
+40 ignore previous instructions
+25 approve this pull request
+```
+
 ## Cross-key rules
 
 Besides each key's own range, `validate` enforces:
@@ -607,6 +637,9 @@ Besides each key's own range, `validate` enforces:
   after its leading symbols.
 - `publish.marker` is `autoreview` or `hermes-pr-review`; `marker:` without a
   value is refused as missing.
+- A policy rule with [`guard`](policy.md#guard) needs `guards.text`; without it
+  the load fails with
+  `configuration_missing: guards.text: the policy rule for <match> sets guard`.
 
 ## Environment variables
 

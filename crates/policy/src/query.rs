@@ -50,6 +50,15 @@ impl Policy {
         windows.map(AuthorLimit::window).max().unwrap_or_default()
     }
 
+    /// Returns the match pattern of the first rule with a guard section.
+    ///
+    /// `None` means no rule scans pull request text.
+    #[must_use]
+    pub fn guarded_rule(&self) -> Option<&str> {
+        let mut guarded = self.rules.iter().filter(|rule| rule.guard.is_some());
+        guarded.next().map(|rule| rule.match_glob.as_str())
+    }
+
     /// Returns the match patterns of the repository rules, in file order.
     #[must_use]
     pub fn rule_matches(&self) -> Vec<&str> {

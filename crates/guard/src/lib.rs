@@ -49,6 +49,16 @@ pub enum FieldKind {
 }
 
 impl FieldKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [Self; 6] = [
+        Self::Title,
+        Self::Body,
+        Self::CommitMessage,
+        Self::Comment,
+        Self::ReviewThread,
+        Self::Patch,
+    ];
+
     /// Returns the stable identifier of the kind; stored and published, never renamed.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

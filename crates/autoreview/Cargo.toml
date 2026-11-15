@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 autoreview-engine = { path = "../engine" }
 autoreview-external = { path = "../external" }
+autoreview-guard = { path = "../guard" }
 autoreview-policy = { path = "../policy" }
 autoreview-schedule = { path = "../schedule" }
 clap = { workspace = true }

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use crate::author_limit::AuthorLimit;
 use crate::authors::Authors;
+use crate::guard::RuleGuard;
 use crate::human_review::HumanReview;
 
 /// Largest policy file in bytes.
@@ -558,6 +559,11 @@ pub struct Rule {
     /// no signal check before an automatic approval.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub human_review: Option<HumanReview>,
+    /// The text guard of the rule; absent when the rule scans no text.
+    ///
+    /// A stored guard it cannot fully read counts as suspect, see [`RuleGuard`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard: Option<RuleGuard>,
 }
 
 autoreview_go_compat::object_only_serde!(Rule);

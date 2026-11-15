@@ -222,6 +222,7 @@ repositories before their owner wildcard.
 | `on_notes` | Optional. `comment`: a review whose findings are all notes goes to the author as a comment first, see [notes hand-off](knowledge/concepts/decisions.md#notes-hand-off). Pull requests authored by bots skip the hand-off and wait for approval directly |
 | `authors` | Required. Who counts as a trusted author and what an untrusted author gets, see below |
 | `author_limit` | Optional. How many reviews one author may start under the rule in a window, see [author limit](#author-limit). Without it the rule sets no limit |
+| `guard` | Optional. The prompt-injection guard of the rule, see [guard](#guard). No review runs the guard in this release |
 | `human_review` | Optional, needs `on_clean: approve`. The signals that hold a clean review for a person, see [human review signals](#human-review-signals) |
 
 Validation rules:
@@ -392,6 +393,33 @@ author_limit:
 The limit counts reviews per pull request author. It does not know who added
 the label or requested the review.
 
+### Guard
+
+`guard` opts the rule in to the prompt-injection guard, a deterministic scan of
+the pull request text for instructions hidden from a human reader. This release
+validates the section and adds it to the policy digest, but no review runs the
+guard yet; a later release turns it on. Without the key the rule has no guard.
+With it, every field is required, and `guard: null` is an error.
+
+```yaml
+guard:
+  fields: [title, body, commit_message, comment, review_thread, patch]
+  threshold: 100       # 1-4294967295
+  on_suspect: await    # await, comment or log
+```
+
+- `fields`: the pull request texts the guard scans, at least one, each once:
+  `title`, `body`, `commit_message`, `comment`, `review_thread` and `patch`
+  (the added lines of the changed files). Their order does not matter.
+- `threshold`: the guard score from which a pull request counts as suspect.
+  Scores start at 0, so 0 is refused: it would mark every pull request.
+- `on_suspect`: the outcome for a suspect pull request, `await`, `comment` or
+  `log`. Until the guard runs, no value changes a review.
+- A rule with `guard` needs the [`guards.text`](configuration.md#guards)
+  section of the configuration; without it the configuration fails to load.
+- A rule with `guard` changes the policy digest; a policy without one keeps its
+  digest.
+
 ## Drafts of coding agents
 
 Some coding agents open pull requests as drafts and never mark them ready.
@@ -472,3 +500,9 @@ request content itself is always untrusted input. See
 | `author_limit.window_hours must be between 1 and 720` | Set `window_hours`; also shown when it is missing |
 | `author_limit.over must be wait or skip` | Set `over` |
 | `author_limit must be a mapping with reviews, window_hours and over` | Fill in the key, or remove it for no limit |
+| `guard must be a mapping with fields, threshold and on_suspect` | Fill in the key, or remove it for no guard |
+| `guard.fields must name at least one field` | List the texts to scan; also shown when `fields` is missing |
+| `guard.fields: "x" is not one of title, body, commit_message, comment, review_thread, patch` | Use those names, in lowercase |
+| `guard.fields: "x" is listed twice` | List each field once |
+| `guard.threshold must be between 1 and 4294967295` | Set `threshold`; also shown when it is missing |
+| `guard.on_suspect must be await, comment or log` | Set `on_suspect` |
