@@ -67,6 +67,11 @@ VARIABLES = (
     ("POLICY_FILE", "text", "policy_file"),
     ("DEBOUNCE_SECONDS", "integer", "schedule.debounce_seconds"),
     ("RETRY_DELAYS_SECONDS_JSON", "delays", "schedule.retry_delays_seconds"),
+    (
+        "USAGE_LIMIT_RETRY_DELAYS_SECONDS_JSON",
+        "delays",
+        "schedule.usage_limit_retry_delays_seconds",
+    ),
     ("GITHUB_HOST", "text", "github.host"),
     ("GITHUB_LOGIN", "text", None),
     (GH_TOKEN, "secret", None),
@@ -499,6 +504,8 @@ def render(out):
             ),
         ),
         f"  retry_delays_seconds: {flow(out['schedule.retry_delays_seconds'])}",
+        "  usage_limit_retry_delays_seconds: "
+        f"{flow(out['schedule.usage_limit_retry_delays_seconds'])}",
         *keys(
             "schedule",
             (

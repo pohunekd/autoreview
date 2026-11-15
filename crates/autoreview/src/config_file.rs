@@ -48,6 +48,10 @@ const DEBOUNCE_SECONDS_MAX: i64 = 600;
 const RETRY_DELAYS_MAX: usize = 5;
 /// Longest retry delay the scheduler accepts, in seconds.
 const RETRY_DELAY_SECONDS_MAX: i64 = 3600;
+/// Most retry delays of a usage-limited review the scheduler accepts.
+const USAGE_LIMIT_DELAYS_MAX: usize = 24;
+/// Longest retry delay of a usage-limited review, in seconds.
+const USAGE_LIMIT_DELAY_SECONDS_MAX: i64 = 21600;
 /// Longest credential name, in characters.
 const CREDENTIAL_NAME_MAX: usize = 32;
 /// Seconds in one day, the shortest review retention.
@@ -433,6 +437,8 @@ struct ScheduleFile {
     debounce_seconds: Option<Value>,
     /// Delays between scheduler attempts of a failed review, in seconds.
     retry_delays_seconds: Option<Value>,
+    /// Delays between scheduler attempts of a usage-limited review, in seconds.
+    usage_limit_retry_delays_seconds: Option<Value>,
     /// Total time of a review step that keeps failing transiently, in seconds.
     step_retry_seconds: Option<Value>,
     /// First backoff delay of a failing step, in seconds.
@@ -850,6 +856,7 @@ fn map_file(
     let schedule = scheduler_policy(
         &schedule_file.debounce_seconds,
         &schedule_file.retry_delays_seconds,
+        &schedule_file.usage_limit_retry_delays_seconds,
     )?;
     let github = section(&file.github, "github")?;
     let github_host = text(&github.host, "github.host")?;
@@ -1623,7 +1630,7 @@ fn find_backend<'a>(backends: &'a [Backend], name: &str, key: &str) -> Result<&'
     Err(invalid(key, "names no configured backend"))
 }
 
-/// Reads the scheduler policy; the debounce is checked before the retry delays.
+/// Reads the scheduler policy: the debounce, the retry delays, then the usage limit delays.
 ///
 /// # Errors
 ///
@@ -1632,12 +1639,16 @@ fn find_backend<'a>(backends: &'a [Backend], name: &str, key: &str) -> Result<&'
 pub(crate) fn scheduler_policy(
     debounce: &Option<Value>,
     retry_delays: &Option<Value>,
+    usage_limit_delays: &Option<Value>,
 ) -> Result<scheduler::Policy, Error> {
     let debounce = debounce_seconds(present(debounce, DEBOUNCE_KEY)?)?;
     let retry_delays = retry_delay_seconds(present(retry_delays, RETRY_DELAYS_KEY)?)?;
+    let usage_limit_delays =
+        usage_limit_delay_seconds(present(usage_limit_delays, USAGE_LIMIT_DELAYS_KEY)?)?;
     Ok(scheduler::Policy {
         debounce,
         retry_delays,
+        usage_limit_delays,
     })
 }
 
@@ -1645,6 +1656,8 @@ pub(crate) fn scheduler_policy(
 const DEBOUNCE_KEY: &str = "schedule.debounce_seconds";
 /// Name of the retry delays key in errors.
 const RETRY_DELAYS_KEY: &str = "schedule.retry_delays_seconds";
+/// Name of the usage limit retry delays key in errors.
+const USAGE_LIMIT_DELAYS_KEY: &str = "schedule.usage_limit_retry_delays_seconds";
 
 /// Accepts an integer from 1 to [`DEBOUNCE_SECONDS_MAX`].
 fn debounce_seconds(value: &Value) -> Result<time::Duration, Error> {
@@ -1697,6 +1710,36 @@ fn retry_delay_seconds(value: &Value) -> Result<Vec<time::Duration>, Error> {
         }
         out.push(time::Duration::seconds(delay));
         previous = delay;
+    }
+    Ok(out)
+}
+
+/// Accepts 1 to [`USAGE_LIMIT_DELAYS_MAX`] integers, none below the one before, each from 1 to
+/// [`USAGE_LIMIT_DELAY_SECONDS_MAX`].
+///
+/// Equal delays repeat one interval, so a short list covers a limit window of several hours.
+fn usage_limit_delay_seconds(value: &Value) -> Result<Vec<time::Duration>, Error> {
+    let refused = |reason: &'static str| {
+        Error::config(
+            CONFIGURATION_INVALID,
+            USAGE_LIMIT_DELAYS_KEY,
+            Some(Box::from(reason)),
+        )
+    };
+    let items = match value {
+        Value::List(items) if !items.is_empty() && items.len() <= USAGE_LIMIT_DELAYS_MAX => items,
+        _ => return Err(refused("invalid or missing configuration")),
+    };
+    let mut out = Vec::new();
+    let mut previous = 1;
+    for item in items {
+        match item {
+            Value::Int(delay) if (previous..=USAGE_LIMIT_DELAY_SECONDS_MAX).contains(delay) => {
+                out.push(time::Duration::seconds(*delay));
+                previous = *delay;
+            }
+            _ => return Err(refused("invalid retry delay")),
+        }
     }
     Ok(out)
 }
@@ -2978,7 +3021,7 @@ pub(crate) mod tests {
             ("120.0", false),
         ];
         for (text, accepted) in cases {
-            let result = scheduler_policy(&scalar(text), &scalar("[60]"));
+            let result = scheduler_policy(&scalar(text), &scalar("[60]"), &scalar("[900]"));
             assert_eq!(result.is_ok(), accepted, "debounce {text}");
         }
         let cases = [
@@ -2998,7 +3041,7 @@ pub(crate) mod tests {
             ("[3601]", Some("invalid retry delay")),
         ];
         for (text, message) in cases {
-            let result = scheduler_policy(&scalar("120"), &scalar(text));
+            let result = scheduler_policy(&scalar("120"), &scalar(text), &scalar("[900]"));
             match message {
                 None => assert!(result.is_ok(), "rejected {text}"),
                 Some(message) => {

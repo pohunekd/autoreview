@@ -87,6 +87,7 @@ schedule:
   max_concurrent_reviews: 8
   debounce_seconds: 120
   retry_delays_seconds: [60, 300, 900]
+  usage_limit_retry_delays_seconds: [900, 1800, 3600, 3600, 3600, 3600, 3600]
   step_retry_seconds: 900
   step_retry_initial_seconds: 2
   step_retry_max_interval_seconds: 60
@@ -357,6 +358,7 @@ How reviewer sessions are named, started, read and cleaned up.
 | `max_concurrent_reviews` | Reviews running at once, across all review hosts of this service |
 | `debounce_seconds` | Quiet time after a push before a review starts, so a burst of pushes is reviewed once. From 1 to 600 |
 | `retry_delays_seconds` | Delays between scheduler attempts of a failed review: 1 to 5 strictly increasing values, each at most 3600. A review that waits for a review host uses none of them. Their number also bounds the starts again of a head whose fetched `refs/pull/<n>/head` is at another commit (`pohunek_head_fetch_mismatch`) |
+| `usage_limit_retry_delays_seconds` | Delays between scheduler attempts of a review that failed with `reviewer_usage_limited`, the rate or usage limit of the reviewer's model account: 1 to 24 values, none below the one before it, each from 1 to 21600. These attempts use none of `retry_delays_seconds`. Make their sum cover the limit window of the account; the example's 5 h 45 min covers a 5-hour window. Required |
 | `step_retry_seconds`, `step_retry_initial_seconds`, `step_retry_max_interval_seconds` | Total time and backoff of a review step that keeps failing transiently |
 | `discovery_lock_timeout_seconds`, `discovery_lock_poll_ms` | Concurrent discovery passes take turns on a lock |
 | `poll_limit`, `search_page_limit` | GitHub search bounds; a truncated search is an error, never a silent drop |

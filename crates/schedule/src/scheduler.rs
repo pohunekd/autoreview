@@ -54,6 +54,8 @@ pub struct Policy {
     pub debounce: Duration,
     /// The delays between automatic retries.
     pub retry_delays: Vec<Duration>,
+    /// The delays between automatic retries of a review that a usage limit ended.
+    pub usage_limit_delays: Vec<Duration>,
 }
 
 /// The persisted schedule entry for one review identity.
@@ -884,6 +886,11 @@ mod tests {
                     Duration::minutes(1),
                     Duration::minutes(5),
                     Duration::minutes(15),
+                ],
+                usage_limit_delays: vec![
+                    Duration::minutes(15),
+                    Duration::minutes(30),
+                    Duration::minutes(60),
                 ],
             },
         )

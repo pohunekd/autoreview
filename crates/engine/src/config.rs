@@ -1146,6 +1146,7 @@ mod tests {
             schedule: scheduler::Policy {
                 debounce: time::Duration::seconds(120),
                 retry_delays: vec![time::Duration::seconds(60)],
+                usage_limit_delays: vec![time::Duration::seconds(900)],
             },
             github_host: "github.com".to_owned(),
             credentials: super::Credentials::single_for_tests("example-user"),
