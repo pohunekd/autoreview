@@ -315,6 +315,13 @@ Python standard library (Python 3.11 or newer). It has two parts:
   without the nonce line. The Codex run gets
   the session environment without the variables that the Claude adapter drops
   (see above).
+  When Codex exits, the adapter ends every process that the run left before
+  it prints a marker: it is their reaper (`PR_SET_CHILD_SUBREAPER`), so a
+  process that forks twice or starts its own session stays below it. Each one
+  gets `SIGTERM`, then `SIGKILL` after 2 seconds, and the adapter stops copying
+  Codex's stderr. So nothing that the run started can append to the output
+  once the nonce is in it, apart from a process that the run had another
+  service start (see [threat model](../safety/threat-model.md) row 19).
   The adapter then stays alive for the retention time, so that the coordinator
   can read the output before it removes the session.
   The engine reads the output as finished once its last line, read up to the
@@ -344,9 +351,10 @@ Python standard library (Python 3.11 or newer). It has two parts:
   `[autoreview-codex/v2 <nonce> refused:head_unavailable]` comes right before the
   exit line, and the engine stops the review with `review_head_unavailable`
   without a fresh session.
-  An invalid argument, Codex path file or input frame stops the adapter before
-  that: it prints the reason and exits with status 64 at once, without the exit
-  line.
+  An invalid argument, Codex path file or input frame, or a host where the
+  adapter cannot become the reaper of Codex's processes, stops the adapter
+  before that: it prints the reason and exits with status 64 at once, without
+  the exit line.
 - `render_profile.py` writes a profile from a base Codex profile. It copies the
   runtime package pin and the allowed environment keys (see
   [agent profiles](#agent-profiles)) of the base profile, and turns off
