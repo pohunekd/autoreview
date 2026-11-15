@@ -63,7 +63,7 @@ Routes reach `matrix`, `webhook` and `none` backends. See
 ## Events
 
 The policy must list a level for every event below except `credential_invalid`,
-`credential_restored` and `credential_expiring`.
+`credential_restored`, `credential_expiring` and `guard_suspect`.
 A policy that leaves another one out fails validation with
 `notifications: event X needs a level`.
 
@@ -82,6 +82,7 @@ A policy that leaves another one out fails validation with
 | `credential_invalid` | GitHub refuses a credential's token while the service runs; once per suspension | `action`, also when the policy leaves it out |
 | `credential_restored` | GitHub accepts the token of a suspended credential again; once per lift | `action`, also when the policy leaves it out |
 | `credential_expiring` | A credential's token expires within `github.expiry_warning_days`, at most once a UTC day per credential while `serve` runs | `action`, also when the policy leaves it out |
+| `guard_suspect` | A rule's text guard found a pull request suspect; names signal codes only | always `action` on the `action` route; no policy or route names it |
 | `started` | A review started | `log` |
 | `retry_scheduled` | A failed review is retried later | `log` |
 | `superseded` | A newer head, a retarget or a changed trigger replaced a review | `log` |

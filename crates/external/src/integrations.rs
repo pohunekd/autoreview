@@ -4,19 +4,21 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, Credential};
 use autoreview_engine::integrations::{
-    ChangedFiles, CommentableLines, GitHubReview, Integrations, PullRequestState, ReadiedDraft,
-    ReviewRequestList, SessionRequest, TokenAnswer,
+    ChangedFiles, CommentableLines, GitHubReview, GuardTexts, Integrations, PullRequestState,
+    ReadiedDraft, ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use autoreview_engine::model::{
     CandidateList, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
     PublishResult, PullRequest, SessionIdentity,
 };
 use autoreview_engine::notify::Notification;
+use autoreview_guard::FieldKind;
 use autoreview_policy::{Permission, Policy, Protocol, Trigger};
 use reqwest::Client;
 use tokio_util::sync::CancellationToken;
@@ -283,6 +285,27 @@ impl Integrations for External {
     ) -> Result<LinkedIssues, Error> {
         (self.github)
             .list_closing_issues(cancel, credential, pull_request)
+            .await
+    }
+
+    async fn read_guard_texts(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        pull_request: &PullRequest,
+        fields: &BTreeSet<FieldKind>,
+        max_bytes: usize,
+        publisher: &str,
+    ) -> Result<GuardTexts, Error> {
+        (self.github)
+            .guard_texts(
+                cancel,
+                credential,
+                pull_request,
+                fields,
+                max_bytes,
+                publisher,
+            )
             .await
     }
 

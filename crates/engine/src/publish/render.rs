@@ -11,7 +11,7 @@ use crate::error::Error;
 use crate::integrations::{ChangedFile, GitHubReview, InlineComment};
 use crate::intent::intent_line;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
-use crate::model::{Artifact, Finding, PriorResult, ReviewInput};
+use crate::model::{Artifact, Finding, GuardOutcome, PriorResult, ReviewInput};
 use crate::verify::{demoted, verification_line};
 
 /// Configured values that shape the rendered review.
@@ -92,6 +92,12 @@ pub(crate) fn render_review(
         sections.push(format!(
             "This review waited for a human approval because the pull request matched: {}.",
             human_review_text(&artifact.human_review, settings.excerpt_characters)
+        ));
+    }
+    if let Some(guard) = &artifact.guard {
+        sections.push(format!(
+            "The text guard flagged this pull request: {}.",
+            guard_text(guard)
         ));
     }
     let (comments, unanchored) = blocking_comments(settings, &blocking);
@@ -517,6 +523,25 @@ pub(crate) fn human_review_text(signals: &[String], limit: i64) -> String {
         text.push_str(&format!("; and {dropped} more"));
     }
     text
+}
+
+/// Names what the text guard flagged: its signal codes, left-out text or an unreadable guard.
+///
+/// It holds fixed codes only, never pull request text.
+pub(crate) fn guard_text(guard: &GuardOutcome) -> String {
+    let mut parts: Vec<String> = (guard.codes().iter())
+        .map(|code| format!("`{code}`"))
+        .collect();
+    if guard.truncated {
+        parts.push("text past the input bound".to_owned());
+    }
+    if guard.unscanned {
+        parts.push("text the engine could not scan".to_owned());
+    }
+    if parts.is_empty() {
+        parts.push("a guard setting this engine cannot read".to_owned());
+    }
+    parts.join(", ")
 }
 
 /// Compares a carried label with a configured label under Unicode simple case folding.

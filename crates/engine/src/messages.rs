@@ -2,17 +2,18 @@
 
 // Rust guideline compliant 2026-06-26
 
+use autoreview_policy::{OnClean, OnSuspect};
 use time::OffsetDateTime;
 
 use crate::integrations::{PullRequestState, SessionRequest};
 use crate::model::review::PRIOR_ANSWERED;
 use crate::model::{
-    Artifact, Decision, Finding, PublishResult, PublishedRecord, PullRequest, ReviewInput,
-    SessionIdentity,
+    Artifact, Decision, Finding, GuardOutcome, PublishResult, PublishedRecord, PullRequest,
+    ReviewInput, SessionIdentity,
 };
 use crate::publish::neutralize::{single_line, visible_excerpt};
 use crate::publish::plan::{PublicationPlan, blocking_count};
-use crate::publish::render::{head_prefix, human_review_text, reviewer_labels};
+use crate::publish::render::{guard_text, head_prefix, human_review_text, reviewer_labels};
 use crate::verify::{VERDICT_NOT_BLOCKING, VERDICT_REFUTED, demoted, escalates, verification_line};
 
 /// Title of the approval request. An approval is accepted only as a reply to a message that
@@ -141,6 +142,17 @@ pub(crate) fn approval_requested_message(
         ));
         message.push('.');
     }
+    if let Some(guard) = artifact.guard.as_ref().filter(|guard| guard.holds()) {
+        let lead = if approves_clean(input) {
+            "This rule approves clean reviews without you, but the text guard"
+        } else {
+            "The text guard"
+        };
+        message.push_str(&format!(
+            "\n{lead} flagged the pull request: {}.",
+            guard_text(guard)
+        ));
+    }
     if escalates(input, artifact) {
         let demoted_findings: Vec<Finding> = notes
             .iter()
@@ -165,6 +177,49 @@ pub(crate) fn approval_requested_message(
     if !notes.is_empty() {
         message.push_str("\nNotes:\n");
         message.push_str(&finding_lines(input, &notes, excerpt_characters));
+    }
+    message
+}
+
+/// Reports whether the input's rule approves a clean review without the owner.
+fn approves_clean(input: &ReviewInput) -> bool {
+    input.rule.on_clean == OnClean::Approve
+}
+
+/// The action message of a suspect text guard result: codes only, never pull request text.
+///
+/// It is sent before the reviewers run, so its outcome line states the rule, not a decision.
+pub(crate) fn guard_suspect_message(input: &ReviewInput, guard: &GuardOutcome) -> String {
+    let pr = &input.pull_request;
+    let outcome = match &guard.outcome {
+        OnSuspect::Log => "log, nothing changes",
+        OnSuspect::Comment => {
+            "comment, a request for changes on an untrusted author becomes a comment"
+        }
+        _ if approves_clean(input) => "await, a clean review waits for your approval",
+        _ => "await, the rule does not approve clean reviews, so nothing changes",
+    };
+    let signals: Vec<String> = (guard.signals.iter())
+        .map(|hit| format!("{} {} x{}", hit.field, hit.signal, hit.count))
+        .collect();
+    let mut message = format!(
+        "Text guard flagged a pull request\n\nReview ID: {}\nPR: {}\nOutcome: {outcome}\n\
+         Score: {}, threshold {}\nSignals: {}",
+        pr.review_id(),
+        pr.url,
+        guard.score,
+        guard.threshold,
+        if signals.is_empty() {
+            "none".to_owned()
+        } else {
+            signals.join("; ")
+        }
+    );
+    if guard.truncated {
+        message.push_str("\nText: cut at the input bound, the rest was not scanned");
+    }
+    if guard.unscanned {
+        message.push_str("\nText: not scanned, the configuration has no guards.text section");
     }
     message
 }

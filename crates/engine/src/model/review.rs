@@ -2,7 +2,9 @@
 
 // Rust guideline compliant 2026-06-26
 
-use autoreview_policy::{Event, Level, Trigger};
+use std::collections::BTreeSet;
+
+use autoreview_policy::{Event, Level, OnSuspect, Trigger};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 use time::OffsetDateTime;
@@ -317,6 +319,9 @@ pub struct Artifact {
     /// What the intent check compared; absent for a pipeline without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent: Option<IntentOutcome>,
+    /// The text guard result when it changes the publication; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard: Option<GuardOutcome>,
 }
 
 autoreview_go_compat::object_only_serde!(Artifact);
@@ -333,6 +338,63 @@ impl Artifact {
             .collect()
     }
 }
+
+/// What the text guard of a review found: signal codes only, never the text.
+///
+/// It is stored as the step `guard`. The artifact carries it only when it changes the
+/// publication: suspect, with an outcome other than `log`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
+pub struct GuardOutcome {
+    /// The signals found, one per field kind and signal, in scan order.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    pub signals: Vec<GuardSignal>,
+    /// The score of the scan.
+    pub score: u32,
+    /// The threshold of the rule's guard.
+    pub threshold: u32,
+    /// Set when a read or the input bound left text out of the scan.
+    pub truncated: bool,
+    /// Set when no lexicon is configured, so nothing was read or scanned.
+    pub unscanned: bool,
+    /// Whether the pull request counts as suspect.
+    pub suspect: bool,
+    /// What the suspect pull request gets; `await` for a guard this engine cannot fully read.
+    pub outcome: OnSuspect,
+}
+
+autoreview_go_compat::object_only_serde!(GuardOutcome);
+
+impl GuardOutcome {
+    /// Reports whether a clean approval waits for the user; an unknown outcome waits.
+    pub(crate) fn holds(&self) -> bool {
+        self.suspect && !matches!(self.outcome, OnSuspect::Comment | OnSuspect::Log)
+    }
+
+    /// Reports whether a request for changes on an untrusted author becomes a comment.
+    pub(crate) fn comments(&self) -> bool {
+        self.suspect && self.outcome == OnSuspect::Comment
+    }
+
+    /// Returns the distinct signal codes, sorted.
+    pub(crate) fn codes(&self) -> BTreeSet<&str> {
+        self.signals.iter().map(|hit| hit.signal.as_str()).collect()
+    }
+}
+
+/// One signal of the text guard in the fields of one kind.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
+pub struct GuardSignal {
+    /// The code of the field kind, such as `body`.
+    pub field: String,
+    /// The code of the signal, such as `unicode_tags`.
+    pub signal: String,
+    /// Occurrences over the fields of that kind.
+    pub count: u32,
+}
+
+autoreview_go_compat::object_only_serde!(GuardSignal);
 
 /// Result of the verifier on blocking claims.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

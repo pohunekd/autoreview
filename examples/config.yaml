@@ -156,8 +156,8 @@ notify:
 #   max_connections: 4
 
 # Optional: the prompt-injection guard of the policy rules that set `guard`;
-# every key is required when the section is present. No review runs the guard
-# in this release. See docs/configuration.md.
+# every key is required when the section is present. Only reviews of such a
+# rule read and scan text. See docs/configuration.md.
 # guards:
 #   text:
 #     max_input_bytes: 1048576

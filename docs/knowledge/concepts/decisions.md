@@ -57,8 +57,11 @@ clean outcome.
 | 0 | any | `await` | `comment` | yes, after a hand-off | wait, then `APPROVE` | Yes |
 
 An approval wait is only ever entered on a rule that never approves without a
-human (`await`) or on an auto-approving rule whose verifier escalated the review.
-Escalation is described in [verification](verification.md#escalation-on-auto-approve-rules).
+human (`await`) or on an auto-approving rule whose review was escalated: by the
+verifier, by a [human review signal](../../policy.md#human-review-signals), or by
+the rule's [text guard](../../policy.md#guard) finding the pull request suspect
+with `on_suspect: await`. Verifier escalation is described in
+[verification](verification.md#escalation-on-auto-approve-rules).
 
 ## Precedence
 
@@ -66,12 +69,17 @@ The decision is taken in this order. The first rule that applies wins.
 
 1. Blocking count above zero and `on_findings: request_changes`: `REQUEST_CHANGES`.
 2. Blocking count above zero otherwise: `COMMENT`.
-3. Clean and `on_clean: approve`: `APPROVE`, or a wait if the verifier escalated.
+3. Clean and `on_clean: approve`: `APPROVE`, or a wait if the review was
+   escalated (verifier, human review signal or text guard).
 4. Clean with notes, `on_notes: comment`, no earlier hand-off for this head
    chain, the pull request not authored by the reviewing account, and the author
    not a bot: `COMMENT` to the author, marked as a hand-off.
 5. Clean and `on_clean: await`: a wait for a human, then `APPROVE`.
 6. Anything else: `COMMENT`.
+
+A text guard with `on_suspect: comment` then turns `REQUEST_CHANGES` on an
+untrusted author's pull request into `COMMENT`. No guard outcome ever requests
+changes.
 
 After these rules, a pull request authored by the reviewing account is forced to
 `COMMENT`, and any pending wait for it is dropped. See
@@ -109,8 +117,8 @@ request. See [GitHub identity](github-identity.md#the-own-pull-request-rule).
 ## Approval wait
 
 A rule with `on_clean: await` ends a clean review in a wait. A rule with
-`on_clean: approve` ends in a wait only when the verifier escalated it. The
-wait works like this:
+`on_clean: approve` ends in a wait only when the review was escalated: by the
+verifier, a human review signal or the text guard. The wait works like this:
 
 1. The review is recorded as waiting, and the engine releases the pull request
    from scheduling. The record is written before the release, so discovery never
@@ -207,6 +215,8 @@ author pushes head B               -> review of B         -> approval wait
 | Blocking findings, own PR | `COMMENT` | `findings_on_own_pr` (action) |
 | Clean, `on_clean: approve`, not escalated | `APPROVE` | `approved` (digest) |
 | Clean, `on_clean: approve`, escalated by verifier | Wait, then `APPROVE` on approval | `approval_requested` (action) |
+| Clean, `on_clean: approve`, text guard suspect with `await` | Wait, then `APPROVE` on approval | `guard_suspect` and `approval_requested` (action) |
+| Blocking findings, untrusted author, text guard suspect with `comment` | `COMMENT` | `guard_suspect` (action), `commented` (digest) |
 | Clean, `on_clean: await` | Wait, then `APPROVE` on approval | `approval_requested` (action) |
 | Clean, `on_clean: comment` | `COMMENT` | `commented` (digest) |
 | Notes only, first time, `on_notes: comment` | `COMMENT` to author (hand-off) | `commented` (digest) |

@@ -1,19 +1,23 @@
 //! Changed files of a pull request: the paged file list, the commentable lines and the changed
 //! files with their line counts.
 //!
-//! Every file is visited once, in listing order, and the first error stops the read.
+//! Every file is visited once, in listing order; the first error or a stop of the visitor ends
+//! the read.
 
 // Rust guideline compliant 2026-06-26
 
 use std::collections::BTreeSet;
+use std::ops::ControlFlow;
 
 use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::{ChangedFile, ChangedFiles, CommentableLines};
 use autoreview_engine::model::PullRequest;
+use autoreview_guard::FieldKind;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
+use super::guard::GuardRead;
 use super::{GitHub, response_invalid};
 
 /// Files per page of the changed-files API; a short page ends the listing.
@@ -280,6 +284,8 @@ enum ListingEnd {
     PageLimit,
     /// The file cap ended the listing on a full page.
     Cap,
+    /// The visitor stopped the listing.
+    Stopped,
 }
 
 /// Decides after a page whether the listing ends, and how; `None` reads the next page.
@@ -304,6 +310,14 @@ fn listing_end(
     }
 }
 
+/// Reports whether a patch read for the guard left changed files out.
+///
+/// GitHub lists at most 3000 files, so a listing that is not complete or that visited fewer
+/// files than `changed_files`, the pull request's own count, left files out.
+fn patches_cut(end: ListingEnd, visited: usize, changed_files: usize) -> bool {
+    end != ListingEnd::Complete || visited < changed_files
+}
+
 impl GitHub {
     /// Returns the commentable lines of every changed file, keyed by path.
     ///
@@ -320,7 +334,7 @@ impl GitHub {
             .visit_changed_files(cancel, credential, pr, None, |file| {
                 let lines = commentable_lines_from_patch(&file.patch)?;
                 result.insert(file.filename.clone(), lines);
-                Ok(())
+                Ok(ControlFlow::Continue(()))
             })
             .await?;
         if end == ListingEnd::PageLimit {
@@ -357,7 +371,7 @@ impl GitHub {
                     deletions: file.deletions,
                     previous_path,
                 });
-                Ok(())
+                Ok(ControlFlow::Continue(()))
             })
             .await?;
         Ok(ChangedFiles {
@@ -366,17 +380,52 @@ impl GitHub {
         })
     }
 
+    /// Adds the patch of every changed file to `read`, for the text guard, until the bound.
+    ///
+    /// A file with added lines whose patch GitHub omits, as it does for a large diff, and a
+    /// listing that left files out mark the read truncated: one stopped at the bound or at the
+    /// file cap, or one with fewer files than `changed_files`, the count read before the listing.
+    pub(super) async fn guard_patches(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        pr: &PullRequest,
+        changed_files: usize,
+        read: &mut GuardRead,
+    ) -> Result<(), Error> {
+        let mut visited: usize = 0;
+        let end = self
+            .visit_changed_files(cancel, credential, pr, Some(LISTED_FILES_CAP), |file| {
+                visited += 1;
+                if file.patch.is_empty() && file.additions > 0 {
+                    read.cut();
+                }
+                read.push(FieldKind::Patch, &file.patch);
+                Ok(if read.full() {
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                })
+            })
+            .await?;
+        if patches_cut(end, visited, changed_files) {
+            read.cut();
+        }
+        Ok(())
+    }
+
     /// Visits every changed file once, in listing order, with a validated path.
     ///
-    /// The read ends at a short page, at the page limit, or at `cap` files when one is given. A
-    /// file whose name is invalid or repeated fails the read before `visit` sees it.
+    /// The read ends at a short page, at the page limit, at `cap` files when one is given, or when
+    /// `visit` breaks. A file whose name is invalid or repeated fails the read before `visit`
+    /// sees it.
     async fn visit_changed_files(
         &self,
         cancel: &CancellationToken,
         credential: &Credential,
         pr: &PullRequest,
         cap: Option<usize>,
-        mut visit: impl FnMut(&ChangedFileRecord) -> Result<(), Error>,
+        mut visit: impl FnMut(&ChangedFileRecord) -> Result<ControlFlow<()>, Error>,
     ) -> Result<ListingEnd, Error> {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         for page in 1..=self.search_page_limit {
@@ -390,7 +439,9 @@ impl GitHub {
                     return Err(response_invalid(None));
                 }
                 seen.insert(file.filename.clone());
-                visit(file)?;
+                if visit(file)?.is_break() {
+                    return Ok(ListingEnd::Stopped);
+                }
             }
             if let Some(end) =
                 listing_end(files.len(), page, self.search_page_limit, seen.len(), cap)
@@ -416,5 +467,26 @@ at end of file",
             .expect("a deleted file parses");
         assert!(deleted.is_empty());
         assert!(super::commentable_lines_from_patch("@@ broken @@").is_err());
+    }
+
+    #[test]
+    fn patches_cut() {
+        use super::ListingEnd::{Cap, Complete, PageLimit, Stopped};
+        let cases = [
+            (Complete, 4, 4, false),
+            (Complete, 5, 4, false),
+            (Complete, 3000, 3001, true),
+            (Complete, 0, 1, true),
+            (Cap, 3000, 3000, true),
+            (PageLimit, 2000, 2000, true),
+            (Stopped, 10, 10, true),
+        ];
+        for (end, visited, changed_files, cut) in cases {
+            assert_eq!(
+                super::patches_cut(end, visited, changed_files),
+                cut,
+                "{end:?} after {visited} of {changed_files} files"
+            );
+        }
     }
 }
