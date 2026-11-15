@@ -38,6 +38,10 @@ can edit an issue writes them. They are bounded by
 `limits.max_issue_characters` and sit on one line of JSON, so no issue text
 starts a line of the request and none can forge a trusted line.
 
+The discussion, the issues, the prior findings and the verifier's claims are
+written as JSON with `\n`, U+0085 (next line), U+2028 and U+2029 escaped, so
+none of them holds a character that a reader takes as a line break.
+
 ## What the prompts say
 
 The generic prompt (`prompts/generic.md`) tells the reviewer:
@@ -127,6 +131,9 @@ attack it models. `scripts/gates` runs them with the other Rust tests.
 - Request building (`intent`): an issue whose title or body forges the trusted
   lines of both adapters, closes the JSON line, or asks for an approval
   changes only its own JSON line of the reviewer and verifier requests.
+- Request building (`protocol::request`): U+0085, U+2028 or U+2029 in the
+  discussion, an issue, a prior finding or a claim reaches the reviewer and
+  verifier prompts only as a JSON escape.
 - Decision planning (`publish::plan`): a finding that asks for an approval is
   planned by its blocking flag only, so on an `on_clean: await` rule the
   approval still waits for a person.

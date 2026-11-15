@@ -321,9 +321,10 @@ pub(crate) fn request_invalid(cause: serde_json::Error) -> Error {
 
 /// Encodes `value` as JSON for the CLI and the reviewer requests.
 ///
-/// serde's output is escaped further for `<`, `>`, `&`, U+2028 and U+2029. This escaping
-/// applies to the command output on stdout, the reviewer requests and the values `init`
-/// writes; the JSON log lines and the profile TOML values do not use it.
+/// serde's output is escaped further for `<`, `>`, `&`, U+0085, U+2028 and U+2029, so the
+/// output holds no character that some reader takes as a line break. This escaping applies to
+/// the command output on stdout, the reviewer requests and the values `init` writes; the JSON
+/// log lines and the profile TOML values do not use it.
 pub fn go_json<T: Serialize + ?Sized>(value: &T) -> Result<String, serde_json::Error> {
     let raw = serde_json::to_string(value)?;
     let mut output = String::with_capacity(raw.len());
@@ -339,6 +340,7 @@ fn push_escaped(output: &mut String, character: char) {
         '<' => output.push_str("\\u003c"),
         '>' => output.push_str("\\u003e"),
         '&' => output.push_str("\\u0026"),
+        '\u{0085}' => output.push_str("\\u0085"),
         '\u{2028}' => output.push_str("\\u2028"),
         '\u{2029}' => output.push_str("\\u2029"),
         _ => output.push(character),
