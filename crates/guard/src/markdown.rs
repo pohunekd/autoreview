@@ -508,10 +508,13 @@ impl Pass<'_> {
         if self.bytes.get(name_end) == Some(&b':') {
             return None;
         }
-        let gt = self.find(Find::TagEnd, name_end)?;
+        let (gt, closed) = self.tag_end(name_end)?;
         let name = self.slice(name_start, name_end);
         let attributes = self.slice(name_end, gt);
-        let signal = if name.eq_ignore_ascii_case("details") {
+        let signal = if !closed {
+            report(add, Signal::LinkMetadataInstruction, attributes);
+            return Some(gt);
+        } else if name.eq_ignore_ascii_case("details") {
             Signal::CollapsedBlockInstruction
         } else if hides(attributes) {
             Signal::HiddenElementInstruction
@@ -525,11 +528,18 @@ impl Pass<'_> {
     }
 
     /// Handles `![` at `at`: an image alt text, reported when it instructs.
+    ///
+    /// The alt text runs to the matching `]`, so nested brackets stay inside it.
     fn image_alt(&mut self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
         if !self.starts_with(at, "![") {
             return None;
         }
-        let close = self.find(Find::Bracket, at.saturating_add(2))?;
+        let open = at.saturating_add(1);
+        let index = self
+            .brackets
+            .binary_search_by_key(&open, |&(start, _)| start)
+            .ok()?;
+        let (_, close) = *self.brackets.get(index)?;
         let after = self.bytes.get(close.saturating_add(1));
         if !matches!(after, Some(b'(' | b'[')) {
             return None;
@@ -544,24 +554,36 @@ impl Pass<'_> {
 
     /// Handles `](` at `at`: the title of an inline link or image, reported when it instructs.
     ///
-    /// The destination is the run up to the next whitespace and is not shown either, so it is
-    /// checked with the title. A title counts only when `)` follows it; a failed parse consumes
-    /// nothing.
+    /// The destination is a `<...>` on one line or the run up to the next whitespace; it is
+    /// not shown either, so it is checked with the title. A title counts only when `)`
+    /// follows it; a failed parse consumes nothing.
     fn link_title(&mut self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
         if !self.starts_with(at, "](") {
             return None;
         }
-        let destination = self.find(Find::NonSpace, at.saturating_add(2))?;
-        let after_destination = self.find(Find::Space, destination)?;
-        let open = self.find(Find::NonSpace, after_destination)?;
-        let closer = match self.bytes.get(open) {
-            Some(b'"') => Find::Quote,
-            Some(b'\'') => Find::Apostrophe,
-            Some(b'(') => Find::Paren,
+        let destination = self.find(DESTINATION, Class::NonSpace, at.saturating_add(2))?;
+        let (slots, after_destination) = if self.bytes.get(destination) == Some(&b'<') {
+            let end = self.find(ANGLE_END, Class::AngleEnd, destination.saturating_add(1))?;
+            if self.bytes.get(end) != Some(&b'>') {
+                return None;
+            }
+            (TITLE_AFTER_ANGLE, end.saturating_add(1))
+        } else {
+            let end = self.find(DESTINATION_END, Class::Space, destination)?;
+            (TITLE_AFTER_PLAIN, end)
+        };
+        let open_slot = slots.saturating_add(TITLE_OPEN);
+        let open = self.find(open_slot, Class::NonSpace, after_destination)?;
+        let (offset, closer) = match self.bytes.get(open) {
+            Some(b'"') => (1, b'"'),
+            Some(b'\'') => (2, b'\''),
+            Some(b'(') => (3, b')'),
             _ => return None,
         };
-        let close = self.find(closer, open.saturating_add(1))?;
-        let end = self.find(Find::NonSpace, close.saturating_add(1))?;
+        let close_slot = slots.saturating_add(offset);
+        let close = self.find(close_slot, Class::Unescaped(closer), open.saturating_add(1))?;
+        let after_slot = slots.saturating_add(TITLE_AFTER);
+        let end = self.find(after_slot, Class::NonSpace, close.saturating_add(1))?;
         if self.bytes.get(end) != Some(&b')') {
             return None;
         }
@@ -575,24 +597,50 @@ impl Pass<'_> {
 
     /// Handles a line that starts at `at` with a reference definition `[label]: ...`.
     ///
-    /// GitHub shows nothing of it. A footnote `[^label]:` is shown and does not count.
-    fn reference_definition(&self, at: usize, add: &mut impl FnMut(Signal, u32)) -> Option<usize> {
-        let len = self.bytes.len();
-        let eol = self
-            .slice(at, len)
-            .find('\n')
-            .map_or(len, |found| at.saturating_add(found));
-        let line = self.slice(at, eol);
-        let rest = indented(line)?;
-        let label = rest
-            .strip_prefix('[')
-            .filter(|label| !label.starts_with('^'))?;
-        let (name, after) = label.split_once(']')?;
-        if name.trim().is_empty() || !after.starts_with(':') {
+    /// GitHub shows nothing of it, also inside a block quote and when its label or title
+    /// continues on the next lines, so the definition runs to the end of its paragraph. A
+    /// footnote `[^label]:` is shown and does not count.
+    fn reference_definition(
+        &mut self,
+        at: usize,
+        add: &mut impl FnMut(Signal, u32),
+    ) -> Option<usize> {
+        let mut start = at;
+        loop {
+            let spaces = self
+                .bytes
+                .get(start..)
+                .unwrap_or_default()
+                .iter()
+                .take_while(|byte| **byte == b' ')
+                .count();
+            if spaces > INDENT_MAX {
+                return None;
+            }
+            start = start.saturating_add(spaces);
+            if self.bytes.get(start) != Some(&b'>') {
+                break;
+            }
+            start = start.saturating_add(1);
+        }
+        if self.bytes.get(start) != Some(&b'[') || self.starts_with(start, "[^") {
             return None;
         }
-        report(add, Signal::ReferenceDefinitionInstruction, rest);
-        Some(eol)
+        let label = start.saturating_add(1);
+        let close = self.find(LABEL_END, Class::Unescaped(b']'), label)?;
+        let end = self.paragraph_end(start);
+        if close >= end
+            || self.bytes.get(close.saturating_add(1)) != Some(&b':')
+            || self.slice(label, close).trim().is_empty()
+        {
+            return None;
+        }
+        report(
+            add,
+            Signal::ReferenceDefinitionInstruction,
+            self.slice(start, end),
+        );
+        Some(end)
     }
 }
 
@@ -666,11 +714,7 @@ fn report(add: &mut impl FnMut(Signal, u32), signal: Signal, text: &str) {
 /// Reports the hidden Markdown signals of a rendered field to `add`.
 pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) {
     let mut code = code_ranges(text).into_iter().peekable();
-    let mut pass = Pass {
-        text,
-        bytes: text.as_bytes(),
-        cache: [None; FIND_CLASSES],
-    };
+    let mut pass = Pass::new(text);
     let mut at = 0_usize;
     while let Some(&byte) = pass.bytes.get(at) {
         if let Some(&(start, end)) = code.peek()
