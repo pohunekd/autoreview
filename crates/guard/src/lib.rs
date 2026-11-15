@@ -75,8 +75,8 @@ pub struct Field<'a> {
     pub kind: FieldKind,
     /// The text; for `FieldKind::Patch` the unified diff of one file.
     ///
-    /// In fields GitHub renders, character references are decoded before the character,
-    /// chat-template and lexicon scanners run, as the rendered page and a model show them.
+    /// In fields GitHub renders, character references outside code blocks are decoded before
+    /// the character, chat-template and lexicon scanners run, as the rendered page shows them.
     pub text: &'a str,
 }
 
@@ -210,9 +210,14 @@ pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
     let mut entries_by_kind: BTreeMap<FieldKind, BTreeSet<usize>> = BTreeMap::new();
     for field in fields {
         let rendered = field.kind.renders_markdown();
+        let code = if rendered {
+            markdown::code_ranges(field.text)
+        } else {
+            Vec::new()
+        };
         let shown = match field.kind {
             FieldKind::Patch => added_lines(field.text),
-            _ if rendered => words::decode_references(field.text),
+            _ if rendered => rendered_text(field.text, &code),
             _ => field.text.to_owned(),
         };
         let mut add = |signal: Signal, count: u32| {
@@ -223,7 +228,7 @@ pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
         };
         characters::scan(&shown, field.kind == FieldKind::Patch, &mut add);
         if rendered {
-            markdown::scan(field.text, &mut add);
+            markdown::scan(field.text, &code, &mut add);
         }
         add(Signal::ChatTemplateToken, template::count(&shown));
         let normalized = words::normalize(&shown);
@@ -255,6 +260,25 @@ pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
         })
         .collect();
     Report { hits, score }
+}
+
+/// Returns a rendered field with its character references decoded outside `code`.
+///
+/// GitHub shows a reference inside a code block as written, so it is no hidden character.
+fn rendered_text(text: &str, code: &[(usize, usize)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0_usize;
+    for &(start, end) in code {
+        out.push_str(&words::decode_references(
+            text.get(at..start).unwrap_or_default(),
+        ));
+        out.push_str(text.get(start..end).unwrap_or_default());
+        at = end;
+    }
+    out.push_str(&words::decode_references(
+        text.get(at..).unwrap_or_default(),
+    ));
+    out
 }
 
 /// Returns the added lines of a unified diff, without `+`, one per line.

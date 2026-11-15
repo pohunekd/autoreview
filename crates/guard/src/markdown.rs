@@ -16,6 +16,12 @@ const INDENT_MAX: usize = 3;
 /// Shortest fence of backticks or tildes.
 const FENCE_MIN: usize = 3;
 
+/// Indentation of an indented code block line.
+const CODE_INDENT: &str = "    ";
+
+/// Most digits of an ordered list item marker, as in CommonMark.
+const LIST_DIGITS_MAX: usize = 9;
+
 /// Tags that start an HTML block only their closing tags end (kind 1).
 const RAW_TAGS: [&str; 4] = ["pre", "script", "style", "textarea"];
 
@@ -47,18 +53,51 @@ enum Block {
         len: usize,
         start: usize,
     },
+    /// An indented code block from byte `start`; its last indented line ends at `end`.
+    Indented { start: usize, end: usize },
 }
 
-/// Returns the byte ranges of closed fenced code blocks, fence lines included.
+/// Returns the length of the list item marker that starts `rest`, space included.
 ///
-/// A fence opens only in column 0 (a fence inside a list item ends with the item), at the
-/// start of the text or after a blank line, never inside an HTML block, and counts only when
-/// a closing fence follows. Each rule is stricter than CommonMark, so a range is always code
-/// that GitHub shows; text it misses is scanned.
-fn code_ranges(text: &str) -> Vec<(usize, usize)> {
+/// A marker is `-`, `*` or `+`, or 1 to `LIST_DIGITS_MAX` digits and `.` or `)`, followed by
+/// a space, a tab or the end of the line.
+fn list_marker(rest: &[u8]) -> Option<usize> {
+    let digits = rest
+        .iter()
+        .take(LIST_DIGITS_MAX.saturating_add(1))
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    let marker = match rest.first() {
+        Some(b'-' | b'*' | b'+') => 1,
+        Some(_)
+            if (1..=LIST_DIGITS_MAX).contains(&digits)
+                && matches!(rest.get(digits), Some(b'.' | b')')) =>
+        {
+            digits.saturating_add(1)
+        }
+        _ => return None,
+    };
+    match rest.get(marker) {
+        Some(b' ' | b'\t') => Some(marker.saturating_add(1)),
+        None | Some(b'\n' | b'\r') => Some(marker),
+        Some(_) => None,
+    }
+}
+
+/// Returns the byte ranges of the code blocks of `text` that are certainly code.
+///
+/// A fenced block counts when it opens in column 0 (a fence inside a list item ends with the
+/// item), at the start of the text or after a blank line, never inside an HTML block, and a
+/// closing fence follows; the range includes the fence lines. An indented block counts when
+/// its lines start with four spaces, it follows a blank line or the start of the text, and no
+/// list item or footnote came before it in the text (their continuation lines are indented
+/// too). Each rule is stricter than CommonMark, so a range is always code that GitHub shows;
+/// text it misses is scanned.
+pub(crate) fn code_ranges(text: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let mut block = Block::Text;
     let mut after_blank = true;
+    let mut container_seen = false;
     let mut offset = 0_usize;
     for raw in text.split_inclusive('\n') {
         let start = offset;
@@ -85,13 +124,32 @@ fn code_ranges(text: &str) -> Vec<(usize, usize)> {
                 }
                 continue;
             }
+            Block::Indented { start: open, end } => {
+                if blank || line.starts_with(CODE_INDENT) {
+                    if !blank {
+                        block = Block::Indented {
+                            start: open,
+                            end: offset,
+                        };
+                    }
+                    after_blank = blank;
+                    continue;
+                }
+                ranges.push((open, end));
+                block = Block::Text;
+            }
             Block::Text => {}
         }
         if blank {
             after_blank = true;
             continue;
         }
+        if after_blank && !container_seen && line.starts_with(CODE_INDENT) {
+            block = Block::Indented { start, end: offset };
+            continue;
+        }
         if let Some(rest) = indented(line) {
+            container_seen |= list_marker(rest.as_bytes()).is_some() || rest.starts_with("[^");
             let column_zero = rest.len() == line.len();
             if let Some((marker, len)) = opens_fence(rest).filter(|_| after_blank && column_zero) {
                 block = Block::Fence { marker, len, start };
@@ -102,6 +160,9 @@ fn code_ranges(text: &str) -> Vec<(usize, usize)> {
             }
         }
         after_blank = false;
+    }
+    if let Block::Indented { start, end } = block {
+        ranges.push((start, end));
     }
     ranges
 }
@@ -712,8 +773,10 @@ fn report(add: &mut impl FnMut(Signal, u32), signal: Signal, text: &str) {
 }
 
 /// Reports the hidden Markdown signals of a rendered field to `add`.
-pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) {
-    let mut code = code_ranges(text).into_iter().peekable();
+///
+/// `code` holds the field's `code_ranges`, which the pass skips.
+pub(crate) fn scan(text: &str, code: &[(usize, usize)], add: &mut impl FnMut(Signal, u32)) {
+    let mut code = code.iter().copied().peekable();
     let mut pass = Pass::new(text);
     let mut at = 0_usize;
     while let Some(&byte) = pass.bytes.get(at) {
