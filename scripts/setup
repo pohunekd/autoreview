@@ -25,6 +25,9 @@ POHUNEK_MIN_VERSION="0.41.0"
 # The autoreview release that is installed; it must know the init layout flags
 # and the --pohunek-timeout-seconds of profiles install (0.4.0 or later).
 AUTOREVIEW_VERSION="0.4.0"
+# The first release that refuses the Codex adapter of every earlier release
+# (review_nonce_mismatch); a Codex profile written before it needs a reinstall.
+CODEX_ADAPTER_RELEASE="0.4.0"
 # pohunek's login service needs systemd 255 or newer.
 SYSTEMD_MIN_VERSION=255
 # The reviewer adapters need Python 3.11 or newer.
@@ -93,6 +96,31 @@ release_state() {
         1) echo newer ;;
         *) return 1 ;;
     esac
+}
+
+# Prints, after an upgrade from release $1 (empty when unknown), the notice for
+# the kept Codex profiles $2...: each one with the command that writes its
+# adapter again. Prints nothing without a profile or when release $1 wrote an
+# adapter that the pinned release accepts.
+codex_notice() {
+    local previous=$1 name
+    shift
+    [ "$#" -gt 0 ] || return 0
+    if [ -n "$previous" ] \
+        && [ "$(version_compare "$previous" "$CODEX_ADAPTER_RELEASE")" != -1 ]; then
+        return 0
+    fi
+    echo "setup: autoreview $AUTOREVIEW_VERSION refuses a Codex adapter from before" \
+        "$CODEX_ADAPTER_RELEASE;"
+    echo "reviews of these profiles fail with review_nonce_mismatch until you run, with the"
+    echo "values of their first install:"
+    for name in "$@"; do
+        printf '  %q profiles install --host local --agent codex --name %q \\\n' \
+            "$autoreview_bin" "$name"
+        echo "    --model <MODEL> --effort <EFFORT> --agent-binary <PATH> \\"
+        echo "    --maximum-input-bytes <BYTES> --maximum-result-bytes <BYTES> \\"
+        echo "    --maximum-retention-seconds <SECONDS> --pohunek-timeout-seconds <SECONDS>"
+    done
 }
 
 # Prints the state of pohunek $1 (empty when absent) against the minimum $2:
@@ -682,14 +710,16 @@ detect_machine() {
     check_trust
 }
 
-# Sets autoreview_state from the installed binary.
+# Sets autoreview_version (empty when unknown) and autoreview_state from the
+# installed binary.
 detect_autoreview() {
-    local output="" version=""
+    local output=""
+    autoreview_version=""
     if [ -x "$autoreview_bin" ]; then
         output=$("$autoreview_bin" --version 2>/dev/null) || output=""
-        version=$(version_of "$output") || version=""
+        autoreview_version=$(version_of "$output") || autoreview_version=""
     fi
-    autoreview_state=$(release_state "$version" "$AUTOREVIEW_VERSION")
+    autoreview_state=$(release_state "$autoreview_version" "$AUTOREVIEW_VERSION")
 }
 
 # Sets pohunek_bin, pohunek_version and pohunek_state. pohunek counts as
@@ -770,6 +800,18 @@ profile_state() {
     fi
 }
 
+# Prints the name of each agent profile that profiles install wrote for Codex,
+# one per line.
+codex_profiles() {
+    local file name
+    for file in "$agents_dir"/*.toml; do
+        [ -f "$file" ] || continue
+        name=${file##*/}
+        name=${name%.toml}
+        [ "$(profile_state "$name")" != "ours codex" ] || printf '%s\n' "$name"
+    done
+}
+
 # Prints `present` or `absent` for the official package of runtime $1.
 package_state() {
     "$pohunek_bin" plugin list --json | json_query package "$1"
@@ -825,8 +867,8 @@ step_autoreview() {
             return
             ;;
     esac
-    local name="autoreview-$AUTOREVIEW_VERSION-$autoreview_target"
-    local -a commands
+    local name="autoreview-$AUTOREVIEW_VERSION-$autoreview_target" previous=$autoreview_version
+    local -a commands kept
     mapfile -t commands < <(download_commands "$AUTOREVIEW_REPOSITORY" "$name.tar.gz" \
         "$AUTOREVIEW_VERSION")
     approve "autoreview $AUTOREVIEW_VERSION" "${commands[@]}" \
@@ -848,6 +890,9 @@ step_autoreview() {
     [ "$autoreview_state" = current ] \
         || fail 7 "installing autoreview failed: $autoreview_bin is not $AUTOREVIEW_VERSION"
     autoreview_installed=1
+    # Printed here: a later step may stop the run, and the next run sees no upgrade.
+    mapfile -t kept < <(codex_profiles)
+    codex_notice "$previous" "${kept[@]}"
 }
 
 # Downloads, checks and unpacks the pohunek daemon archive of version $1, once
