@@ -96,3 +96,96 @@ struct Listing {
     /// `git for-each-ref` and `git worktree list` output, or the error of the first that failed.
     output: Result<(String, String), Error>,
 }
+
+/// Lists the review branches of the selected hosts and, with `--yes`, deletes the ones with
+/// the verdict `delete`.
+///
+/// A host whose repositories are not on this machine, or whose pohunek calls fail, is skipped
+/// and reported; the other hosts go on.
+///
+/// # Errors
+///
+/// Returns `command_invalid` for a relative `--git-binary` or a `--host` that is not a
+/// configured review host, `store_unavailable` when the store database does not exist, and the
+/// store errors of the review read.
+pub(crate) async fn run(
+    config: &Config,
+    arguments: &PruneArguments,
+    cancel: &CancellationToken,
+) -> Result<PruneResult, Error> {
+    if !arguments.git_binary.starts_with('/') {
+        return Err(command_invalid(Some(
+            "--git-binary must be an absolute path".into(),
+        )));
+    }
+    let configured = review_hosts(config);
+    let hosts: Vec<String> = match &arguments.host {
+        Some(host) if configured.contains(host) => vec![host.clone()],
+        Some(_) => {
+            return Err(command_invalid(Some(
+                "--host is not a configured review host".into(),
+            )));
+        }
+        None => configured,
+    };
+    let path = Path::new(&config.state_db_path);
+    // Opening creates a missing database, and an empty store would leave every branch unowned.
+    if !path.is_file() {
+        let cause = "the store database does not exist".into();
+        return Err(Error::workflow(STORE_UNAVAILABLE, true, Some(cause)));
+    }
+    let store = Store::open(path, Box::new(OffsetDateTime::now_utc))?;
+    let git = arguments.git_binary.as_str();
+    let mut listed = Vec::new();
+    for host in hosts {
+        let listing = list_host(config, cancel, git, &host).await;
+        listed.push((host, listing));
+    }
+    let reviews = store.list_reviews(&ReviewFilter::All, i64::MAX)?;
+    store.close()?;
+    let owners = Owners::from_reviews(&reviews);
+    let older_than = arguments
+        .older_than_days
+        .map(|days| Duration::from_secs(u64::from(days) * SECONDS_PER_DAY));
+    let now = OffsetDateTime::now_utc();
+    let mut reports = Vec::new();
+    for (host, listing) in listed {
+        let listings = match listing {
+            Ok(listings) => listings,
+            Err(reason) => {
+                reports.push(skipped(host, reason));
+                continue;
+            }
+        };
+        // A host whose sessions are unknown is skipped: a session may work on any branch.
+        let sessions = match session_branches(config, cancel, &host).await {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                tracing::warn!(host, error = %error, "prune host skipped");
+                reports.push(skipped(host, error_code(&error).to_owned()));
+                continue;
+            }
+        };
+        let rules = Rules {
+            prefix: &config.session_branch_prefix,
+            owners: &owners,
+            sessions: &sessions,
+            older_than,
+            retention: config.review_retention,
+            now,
+        };
+        let mut repositories = Vec::new();
+        for listing in listings {
+            repositories.push(plan_repository(&host, listing, &rules));
+        }
+        reports.push(HostReport {
+            host,
+            skipped: String::new(),
+            repositories,
+        });
+    }
+    Ok(PruneResult {
+        delete: arguments.yes,
+        hosts: reports,
+    })
+}
