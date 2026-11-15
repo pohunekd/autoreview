@@ -19,7 +19,7 @@ pub use authors::{
     AuthorClass, AuthorType, Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview,
     login_valid, user_login_valid,
 };
-pub use guard::{OnSuspect, RuleGuard};
+pub use guard::{GuardField, OnSuspect, RuleGuard};
 pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};
 pub use types::{

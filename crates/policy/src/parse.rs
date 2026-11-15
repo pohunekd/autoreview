@@ -1125,7 +1125,7 @@ mod tests {
     use crate::Error;
     use crate::author_limit::{AuthorLimit, OverLimit};
     use crate::authors::{Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview};
-    use crate::guard::{OnSuspect, RuleGuard};
+    use crate::guard::{GuardField, OnSuspect, RuleGuard};
     use crate::types::{
         Event, IntentCheck, Level, MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy,
     };
@@ -1381,7 +1381,10 @@ notifications:
         let set = "{fields: [patch, title], threshold: 100, on_suspect: await}";
         let second = parse(with_guard(VALID_POLICY, set).as_bytes(), prompts).expect("guard");
         let guard = RuleGuard {
-            fields: BTreeSet::from([FieldKind::Title, FieldKind::Patch]),
+            fields: BTreeSet::from([
+                GuardField::Kind(FieldKind::Title),
+                GuardField::Kind(FieldKind::Patch),
+            ]),
             threshold: 100,
             on_suspect: OnSuspect::Await,
         };

@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::author_limit::AuthorLimit;
 use crate::authors::{Authors, Untrusted};
+use crate::guard::GuardField;
 use crate::types::{Event, IntentCheck, Level, Pipeline, Policy, Reviewer, Rule};
 
 /// Renders an optional limit for the digest; an absent limit is the empty text.
@@ -113,7 +114,7 @@ pub(crate) fn digest_of(
         // Only a guarded rule adds bytes, so other policies keep their digest.
         if let Some(guard) = &rule.guard {
             // Sorted by the stable codes, so the variant order of `FieldKind` is not hashed.
-            let mut fields: Vec<&str> = guard.fields.iter().map(|kind| kind.as_str()).collect();
+            let mut fields: Vec<&str> = guard.fields.iter().map(GuardField::as_str).collect();
             fields.sort_unstable();
             hasher.update(format!(
                 "guard\x00{}\x00{}\x00{}\x00",

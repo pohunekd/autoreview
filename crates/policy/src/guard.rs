@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use autoreview_guard::FieldKind;
-use serde::de::{self, Deserializer};
+use serde::de::Deserializer;
 use serde::ser::Serializer;
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,28 @@ impl OnSuspect {
     }
 }
 
+/// One field of a guard: a text kind the guard scans, or an unknown stored code.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum GuardField {
+    /// A kind of pull request text the guard scans.
+    Kind(FieldKind),
+    /// A code a newer engine stored that this one does not know, kept as stored.
+    ///
+    /// Parsing a policy refuses unknown codes, so only a stored rule holds one.
+    Other(String),
+}
+
+impl GuardField {
+    /// Returns the stored code of the field.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Kind(kind) => kind.as_str(),
+            Self::Other(code) => code,
+        }
+    }
+}
+
 /// The text guard of a rule: its fields, threshold and suspect outcome.
 ///
 /// It is copied with the rule into each review workflow input. A stored guard without a key
@@ -58,7 +80,7 @@ pub struct RuleGuard {
         serialize_with = "serialize_fields",
         deserialize_with = "deserialize_fields"
     )]
-    pub fields: BTreeSet<FieldKind>,
+    pub fields: BTreeSet<GuardField>,
     /// The score from which a pull request is suspect, 1 to `u32::MAX` when parsed.
     pub threshold: u32,
     /// What a suspect pull request gets.
@@ -95,27 +117,21 @@ fn field_codes() -> String {
 
 /// Writes the fields as a list of their codes.
 fn serialize_fields<S: Serializer>(
-    fields: &BTreeSet<FieldKind>,
+    fields: &BTreeSet<GuardField>,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(fields.iter().map(|kind| kind.as_str()))
+    serializer.collect_seq(fields.iter().map(GuardField::as_str))
 }
 
-/// Reads the fields from their codes; null is empty, an unknown code fails.
+/// Reads the fields from their codes; null is empty, an unknown code is kept as `Other`.
 ///
-/// An unknown code names a text this engine cannot scan. Dropping it would scan less than the
-/// stored rule asks, so the row is refused instead.
+/// A rollback must still decode rows a newer engine stored with a kind it added.
 fn deserialize_fields<'de, D: Deserializer<'de>>(
     deserializer: D,
-) -> Result<BTreeSet<FieldKind>, D::Error> {
+) -> Result<BTreeSet<GuardField>, D::Error> {
     let codes = Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default();
-    codes
-        .iter()
-        .map(|code| {
-            field_kind(code)
-                .ok_or_else(|| de::Error::custom(format!("unknown guard field {code:?}")))
-        })
-        .collect()
+    let field = |code: String| field_kind(&code).map_or(GuardField::Other(code), GuardField::Kind);
+    Ok(codes.into_iter().map(field).collect())
 }
 
 /// Validates the guard section of a rule; an absent key sets no guard.
@@ -139,7 +155,7 @@ pub(crate) fn parse_guard(raw: Option<&Option<FileGuard>>) -> Result<Option<Rule
             field: code.clone(),
             known: field_codes(),
         })?;
-        if !fields.insert(kind) {
+        if !fields.insert(GuardField::Kind(kind)) {
             return Err(Error::GuardFieldRepeated {
                 field: code.clone(),
             });
