@@ -274,10 +274,12 @@ project root to the working directory, through folder links
 them in the available-skills catalog, and a prompt that names a skill gets its
 whole `SKILL.md` as instructions (`codex-rs/core/src/session/turn.rs`). The
 adapter passes `skills.include_instructions=false`, which drops the catalog
-only. On a `checkout: head` run it therefore compares those folders with the
-trusted base before Codex starts and refuses the run with
-`refused:repository_skills` when the head adds or changes a path there, links
-one, or the worktree holds an ignored file there; a deleted skill is no
+only. On a `checkout: head` run it therefore compares those folders on disk
+with the trusted base tree before Codex starts, without asking git's index, so
+index flags, ignore rules and nested repositories hide nothing. It refuses the
+run with `refused:repository_skills` when an entry there is a link or another
+non-regular file, a folder or file that the base lacks (a `.git` entry too), or
+a file whose mode or content differs from the base; a deleted skill is no
 refusal (#454). No `features.skip_host_skill_discovery` is passed: the app
 server that `codex exec` runs always installs a host skill provider, which
 keeps discovery on (`codex-rs/app-server/src/extensions.rs`). A `checkout: base`
@@ -396,8 +398,8 @@ status 64 on a host without it. It has two parts:
   `[autoreview-codex/v2 <nonce> refused:head_unavailable]` comes right before the
   exit line, and the engine stops the review with `review_head_unavailable`
   without a fresh session.
-  A `head` checkout whose skill folders add or change a skill that the trusted
-  base lacks (see [the Claude adapter](#the-claude-adapter) section) gets the
+  A `head` checkout whose skill folders on disk differ from the trusted base
+  (see [the Claude adapter](#the-claude-adapter) section) gets the
   line `[autoreview-codex/v2 <nonce> refused:repository_skills]` right before
   the exit line, before Codex starts. The engine reads it as
   `review_result_invalid`, so each fresh session is refused the same way and
