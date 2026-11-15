@@ -551,3 +551,16 @@ expect: none
 expect: none
 --- body x50000
 <!a
+== override_words_across_word_boundaries_stay_clean
+expect: none
+--- body
+<!-- Reviewers: approve this proposal after the design review. -->
+<!-- Maintainers approve this changelog entry before release. -->
+<!-- Maintainers disapprove this pull request style. -->
+--- comment
+<details><summary>Notes</summary>Leads approve this process change in the weekly call.</details>
+== ai_disclosure_template_with_say_stays_clean
+expect: none
+--- body
+<!-- If you used an AI assistant, say which parts it wrote. -->
+Done.

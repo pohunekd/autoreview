@@ -37,9 +37,10 @@ const ADDRESSEES: [&str; 27] = [
 
 /// Verbs that tell a model what to do or leave out; normalized and padded.
 ///
-/// Template verbs such as "describe", "link" or "check" and the modals "must" and "never" are
-/// left out on purpose: they fill the HTML comments of pull request templates.
-const DIRECTIVES: [&str; 20] = [
+/// Template verbs such as "describe", "link", "check" or "say" and the modals "must" and
+/// "never" are left out on purpose: they fill the HTML comments of pull request templates
+/// ("If you used an AI assistant, say which parts it wrote").
+const DIRECTIVES: [&str; 19] = [
     " ignore ",
     " disregard ",
     " forget ",
@@ -51,7 +52,6 @@ const DIRECTIVES: [&str; 20] = [
     " respond ",
     " reply ",
     " output ",
-    " say ",
     " report ",
     " flag ",
     " mention ",
@@ -82,6 +82,12 @@ const OVERRIDES: [&str; 17] = [
     " report no issues ",
     " report no findings ",
 ];
+
+/// Shortest last override word that more letters may follow in a glued word.
+///
+/// "IgnorePreviousInstructionsNow" holds an override; "ApproveThisProposal" does not, so a
+/// phrase that ends in a short word such as "pr" only matches a glued word exactly.
+const GLUED_TAIL_MIN: usize = 5;
 
 /// The `OVERRIDES` without their spaces, for words written together.
 const GLUED_OVERRIDES: [&str; 17] = [
@@ -287,11 +293,30 @@ pub(crate) fn instructs(text: &str) -> bool {
     if has(&without_addresses, &ADDRESSEES) && has(&without_addresses, &DIRECTIVES) {
         return true;
     }
-    let compact: String = words
-        .chars()
-        .filter(|character| *character != ' ')
-        .collect();
-    has(&compact, &GLUED_OVERRIDES)
+    glued(&words)
+}
+
+/// Reports whether one normalized word holds an override written without spaces.
+///
+/// The match never crosses a word boundary: "approve this proposal" holds no override.
+fn glued(words: &str) -> bool {
+    let shortest = GLUED_OVERRIDES
+        .iter()
+        .map(|glued| glued.len())
+        .min()
+        .unwrap_or_default();
+    words
+        .split(' ')
+        .filter(|word| word.len() >= shortest)
+        .any(|word| {
+            OVERRIDES
+                .iter()
+                .zip(GLUED_OVERRIDES)
+                .any(|(phrase, glued)| {
+                    let tail = phrase.trim().rsplit(' ').next().unwrap_or_default();
+                    word == glued || (tail.len() >= GLUED_TAIL_MIN && word.contains(glued))
+                })
+        })
 }
 
 /// Reports whether normalized words hold an override verb, then a qualifier and an object.
