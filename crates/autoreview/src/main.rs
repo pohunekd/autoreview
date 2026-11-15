@@ -5,6 +5,7 @@
 mod config_file;
 mod env_file;
 mod error_response;
+mod guard_scan;
 mod init;
 mod logging;
 mod mcp_server;
