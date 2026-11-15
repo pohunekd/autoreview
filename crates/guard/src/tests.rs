@@ -200,6 +200,7 @@ fn character_scanners_report_hidden_character_shapes_and_spare_legitimate_use() 
 #[test]
 fn hidden_markdown_reports_instructions_that_rendering_hides() {
     table(include_str!("../testdata/markdown.txt"));
+    table(include_str!("../testdata/benign.txt"));
 }
 
 #[test]
