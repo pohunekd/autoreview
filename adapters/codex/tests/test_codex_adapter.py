@@ -106,6 +106,8 @@ class WrapperTests(unittest.TestCase):
                 'approval_policy="never"',
                 "--config",
                 "project_doc_max_bytes=0",
+                "--config",
+                "skills.include_instructions=false",
                 "--sandbox",
                 "read-only",
                 "--ignore-user-config",

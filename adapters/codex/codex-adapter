@@ -512,6 +512,10 @@ def codex_arguments(
         # marked untrusted; a zero byte budget reads none. The prompt names the trusted guidance.
         "--config",
         "project_doc_max_bytes=0",
+        # This drops the catalog of the skills that Codex loads, which every turn lists. A skill
+        # that the prompt names still loads, so the checkout check refuses a head's new skills.
+        "--config",
+        "skills.include_instructions=false",
         "--sandbox",
         "read-only",
         "--ignore-user-config",
