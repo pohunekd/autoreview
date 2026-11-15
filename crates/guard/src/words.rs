@@ -5,7 +5,7 @@
 use crate::{characters, template};
 
 /// Words that address a model; each phrase is normalized and padded with one space.
-const ADDRESSEES: [&str; 16] = [
+const ADDRESSEES: [&str; 19] = [
     " ai ",
     " llm ",
     " llms ",
@@ -22,6 +22,9 @@ const ADDRESSEES: [&str; 16] = [
     " review bot ",
     " automated reviewer ",
     " system prompt ",
+    " a i ",
+    " l l m ",
+    " co pilot ",
 ];
 
 /// Verbs that tell a model what to do or leave out; normalized and padded.
@@ -92,6 +95,47 @@ pub(crate) fn normalize(text: &str) -> String {
     out
 }
 
+/// Verbs that start an override: a qualifier and an object follow within `OVERRIDE_WINDOW`.
+const OVERRIDE_VERBS: [&str; 8] = [
+    "ignore",
+    "ignoring",
+    "disregard",
+    "disregarding",
+    "forget",
+    "forgetting",
+    "override",
+    "overriding",
+];
+
+/// Words that point an override at instructions that came before.
+const OVERRIDE_QUALIFIERS: [&str; 8] = [
+    "previous",
+    "prior",
+    "above",
+    "earlier",
+    "preceding",
+    "original",
+    "system",
+    "your",
+];
+
+/// Words that name what an override replaces.
+const OVERRIDE_OBJECTS: [&str; 10] = [
+    "instruction",
+    "instructions",
+    "rule",
+    "rules",
+    "guideline",
+    "guidelines",
+    "prompt",
+    "prompts",
+    "directions",
+    "directives",
+];
+
+/// Most words after an override verb that may hold its qualifier and object.
+const OVERRIDE_WINDOW: usize = 5;
+
 /// Named character references that are decoded, with their characters.
 ///
 /// The usual escapes, and the invisible characters HTML has names for.
@@ -132,8 +176,35 @@ pub(crate) fn instructs(text: &str) -> bool {
     let without_addresses = normalize(&without_web_addresses(&text));
     let has = |words: &str, phrases: &[&str]| phrases.iter().any(|phrase| words.contains(phrase));
     has(&words, &OVERRIDES)
+        || overrides(&words)
         || template::count(&text) > 0
         || (has(&without_addresses, &ADDRESSEES) && has(&without_addresses, &DIRECTIVES))
+}
+
+/// Reports whether normalized words hold an override verb, then a qualifier and an object.
+///
+/// "Ignore all the previous instructions" and "disregard prior rules" are overrides; "ignore
+/// this rule if it does not apply" is not, as no qualifier points back.
+fn overrides(words: &str) -> bool {
+    let tokens: Vec<&str> = words.split(' ').filter(|token| !token.is_empty()).collect();
+    tokens.iter().enumerate().any(|(index, token)| {
+        if !OVERRIDE_VERBS.contains(token) {
+            return false;
+        }
+        let window = tokens
+            .get(index.saturating_add(1)..)
+            .unwrap_or_default()
+            .iter()
+            .take(OVERRIDE_WINDOW);
+        let mut qualified = false;
+        for word in window {
+            qualified |= OVERRIDE_QUALIFIERS.contains(word);
+            if qualified && OVERRIDE_OBJECTS.contains(word) {
+                return true;
+            }
+        }
+        false
+    })
 }
 
 /// Returns `text` with its character references decoded, as an HTML parser decodes them.

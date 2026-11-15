@@ -2,12 +2,16 @@
 
 // Rust guideline compliant 2026-06-26
 
-/// Fixed tokens of common chat templates, matched with their case.
+use std::borrow::Cow;
+
+use crate::characters;
+
+/// Fixed tokens of common chat templates, lowercase; matched ignoring ASCII case.
 const TOKENS: [&str; 6] = [
-    "[INST]",
-    "[/INST]",
-    "<<SYS>>",
-    "<</SYS>>",
+    "[inst]",
+    "[/inst]",
+    "<<sys>>",
+    "<</sys>>",
     "<start_of_turn>",
     "<end_of_turn>",
 ];
@@ -32,10 +36,22 @@ const ROLE_INDENT_MAX: usize = 3;
 
 /// Counts the chat-template and role tokens of `text`.
 ///
+/// Invisible characters are dropped first, so a token split by them still counts.
+///
 /// A special token is `<|`, 1 to `SPECIAL_NAME_MAX` ASCII letters, digits or `_`, and `|>`,
 /// or the same between `FULLWIDTH_OPEN` and `FULLWIDTH_CLOSE` with `NAME_SPACE` allowed.
 /// A role token is a line that starts with a `ROLE_LINES` prefix after at most three spaces.
 pub(crate) fn count(text: &str) -> u32 {
+    let visible: Cow<'_, str> = if text.chars().any(characters::invisible) {
+        Cow::Owned(
+            text.chars()
+                .filter(|character| !characters::invisible(*character))
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(text)
+    };
+    let text = visible.as_ref();
     let mut found = 0_u32;
     for (start, _) in text.match_indices("<|") {
         let name = text
@@ -73,8 +89,9 @@ pub(crate) fn count(text: &str) -> u32 {
             found = found.saturating_add(1);
         }
     }
+    let lower = text.to_ascii_lowercase();
     for token in TOKENS {
-        let matches = u32::try_from(text.matches(token).count()).unwrap_or(u32::MAX);
+        let matches = u32::try_from(lower.matches(token).count()).unwrap_or(u32::MAX);
         found = found.saturating_add(matches);
     }
     for line in text.split('\n') {
