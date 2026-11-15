@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import ctypes
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -66,10 +68,19 @@ ERROR_LINE_PREFIXES = (b"ERROR:", b"error:")
 # Most bytes of Codex's stderr that the adapter keeps to find the reason in. Not a tunable:
 # it bounds the adapter's own memory, and no operator decision depends on it.
 STDERR_TAIL_BYTES = 65536
-# Longest wait for the end of Codex's stderr after Codex exited: a process that Codex
-# started may keep the pipe open, and the exit line must not wait for it. Not a tunable:
-# it bounds the wait for such a process, and no operator decision depends on it.
+# Longest wait for the end of Codex's stderr after Codex and the processes it left ended:
+# a process outside the adapter's tree that got the pipe may keep it open, and the exit
+# line must not wait for it. Not a tunable: it bounds the wait for such a process, and no
+# operator decision depends on it.
 STDERR_DRAIN_SECONDS = 5
+# The Linux `prctl` option that makes the adapter the reaper of its orphaned descendants,
+# so a process that Codex leaves stays its child after a double fork or `setsid`.
+PR_SET_CHILD_SUBREAPER = 36
+# Time that the processes Codex left get after SIGTERM, before SIGKILL, and the step of the
+# check whether they ended. Not tunables: they bound the end of a run, and no operator
+# decision depends on them.
+LEFTOVER_GRACE_SECONDS = 2
+LEFTOVER_POLL_SECONDS = 0.05
 # Unicode general categories that a reason shows as `?`: controls, format characters such
 # as bidi controls, soft hyphens and tags, and the line and paragraph separators, which
 # could make a log line read differently than it is.
@@ -361,16 +372,26 @@ class StderrTail:
     def __init__(self) -> None:
         self.data = bytearray()
         self.truncated = False
+        self.stopped = False
+        self.lock = threading.Lock()
 
     def copy(self, stream: BinaryIO) -> None:
-        """Copies `stream` to the adapter's stderr until its end, keeping the last bytes."""
+        """Copies `stream` to stderr until its end or `stop`, keeping the last bytes."""
         while chunk := os.read(stream.fileno(), STDERR_TAIL_BYTES):
-            sys.stderr.buffer.write(chunk)
-            sys.stderr.buffer.flush()
-            self.data += chunk
-            if len(self.data) > STDERR_TAIL_BYTES:
-                del self.data[:-STDERR_TAIL_BYTES]
-                self.truncated = True
+            with self.lock:
+                if self.stopped:
+                    return
+                sys.stderr.buffer.write(chunk)
+                sys.stderr.buffer.flush()
+                self.data += chunk
+                if len(self.data) > STDERR_TAIL_BYTES:
+                    del self.data[:-STDERR_TAIL_BYTES]
+                    self.truncated = True
+
+    def stop(self) -> None:
+        """Ends the copy: once it returns, nothing from the stream reaches the adapter's stderr."""
+        with self.lock:
+            self.stopped = True
 
     def lines(self) -> bytes:
         """Returns the kept bytes; a cut tail loses its first line, which is only an end."""
@@ -387,6 +408,8 @@ def run_codex(
 
     Codex's stderr goes on to the session output as it arrives. Threads write the prompt
     and read stderr, so neither pipe can block the other, and the run ends when Codex exits.
+    Before it returns, the processes that Codex left have ended and the copy of its stderr
+    has stopped, so nothing that the run started writes after the adapter's markers.
     """
     process = subprocess.Popen(
         arguments, stdin=subprocess.PIPE, stderr=subprocess.PIPE, env=environment
@@ -397,8 +420,76 @@ def run_codex(
     reader.start()
     writer.start()
     status = process.wait()
+    stop_leftover_processes()
     reader.join(STDERR_DRAIN_SECONDS)
+    tail.stop()
     return status, tail.lines()
+
+
+def become_subreaper() -> None:
+    """Makes the adapter the reaper of its orphaned descendants, see `PR_SET_CHILD_SUBREAPER`."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, ctypes.c_ulong(1), 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def child_processes() -> list[int]:
+    """Returns the ids of the adapter's child processes, ended ones not yet reaped included."""
+    parent = os.getpid()
+    children = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            stat_line = Path("/proc", entry, "stat").read_text(encoding="utf-8", errors="replace")
+        # A process gone since the listing, or another user's under `hidepid`, is no child
+        # that the adapter can see; a hidden child of its own keeps the adapter in the wait.
+        except (FileNotFoundError, ProcessLookupError, PermissionError):
+            continue
+        # The name in parentheses may hold any character; the state and the parent process
+        # id are the first two fields after its last `)`.
+        if int(stat_line[stat_line.rindex(")") + 1 :].split()[1]) == parent:
+            children.append(int(entry))
+    return children
+
+
+def signal_children(signal_number: int) -> None:
+    """Sends `signal_number` to every child; an unreaped child keeps its id, so none is reused."""
+    for child in child_processes():
+        os.kill(child, signal_number)
+
+
+def reap_children() -> bool:
+    """Reaps every child that has ended; reports whether a child is still running."""
+    while True:
+        try:
+            child, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return False
+        if child == 0:
+            return True
+
+
+def stop_leftover_processes() -> None:
+    """Ends every process that the Codex run left, once Codex has exited and been reaped.
+
+    The adapter is their reaper, so each one is its child or below one. The children get
+    SIGTERM and `LEFTOVER_GRACE_SECONDS` to end, then SIGKILL; the orphans of a killed child
+    become the adapter's children and get SIGKILL in the next round, until no child is left.
+    A process that SIGKILL cannot end keeps the adapter here, before any marker.
+    """
+    signal_children(signal.SIGTERM)
+    deadline = time.monotonic() + LEFTOVER_GRACE_SECONDS
+    while reap_children() and time.monotonic() < deadline:
+        time.sleep(LEFTOVER_POLL_SECONDS)
+    while True:
+        signal_children(signal.SIGKILL)
+        try:
+            os.waitpid(-1, 0)
+        except ChildProcessError:
+            return
+        reap_children()
 
 
 def codex_arguments(
@@ -719,6 +810,11 @@ def main() -> NoReturn:
         fail("Codex executable argument differs from the Codex path file")
     if not sys.stdin.isatty():
         fail("stdin must be a Pohunek-managed PTY")
+    try:
+        become_subreaper()
+    # A C library without `prctl`, as on systems other than Linux, raises AttributeError.
+    except (OSError, AttributeError) as error:
+        fail(f"needs Linux PR_SET_CHILD_SUBREAPER to end Codex's leftover processes: {error}")
 
     descriptor = sys.stdin.fileno()
     original_attributes = termios.tcgetattr(descriptor)

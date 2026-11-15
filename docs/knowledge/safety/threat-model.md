@@ -89,7 +89,7 @@ the engine publishes.
 | 16 | Secret written into config, policy or a prompt | Only `*_env` names appear in config; secret values stay in the environment file | Operator rule |
 | 17 | An agent with an MCP `write` token is steered into `approve` or `retry` by text injected into a pull request | Tool results carry review text as neutralized data inside an untrusted-data notice; `approve` publishes only a clean review that waits at the exact head. Give the `write` scope only to agents that keep review text out of their instructions | Operator choice; see the [MCP server guide](../guides/mcp-server.md#untrusted-output) |
 | 18 | Another process, a host on the network or a web page reads or floods the metrics endpoint | The endpoint is off without its `metrics` section and checks no token, so keep `listen` on loopback and put a reverse proxy with authentication in front of a scraper on another host. It serves only `GET /metrics`, only for a `Host` in `allowed_hosts` (against DNS rebinding), and refuses any request with an `Origin` header. `max_connections` bounds the connections at once, `header_timeout_seconds` the time to send a request head, and `request_timeout_seconds` each connection, which serves one request, and the wait for them at shutdown; each scrape is one indexed read of the store. The text names repositories, hosts, rules and error codes, which a reader learns | Engine behaviour; `listen` and the proxy are the operator's |
-| 19 | A Codex transcript forges the adapter's result frame and exit line, printed by the model or by tool output steered from the pull request, while the model pauses | Every Codex marker carries a nonce that the engine draws from the OS random source for each run; the adapter removes the nonce line before Codex reads the prompt, and the engine reads only the markers with the run's nonce | Engine and adapter behaviour; test `codex_output_is_read_only_with_the_markers_of_the_request_nonce`. An adapter from an earlier release refuses such a request before Codex runs, so the nonce never reaches the model; install the profiles before the engine |
+| 19 | A Codex transcript forges the adapter's result frame and exit line, printed by the model or by tool output steered from the pull request, while the model pauses | Every Codex marker carries a nonce that the engine draws from the OS random source for each run; the adapter removes the nonce line before Codex reads the prompt, and the engine reads only the markers with the run's nonce. Before the adapter prints a marker, it ends every process that the Codex run left (it is their reaper, so a double fork or a new session does not escape) and stops copying Codex's stderr, so no process of the run can append a tail once the nonce is in the output | Engine and adapter behaviour; tests `codex_output_is_read_only_with_the_markers_of_the_request_nonce` and `test_a_process_that_codex_leaves_behind_cannot_write_after_the_markers`; a process started outside the adapter's process tree is a residual risk. An adapter from an earlier release refuses such a request before Codex runs, so the nonce never reaches the model; install the profiles before the engine |
 
 ## Residual risks
 
@@ -103,6 +103,14 @@ These are not solved by autoreview. Operators must accept or mitigate them.
 - **The head checkout runs nothing by itself, but the agent reads it.** For
   `checkout: head`, the agent reads untrusted files. Use `checkout: base` for
   every rule that accepts outside authors.
+- **A Codex run can start a process outside the adapter's process tree.** The
+  Codex adapter ends only the processes below it (attack 19). A tool command
+  that has another service start a process, for example a user service
+  manager over its socket, leaves one that the adapter does not end. If that
+  process can read the session output and write to the session's terminal
+  device, it can append a tail with the nonce after the adapter's markers.
+  Whether the read-only Codex sandbox allows both is not verified. Run Codex
+  reviews on a dedicated review host whose user runs no other services.
 - **Model mistakes.** A reviewer can miss a bug or invent one. The verifier
   reduces false blocking findings and the human approval step catches the rest,
   but neither is a guarantee.
