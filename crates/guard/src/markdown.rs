@@ -114,3 +114,169 @@ struct Walk<'a, F: FnMut(Signal, u32)> {
     /// The alt text of the image being read.
     alt: Option<String>,
 }
+
+impl<F: FnMut(Signal, u32)> Walk<'_, F> {
+    /// Takes shown text, or code when `code` is set, in document order.
+    fn text(&mut self, text: &str, code: bool) {
+        if let Some(alt) = self.alt.as_mut() {
+            alt.push_str(text);
+        }
+        if let Some(frame) = self.frames.first_mut() {
+            frame.all.push_str(text);
+            if !code {
+                frame.plain.push_str(text);
+            }
+        }
+    }
+
+    /// Adds one `signal` when the hidden `text` instructs a reviewer.
+    fn report(&mut self, signal: Signal, text: &str) {
+        if words::instructs(text) {
+            (self.add)(signal, 1);
+        }
+    }
+
+    /// Closes every open frame and reports the outermost one.
+    ///
+    /// A collapsed block shows its code as code once opened, and logs are its usual content,
+    /// so the model-and-directive part of the cue rule leaves code out; override phrases and
+    /// chat-template tokens count in code too.
+    fn close_all(&mut self) {
+        let frames = std::mem::take(&mut self.frames);
+        self.open.clear();
+        if let Some(frame) = frames.into_iter().next() {
+            let hit = if frame.signal == Signal::CollapsedBlockInstruction {
+                words::instructs(&frame.plain) || words::overrides_in(&frame.all)
+            } else {
+                words::instructs(&frame.all)
+            };
+            if hit {
+                (self.add)(frame.signal, 1);
+            }
+        }
+    }
+
+    /// Opens a frame for the element `name`.
+    fn push(&mut self, name: String, signal: Signal, paragraph_only: bool) {
+        let count = self.open.entry(name.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+        self.frames.push(Frame {
+            name,
+            signal,
+            paragraph_only,
+            all: String::new(),
+            plain: String::new(),
+        });
+    }
+
+    /// Closes the innermost open frame of the element `name`, and those opened inside it.
+    fn pop(&mut self, name: &str) {
+        if self.open.get(name).copied().unwrap_or_default() == 0 {
+            return;
+        }
+        let Some(index) = self.frames.iter().rposition(|frame| frame.name == name) else {
+            return;
+        };
+        if index == 0 {
+            self.close_all();
+            return;
+        }
+        for frame in self.frames.drain(index..) {
+            if let Some(count) = self.open.get_mut(&frame.name) {
+                *count = count.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Ends a paragraph: an inline `HIDDEN_ELEMENTS` element still open there was prose.
+    fn end_paragraph(&mut self) {
+        if self
+            .frames
+            .first()
+            .is_some_and(|frame| frame.paragraph_only)
+        {
+            self.frames.clear();
+            self.open.clear();
+        }
+    }
+
+    /// Reads one raw HTML piece; `inline` is set for inline HTML inside a paragraph.
+    fn raw_html(&mut self, html: &str, inline: bool) {
+        let mut rest = html;
+        while let Some(start) = rest.find('<') {
+            self.text(rest.get(..start).unwrap_or_default(), false);
+            self.text(" ", false);
+            let from = rest.get(start..).unwrap_or_default();
+            let head = from
+                .get(..from.len().min(OPENER_MAX))
+                .unwrap_or(from)
+                .to_ascii_lowercase();
+            let markup = HIDDEN_MARKUP
+                .iter()
+                .find(|(open, _)| head.starts_with(open) && (*open != "<!" || declaration(from)));
+            if let Some((open, close)) = markup {
+                let body = from.get(open.len()..).unwrap_or_default();
+                let (content, after) = match body.find(close) {
+                    Some(end) => (
+                        body.get(..end).unwrap_or_default(),
+                        body.get(end.saturating_add(close.len())..)
+                            .unwrap_or_default(),
+                    ),
+                    None => (body, ""),
+                };
+                self.report(Signal::HiddenCommentInstruction, content);
+                rest = after;
+                continue;
+            }
+            rest = self.tag(from, inline);
+        }
+        self.text(rest, false);
+    }
+
+    /// Reads the tag that starts `from` and returns the text after it.
+    fn tag<'h>(&mut self, from: &'h str, inline: bool) -> &'h str {
+        let closing = from.starts_with("</");
+        let name_from = from.get(if closing { 2 } else { 1 }..).unwrap_or_default();
+        let name_len = name_from
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+            .count();
+        if name_len == 0 {
+            self.text("<", false);
+            return from.get(1..).unwrap_or_default();
+        }
+        let name = name_from
+            .get(..name_len)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let attributes_from = name_from.get(name_len..).unwrap_or_default();
+        let end = tag_end(attributes_from);
+        let attributes = attributes_from.get(..end).unwrap_or_default();
+        let after = attributes_from
+            .get(end.saturating_add(1)..)
+            .unwrap_or_default();
+        if closing {
+            self.pop(&name);
+            return after;
+        }
+        self.report(Signal::LinkMetadataInstruction, attributes);
+        let hidden_element = HIDDEN_ELEMENTS.contains(&name.as_str());
+        let signal = if name == "details" {
+            Some(Signal::CollapsedBlockInstruction)
+        } else if hides(attributes)
+            || hidden_element
+            || self.open.get(&name).copied().unwrap_or_default() > 0
+        {
+            Some(Signal::HiddenElementInstruction)
+        } else {
+            None
+        };
+        if let Some(signal) = signal
+            && !attributes.trim_end().ends_with('/')
+        {
+            let paragraph_only = inline && hidden_element && self.frames.is_empty();
+            self.push(name, signal, paragraph_only);
+        }
+        after
+    }
+}
