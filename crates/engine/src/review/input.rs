@@ -24,6 +24,9 @@ use crate::verify::VerifierResult;
 /// Step and state names are persisted; `STEP_ARTIFACT` and `STEP_PUBLICATION` are in `engine`.
 pub(crate) const STEP_DISCUSSION: &str = "discussion";
 
+/// Step that stores the issues the pull request closes, bounded, for an intent check.
+pub(crate) const STEP_LINKED_ISSUES: &str = "linked_issues";
+
 /// Step that stores the lines that accept an inline comment.
 pub(crate) const STEP_COMMENTABLE: &str = "commentable";
 
@@ -343,6 +346,7 @@ mod tests {
                 checkout,
                 project_sources: vec!["manual".to_owned()],
                 verifier: None,
+                ..Pipeline::default()
             },
             ..Rule::default()
         }

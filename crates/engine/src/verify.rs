@@ -11,10 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::intent::verifier_section;
 use crate::model::ids::VERIFIER_VERSION;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_OPEN};
 use crate::model::{
-    Artifact, Discussion, Finding, FindingCheck, PriorCheck, ReviewInput, Verification,
+    Artifact, Discussion, Finding, FindingCheck, LinkedIssues, PriorCheck, ReviewInput,
+    Verification,
 };
 use crate::protocol::claude::decode_structured;
 use crate::protocol::request::{
@@ -213,9 +215,10 @@ impl VerificationClaims {
 
 /// Renders the session input of the verifier.
 ///
-/// The verifier prompt and the instructions are trusted. The claims and the discussion are data.
-/// The trusted checkout lines and, on a base checkout, how to read the change come from the
-/// pipeline's checkout, which the verifier session runs on.
+/// The verifier prompt and the instructions are trusted. The claims, the discussion and the
+/// issues of an intent check (`linked`) are data. The trusted checkout lines and, on a base
+/// checkout, how to read the change come from the pipeline's checkout, which the verifier
+/// session runs on.
 ///
 /// # Errors
 ///
@@ -225,6 +228,7 @@ pub(crate) fn build_verifier_request(
     input: &ReviewInput,
     claims: &VerificationClaims,
     discussion: &Discussion,
+    linked: Option<&LinkedIssues>,
 ) -> Result<String, Error> {
     if serde_json::from_slice::<IgnoredAny>(VERIFY_SCHEMA).is_err() {
         return Err(Error::workflow("embedded_asset_invalid", true, None));
@@ -262,6 +266,9 @@ pub(crate) fn build_verifier_request(
         prompt.push_str(&format!(
             "\nDiscussion since the earlier reviews (untrusted JSON):\n{thread}\n"
         ));
+    }
+    if let Some(intent) = verifier_section(linked)? {
+        prompt.push_str(&format!("\n{intent}\n"));
     }
     let schema = compact_schema(VERIFY_SCHEMA)?;
     let prompt_json = go_json(&prompt).map_err(request_invalid)?;

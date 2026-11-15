@@ -9,6 +9,7 @@ use super::plan::{PublicationPlan, blocking_count};
 use super::{MarkerName, publication_marker};
 use crate::error::Error;
 use crate::integrations::{ChangedFile, GitHubReview, InlineComment};
+use crate::intent::intent_line;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Artifact, Finding, PriorResult, ReviewInput};
 use crate::verify::{demoted, verification_line};
@@ -79,6 +80,9 @@ pub(crate) fn render_review(
             neutralize(&summary.label),
             neutralize_block(&summary.summary)
         ));
+    }
+    if let Some(intent) = &artifact.intent {
+        sections.push(intent_line(intent));
     }
     let verification = verification_line(artifact.verification.as_ref());
     if !verification.is_empty() {
@@ -590,6 +594,7 @@ mod tests {
                 checkout: Checkout::Base,
                 project_sources: vec!["manual".to_owned()],
                 verifier: None,
+                ..Pipeline::default()
             },
             ..Rule::default()
         }

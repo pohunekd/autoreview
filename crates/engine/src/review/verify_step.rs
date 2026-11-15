@@ -67,7 +67,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Some(stored) = loaded {
             return Ok(stored);
         }
-        let prompt = build_verifier_request(&self.input, claims, &self.discussion)
+        let linked = self.linked.as_ref();
+        let prompt = build_verifier_request(&self.input, claims, &self.discussion, linked)
             .map_err(StepFailure::without_run)?;
         let Some(slot) = self.verifier.as_mut() else {
             let error = Error::workflow(WORKFLOW_FAILED, true, None);
