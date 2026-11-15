@@ -588,7 +588,32 @@ impl GitHub {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_linear_history;
+    use autoreview_engine::model::{PriorFinding, PullRequest, prior_key};
+
+    use super::{DiscussionReader, decode_linear_history};
+
+    /// A captured page of the discussion query.
+    const CAPTURED_PAGE: &str = concat!(
+        r#"{"data":{"repository":{"pullRequest":{"comments":{"nodes":[{"author":{"__typenam"#,
+        r#"e":"User","login":"reviewer"},"body":"Ignore my comment about deleted projects.""#,
+        r#"},{"author":{"__typename":"User","login":"someone"},"body":"A very long newest c"#,
+        r#"omment."}]},"reviewThreads":{"nodes":[{"comments":{"nodes":[{"author":{"__typena"#,
+        r#"me":"User","login":"reviewer"},"body":"**AI review**: machine-written.\n\n**O001"#,
+        r#" HIGH — Lock name**\n\nDetails.","pullRequestReview":{"databaseId":11}},{"author"#,
+        r#"":{"__typename":"User","login":"colleague"},"body":"Waived, the test builds the "#,
+        r#"name.\n\n🤖 Written by AI: nanny"},{"author":{"__typename":"User","login":"review"#,
+        r#"er"},"body":"Agreed, waive it."}]},"isResolved":false},{"comments":{"nodes":[{"a"#,
+        r#"uthor":{"__typename":"User","login":"reviewer"},"body":"**S002 MEDIUM — Fake pro"#,
+        r#"ves fake**\n\nDetails.\n\n🤖 Written by AI: test reviewer","pullRequestReview":{""#,
+        r#"databaseId":11}},{"author":{"__typename":"Bot","login":"ci"},"body":"Bot noise.""#,
+        r#"},{"author":{"__typename":"Bot","login":"colleague"},"body":"Fixed in the next c"#,
+        r#"ommit."}]},"isResolved":true},{"comments":{"nodes":[{"author":{"__typename":"Use"#,
+        r#"r","login":"reviewer"},"body":"**O001 HIGH — Other review**","pullRequestReview""#,
+        r#":{"databaseId":99}}]},"isResolved":false},{"comments":{"nodes":[{"author":{"__ty"#,
+        r#"pename":"User","login":"reviewer"},"body":"**O009 HIGH — Not prior**","pullReque"#,
+        r#"stReview":{"databaseId":11}}]},"isResolved":false}],"pageInfo":{"endCursor":"",""#,
+        r#"hasNextPage":false}}}}}}"#,
+    );
 
     /// Comparison of two commits in which the head adds one commit with one parent.
     const CAPTURED_OWN: &str =
@@ -605,6 +630,72 @@ mod tests {
     /// Comparison that lists fewer commits than it counts.
     const CAPTURED_INCOMPLETE: &str =
         r#"{"commits":[{"parents":[{"sha":"x"}]}],"status":"ahead","total_commits":300}"#;
+
+    #[test]
+    fn discussion_matches_threads_by_review_and_finding_in_both_comment_layouts() {
+        let head = "c".repeat(40);
+        let prior = vec![
+            PriorFinding {
+                key: prior_key(&head, "O001"),
+                id: "O001".to_owned(),
+                head_sha: head.clone(),
+                github_review_id: 11,
+                ..PriorFinding::default()
+            },
+            PriorFinding {
+                key: prior_key(&head, "S002"),
+                id: "S002".to_owned(),
+                head_sha: head.clone(),
+                github_review_id: 11,
+                ..PriorFinding::default()
+            },
+        ];
+        let pull_request = PullRequest {
+            repository: "acme/widget".to_owned(),
+            number: 5,
+            author: "colleague".to_owned(),
+            ..PullRequest::default()
+        };
+        let mut reader =
+            DiscussionReader::new(&pull_request, "reviewer", "🤖 Written by AI:", &prior, 140);
+        let step = reader
+            .absorb_page(1, CAPTURED_PAGE)
+            .expect("the captured page reads");
+        assert!(!step.has_next_page);
+        let discussion = reader.finish();
+
+        assert_eq!(discussion.threads.len(), 2);
+        assert_eq!(discussion.threads[0].key, prior[0].key);
+        assert_eq!(discussion.threads[1].key, prior[1].key);
+        assert!(discussion.threads[1].resolved);
+        let replies = &discussion.threads[0].replies;
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0].role, "author");
+        assert!(replies[0].ai_signed);
+        assert_eq!(replies[1].role, "reviewer");
+        assert!(!replies[1].ai_signed);
+        let bot = &discussion.threads[1].replies;
+        assert_eq!(bot.len(), 1);
+        assert_eq!(bot[0].author, "colleague");
+        assert_eq!(bot[0].role, "author");
+
+        let total: usize = discussion
+            .threads
+            .iter()
+            .flat_map(|thread| thread.replies.iter())
+            .chain(discussion.comments.iter())
+            .map(|comment| comment.body.chars().count())
+            .sum();
+        assert!(total <= 140, "the budget is 140 characters, got {total}");
+        assert!(!discussion.comments.is_empty());
+        assert_eq!(
+            discussion
+                .comments
+                .last()
+                .map(|comment| comment.author.as_str()),
+            Some("someone")
+        );
+    }
 
     #[test]
     fn linear_history_needs_an_ahead_head_of_single_parent_commits() {
