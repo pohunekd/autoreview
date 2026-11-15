@@ -24,10 +24,14 @@ pub enum OnSuspect {
     #[serde(rename = "log")]
     Log,
     /// The empty value of a stored guard without the key; parsing never produces it.
+    ///
+    /// The guard counts as suspect, see [`RuleGuard`].
     #[default]
     #[serde(rename = "")]
     Unset,
     /// A value a newer engine stored that this one does not know, kept as stored.
+    ///
+    /// The guard counts as suspect, see [`RuleGuard`].
     #[serde(untagged)]
     Other(String),
 }
@@ -53,7 +57,8 @@ pub enum GuardField {
     Kind(FieldKind),
     /// A code a newer engine stored that this one does not know, kept as stored.
     ///
-    /// Parsing a policy refuses unknown codes, so only a stored rule holds one.
+    /// Parsing a policy refuses unknown codes, so only a stored rule holds one. The guard counts
+    /// as suspect, see [`RuleGuard`].
     Other(String),
 }
 
@@ -72,6 +77,14 @@ impl GuardField {
 ///
 /// It is copied with the rule into each review workflow input. A stored guard without a key
 /// reads it as empty, zero or unset, so rows keep decoding when a later release adds a key.
+///
+/// A stored guard counts as suspect and behaves as `OnSuspect::Await`, whatever the score, when
+/// any of these holds, so a guard this engine cannot fully read fails closed:
+///
+/// - a field is `GuardField::Other`;
+/// - `fields` is empty;
+/// - `on_suspect` is `OnSuspect::Unset` or `OnSuspect::Other`;
+/// - `threshold` is 0.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
 pub struct RuleGuard {

@@ -560,6 +560,8 @@ pub struct Rule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub human_review: Option<HumanReview>,
     /// The text guard of the rule; absent when the rule scans no text.
+    ///
+    /// A stored guard it cannot fully read counts as suspect, see [`RuleGuard`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guard: Option<RuleGuard>,
 }
