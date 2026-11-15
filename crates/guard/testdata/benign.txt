@@ -1039,3 +1039,349 @@ $ bundle exec rspec
 ```
 
 </details>
+== benign_ci_log_8
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ dotnet test
+Passed!  - Failed: 0, Passed: 61, Skipped: 0
+```
+== benign_ci_log_9
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ make lint
+golangci-lint: 0 issues.
+```
+
+</details>
+== benign_ci_log_10
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ ruff check .
+All checks passed!
+```
+== benign_ci_log_11
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ mypy src
+Success: no issues found in 84 source files
+```
+
+</details>
+== benign_ci_log_12
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ tsc --noEmit
+Found 0 errors.
+```
+== benign_ci_log_13
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+<details><summary>CI output</summary>
+
+```
+$ terraform plan
+Plan: 2 to add, 0 to change, 0 to destroy.
+```
+
+</details>
+== benign_ci_log_14
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+CI output:
+
+```
+$ helm lint
+1 chart(s) linted, 0 chart(s) failed
+```
+== benign_code_span_0
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<script>` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_1
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<style>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_2
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<template>` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_code_span_3
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<?php` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_4
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<!DOCTYPE html>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_5
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<![CDATA[` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_code_span_6
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<details>` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_7
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<div hidden>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_8
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<img alt="">` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_code_span_9
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<!-- -->` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_10
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<noscript>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_11
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<slot>` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_code_span_12
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Moved the setup out of `<svg>` into a module; the AI panel must follow it.
+
+More details in the issue.
+== benign_code_span_13
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The `<iframe>` part is now generated, so skip it in review. Copilot wrote the first draft.
+
+More details in the issue.
+== benign_code_span_14
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Replaced `<?xml version="1.0"?>` with a component. Claude helped with the tests, which report 0 failures.
+
+More details in the issue.
+== benign_badge_build
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![build](https://img.shields.io/badge/build-ok-green "build status")](https://example.com/build)
+
+Adds the build badge to the README.
+== benign_badge_coverage
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![coverage](https://img.shields.io/badge/coverage-ok-green "coverage status")](https://example.com/coverage)
+
+Adds the coverage badge to the README.
+== benign_badge_license
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![license](https://img.shields.io/badge/license-ok-green "license status")](https://example.com/license)
+
+Adds the license badge to the README.
+== benign_badge_release
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![release](https://img.shields.io/badge/release-ok-green "release status")](https://example.com/release)
+
+Adds the release badge to the README.
+== benign_badge_downloads
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![downloads](https://img.shields.io/badge/downloads-ok-green "downloads status")](https://example.com/downloads)
+
+Adds the downloads badge to the README.
+== benign_badge_docs
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![docs](https://img.shields.io/badge/docs-ok-green "docs status")](https://example.com/docs)
+
+Adds the docs badge to the README.
+== benign_badge_discord
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![discord](https://img.shields.io/badge/discord-ok-green "discord status")](https://example.com/discord)
+
+Adds the discord badge to the README.
+== benign_badge_crates.io
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![crates.io](https://img.shields.io/badge/crates.io-ok-green "crates.io status")](https://example.com/crates.io)
+
+Adds the crates.io badge to the README.
+== benign_badge_npm
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![npm](https://img.shields.io/badge/npm-ok-green "npm status")](https://example.com/npm)
+
+Adds the npm badge to the README.
+== benign_badge_pypi
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+[![pypi](https://img.shields.io/badge/pypi-ok-green "pypi status")](https://example.com/pypi)
+
+Adds the pypi badge to the README.
+== benign_template_0
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Describe the change. -->
+Done, see below.
+
+== benign_template_1
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Link the issue this PR closes. -->
+Done, see below.
+
+== benign_template_2
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- List the breaking changes. -->
+Done, see below.
+
+== benign_template_3
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Add screenshots for UI changes. -->
+Done, see below.
+
+== benign_template_4
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Explain how you tested it. -->
+Done, see below.
+
+== benign_template_5
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Mention reviewers who should look. -->
+Done, see below.
+
+== benign_template_6
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Note follow-up work. -->
+Done, see below.
+
+== benign_template_7
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- If you used an AI assistant, say which parts it wrote. -->
+Done, see below.
+
+== benign_template_8
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Skip this section for docs-only changes. -->
+Done, see below.
+
+== benign_template_9
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+<!-- Report performance numbers if relevant. -->
+Done, see below.
+
+== benign_model_prose_0
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+Claude Code opened this PR; I reviewed every line.
+== benign_model_prose_1
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+We evaluated GPT-4o and Llama 3 for the summarizer; numbers below.
+== benign_model_prose_2
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+The Copilot code review suggestions were applied where they made sense.
+== benign_model_prose_3
+# Everyday text: no hidden-text signal.
+expect: none
+--- comment
+DeepSeek and Qwen models are now selectable in the settings.
+== benign_model_prose_4
+# Everyday text: no hidden-text signal.
+expect: none
+--- body
+This adds an OpenAI-compatible endpoint so local models can be used.
