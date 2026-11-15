@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use autoreview_policy::Level;
 use serde_json::json;
+use time::OffsetDateTime;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{Credential, Credentials};
 use crate::integrations::SessionRequest;
@@ -105,6 +107,34 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     assert!(
         h.started_count() == 2 && h.publications() == 2,
         "an approved head was reviewed or published again"
+    );
+    // The hand-off counts once in `notes_to_author`, from its stored plan and after a prune.
+    let today = OffsetDateTime::now_utc().date();
+    let since = today
+        .previous_day()
+        .expect("a day before today")
+        .to_string();
+    let history = || {
+        let cancel = CancellationToken::new();
+        let document = h.engine.review_stats(&cancel, Some(&since), None);
+        let document = document.expect("the statistics read");
+        let mut document = serde_json::to_value(document).expect("the document encodes");
+        let mut history = document["history"].take();
+        if let Some(history) = history.as_object_mut() {
+            history.remove("pruned_before");
+        }
+        history
+    };
+    let kept = history();
+    let cutoff = OffsetDateTime::now_utc() + time::Duration::days(1);
+    let pruned = h.store.prune_reviews(cutoff).expect("prune the reviews");
+    let rolled_up = history();
+    assert!(
+        pruned == 2
+            && kept["totals"]["notes_to_author"] == json!(1)
+            && kept["by_repository"][0]["notes_to_author"] == json!(1)
+            && rolled_up == kept,
+        "pruned {pruned}: kept = {kept}, rolled up = {rolled_up}"
     );
     h.stop_engine().await;
 }
