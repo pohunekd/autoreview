@@ -19,7 +19,6 @@ use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
-use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Credential;
@@ -103,8 +102,6 @@ pub(crate) struct FakeState {
     pub(crate) discussion_reads: Vec<Vec<PriorFinding>>,
     /// Pull requests whose newer head is a rewritten history, by head SHA.
     pub(crate) rewritten: BTreeSet<String>,
-    /// Error code that every publication fails with; `None` lets publications succeed.
-    pub(crate) publish_fail: Option<String>,
     /// Until this instant, reads and searches fail transiently; `None` never fails them.
     pub(crate) transient_until: Option<Instant>,
     /// Refused candidates that the candidate search returns.
@@ -113,8 +110,6 @@ pub(crate) struct FakeState {
     pub(crate) published: Vec<GitHubReview>,
     /// Head SHA of each review in `published`, in the same order.
     pub(crate) published_heads: Vec<String>,
-    /// Name of the credential that posted each review in `published`, in the same order.
-    pub(crate) publishers: Vec<String>,
     /// Login of the credential that posted each review in `published`, in the same order.
     pub(crate) publisher_logins: Vec<String>,
     /// Every pull request read, as `repository#number credential`, in order.
@@ -125,8 +120,6 @@ pub(crate) struct FakeState {
     pub(crate) lookups: usize,
     /// Pull requests whose review request a posted review answered, by `repository#number`.
     pub(crate) answered: BTreeSet<String>,
-    /// Gate that every posted review waits on before it returns; `None` holds none.
-    pub(crate) held_publications: Option<Arc<Semaphore>>,
     /// Every notification that was sent.
     pub(crate) notes: Vec<Note>,
     /// Counter of session IDs.
@@ -645,42 +638,29 @@ impl Integrations for FakeIntegration {
         // An earlier review is reused when its body carries the marker and it is not dismissed,
         // as the GitHub client finds it. A posted review answers the review request of the
         // login, as on GitHub.
-        let (result, gate) = {
+        let result = {
             let mut state = self.lock();
-            if let Some(code) = state.publish_fail.clone() {
-                (Err(Error::workflow(code, true, None)), None)
-            } else if let Some(index) =
-                state.standing_review(&review.marker, None, &credential.login)
-            {
-                let reused = PublishResult {
+            if let Some(index) = state.standing_review(&review.marker, None, &credential.login) {
+                PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: (index + 1) as i64,
                     review_url: format!("{}#review", pull_request.url),
                     reused: true,
-                };
-                (Ok(reused), None)
+                }
             } else {
                 state.published.push(review.clone());
                 state.published_heads.push(pull_request.head_sha.clone());
-                state.publishers.push(credential.name.clone());
                 state.publisher_logins.push(credential.login.clone());
                 state.answered.insert(pull_request.key());
-                let posted = PublishResult {
+                PublishResult {
                     decision: review.decision.clone(),
                     github_review_id: state.published.len() as i64,
                     review_url: format!("{}#review", pull_request.url),
                     reused: false,
-                };
-                (Ok(posted), state.held_publications.clone())
+                }
             }
         };
-        async move {
-            if let Some(gate) = gate {
-                // The permit goes back when it drops, so one permit releases every held review.
-                let _permit = gate.acquire().await;
-            }
-            result
-        }
+        ready(Ok(result))
     }
 
     fn find_published_review(
