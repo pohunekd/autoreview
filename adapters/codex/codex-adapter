@@ -812,8 +812,9 @@ def main() -> NoReturn:
         fail("stdin must be a Pohunek-managed PTY")
     try:
         become_subreaper()
-    except OSError as error:
-        fail(f"cannot become the reaper of the processes that Codex leaves: {error.strerror}")
+    # A C library without `prctl`, as on systems other than Linux, raises AttributeError.
+    except (OSError, AttributeError) as error:
+        fail(f"needs Linux PR_SET_CHILD_SUBREAPER to end Codex's leftover processes: {error}")
 
     descriptor = sys.stdin.fileno()
     original_attributes = termios.tcgetattr(descriptor)

@@ -269,7 +269,9 @@ are in [wire names](#wire-names).
 ### The Codex adapter
 
 The adapter for `codex-envelope` lives in `adapters/codex/` and uses only the
-Python standard library (Python 3.11 or newer). It has two parts:
+Python standard library (Python 3.11 or newer). It runs only on Linux: it needs
+`PR_SET_CHILD_SUBREAPER` to end the processes that a run leaves, and exits with
+status 64 on a host without it. It has two parts:
 
 - `codex-adapter` is the program a profile starts. It runs under `python3 -I`.
   Before it reads the request it sets the fixed terminal title
@@ -351,10 +353,9 @@ Python standard library (Python 3.11 or newer). It has two parts:
   `[autoreview-codex/v2 <nonce> refused:head_unavailable]` comes right before the
   exit line, and the engine stops the review with `review_head_unavailable`
   without a fresh session.
-  An invalid argument, Codex path file or input frame, or a host where the
-  adapter cannot become the reaper of Codex's processes, stops the adapter
-  before that: it prints the reason and exits with status 64 at once, without
-  the exit line.
+  An invalid argument, Codex path file or input frame, or a host without
+  Linux's `PR_SET_CHILD_SUBREAPER`, stops the adapter before that: it prints
+  the reason and exits with status 64 at once, without the exit line.
 - `render_profile.py` writes a profile from a base Codex profile. It copies the
   runtime package pin and the allowed environment keys (see
   [agent profiles](#agent-profiles)) of the base profile, and turns off
