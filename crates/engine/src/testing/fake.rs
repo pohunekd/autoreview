@@ -5,7 +5,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::{Future, Ready, ready};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -130,6 +130,12 @@ pub(crate) struct FakeState {
     pub(crate) token_checks: Vec<String>,
     /// Every pull request state read, as `repository#number credential`, in order.
     pub(crate) state_reads: Vec<String>,
+    /// Hosts whose daemon advertises the fetch of an extra ref at session start.
+    pub(crate) fetch_ref_hosts: BTreeSet<String>,
+    /// Number of the next capability reads that fail as a transient `pohunek_request_failed`.
+    pub(crate) fetch_ref_failures: usize,
+    /// Failures of the next session starts, in order, as error code and permanence.
+    pub(crate) start_failures: VecDeque<(String, bool)>,
 }
 
 impl FakeState {
@@ -408,6 +414,19 @@ impl Integrations for FakeIntegration {
         ready(Err(Error::workflow("pohunek_request_failed", false, None)))
     }
 
+    fn fetch_ref_supported(
+        &self,
+        _cancel: &CancellationToken,
+        host: &str,
+    ) -> impl Future<Output = Result<bool, Error>> + Send {
+        let mut state = self.lock();
+        if state.fetch_ref_failures > 0 {
+            state.fetch_ref_failures -= 1;
+            return ready(Err(Error::workflow("pohunek_request_failed", false, None)));
+        }
+        ready(Ok(state.fetch_ref_hosts.contains(host)))
+    }
+
     fn ensure_session(
         &self,
         _cancel: &CancellationToken,
@@ -428,6 +447,8 @@ impl Integrations for FakeIntegration {
                     runtime_generation: "1".to_string(),
                     reviewer_id: request.reviewer.id.clone(),
                 })
+            } else if let Some((code, permanent)) = state.start_failures.pop_front() {
+                Err(Error::workflow(code, permanent, None))
             } else {
                 state.next_session += 1;
                 let id = format!("s-{}", state.next_session);
