@@ -1,0 +1,4 @@
+---
+kind: security
+---
+Codex reviewer runs now refuse a `checkout: head` pull request that adds or changes a repository skill (`.agents/skills/` or `.codex/skills/`, as a file, a link or an ignored file in the checkout) before Codex starts, with `refused:repository_skills` before the exit line, and pass `skills.include_instructions=false`: before, Codex 0.167.0 loaded those skills without host trust, listed them on every turn and injected the whole `SKILL.md` of a skill that the prompt names, so a pull request could add instructions to its own review. The engine reads the refusal as `review_result_invalid`, so every attempt is refused and nothing is published; a `checkout: base` review and a head whose skills match the trusted base run as before. The change reaches a review host only when its profiles are installed again with `autoreview profiles install`.

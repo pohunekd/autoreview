@@ -61,6 +61,11 @@ LEGACY_MARKERS = Markers(
     reason_format="[pohunek-codex-review-reason-v1:{}]",
 )
 REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
+REFUSAL_REPOSITORY_SKILLS = "repository_skills"
+# Codex 0.167.0 loads the skills in `.agents/skills` and `.codex/skills` of every directory
+# from the project root to its working directory, without host trust, through folder links.
+SKILL_PARENT_FOLDERS = (".agents", ".codex")
+SYMBOLIC_LINK_MODE = "120000"
 # Most UTF-8 bytes of a reason, as the engine's bound; a longer one is cut at a character.
 REASON_MAX_BYTES = 512
 # Codex prints a failed turn as `ERROR: ...`; its argument parser prints `error: ...`.
@@ -206,6 +211,10 @@ class HeadUnavailableError(InputFrameError):
     """Raised when the trusted pull request head is not in the review checkout."""
 
 
+class RepositorySkillsError(InputFrameError):
+    """Raised when a head checkout holds skills for Codex that the trusted base does not."""
+
+
 def read_exact(stream: BinaryIO, size: int) -> bytes:
     data = bytearray()
     while len(data) < size:
@@ -326,6 +335,8 @@ def refusal_marker(error: InputFrameError, after_run: bool, markers: Markers) ->
         lines.append(reason_marker(f"{PROGRAM_NAME}: {error}".encode("utf-8"), markers))
     if isinstance(error, HeadUnavailableError):
         lines.append(markers.refusal_format.format(REFUSAL_HEAD_UNAVAILABLE))
+    if isinstance(error, RepositorySkillsError):
+        lines.append(markers.refusal_format.format(REFUSAL_REPOSITORY_SKILLS))
     return "\n".join(lines)
 
 
@@ -665,6 +676,68 @@ def verify_checkout_head(prompt: str, cwd: Path | None = None) -> str:
     return expected_head_sha
 
 
+def git_entries(arguments: list[str], cwd: Path | None = None) -> list[str]:
+    """Returns the NUL-separated entries that a git listing prints."""
+    listed = subprocess.run(git_command(*arguments), capture_output=True, check=False, cwd=cwd)
+    if listed.returncode != 0:
+        raise InputFrameError("review checkout skills are unavailable")
+    entries = listed.stdout.split(b"\0")
+    return [entry.decode("utf-8", errors="surrogateescape") for entry in entries if entry]
+
+
+def skill_levels(cwd: Path | None = None) -> list[str]:
+    """Returns the directories from the checkout root to `cwd`, each as a root-relative prefix."""
+    shown = subprocess.run(
+        git_command("rev-parse", "--show-prefix"), capture_output=True, check=False, cwd=cwd
+    )
+    if shown.returncode != 0:
+        raise InputFrameError("review checkout directory is unavailable")
+    prefix = shown.stdout.removesuffix(b"\n").decode("utf-8", errors="surrogateescape")
+    parts = [part for part in prefix.split("/") if part]
+    return ["".join(part + "/" for part in parts[:count]) for count in range(len(parts) + 1)]
+
+
+def is_skill_path(path: str, levels: list[str]) -> bool:
+    """Reports whether `path` is a skill folder of a level, below one, or the entry above it."""
+    for level in levels:
+        for parent in SKILL_PARENT_FOLDERS:
+            skills = f"{level}{parent}/skills"
+            if path in (level + parent, skills) or path.startswith(skills + "/"):
+                return True
+    return False
+
+
+def verify_repository_skills(prompt: str, cwd: Path | None = None) -> None:
+    """Refuses a clean head checkout whose skill folders differ from the trusted base.
+
+    A path that the head adds or changes counts, as do a symbolic link and an ignored file
+    there, which Codex reads but the diff and the clean check do not show. A deletion does not.
+    """
+    levels = skill_levels(cwd)
+    pathspecs = [
+        f":(top,literal){level}{parent}" for level in levels for parent in SKILL_PARENT_FOLDERS
+    ]
+    base_sha = trusted_base_sha(prompt)
+    changed = git_entries(
+        ["diff-tree", "-r", "-z", "--name-only", "--diff-filter=d", base_sha, "HEAD", "--"]
+        + pathspecs,
+        cwd,
+    )
+    tree = git_entries(["ls-tree", "-r", "-z", "--full-tree", "HEAD", "--", *pathspecs], cwd)
+    links = [
+        entry.partition("\t")[2] for entry in tree if entry.startswith(SYMBOLIC_LINK_MODE + " ")
+    ]
+    ignored = git_entries(
+        ["ls-files", "-z", "--full-name", "--others", "--ignored", "--exclude-standard", "--"]
+        + pathspecs,
+        cwd,
+    )
+    if any(is_skill_path(path, levels) for path in (*changed, *links, *ignored)):
+        raise RepositorySkillsError(
+            "review checkout adds or changes repository skills that Codex would load"
+        )
+
+
 def verify_base_checkout(prompt: str, cwd: Path | None = None) -> str:
     """Checks a base checkout and returns its HEAD; it reads only the local repository.
 
@@ -697,6 +770,7 @@ def verify_review_checkout(prompt: str, cwd: Path | None = None) -> tuple[str, s
     if trusted_checkout(prompt) == CHECKOUT_BASE:
         return trusted_head_sha(prompt), verify_base_checkout(prompt, cwd)
     head_sha = verify_checkout_head(prompt, cwd)
+    verify_repository_skills(prompt, cwd)
     return head_sha, head_sha
 
 
