@@ -113,9 +113,11 @@ The cheap pass costs less. Like `strict`, its re-reviews settle the earlier
 findings, its notes do not block, and it reviews the whole pull request again
 after a rebase or a force push. It has no verifier, because a verifier must be a
 Claude reviewer and therefore sits in `strict`. Its Codex reviewer works from the
-base checkout, so the pull request head must already be in the project
-repository on the review host (`git fetch origin refs/pull/<n>/head` there),
-or the review stops with `review_head_unavailable`; see
+base checkout, so the pull request head must be in the project repository on
+the review host. The session start fetches it with pohunek 0.43.0 or later
+(CLI and daemon); with an older pohunek run
+`git fetch origin refs/pull/<n>/head` there, or the review stops with
+`review_head_unavailable`; see
 [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused).
 
 ## Recipe d: notes for humans, drafts of coding agents marked ready
