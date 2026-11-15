@@ -210,11 +210,13 @@ path_trust() {
 }
 
 # Checks the pure functions of this script against fixed tables; reads nothing
-# else. The profile tables are local, so the functions under test read them.
+# else. The profile tables and the paths are local, so the functions under
+# test read them.
 self_test() {
     local checks=0 failures=0 expected
     local autoreview_bin=/h/.local/bin/autoreview pohunek_timeout=45
-    local -a install_command=()
+    local dir=/h/autoreview env_file=/h/.config/autoreview/autoreview.env
+    local -a install_command=() unit_names=() unit_texts=()
     local -A profile_agent=([one]=claude [two]=codex) profile_model=([one]=m-1 [two]=m.2)
     local -A profile_effort=([one]=max [two]=xhigh) profile_input=([one]=1048576 [two]=2048)
     local -A profile_binary=([one]="/opt/my tools/claude" [two]=/usr/bin/codex)
@@ -343,6 +345,9 @@ self_test() {
     expected+=" --maximum-retention-seconds 7200 --pohunek-timeout-seconds 45 "
     profile_install_command two
     check "printed install command of a Codex profile" "$expected" "$(install_command_text)"
+    render_units
+    check "umask of the review service" 1 "$(grep -cx 'UMask=0077' <<<"${unit_texts[0]}")"
+    check "umask of the queue service" 1 "$(grep -cx 'UMask=0077' <<<"${unit_texts[1]}")"
     if [ "$failures" -ne 0 ]; then
         echo "self-test: $failures of $checks checks failed"
         return 1
