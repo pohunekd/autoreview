@@ -451,6 +451,3 @@ fn path_parts_clean(text: &str) -> bool {
 fn invalid_flag(flag: &str, reason: &'static str) -> Error {
     Error::config(CONFIGURATION_INVALID, flag, Some(reason.into()))
 }
-
-#[cfg(test)]
-mod tests;

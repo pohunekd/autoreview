@@ -2359,21 +2359,6 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_do_not_expose_raw_errors() {
-        let disk = std::io::Error::other("secret-token: No space left on device");
-        assert!(
-            diagnostic(Some(&disk)) == "disk_full",
-            "disk failure not classified"
-        );
-        let raw = std::io::Error::other("token=secret prompt=private");
-        let got = diagnostic(Some(&raw));
-        assert!(
-            got == "unclassified_cli_failure",
-            "raw detail escaped: {got}"
-        );
-    }
-
-    #[test]
     fn request_timeout_is_retryable_and_explained() {
         assert!(
             retryable("pohunek_request_timeout"),

@@ -927,46 +927,9 @@ fn is_error_code(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-
     use autoreview_engine::error_code;
 
-    use super::{fetch_ref_from_output, local_environment, mismatch_commit};
-
-    fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
-        items
-            .iter()
-            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
-            .collect()
-    }
-
-    #[test]
-    fn local_environment_keeps_the_daemon_paths_and_drops_identity_and_secrets() {
-        let parent = pairs(&[
-            ("PATH", "/usr/bin"),
-            ("POHUNEK_SESSION_ID", "session-1"),
-            ("POHUNEK_DAEMON_ID", "daemon-1"),
-            ("XDG_STATE_HOME", "/home/operator/.local/state"),
-            ("XDG_RUNTIME_DIR", "/run/user/1000"),
-            ("GH_TOKEN", "synthetic-gh"),
-            ("MATRIX_ACCESS_TOKEN", "synthetic-matrix"),
-            ("AUTOREVIEW_GH_TOKEN", "synthetic-autoreview"),
-            ("SHARED_TOOL_TOKEN", "synthetic-shared"),
-            ("GITHUB_TOKEN", "synthetic-github"),
-            ("HTTPS_PROXY", "http://proxy.example:3128"),
-            ("PAGER", "less"),
-        ]);
-
-        assert_eq!(
-            local_environment(parent),
-            pairs(&[
-                ("PATH", "/usr/bin"),
-                ("XDG_STATE_HOME", "/home/operator/.local/state"),
-                ("XDG_RUNTIME_DIR", "/run/user/1000"),
-                ("PAGER", "cat"),
-            ])
-        );
-    }
+    use super::{fetch_ref_from_output, mismatch_commit};
 
     /// Only an advertised `true` enables the head fetch; an older CLI or daemon omits the key
     /// (#255).

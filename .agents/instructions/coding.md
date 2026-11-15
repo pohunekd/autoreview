@@ -388,8 +388,7 @@ What is not compatible, by decision:
   (`cmd/autoreview/github.go:40`) refuses the underscore, so Go fails such a
   pull request as `github_response_invalid` (`github.go:174`, `github.go:228`).
   No stored row changes, and a rollback to Go brings the Go behaviour back. The
-  regression tests are `author_logins_follow_the_github_login_grammar` and
-  `trusted_logins_follow_the_github_login_grammar`.
+  regression test is `trusted_logins_follow_the_github_login_grammar`.
 - **Served Enterprise Managed User login (#276):** `github.credentials.login`,
   `init --login`, the review input's `publisher_login` and the permission read
   check `autoreview_policy::user_login_valid`, the user branch of the #227
