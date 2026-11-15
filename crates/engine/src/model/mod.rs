@@ -18,7 +18,10 @@ pub use host_state::{
     HostWindow,
 };
 #[doc(inline)]
-pub use ids::{HEAD_PREFIX_MIN_LEN, SHA_LEN, head_prefix_valid, repository_valid, sha_valid};
+pub use ids::{
+    HEAD_PREFIX_MIN_LEN, SHA_LEN, WORKFLOW_ID_PREFIX, head_prefix_valid, repository_valid,
+    sha_valid,
+};
 #[doc(inline)]
 pub use pull_request::{
     Candidate, CandidateList, ClassifiedCandidates, NotesHandoff, PriorFinding, ProjectRoute,

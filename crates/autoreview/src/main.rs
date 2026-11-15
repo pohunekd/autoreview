@@ -10,6 +10,7 @@ mod logging;
 mod mcp_server;
 mod metrics_server;
 mod profiles;
+mod prune_branches;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -107,6 +108,9 @@ enum Invocation {
 enum Command {
     /// Validates the configuration and the policy and prints the policy digest.
     Validate(ValidateArguments),
+    /// Lists the review branches that no review needs on the local review hosts; `--yes`
+    /// deletes them.
+    PruneBranches(prune_branches::PruneArguments),
     /// A command that runs on the store and the engine.
     #[command(flatten)]
     Engine(EngineCommand),
@@ -272,10 +276,15 @@ fn print_display(display: &clap::Error) -> Result<(), Error> {
 }
 
 /// Prints the JSON error object of `error` on stdout and logs the failure.
+///
+/// A `branch_prune_incomplete` failure is only logged: its document is the stdout object.
 fn report(error: &Error) {
+    let code = error_code(error);
+    // `prune-branches` printed its document; one object on stdout stays the rule.
+    let printed = code == prune_branches::BRANCH_PRUNE_INCOMPLETE;
     let response = error_response(error);
     // A failed write leaves only the log line; there is nowhere else to report it.
-    if let Ok(text) = go_json(&response) {
+    if let Some(text) = go_json(&response).ok().filter(|_| !printed) {
         let mut stdout = io::stdout().lock();
         if writeln!(stdout, "{text}")
             .and_then(|()| stdout.flush())
@@ -284,7 +293,7 @@ fn report(error: &Error) {
             tracing::warn!("command error not printed");
         }
     }
-    tracing::error!(error_code = error_code(error), error = %error, "command failed");
+    tracing::error!(error_code = code, error = %error, "command failed");
 }
 
 /// Loads the configuration and runs the command.
@@ -304,6 +313,11 @@ async fn run(
     match command {
         Command::Validate(arguments) => {
             validate(&config, arguments.check_credentials, &cancel).await
+        }
+        Command::PruneBranches(arguments) => {
+            let result = prune_branches::run(&config, &arguments, &cancel).await?;
+            print_json(&result)?;
+            result.status()
         }
         Command::Engine(command) => {
             let external = Arc::new(External::new(config.clone())?);

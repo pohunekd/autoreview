@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, approve, resolve, retry, review-queue and backup-db - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, approve, resolve, retry, review-queue, backup-db and prune-branches - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -427,6 +427,77 @@ Writes a consistent copy of the SQLite store while the service runs. `path`
 must be absolute and must not exist yet (`backup_path_invalid`,
 `backup_path_exists`).
 
+### `autoreview prune-branches`
+
+```
+autoreview prune-branches --git-binary <PATH> [--host <HOST>] [--older-than-days <DAYS>] [--yes]
+```
+
+Lists the review branches that no review needs and, with `--yes`, deletes them; without
+`--yes` nothing changes.
+
+Only local review hosts are pruned. pohunek has no command that lists or deletes the
+branches of another machine, so run the command on the machine that holds both the store
+and the review host's repositories, as the user of the service. A host whose repositories
+are on another machine is reported as skipped with `host_not_local`, and its branches stay.
+
+- `--git-binary`: the absolute path of `git`.
+- `--host`: a host of `pohunek.hosts` or of a `route_overrides` entry (also an `untrusted`
+  one); every such host when absent. A host counts as local only when
+  `pohunek host governance inspect` reports the same `host_id` for it as for `local`.
+- `--older-than-days`: keeps the branches whose review was last updated fewer than this many
+  days ago. A branch whose review the store no longer holds counts as older than
+  `store.review_retention_seconds`.
+
+The command lists the branches first, then reads the store and the sessions. The
+repositories are the roots of `pohunek project list` on the host; the branches are the ones
+whose name starts with `session.branch_prefix`. Two services that share a review host need
+different prefixes: a branch of the other service's reviews has no owner in this store.
+Each listed branch gets a `verdict`:
+
+| Verdict | Meaning |
+|---|---|
+| `delete` | No review, session or worktree needs it; `--yes` deletes it |
+| `symbolic_ref` | The ref is symbolic (`git symbolic-ref`); git lists it with its target's commit, so it is never deleted; kept |
+| `name_unknown` | No workflow ID follows the prefix; kept |
+| `review_active` | Its review is queued, running or awaiting, or its session cleanup is pending; kept |
+| `session_live` | A pohunek session of the host works on it; kept |
+| `checked_out` | A worktree of the repository has it checked out; kept |
+| `too_recent` | Its review was updated fewer than `--older-than-days` days ago; kept |
+| `age_unknown` | `--older-than-days` is set and the age is unknown; kept |
+
+```json
+{"delete": true, "hosts": [
+  {"host": "review-a", "repositories": [{"path": "/srv/repos/example", "branches": [
+    {"branch": "autoreview/review/prr-v2-<digest>-opus-run1", "commit": "<sha>",
+     "verdict": "delete", "deleted": true}]}]},
+  {"host": "review-b", "skipped": "host_not_local", "repositories": []}]}
+```
+
+Before each deletion the log line `branch delete` names the host, the repository, the branch
+and the commit. A deletion runs `git update-ref --no-deref -d` with the listed commit, so a
+branch that moved since the listing stays and gets `"error": "git_command_failed"`. Restore a
+deleted branch with `git -C <path> branch <branch> <commit>` while the commit still exists.
+git runs without the system and the user configuration (`GIT_CONFIG_NOSYSTEM`,
+`GIT_CONFIG_GLOBAL=/dev/null`, no `HOME`), without the hooks directory
+(`core.hooksPath=/dev/null`) and file system monitor, and only in the repository at the root
+itself, never in one above it. From git 2.55, `hook.reference-transaction.enabled=false` also
+stops every `reference-transaction` hook that the repository configuration names; git 2.54
+runs such a hook anyway, so with any git a repository whose configuration names one is not
+pruned and is reported with `"error": "repository_hook_configured"`.
+
+The repositories must be owned by the user who runs the command: git reads `safe.directory`
+only from the system, the user and the command-line configuration, none of which sets it
+here, so a repository of another user fails with `git_command_failed`. A host whose pohunek
+calls fail is reported with the error code in `skipped`, and a repository whose git calls
+fail with it in `error`; the other hosts go on. A missing store database is
+`store_unavailable`.
+
+The document is printed in every case once the hosts were read. The command then exits with
+status 1 and logs `command failed` with `branch_prune_incomplete`, without a second object on
+stdout, when a deletion failed, or when the host that `--host` names was skipped or has a
+repository in `error`. Without `--host`, a skipped host or repository keeps exit status 0.
+
 ## Error codes
 
 | Code | Meaning |
@@ -455,6 +526,8 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `state_entry_limit_exceeded` | The discovery state hit `schedule.state_entry_limit` |
 | `store_unavailable` | The SQLite store could not be opened or written |
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
+| `host_not_local`, `git_command_failed`, `repository_hook_configured` | `prune-branches` skipped a host whose repositories are not on this machine, a git call failed (also for a repository owned by another user), or a repository configuration names a `reference-transaction` hook |
+| `branch_prune_incomplete` | `prune-branches` printed its document and exits with status 1: a deletion failed, or the `--host` host or one of its repositories was skipped |
 | `stats_range_invalid` | `--since` or `--until` of `stats` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
 | `stats_range_too_long` | The `stats` range covers more than 366 days |
 | `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start the review: its author started the most reviews the rule allows in the window. `retry` starts it |

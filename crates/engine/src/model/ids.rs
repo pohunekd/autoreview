@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use super::pull_request::{PullRequest, RejectedCandidate};
 
 /// Prefix of the workflow IDs of this engine; pohunek session names derive from them.
-pub(crate) const WORKFLOW_ID_PREFIX: &str = "prr-v2-";
+pub const WORKFLOW_ID_PREFIX: &str = "prr-v2-";
 
 /// Contract version of the review input that discovery writes.
 pub(crate) const INPUT_VERSION: i64 = 5;

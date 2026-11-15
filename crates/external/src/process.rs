@@ -58,6 +58,12 @@ pub(crate) const POHUNEK_INHERITED: [&str; 9] = [
     "POHUNEK_REMOTE_PORT",
 ];
 
+/// Variables of the engine that a git child inherits.
+///
+/// No `HOME`, `XDG_CONFIG_HOME` or `GIT_*` variable reaches it: git reads no user
+/// configuration, and the repository is the one that `-C` names.
+pub(crate) const GIT_INHERITED: [&str; 2] = ["PATH", "TMPDIR"];
+
 /// Errors of a child process run.
 ///
 /// Callers wrap it as the cause of a workflow failure with their own code.
