@@ -396,3 +396,110 @@ fn overrides(words: &str) -> bool {
         false
     })
 }
+
+/// Returns `text` with its character references decoded, as an HTML parser decodes them.
+///
+/// A numeric reference takes its whole digit run, `;` optional, leading zeros skipped; one
+/// that names no character (0, a surrogate, above U+10FFFF) becomes U+FFFD. A name of
+/// `NAMED_REFERENCES` needs its `;`, except the `LEGACY_NAMES`. Anything else stays as
+/// written. The output is decoded once: `&amp;#105;` gives `&#105;`.
+pub(crate) fn decode_references(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        out.push_str(rest.get(..start).unwrap_or_default());
+        let from = rest.get(start.saturating_add(1)..).unwrap_or_default();
+        match reference(from, &mut out) {
+            Some(used) => rest = from.get(used..).unwrap_or_default(),
+            None => {
+                out.push('&');
+                rest = from;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Decodes the reference that starts `from` (the text after `&`) into `out`.
+///
+/// Returns the length of the reference, or `None`, writing nothing, when there is none.
+fn reference(from: &str, out: &mut String) -> Option<usize> {
+    if let Some(number) = from.strip_prefix('#') {
+        let (body, radix, prefix) = match number.strip_prefix(['x', 'X']) {
+            Some(hex) => (hex, 16, 2_usize),
+            None => (number, 10, 1_usize),
+        };
+        let digits = body
+            .chars()
+            .take_while(|digit| digit.is_digit(radix))
+            .count();
+        let all = body.get(..digits).filter(|all| !all.is_empty())?;
+        let significant = all.trim_start_matches('0');
+        let character = (significant.len() <= NUMBER_DIGITS_MAX)
+            .then(|| u32::from_str_radix(significant, radix).ok())
+            .flatten()
+            .filter(|code| *code != 0)
+            .and_then(char::from_u32)
+            .unwrap_or(char::REPLACEMENT_CHARACTER);
+        let semicolon = usize::from(body.get(digits..).is_some_and(|tail| tail.starts_with(';')));
+        out.push(character);
+        return Some(prefix.saturating_add(digits).saturating_add(semicolon));
+    }
+    let name_len = from
+        .bytes()
+        .take(REFERENCE_MAX.saturating_add(1))
+        .take_while(u8::is_ascii_alphanumeric)
+        .count();
+    let name = from.get(..name_len).unwrap_or_default();
+    let closed = from
+        .get(name_len..)
+        .is_some_and(|tail| tail.starts_with(';'));
+    let named = |name: &str| {
+        NAMED_REFERENCES
+            .iter()
+            .find(|(known, _)| *known == name)
+            .map(|(_, decoded)| *decoded)
+    };
+    if closed && let Some(decoded) = named(name) {
+        out.push_str(decoded);
+        return Some(name_len.saturating_add(1));
+    }
+    let legacy = LEGACY_NAMES
+        .iter()
+        .find(|legacy| from.starts_with(**legacy))?;
+    let decoded = named(legacy)?;
+    out.push_str(decoded);
+    Some(legacy.len())
+}
+
+/// Returns `text` without its `http://` and `https://` addresses.
+///
+/// An address runs to the next whitespace, quote, angle bracket, `)` or `]`.
+fn without_web_addresses(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("http") {
+        out.push_str(rest.get(..start).unwrap_or_default());
+        let from = rest.get(start..).unwrap_or_default();
+        let scheme = ["http://", "https://"]
+            .iter()
+            .find(|scheme| from.starts_with(**scheme));
+        let Some(scheme) = scheme else {
+            out.push_str("http");
+            rest = from.get(4..).unwrap_or_default();
+            continue;
+        };
+        let address = from.get(scheme.len()..).unwrap_or_default();
+        let end = address.find(ends_address).unwrap_or(address.len());
+        out.push(' ');
+        rest = address.get(end..).unwrap_or_default();
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Reports whether a character ends a web address: whitespace, a quote or a closing bracket.
+fn ends_address(character: char) -> bool {
+    character.is_whitespace() || matches!(character, '"' | '\'' | '<' | '>' | ')' | ']')
+}
