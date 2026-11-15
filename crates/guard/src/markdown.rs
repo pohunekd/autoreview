@@ -286,8 +286,10 @@ const TITLE_OPEN: usize = 0;
 const TITLE_AFTER: usize = 4;
 /// Cache slot of the fallback `]` of an alt text.
 const LINK_CLOSE: usize = 18;
+/// First cache slot of a reference definition title (quote, apostrophe, parenthesis).
+const REFERENCE_TITLE: usize = 19;
 /// Number of cache slots.
-const SLOTS: usize = 19;
+const SLOTS: usize = 22;
 
 /// The last search of one slot: where it started and what it found.
 #[derive(Debug, Clone, Copy)]
@@ -677,43 +679,52 @@ impl Pass<'_> {
 
     /// Handles a line that starts at `at` with a reference definition `[label]: ...`.
     ///
-    /// GitHub shows nothing of it, also inside a block quote and when its label or title
-    /// continues on the next lines, so the definition runs to the end of its paragraph. A
-    /// footnote `[^label]:` is shown and does not count.
+    /// GitHub shows nothing of it, also behind block-quote and list item markers and when its
+    /// label, destination or title continues on the next lines. It ends where CommonMark ends
+    /// it: after the line of its title, or after the line of its destination when no title
+    /// closes before a blank line, so a block that starts on the next line is handled on its
+    /// own. A footnote `[^label]:` is shown and does not count.
     fn reference_definition(
         &mut self,
         at: usize,
         add: &mut impl FnMut(Signal, u32),
     ) -> Option<usize> {
-        let mut start = at;
-        loop {
-            let spaces = self
-                .bytes
-                .get(start..)
-                .unwrap_or_default()
-                .iter()
-                .take_while(|byte| **byte == b' ')
-                .count();
-            if spaces > INDENT_MAX {
-                return None;
-            }
-            start = start.saturating_add(spaces);
-            if self.bytes.get(start) != Some(&b'>') {
-                break;
-            }
-            start = start.saturating_add(1);
-        }
+        let start = self.container_content(at);
         if self.bytes.get(start) != Some(&b'[') || self.starts_with(start, "[^") {
             return None;
         }
         let label = start.saturating_add(1);
         let close = self.find(LABEL_END, Class::Unescaped(b']'), label)?;
-        let end = self.paragraph_end(start);
-        if close >= end
+        let paragraph = self.paragraph_end(start);
+        if close >= paragraph
             || self.bytes.get(close.saturating_add(1)) != Some(&b':')
             || self.slice(label, close).trim().is_empty()
         {
             return None;
+        }
+        let destination = self.skip_space(close.saturating_add(2));
+        if destination >= paragraph {
+            return None;
+        }
+        let destination_end = self.destination_end(destination)?;
+        let mut end = self.line_end(destination_end);
+        let open = self.skip_space(destination_end);
+        let title = match self.bytes.get(open) {
+            Some(b'"') => Some((0, b'"')),
+            Some(b'\'') => Some((1, b'\'')),
+            Some(b'(') => Some((2, b')')),
+            _ => None,
+        };
+        if let Some((offset, closer)) = title.filter(|_| open < paragraph) {
+            let slot = REFERENCE_TITLE.saturating_add(offset);
+            let title_close = self.find(slot, Class::Unescaped(closer), open.saturating_add(1));
+            if let Some(title_close) = title_close.filter(|close| *close < paragraph) {
+                let after = self.line_end(title_close.saturating_add(1));
+                let rest = self.slice(title_close.saturating_add(1), after);
+                if rest.trim_matches([' ', '\t', '\r']).is_empty() {
+                    end = after;
+                }
+            }
         }
         report(
             add,
@@ -721,6 +732,67 @@ impl Pass<'_> {
             self.slice(start, end),
         );
         Some(end)
+    }
+
+    /// Returns the offset after the block-quote and list item markers that start a line.
+    fn container_content(&self, at: usize) -> usize {
+        let mut start = at;
+        loop {
+            let rest = self.bytes.get(start..).unwrap_or_default();
+            let spaces = rest
+                .iter()
+                .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                .count();
+            start = start.saturating_add(spaces);
+            let rest = self.bytes.get(start..).unwrap_or_default();
+            if rest.first() == Some(&b'>') {
+                start = start.saturating_add(1);
+            } else if let Some(marker) = list_marker(rest) {
+                start = start.saturating_add(marker);
+            } else {
+                return start;
+            }
+        }
+    }
+
+    /// Returns the offset after spaces, tabs and one line break from `from`.
+    fn skip_space(&self, from: usize) -> usize {
+        let mut at = from;
+        let mut line_breaks = 0_usize;
+        while let Some(byte) = self.bytes.get(at) {
+            match byte {
+                b' ' | b'\t' | b'\r' => {}
+                b'\n' if line_breaks == 0 => line_breaks = 1,
+                _ => break,
+            }
+            at = at.saturating_add(1);
+        }
+        at
+    }
+
+    /// Returns the end of the reference destination at `at`: `<...>` on one line or a run.
+    fn destination_end(&self, at: usize) -> Option<usize> {
+        let rest = self.bytes.get(at..).unwrap_or_default();
+        if rest.first() == Some(&b'<') {
+            let inner = rest.iter().enumerate().skip(1).find(|&(offset, byte)| {
+                matches!(byte, b'>' | b'<' | b'\n')
+                    && !escaped(self.bytes, at.saturating_add(offset))
+            })?;
+            return (*inner.1 == b'>').then(|| at.saturating_add(inner.0).saturating_add(1));
+        }
+        let run = rest
+            .iter()
+            .take_while(|byte| !byte.is_ascii_whitespace())
+            .count();
+        Some(at.saturating_add(run))
+    }
+
+    /// Returns the offset of the next line break from `from`, or the text end.
+    fn line_end(&self, from: usize) -> usize {
+        let len = self.bytes.len();
+        self.slice(from, len)
+            .find('\n')
+            .map_or(len, |found| from.saturating_add(found))
     }
 }
 
