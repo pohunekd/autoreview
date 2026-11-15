@@ -48,7 +48,7 @@ These flags are required:
 
 | Flag | Meaning |
 |---|---|
-| `--dir` | Clean absolute directory whose parent exists; it is created with mode 0700 and `prompts/` with the umask's mode when absent, and an existing one keeps its mode |
+| `--dir` | Clean absolute directory whose parent exists; it and `prompts/` are created when absent. A created `--dir` gets mode 0700 when `store.path` (`--store-path`, or the reference value) lies inside it, as in the `scripts/setup` layout, and the umask's mode otherwise, so the service user can read a `/etc/autoreview` that root creates; `prompts/` always gets the umask's mode, and an existing `--dir` keeps its mode |
 | `--login` | Lowercase GitHub user login of the one credential, such as `review-bot`, or `mona-cat_octo` for an Enterprise Managed User |
 | `--pohunek-host` | The pohunek host that runs the reviewers |
 | `--example` | The example directory under `examples/`, for example `single-repo-comment` |

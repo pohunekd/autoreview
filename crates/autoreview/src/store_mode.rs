@@ -25,8 +25,9 @@ const FILE_SUFFIXES: [&str; 3] = ["", "-wal", "-shm"];
 
 /// Checks that the store directory and the store files that exist grant nothing to others.
 ///
-/// A missing path passes: `Store::open` creates the directory with mode 0700, and the
-/// service creates the files under its umask. A mode is only reported, never changed.
+/// A missing path passes: `Store::open` creates a missing directory 0700 and a missing
+/// database 0600, and SQLite gives `-wal` and `-shm` the database's mode. A mode is only
+/// reported, never changed.
 ///
 /// # Errors
 ///

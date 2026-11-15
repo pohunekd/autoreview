@@ -63,13 +63,16 @@ the host name from step 1:
 
 ```sh
 autoreview init --dir "$AUTOREVIEW_HOME" --login <your-login> \
-  --pohunek-host <host> --example single-repo-comment
+  --pohunek-host <host> --example single-repo-comment \
+  --store-path "$AUTOREVIEW_HOME/autoreview.db"
 ```
 
-`init` sets `policy_file`, the `login` of the credential and `pohunek.hosts`. In
-`$AUTOREVIEW_HOME/config.yaml`, set `store.path` to a file under
-`$AUTOREVIEW_HOME`, or pass `--store-path` and the other
-[layout flags](../../cli.md#autoreview-init) to `init` instead.
+`init` sets `policy_file`, the `login` of the credential, `pohunek.hosts` and
+`store.path`, and creates `$AUTOREVIEW_HOME` with mode 0700 because the store
+lies inside it; [`validate`](../../cli.md#autoreview-validate) refuses a store
+that other users can read. Pass the other
+[layout flags](../../cli.md#autoreview-init) to `init` as well, or set them in
+`$AUTOREVIEW_HOME/config.yaml`.
 
 ## 5. Point the policy at your repository
 

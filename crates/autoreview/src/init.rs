@@ -69,7 +69,7 @@ const MENTION_LINE: (&str, &str) = (
     "      mention_user: ",
 );
 
-/// Mode of the `--dir` that `init` creates: only its owner may enter it.
+/// Mode of a `--dir` that `init` creates and that holds the store: only its owner may enter.
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 
 /// Name of the written configuration file.
@@ -243,12 +243,23 @@ pub(crate) fn run(
     let directory = directory(&arguments.dir)?;
     let files = render(arguments, directory)?;
     let agent_profiles = agent_profiles(&files)?;
-    let written = write(Path::new(directory), &files)?;
+    let private =
+        store_path(&arguments.layout).is_some_and(|store| Path::new(store).starts_with(directory));
+    let written = write(Path::new(directory), &files, private)?;
     Ok(InitResult {
         directory: directory.to_owned(),
         files: written,
         agent_profiles,
     })
+}
+
+/// Returns the `store.path` that `init` writes: the flag, or the value of the template line.
+fn store_path(layout: &Layout) -> Option<&str> {
+    let (line, key) = STORE_PATH_LINE;
+    layout
+        .store_path
+        .as_deref()
+        .or_else(|| line.strip_prefix(key)?.strip_suffix('\n'))
 }
 
 /// Returns `dir` as text when it is a clean absolute UTF-8 path.
@@ -438,6 +449,9 @@ fn write_failed(path: &Path, cause: io::Error) -> Error {
 
 /// Writes `files` into `directory`, creating it and `prompts/` when they are absent.
 ///
+/// With `private`, a created `directory` gets mode 0700; otherwise every created directory
+/// gets the mode of the umask, as other users may need to read it.
+///
 /// The parent of `directory` must exist. Every target is checked before anything is created:
 /// `directory` and `prompts/` must be real directories (a symlink is in the way), and no file
 /// of the set may exist. Directories are created one level at a time and files are opened
@@ -449,7 +463,11 @@ fn write_failed(path: &Path, cause: io::Error) -> Error {
 /// Returns `configuration_invalid` naming `--dir` when the parent of `directory` is not a
 /// directory, `init_file_exists` naming the first path in the way, and `init_write_failed`
 /// naming the path that cannot be checked, created or written.
-pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>, Error> {
+pub(crate) fn write(
+    directory: &Path,
+    files: &[SetupFile],
+    private: bool,
+) -> Result<Vec<String>, Error> {
     let parent = directory
         .parent()
         .ok_or_else(|| invalid_flag("--dir", "must have a parent directory"))?;
@@ -500,7 +518,8 @@ pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>
         }
     }
     let mut created = Created::default();
-    let result = create_all(directory, &missing, files, &targets, &mut created);
+    let private = private.then_some(directory);
+    let result = create_all(private, &missing, files, &targets, &mut created);
     if result.is_err() {
         created.remove();
     }
@@ -509,11 +528,11 @@ pub(crate) fn write(directory: &Path, files: &[SetupFile]) -> Result<Vec<String>
 
 /// Creates the missing directories, then each file, and records what it created.
 ///
-/// `directory` gets mode 0700 when this call creates it: it often holds the store as well. A
-/// directory that appears between the check and its creation is not recorded, so it is
+/// `private` gets mode 0700 when this call creates it, every other directory the umask's mode.
+/// A directory that appears between the check and its creation is not recorded, so it is
 /// never removed; it is used only when it is a real directory.
 fn create_all(
-    directory: &Path,
+    private: Option<&Path>,
     missing: &[PathBuf],
     files: &[SetupFile],
     targets: &[PathBuf],
@@ -521,7 +540,7 @@ fn create_all(
 ) -> Result<Vec<String>, Error> {
     for path in missing {
         let mut builder = DirBuilder::new();
-        if path == directory {
+        if private == Some(path.as_path()) {
             builder.mode(PRIVATE_DIRECTORY_MODE);
         }
         match builder.create(path) {
