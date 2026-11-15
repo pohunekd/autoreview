@@ -99,19 +99,20 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   hooks (`.pohunek/hooks/<event>`, and `.pohunek/setup` for `post-create`) from
   the session's worktree and runs them as its daemon user for `post-create`,
   `session-start`, `session-stop`, `agent-state` and `pre-remove`. With
-  `checkout: head`, that worktree holds the pull request's code, so the pull
-  request can add or change a hook, which then runs even when the project's own
-  repository has none; a project or review host without hooks does not prevent
-  it. With `checkout: base`, the worktree is the base branch tip, so the
-  author's hooks never reach it; every untrusted author that a rule reviews
-  gets it. A head checkout runs only for the authors that `authors.trusted`
-  names, so on a rule whose pipeline uses `checkout: head`, trust only authors
-  who may run code on the review host, and never use `trusted: any` on a
-  repository with outside contributors. A trigger that only maintainers use
-  helps only when they check the pull request's `.pohunek/` directory before
-  they trigger the review. A pohunek switch that skips the in-repo hooks is
-  requested in [zajca/pohunek#2366](https://github.com/zajca/pohunek/issues/2366),
-  and #399 tracks the autoreview option that uses it.
+  `checkout: head`, that worktree holds the pull request's code, so every
+  in-repo hook, including one the pull request adds, and any project tooling
+  that a hook or a host-global hook runs (an install, a build, a script in the
+  repository) executes the pull request's code, even when the project's own
+  repository has no hooks. With `checkout: base`, the worktree is the base
+  branch tip, so the head's hooks and tooling never run; every untrusted author
+  that a rule reviews gets it. A head checkout runs only for the authors that
+  `authors.trusted` names, so on a rule whose pipeline uses `checkout: head`,
+  trust only authors who may run code on the review host, and never use
+  `trusted: any` on a repository with outside contributors; use
+  `checkout: base` for everyone else. A pohunek switch that skips the in-repo
+  hooks is requested in
+  [zajca/pohunek#2366](https://github.com/zajca/pohunek/issues/2366), and #399
+  tracks the autoreview option that uses it.
 - **Apart from its hooks, the head checkout runs nothing, but the agent reads
   it.** For `checkout: head`, the agent reads untrusted files. Use
   `checkout: base` for every rule that accepts outside authors.
