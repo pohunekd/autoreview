@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs the repository gates, reports each gate's own result and exits non-zero
-# when any gate failed. Usage: scripts/gates [all|docs|adapters|rust]; CI runs
-# the docs, adapters and rust groups as separate jobs.
+# when any gate failed. Usage: scripts/gates [all|docs|adapters|rust|deny]; CI
+# runs the docs, adapters, rust and deny groups as separate jobs.
 set -uo pipefail
 # Deliberately no -e: a failing gate must not stop the others from running.
 
@@ -9,9 +9,9 @@ cd "$(dirname "$0")/.." || exit 2
 
 group=${1:-all}
 case "$group" in
-    all | docs | adapters | rust) ;;
+    all | docs | adapters | rust | deny) ;;
     *)
-        echo "usage: scripts/gates [all|docs|adapters|rust]" >&2
+        echo "usage: scripts/gates [all|docs|adapters|rust|deny]" >&2
         exit 2
         ;;
 esac
@@ -41,8 +41,8 @@ skip_gate() {
     results+=("skipped ($2)")
 }
 
-# CI sets CI, so there a missing shellcheck or systemd-analyze fails the gate
-# instead of skipping it.
+# CI sets CI, so there a missing shellcheck, systemd-analyze or cargo-deny
+# fails the gate instead of skipping it.
 docs_gates() {
     run_gate check-docs python3 -I scripts/check-docs
     if command -v shellcheck >/dev/null 2>&1 || [ -n "${CI:-}" ]; then
@@ -81,15 +81,29 @@ rust_gates() {
     run_gate changelog scripts/changelog check
 }
 
+# Licences and advisories of Cargo.lock against deny.toml. The advisory
+# database is fetched on every run; without network the gate fails. The binary
+# on PATH runs directly: `cargo deny` first tries $CARGO_HOME/bin when that
+# directory is not on PATH.
+deny_gates() {
+    if command -v cargo-deny >/dev/null 2>&1 || [ -n "${CI:-}" ]; then
+        run_gate cargo-deny cargo-deny --locked check licenses advisories
+    else
+        skip_gate cargo-deny "cargo-deny is not on PATH"
+    fi
+}
+
 case "$group" in
     all)
         docs_gates
         adapters_gates
         rust_gates
+        deny_gates
         ;;
     docs) docs_gates ;;
     adapters) adapters_gates ;;
     rust) rust_gates ;;
+    deny) deny_gates ;;
 esac
 
 echo

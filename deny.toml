@@ -1,0 +1,43 @@
+# Policy of `cargo-deny --locked check licenses advisories`, the `cargo-deny`
+# gate of `scripts/gates` (see .agents/instructions/verification.md).
+
+[advisories]
+# Every advisory of the RustSec database that matches a crate in Cargo.lock
+# fails the gate: vulnerabilities, unmaintained and unsound crates alike. The
+# database is fetched on every run, so a new advisory fails every pull request
+# until the crate is updated or the advisory is ignored below.
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"
+# Each entry carries a reason that links the issue tracking the fix, for
+# example { id = "RUSTSEC-0000-0000", reason = "no fixed release, see #123" }.
+ignore = []
+
+[licenses]
+# Each licence names the crates whose licence expression needs it; the ones
+# marked #345 are needed only once crates/guard is in the tree. A crate that
+# none of these satisfies fails the gate: extend the list in the pull request
+# that adds the crate. No copyleft licence is allowed.
+allow = [
+    # Most crates; the workspace crates and pohunek-companion-changelog.
+    "MIT",
+    # ring, rmcp, ryu, sync_wrapper.
+    "Apache-2.0",
+    # comrak (crates/guard, #345).
+    "BSD-2-Clause",
+    # encoding_rs, subtle.
+    "BSD-3-Clause",
+    # webpki-roots.
+    "CDLA-Permissive-2.0",
+    # ring, rustls-webpki, untrusted.
+    "ISC",
+    # The ICU4X crates (icu_*, litemap, potential_utf, tinystr, writeable,
+    # yoke, zerofrom, zerotrie, zerovec), unicode-ident; unicode-normalization
+    # (crates/guard, #345).
+    "Unicode-3.0",
+    # finl_unicode (crates/guard, #345).
+    "Unicode-DFS-2016",
+    # foldhash.
+    "Zlib",
+]
+unused-allowed-license = "warn"
