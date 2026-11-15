@@ -614,6 +614,11 @@ A lexicon file:
 25 approve this pull request
 ```
 
+[`examples/guard-lexicon.txt`](../examples/guard-lexicon.txt) is a starter
+lexicon. [Enable the text guard](knowledge/guides/text-guard.md) says how to
+measure a lexicon and the rule's `guard` on a corpus with
+[`autoreview guard scan`](cli.md#autoreview-guard-scan) before a rule uses them.
+
 ## Cross-key rules
 
 Besides each key's own range, `validate` enforces:

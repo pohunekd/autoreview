@@ -18,7 +18,9 @@ knowledge bundle so pohunek.dev can render both.
 - **Guides** are use cases with a complete policy each. Start with
   [getting started](guides/getting-started.md), the
   [quickstart](guides/quickstart.md) and the [use case chooser](guides/index.md);
-  [combining patterns](guides/combining.md) layers them in one policy.
+  [combining patterns](guides/combining.md) layers them in one policy, and
+  [enable the text guard](guides/text-guard.md) measures the prompt-injection
+  guard before a rule relies on it.
 - **Runbooks** fix things in operation:
   [troubleshooting](runbooks/troubleshooting.md),
   [retry and recovery](runbooks/retry-and-recovery.md),

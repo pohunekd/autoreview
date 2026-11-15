@@ -105,3 +105,5 @@ Two dimensions are not in a policy: the GitHub account (the `login` of the crede
   review through the MCP server.
 - [MCP server](mcp-server.md) lets any MCP client list, read, approve and
   retry reviews.
+- [Enable the text guard](text-guard.md) turns on the prompt-injection guard
+  of a rule after shadow mode and a corpus measurement.
