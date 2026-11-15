@@ -130,7 +130,9 @@ Roll back only with a backup taken before the upgrade:
    are not in the restored store; check them on GitHub before you retry.
 4. Restore the `config.yaml` of the old version, or remove the keys that the new
    version added: an earlier release refuses an unknown key, such as
-   `limits.max_issue_characters` for a release before it. On a converted
+   `limits.max_issue_characters` for a release before it, or
+   `schedule.usage_limit_retry_delays_seconds` for a release before the
+   automatic retry of a usage-limited review. On a converted
    deployment, remove the matching `HERMES_PR_REVIEW_*` variable too, or run
    the old release's `scripts/env-to-config`, which refuses it as unknown.
    Do the same for the policy: restore the policy of the old version, or remove

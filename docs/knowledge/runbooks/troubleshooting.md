@@ -40,6 +40,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_result_invalid: Claude adapter refused the run: claude-adapter: ...` in the log | The Claude adapter refused the worktree, before or after Claude Code ran | [Codex checkout refused](#codex-checkout-refused) |
 | `review_wrapper_invalid`, `review_wrapper_invalid: Claude Code exited with status N: ...` in the log | A Claude result line was unusable, or Claude Code itself failed | [Claude Code failed](#claude-code-failed) |
 | `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried | [Reviewer output](#reviewer-output) |
+| `reviewer_usage_limited` | Claude Code ended a reviewer run on the rate or usage limit of its model account | [Reviewer usage limit](#reviewer-usage-limit) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `pohunek_head_fetch_failed`, `pohunek_head_fetch_ref_missing` | The session start could not fetch the pull request head on the review host | [Head commit unavailable](#head-commit-unavailable) |
 | `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start a review: its author started the most reviews the rule allows in the window | Wait for the window, or `retry` the pull request; see [author limit](../../policy.md#author-limit) |
@@ -297,6 +298,28 @@ unreadable result line, or one of another protocol or mode with status 0. The
 result line in the session output holds the whole stderr in `stderr_base64`.
 The engine reads the stderr that every Claude adapter already sends, so no
 `autoreview profiles install` is needed for this reason.
+
+### Reviewer usage limit
+
+A Claude reviewer failed with `reviewer_usage_limited`: Claude Code ended the
+run with a result message that has `is_error`, subtype `success` and
+`api_error_status` 429, the HTTP status of the rate or usage limit of the
+model account on the review host. Only these fields count; the text of the
+result, such as `You've hit your session limit`, is never read, so a review
+that mentions a limit is not taken for one, and an error result with another
+status stays `review_wrapper_invalid`. The reviewer is not run again inside the
+review, because a fresh session in the same minute meets the same limit. The
+scheduler tries the whole review again after each delay of
+[`schedule.usage_limit_retry_delays_seconds`](../../configuration.md#schedule),
+without spending `schedule.retry_delays_seconds`. The first limited attempt in
+a row sends a `retry_scheduled` notice; the next ones send none. When the
+delays are spent, the review stops with a `review_stopped` notice; run
+`autoreview retry` after the limit resets. Such a retry continues the count of
+limited attempts, so a run that meets the limit again stops at once. The
+verifier's claims are published unverified when the verifier meets the limit,
+as for any other failure of the verifier. Codex reviewers are unchanged: the
+Codex output names no structured limit, so a Codex run on a spent quota keeps
+its code.
 
 ### Head commit unavailable
 

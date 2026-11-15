@@ -114,6 +114,12 @@ These rules also apply to the layers:
   mismatch stops the head with `review_stopped`. The count is read from the
   stored reviews of the head, so a restart neither resets it nor counts a start
   twice.
+- **A usage limit waits on its own delays.** A review that failed with
+  `reviewer_usage_limited` is tried again after each delay of
+  `schedule.usage_limit_retry_delays_seconds`, without spending the scheduler's
+  retries; the next consecutive limited attempt stops it with `review_stopped`.
+  Only the first limited attempt in a row and the stop send a notice. The count
+  is read from the stored reviews of the head, like the head fetch mismatches.
 - **A rule's author limit is read from the stored reviews.** A new start over a
   rule's `author_limit` waits for the window or is skipped (`author_limit_reached`).
   The count is the author's stored reviews of the window plus the starts of the
@@ -147,7 +153,7 @@ CLI output:
 |---|---|
 | `waiting` | A head was seen. The review starts after `schedule.debounce_seconds` of quiet time. |
 | `running` | A review of this head is in progress. |
-| `retry_wait` | The last attempt failed with a retryable failure, and the next attempt is due at a set time; or the review waits for a review host and is due on every pass. |
+| `retry_wait` | The last attempt failed with a retryable failure, and the next attempt is due at a set time; or it failed with `reviewer_usage_limited` and waits for its next usage limit delay; or the review waits for a review host and is due on every pass. |
 | `completed` | A published review covers the head, or the review finished. |
 | `failed` | The attempts are used up, or the failure is not retryable. |
 

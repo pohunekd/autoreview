@@ -181,7 +181,10 @@ structured output (`claude_result_mismatch`), an output over
 `session.output_max_bytes` (`review_output_too_large`) and an unusable answer
 of the review host to a read of the session output end the review at once,
 without a fresh session (see
-[troubleshooting](../runbooks/troubleshooting.md#reviewer-output)).
+[troubleshooting](../runbooks/troubleshooting.md#reviewer-output)). So does a
+run that Claude Code ended on the rate or usage limit of its model account
+(`reviewer_usage_limited`); the scheduler then tries the review again after
+each delay of `schedule.usage_limit_retry_delays_seconds`.
 
 Finding ids combine the reviewer's `finding_prefix` with a three-digit sequence
 number (for example `O001` for the first finding of the reviewer with prefix
