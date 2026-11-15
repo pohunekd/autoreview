@@ -189,6 +189,10 @@ pub struct Config {
     pub pohunek_hosts: Vec<String>,
     /// Routing overrides keyed by repository.
     pub route_overrides: BTreeMap<String, RouteOverride>,
+    /// Routes of the untrusted authors' pull requests, keyed by repository.
+    ///
+    /// Each key also has a `route_overrides` entry, which the trusted authors take.
+    pub untrusted_route_overrides: BTreeMap<String, RouteOverride>,
     /// The host-state rules, or `None` when hosts are tried in configured order only.
     pub host_state: Option<HostStateRules>,
     /// The notification backends, their routes and the backends of the review queue.
@@ -374,6 +378,14 @@ impl Config {
                 || !identifier_valid(&route.project_id)
             {
                 return Err(invalid("invalid route override"));
+            }
+        }
+        for (repository, route) in &self.untrusted_route_overrides {
+            if !self.route_overrides.contains_key(repository)
+                || !identifier_valid(&route.host)
+                || !identifier_valid(&route.project_id)
+            {
+                return Err(invalid("invalid untrusted route override"));
             }
         }
         if !signature_valid(&self.ai_signature, &self.ai_signed_pattern) {
@@ -1121,6 +1133,7 @@ mod tests {
             pohunek_runtime: "/run/pohunek".to_owned(),
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
+            untrusted_route_overrides: std::collections::BTreeMap::new(),
             host_state: None,
             notify: NotifySettings::single_for_tests(),
             secret_variables: std::collections::BTreeSet::new(),

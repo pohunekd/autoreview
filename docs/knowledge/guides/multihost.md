@@ -205,6 +205,9 @@ pohunek:
   host is asked. It still requires the project to exist on the named host; a
   missing project is an error, not a silent fallback to another host, and a
   failing named host makes the review wait for its next retry.
+- An `untrusted: {host, project_id}` key in the entry pins the pull requests of
+  untrusted authors to their own host and project, with the same rules; see
+  [untrusted authors](../safety/untrusted-authors.md#separate-review-host).
 
 Use an override to pin a route. Do not use it to hide a missing
 registration: a repository that is registered nowhere still fails with

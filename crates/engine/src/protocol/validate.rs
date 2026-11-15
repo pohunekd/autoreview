@@ -302,6 +302,7 @@ pub(crate) mod tests {
             pohunek_runtime: "/run/pohunek".to_owned(),
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
+            untrusted_route_overrides: std::collections::BTreeMap::new(),
             host_state: None,
             notify: NotifySettings::single_for_tests(),
             secret_variables: std::collections::BTreeSet::new(),

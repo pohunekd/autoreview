@@ -8,11 +8,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
+use autoreview_policy::AuthorClass;
 use autoreview_schedule::scheduler::retryable;
 use tokio_util::sync::CancellationToken;
 
 use super::host_state::{HOST_STATE_INELIGIBLE, HostVerdicts, state_hosts};
-use crate::config::RouteOverride;
+use crate::config::{Config, RouteOverride};
 use crate::engine::{Clock, Engine, is_permanent};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
@@ -69,10 +70,26 @@ pub(crate) struct HostPass {
     pub(crate) verdicts: HostVerdicts,
 }
 
+/// Returns the route override for the reviews of `repository` by an author of `class`.
+///
+/// Only a trusted author takes the repository's route override. Any other class, also an
+/// unknown one, takes its untrusted route when it has one, so it never runs on the trusted host.
+pub(crate) fn route_pin<'a>(
+    config: &'a Config,
+    repository: &str,
+    class: Option<&AuthorClass>,
+) -> Option<&'a RouteOverride> {
+    let pinned = config.route_overrides.get(repository);
+    if matches!(class, Some(AuthorClass::Trusted)) {
+        return pinned;
+    }
+    config.untrusted_route_overrides.get(repository).or(pinned)
+}
+
 impl<I: Integrations, C: Clock> Engine<I, C> {
-    /// Returns the pohunek host and project that run the reviews of `repository`.
+    /// Returns the pohunek host and project for a review of `repository` by `class`.
     ///
-    /// With host-state rules, a repository without a route override tries only the hosts the
+    /// With host-state rules, a review without a route override tries only the hosts the
     /// rules allow, in their order, and asks the refused hosts only when none of them serves
     /// the repository; each refused host logs one WARN line.
     ///
@@ -83,13 +100,15 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         &self,
         cancel: &CancellationToken,
         repository: &str,
+        class: Option<&AuthorClass>,
         sources: &[String],
         pass: &mut HostPass,
     ) -> Result<ProjectRoute, Error> {
         let configured = &self.config.pohunek_hosts;
+        let pinned = route_pin(&self.config, repository, class);
         let rules = self.config.host_state.as_ref();
         let (hosts, refused) = match rules {
-            Some(rules) if !self.config.route_overrides.contains_key(repository) => {
+            Some(rules) if pinned.is_none() => {
                 let read_timeout = rules.read_timeout;
                 let checked = state_hosts(
                     configured,
@@ -115,18 +134,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             _ => (configured.clone(), Vec::new()),
         };
-        search_state_route(
-            &hosts,
-            &refused,
-            &self.config.route_overrides,
-            repository,
-            cancel,
-            pass,
-            |host| {
-                self.integration
-                    .host_routes(cancel, host, repository, sources)
-            },
-        )
+        search_state_route(&hosts, &refused, pinned, repository, cancel, pass, |host| {
+            self.integration
+                .host_routes(cancel, host, repository, sources)
+        })
         .await
     }
 
@@ -172,15 +183,18 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         Ok(())
     }
 
-    /// Returns the hosts that `repository` may use and that are in `failures`, in order.
+    /// Returns the failed hosts that `repository` may use for `class`.
+    ///
+    /// The hosts are those in `failures`, in the order of `pohunek.hosts`.
     pub(crate) fn failed_route_hosts(
         &self,
         repository: &str,
+        class: Option<&AuthorClass>,
         failures: &HostFailures,
     ) -> Vec<String> {
         route_hosts(
             &self.config.pohunek_hosts,
-            self.config.route_overrides.get(repository),
+            route_pin(&self.config, repository, class),
         )
         .into_iter()
         .filter(|host| failures.contains_key(*host))
@@ -191,6 +205,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
 /// Returns the route of the first host, in order, whose projects serve `repository`.
 ///
+/// `pinned` is the route override of the review, see [`route_pin`].
 /// `list` returns the routes of one host. A host in the pass's failures is skipped without a
 /// call; a host whose call fails is skipped and added to them, and a host whose call succeeds is
 /// added to the pass's answers. Every skip logs one WARN line.
@@ -204,7 +219,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 /// `list` at once when `cancel` is cancelled.
 pub(crate) async fn search_route<'a, F, Fut>(
     hosts: &'a [String],
-    overrides: &BTreeMap<String, RouteOverride>,
+    pinned: Option<&RouteOverride>,
     repository: &str,
     cancel: &CancellationToken,
     pass: &mut HostPass,
@@ -214,7 +229,6 @@ where
     F: FnMut(&'a str) -> Fut,
     Fut: Future<Output = Result<Vec<ProjectRoute>, Error>>,
 {
-    let pinned = overrides.get(repository);
     let mut first_failure = None;
     let mut first_retryable = None;
     for host in route_hosts(hosts, pinned) {
@@ -274,7 +288,7 @@ where
 pub(crate) async fn search_state_route<'a, F, Fut>(
     hosts: &'a [String],
     refused: &'a [String],
-    overrides: &BTreeMap<String, RouteOverride>,
+    pinned: Option<&RouteOverride>,
     repository: &str,
     cancel: &CancellationToken,
     pass: &mut HostPass,
@@ -284,9 +298,9 @@ where
     F: FnMut(&'a str) -> Fut,
     Fut: Future<Output = Result<Vec<ProjectRoute>, Error>>,
 {
-    match search_route(hosts, overrides, repository, cancel, pass, &mut list).await {
+    match search_route(hosts, pinned, repository, cancel, pass, &mut list).await {
         Err(err) if !refused.is_empty() && error_code(&err) == PROJECT_ROUTE_NOT_FOUND => {
-            match search_route(refused, overrides, repository, cancel, pass, &mut list).await {
+            match search_route(refused, pinned, repository, cancel, pass, &mut list).await {
                 // The review waits until the state of a host that serves it allows it.
                 Ok(_) => Err(Error::workflow(HOST_STATE_INELIGIBLE, false, None)),
                 Err(err) => Err(err),
@@ -329,10 +343,102 @@ fn pick_route(
 
 #[cfg(test)]
 mod tests {
-    use autoreview_schedule::scheduler::retryable;
+    use std::future::ready;
 
-    use super::host_unavailable;
-    use crate::error::Error;
+    use autoreview_policy::AuthorClass;
+    use autoreview_schedule::scheduler::retryable;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{HostPass, host_unavailable, route_hosts, route_pin, search_state_route};
+    use crate::config::RouteOverride;
+    use crate::error::{Error, error_code};
+    use crate::model::ProjectRoute;
+    use crate::protocol::validate::tests::test_config;
+
+    #[tokio::test]
+    async fn untrusted_route_takes_every_class_but_trusted_and_never_falls_back() {
+        const FAILED: &str = "pohunek_request_failed";
+        const NOT_FOUND: &str = "project_route_not_found";
+        let class = |name: &str| match name {
+            "trusted" => Some(AuthorClass::Trusted),
+            "untrusted" => Some(AuthorClass::Untrusted),
+            "unset" => Some(AuthorClass::Unset),
+            "other" => Some(AuthorClass::Other("maintainer".to_owned())),
+            _ => None,
+        };
+        // A route is `host/project`, empty for none. Hosts `a` and `b` serve project `p`.
+        let pin = |route: &str| {
+            let (host, project_id) = route.split_once('/')?;
+            let (host, project_id) = (host.to_owned(), project_id.to_owned());
+            Some(RouteOverride { host, project_id })
+        };
+        // (class, route override, untrusted route, failing host, result, hosts asked)
+        let cases = [
+            ("trusted", "", "", "", Ok("a"), "a"),
+            ("untrusted", "", "", "", Ok("a"), "a"),
+            ("untrusted", "", "", "a", Ok("b"), "a b"),
+            ("untrusted", "a/p", "", "", Ok("a"), "a"),
+            ("trusted", "a/p", "b/p", "", Ok("a"), "a"),
+            ("untrusted", "a/p", "b/p", "", Ok("b"), "b"),
+            ("none", "a/p", "b/p", "", Ok("b"), "b"),
+            ("unset", "a/p", "b/p", "", Ok("b"), "b"),
+            ("other", "a/p", "b/p", "", Ok("b"), "b"),
+            // A failing pinned host is never replaced by the other host.
+            ("untrusted", "a/p", "b/p", "b", Err(FAILED), "b"),
+            ("trusted", "a/p", "b/p", "a", Err(FAILED), "a"),
+            ("untrusted", "a/p", "b/q", "", Err(NOT_FOUND), "b"),
+            ("untrusted", "a/p", "c/p", "", Err(NOT_FOUND), ""),
+        ];
+        for (name, route, untrusted_route, failing, want, want_asked) in cases {
+            let mut config = test_config();
+            config.pohunek_hosts = vec!["a".to_owned(), "b".to_owned()];
+            let repository = "example-org/public-repo";
+            if let Some(route) = pin(route) {
+                (config.route_overrides).insert(repository.to_owned(), route);
+            }
+            if let Some(route) = pin(untrusted_route) {
+                (config.untrusted_route_overrides).insert(repository.to_owned(), route);
+            }
+            let pinned = route_pin(&config, repository, class(name).as_ref());
+            let (mut asked, mut pass) = (Vec::new(), HostPass::default());
+            let hosts = &config.pohunek_hosts;
+            let list = |host: &str| {
+                asked.push(host.to_owned());
+                let project_id = "p".to_owned();
+                ready(if host == failing {
+                    Err(Error::workflow(FAILED, false, None))
+                } else {
+                    Ok(vec![ProjectRoute {
+                        host: host.to_owned(),
+                        project_id,
+                    }])
+                })
+            };
+            let cancel = CancellationToken::new();
+            let found =
+                search_state_route(hosts, &[], pinned, repository, &cancel, &mut pass, list);
+            let found = found.await;
+            let got = found.as_ref().map(|route| route.host.as_str());
+            let got = got.map_err(|err| error_code(err));
+            // The hosts of the outage notice: the hosts of the route that failed in the pass.
+            let failed: Vec<&str> = route_hosts(hosts, pinned)
+                .into_iter()
+                .filter(|host| pass.failures.contains_key(*host))
+                .collect();
+            let want_failed: Vec<&str> = (want_asked.split_whitespace())
+                .filter(|host| *host == failing)
+                .collect();
+            let waits = found.as_ref().is_err_and(host_unavailable);
+            assert!(
+                got == want
+                    && asked.join(" ") == want_asked
+                    && failed == want_failed
+                    && waits == (want == Err(FAILED)),
+                "class={name} route={route} untrusted={untrusted_route} failing={failing}: \
+                 got {got:?} asked {asked:?} failed {failed:?} waits {waits}"
+            );
+        }
+    }
 
     #[test]
     fn only_a_host_failure_makes_a_review_wait_for_a_host() {
