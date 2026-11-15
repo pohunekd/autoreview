@@ -7,6 +7,7 @@ use std::fmt;
 use std::net::Ipv6Addr;
 use std::time::Duration;
 
+use autoreview_guard::Lexicon;
 use autoreview_policy::{Event, Level, Policy, user_login_valid};
 use autoreview_schedule::metadata::is_valid_session_group;
 use autoreview_schedule::scheduler;
@@ -163,6 +164,15 @@ pub struct HostStateRules {
     pub outside_window: HostStateChoice,
 }
 
+/// The settings of the text guard, from `guards.text`; policy rules opt in to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextGuard {
+    /// Largest amount of pull request text the guard reads for one review, in bytes.
+    pub max_input_bytes: usize,
+    /// The weighted phrase lexicon, read from `guards.text.lexicon_file` at startup.
+    pub lexicon: Lexicon,
+}
+
 /// The technical settings of the engine. What is reviewed and how it is published lives in the
 /// review policy.
 ///
@@ -195,6 +205,8 @@ pub struct Config {
     pub untrusted_route_overrides: BTreeMap<String, RouteOverride>,
     /// The host-state rules, or `None` when hosts are tried in configured order only.
     pub host_state: Option<HostStateRules>,
+    /// The text guard settings, or `None` when the configuration has no `guards.text`.
+    pub text_guard: Option<TextGuard>,
     /// The notification backends, their routes and the backends of the review queue.
     pub notify: NotifySettings,
     /// Names of the variables that hold the configured secrets.
@@ -1145,6 +1157,7 @@ mod tests {
             route_overrides: std::collections::BTreeMap::new(),
             untrusted_route_overrides: std::collections::BTreeMap::new(),
             host_state: None,
+            text_guard: None,
             notify: NotifySettings::single_for_tests(),
             secret_variables: std::collections::BTreeSet::new(),
             queue_max_items: 10,

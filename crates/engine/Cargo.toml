@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 autoreview-go-compat = { path = "../go-compat" }
+autoreview-guard = { path = "../guard" }
 autoreview-policy = { path = "../policy" }
 autoreview-schedule = { path = "../schedule" }
 base64 = { workspace = true }

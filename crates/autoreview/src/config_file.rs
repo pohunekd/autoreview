@@ -8,18 +8,21 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fmt;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{
     BackendKind, Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules,
-    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, WebhookBackend, WebhookFormat,
-    signature_text,
+    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, TextGuard, WebhookBackend,
+    WebhookFormat, signature_text,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::publish::MarkerName;
+use autoreview_guard::Lexicon;
 use autoreview_policy::{EVENTS, OPTIONAL_EVENTS, Policy, user_login_valid};
 use autoreview_schedule::scheduler;
 use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -83,6 +86,15 @@ const DAEMON_COMMAND_TIMEOUT_MAX_SECONDS: u64 = 60;
 /// pohunek 0.41.0 waits `min(limit, 60 s) + 1 s`: `DEDICATED_WAIT_TRANSPORT_HEADROOM`
 /// (`crates/client/src/transport.rs:94`), added in `dedicated_request_timeout` (`:1725`).
 const CLI_REPLY_HEADROOM_SECONDS: u64 = 1;
+
+/// Key of the text guard section, which a policy rule with a guard needs.
+const GUARDS_TEXT_KEY: &str = "guards.text";
+
+/// Largest `guards.text.max_input_bytes`: the guard's scan time is measured up to 4 MiB.
+const GUARD_INPUT_MAX_BYTES: usize = 4 << 20;
+
+/// Largest lexicon file, in bytes; the scan time grows with the number of entries.
+const LEXICON_MAX_BYTES: usize = 64 << 10;
 
 /// A configuration value read without type coercion, so that each key decides what it accepts and
 /// names itself when it refuses.
@@ -193,6 +205,29 @@ pub(crate) struct FileConfig {
     /// as a section without keys, so its first key is reported missing.
     #[serde(default, deserialize_with = "present_section")]
     metrics: Option<MetricsFile>,
+    /// The `guards` section; a policy rule with a guard needs it. A null section reads as a
+    /// section without keys, so `guards.text` is reported missing.
+    #[serde(default, deserialize_with = "present_section")]
+    guards: Option<GuardsFile>,
+}
+
+/// The `guards` section.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuardsFile {
+    /// The `guards.text` section; a null section reads as a section without keys.
+    #[serde(default, deserialize_with = "present_section")]
+    text: Option<TextGuardFile>,
+}
+
+/// The `guards.text` section.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextGuardFile {
+    /// Largest pull request text the guard reads for one review, in bytes.
+    max_input_bytes: Option<Value>,
+    /// Absolute path of the lexicon file.
+    lexicon_file: Option<Value>,
 }
 
 /// The `metrics` section.
@@ -660,6 +695,53 @@ pub(crate) fn metrics_section(file: &FileConfig) -> Result<Option<MetricsConfig>
     .map(Some)
 }
 
+/// Maps `guards.text` and reads its lexicon file; `None` when the configuration has no `guards`.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for an absent key, and `configuration_invalid` for a value
+/// out of range or a lexicon file that cannot be read or fails the guard's validation.
+fn text_guard(guards: Option<&GuardsFile>) -> Result<Option<TextGuard>, Error> {
+    let Some(guards) = guards else {
+        return Ok(None);
+    };
+    let settings = section(&guards.text, GUARDS_TEXT_KEY)?;
+    let input_key = "guards.text.max_input_bytes";
+    let max_input_bytes = count(&settings.max_input_bytes, input_key)?;
+    if max_input_bytes > GUARD_INPUT_MAX_BYTES {
+        return Err(invalid(input_key, "must be at most 4194304"));
+    }
+    let lexicon_key = "guards.text.lexicon_file";
+    let lexicon_file = text(&settings.lexicon_file, lexicon_key)?;
+    if !clean_absolute(&lexicon_file) {
+        return Err(invalid(lexicon_key, "must be a clean absolute path"));
+    }
+    let lexicon = read_lexicon(Path::new(&lexicon_file))
+        .map_err(|cause| Error::config(CONFIGURATION_INVALID, lexicon_key, Some(cause)))?;
+    Ok(Some(TextGuard {
+        max_input_bytes,
+        lexicon,
+    }))
+}
+
+/// Reads a lexicon file of at most `LEXICON_MAX_BYTES` bytes and validates it.
+///
+/// # Errors
+///
+/// Returns the read error, a size error, or the guard crate's lexicon error.
+fn read_lexicon(path: &Path) -> Result<Lexicon, Box<dyn std::error::Error + Send + Sync>> {
+    let file = File::open(path)?;
+    let limit = u64::try_from(LEXICON_MAX_BYTES)?;
+    let mut text = String::new();
+    let read = file
+        .take(limit.saturating_add(1))
+        .read_to_string(&mut text)?;
+    if read > LEXICON_MAX_BYTES {
+        return Err(Box::from("the lexicon file must be at most 65536 bytes"));
+    }
+    Ok(Lexicon::parse(&text)?)
+}
+
 /// Reads a section that is present when its key is, also when its value is null.
 fn present_section<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
@@ -930,6 +1012,17 @@ fn map_file(
     let queue_max_items = positive(&review_queue.max_items, "notify.review_queue.max_items")?;
     let queue_backends = text_list(&review_queue.backends, "notify.review_queue.backends")?;
     let notify = notify_settings(&backends, routes, queue_backends)?;
+    let text_guard = text_guard(file.guards.as_ref())?;
+    if text_guard.is_none()
+        && let Some(rule) = policy.guarded_rule()
+    {
+        let cause = format!("the policy rule for {rule} sets guard");
+        return Err(Error::config(
+            CONFIGURATION_MISSING,
+            GUARDS_TEXT_KEY,
+            Some(Box::from(cause)),
+        ));
+    }
     let config = Config {
         policy: Some(policy),
         schedule,
@@ -943,6 +1036,7 @@ fn map_file(
         route_overrides,
         untrusted_route_overrides,
         host_state,
+        text_guard,
         notify,
         secret_variables: secret_variables.take(),
         queue_max_items,
