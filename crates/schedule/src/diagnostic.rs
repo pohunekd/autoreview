@@ -228,9 +228,9 @@ pub fn failure_explanation(code: &str) -> &'static str {
         }
         AUTHOR_LIMIT_REACHED => {
             "The pull request author started as many reviews under this rule as its \
-             `author_limit` allows in its window, and the rule skips reviews over the bound. \
-             A later commit is reviewed once the window frees a slot; retry this PR to review \
-             it now."
+             `author_limit` allows in its window, and the rule skips reviews over the bound, so \
+             this head is not reviewed. A later commit is reviewed if it comes after the window \
+             frees a slot; retry this PR to review this head now."
         }
         "credential_invalid" => {
             "GitHub refused the token of the review's credential: revoked, expired or never valid. Replace the token in the variable that its `token_env` names and restart autoreview, then retry this PR; it is not retried automatically."

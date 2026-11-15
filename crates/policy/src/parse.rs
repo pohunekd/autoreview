@@ -1291,7 +1291,7 @@ notifications:
     #[test]
     fn author_limit_parses_and_changes_the_digest() {
         let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
-        // A policy without the key keeps the digest it had before the key existed (#401).
+        // A policy without author_limit hashes no author limit bytes, so its digest is pinned.
         assert_eq!(
             first.digest(),
             "78ab635662e41adc871491ea70f495ce62d272870f22b730d69c694213c0433b",

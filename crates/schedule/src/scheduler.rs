@@ -91,6 +91,11 @@ pub struct Record {
     /// The retry count before the failure of `handled_workflow` was handled.
     #[serde(skip_serializing_if = "is_zero")]
     pub handled_retries: i64,
+    /// Marks a dispatch that continues a review the author limit let through.
+    ///
+    /// A host wait keeps it, so the dispatch after the wait is not held as a new start.
+    #[serde(skip_serializing_if = "is_false")]
+    pub continues: bool,
 }
 
 autoreview_go_compat::object_only_serde!(Record);
@@ -109,6 +114,7 @@ impl Default for Record {
             awaits_host: false,
             handled_workflow: String::new(),
             handled_retries: 0,
+            continues: false,
         }
     }
 }
@@ -235,6 +241,7 @@ pub fn plan(
             awaits_host: false,
             handled_workflow: String::new(),
             handled_retries: 0,
+            continues: false,
         }
     } else {
         previous
@@ -556,11 +563,12 @@ pub struct AuthorBound {
 /// Holds a dispatch of a new start that the author's earlier `starts` leave no slot for.
 ///
 /// Starts inside the window count; a start at the window's first instant has left it. Only a
-/// dispatch from a `retry_wait` record of the same identity that waits for no host goes
-/// through over the bound: an automatic retry or an operator `retry` of an admitted review.
-/// Over the bound, a `skip` bound fails the record with [`AUTHOR_LIMIT_REACHED`] and notifies,
-/// unless the `previous` record carries that code from a skip of the pull request; otherwise
-/// the record waits until a start leaves the window.
+/// dispatch from a `retry_wait` record of the same identity goes through over the bound, an
+/// automatic retry or an operator `retry`, when it waits for no host or its delayed dispatch
+/// was such a continuation; the dispatch keeps that mark in `continues`. Over the bound, a
+/// `skip` bound fails the record with [`AUTHOR_LIMIT_REACHED`] and notifies, unless the
+/// `previous` record carries that code from a skip of the pull request; otherwise the record
+/// waits until a start leaves the window.
 ///
 /// # Errors
 ///
@@ -574,8 +582,12 @@ pub fn limit_author(
 ) -> Result<Decision, Error> {
     let continues = previous.identity == decision.record.identity
         && previous.phase == phase::RETRY_WAIT
-        && !previous.awaits_host;
-    if !decision.dispatch || continues {
+        && (!previous.awaits_host || previous.continues);
+    if !decision.dispatch {
+        return Ok(decision);
+    }
+    decision.record.continues = continues;
+    if continues {
         return Ok(decision);
     }
     let opens = now.checked_sub(bound.window).ok_or(Error::TimeOutOfRange)?;
@@ -1420,8 +1432,6 @@ mod tests {
         }
     }
 
-    // The mismatch count belongs to one head: a new head starts its own, a retarget keeps it,
-    // and the stop notice names both commits (#416).
     /// One row of the author limit table: what `limit_author` makes of a due dispatch.
     struct LimitCase {
         name: &'static str,
@@ -1466,6 +1476,10 @@ mod tests {
             phase: phase::RETRY_WAIT.to_owned(),
             ..old_head.clone()
         };
+        let retry_on_host = Record {
+            continues: true,
+            ..record(phase::RETRY_WAIT, 1, true)
+        };
         let (run, wait, failed) = (phase::RUNNING, phase::WAITING, phase::FAILED);
         let code = AUTHOR_LIMIT_REACHED;
         #[rustfmt::skip]
@@ -1500,6 +1514,12 @@ mod tests {
             LimitCase { name: "a retry after a host wait is held",
                 previous: record(phase::RETRY_WAIT, 0, true), skip: false, ago: &[1, 2],
                 want: (false, wait, false, "", 22) },
+            LimitCase { name: "a retry that waited for a host is not held",
+                previous: retry_on_host.clone(), skip: false, ago: &[1, 2],
+                want: (true, run, false, "", 0) },
+            LimitCase { name: "a retry that waited for a host is not skipped",
+                previous: retry_on_host, skip: true, ago: &[1, 2],
+                want: (true, run, false, "", 0) },
             LimitCase { name: "a restart after a superseded run is held",
                 previous: record(wait, 1, false), skip: false, ago: &[1, 2],
                 want: (false, wait, false, "", 22) },
@@ -1594,6 +1614,20 @@ mod tests {
             fresh.record.error_code == code && due.dispatch && due.record.error_code.is_empty(),
             "the skip was not carried: {fresh:?} {due:?}"
         );
+        // A retry or an operator `retry` over the bound that meets a host outage, under both
+        // outcomes, starts once the host is back, with no notice.
+        for skip in [false, true] {
+            let retry = record(phase::RETRY_WAIT, 1, false);
+            let due = plan(retry.clone(), &target, &[], now, &policy).expect("plan");
+            let first = limit_author(due, &retry, &starts, &bound(skip), now).expect("limit");
+            let waiting = wait_for_host(first.record.clone(), "pohunek_request_failed");
+            let back = plan(waiting.clone(), &target, &[], now, &policy).expect("plan");
+            let second = limit_author(back, &waiting, &starts, &bound(skip), now).expect("limit");
+            assert!(
+                first.dispatch && !first.notify && second.dispatch && !second.notify,
+                "skip={skip}: the retry was held after the host wait: {second:?}"
+            );
+        }
         // A skip notice is the review_stopped text with the explanation of the code.
         let stopped = Record {
             error_code: AUTHOR_LIMIT_REACHED.to_owned(),
@@ -1606,6 +1640,8 @@ mod tests {
         );
     }
 
+    // The mismatch count belongs to one head: a new head starts its own, a retarget keeps it,
+    // and the stop notice names both commits (#416).
     #[test]
     fn head_fetch_mismatch_count_follows_the_head() {
         const M: &str = HEAD_FETCH_MISMATCH;

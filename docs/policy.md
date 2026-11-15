@@ -349,7 +349,8 @@ author_limit:
   re-added trigger, and a `retry`. A review counts from its start for
   `window_hours`, and the count is read from the store, so a restart keeps it.
 - A new start over the bound is held. An automatic retry of a failed review and
-  a `retry` command are never held, so a review that started can finish.
+  a `retry` command are never held, also when they wait for a review host first,
+  so a review that started can finish.
 - `over: wait`: the review waits and starts on the first discovery pass after
   enough starts left the window. `over: skip`: the review of that head is not
   started, and a `review_stopped` notice with the code `author_limit_reached`
