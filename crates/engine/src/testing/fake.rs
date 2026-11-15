@@ -29,8 +29,8 @@ use crate::integrations::{
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
-    Candidate, CandidateList, Discussion, HostCapacity, PriorFinding, ProjectRoute, PublishResult,
-    PullRequest, RejectedCandidate, SessionIdentity,
+    Candidate, CandidateList, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
+    PublishResult, PullRequest, RejectedCandidate, SessionIdentity,
 };
 use crate::notify::Notification;
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
@@ -93,6 +93,10 @@ pub(crate) struct FakeState {
     pub(crate) discussion: Discussion,
     /// Prior findings of each discussion read, in order.
     pub(crate) discussion_reads: Vec<Vec<PriorFinding>>,
+    /// Issues that the closing-issue read returns; `None` makes GitHub refuse the read.
+    pub(crate) closing_issues: Option<LinkedIssues>,
+    /// Pull request of each closing-issue read, as `repository#number`, in order.
+    pub(crate) closing_reads: Vec<String>,
     /// Pull requests whose newer head is a rewritten history, by head SHA.
     pub(crate) rewritten: BTreeSet<String>,
     /// Refused candidates that the candidate search returns.
@@ -560,6 +564,21 @@ impl Integrations for FakeIntegration {
             state.discussion.clone()
         };
         ready(Ok(result))
+    }
+
+    fn list_closing_issues(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        pull_request: &PullRequest,
+    ) -> impl Future<Output = Result<LinkedIssues, Error>> + Send {
+        let result = {
+            let mut state = self.lock();
+            state.closing_reads.push(pull_request.key());
+            (state.closing_issues.clone())
+                .ok_or_else(|| Error::workflow("github_request_rejected", true, None))
+        };
+        ready(result)
     }
 
     fn linear_history(
