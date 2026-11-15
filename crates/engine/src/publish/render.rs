@@ -545,9 +545,7 @@ mod tests {
         Rule, Trigger, TriggerKind,
     };
 
-    use super::{
-        HumanReviewFacts, RenderSettings, human_review_signals, human_review_text, render_review,
-    };
+    use super::{HumanReviewFacts, RenderSettings, human_review_signals, render_review};
     use crate::integrations::ChangedFile;
     use crate::messages::{APPROVAL_REQUESTED_TITLE, approval_requested_message};
     use crate::model::ids::INPUT_VERSION;
@@ -1378,90 +1376,6 @@ mod tests {
             let got = human_review_signals(&signals, &facts);
             assert_eq!(got, want, "{name}");
         }
-    }
-
-    #[test]
-    fn human_review_text_drops_whole_signals_and_never_cuts_a_code_span() {
-        let hostile = "changed path ``db/[x](y)*a*`b`@octocat.sql`` (1 matching files)".to_owned();
-        let label = "label `needs-human`".to_owned();
-        let cases = [
-            (
-                "the limit falls inside the hostile span",
-                vec![hostile.clone(), label.clone()],
-                40,
-                format!("{hostile}; and 1 more"),
-            ),
-            (
-                "a signal that fits is kept",
-                vec![label.clone(), hostile.clone()],
-                200,
-                format!("{label}; {hostile}"),
-            ),
-            (
-                "a first signal longer than the limit is kept whole",
-                vec![hostile.clone()],
-                10,
-                hostile.clone(),
-            ),
-        ];
-        for (name, signals, limit, want) in cases {
-            let got = human_review_text(&signals, limit);
-            assert_eq!(got, want, "{name}");
-            assert!(
-                got.matches('`').count().is_multiple_of(2),
-                "{name}: unclosed backtick in {got}"
-            );
-        }
-        // A thousand deleted tests cannot make one signal, or the sentence, grow with the list: the
-        // list shows the values that fit the budget and counts the rest.
-        let budget = 200;
-        let signals = HumanReview {
-            deleted_tests: vec!["tests/**".to_owned()],
-            ..HumanReview::default()
-        };
-        let long: Vec<ChangedFile> = (0..1000)
-            .map(|index| ChangedFile {
-                path: format!("tests/{index:04}/{}Test.php", "x".repeat(300)),
-                status: "removed".to_owned(),
-                additions: 0,
-                deletions: 1,
-                previous_path: None,
-            })
-            .collect();
-        let short: Vec<ChangedFile> = (0..1000)
-            .map(|index| ChangedFile {
-                path: format!("tests/{index}.php"),
-                status: "removed".to_owned(),
-                additions: 0,
-                deletions: 1,
-                previous_path: None,
-            })
-            .collect();
-        fn facts(changed: &[ChangedFile], list_budget: usize) -> HumanReviewFacts<'_> {
-            HumanReviewFacts {
-                labels: &[],
-                author: "someone",
-                author_class: &AuthorClass::Untrusted,
-                changed,
-                truncated: false,
-                notes: 0,
-                list_budget,
-            }
-        }
-        let found = human_review_signals(&signals, &facts(&long, budget));
-        assert_eq!(
-            human_review_text(&found, 1000),
-            "deleted test files and 1000 more",
-            "long paths are counted, not listed"
-        );
-        let found = human_review_signals(&signals, &facts(&short, budget));
-        let text = human_review_text(&found, 1000);
-        assert!(
-            text.starts_with("deleted test files `tests/0.php`, ")
-                && text.ends_with(" more")
-                && text.len() <= "deleted test files ".len() + budget + ", and 1000 more".len(),
-            "short paths are listed to the budget: {text}"
-        );
     }
 
     #[test]

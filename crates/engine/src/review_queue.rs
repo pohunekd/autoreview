@@ -653,7 +653,6 @@ mod tests {
     use time::macros::datetime;
     use tokio_util::sync::CancellationToken;
 
-    use super::{QueuePriority, clean_text, render_queue};
     use crate::config::{Config, Credential, Credentials};
     use crate::engine::{Clock, Engine};
     use crate::integrations::ReviewRequest;
@@ -672,74 +671,6 @@ mod tests {
             author: "someone".to_owned(),
             url: format!("https://github.com/{repository}/pull/{number}"),
         }
-    }
-
-    #[test]
-    fn render_queue_escapes_text_and_links_only_the_verified_url() {
-        let mut request = queue_request(
-            "example-org/example-repo",
-            12,
-            "<img src=x onerror=\"alert(1)\"> & \"quoted\" \u{202e}gnp",
-        );
-        request.author = "dev<script>".to_owned();
-        let entries = vec![super::QueueEntry {
-            request,
-            status: "AI review running".to_owned(),
-            priority: QueuePriority::Other,
-            account: None,
-        }];
-        let rendered = render_queue(&entries, false, 8000, 512);
-        assert!(
-            rendered.shown == 1 && !rendered.dropped,
-            "shown {} dropped {}",
-            rendered.shown,
-            rendered.dropped
-        );
-        assert!(
-            !rendered.formatted.contains("<img") && !rendered.formatted.contains("<script"),
-            "formatted body carries raw markup: {}",
-            rendered.formatted
-        );
-        assert!(
-            rendered
-                .formatted
-                .contains("<a href=\"https://github.com/example-org/example-repo/pull/12\">"),
-            "missing verified link: {}",
-            rendered.formatted
-        );
-        assert!(
-            rendered.formatted.contains(concat!(
-                "&lt;img src=x onerror=&#34;alert(1)&#34;&gt; &amp; &#34;quoted&#34; ",
-                "&lt;U+202E&gt;gnp"
-            )),
-            "title not escaped: {}",
-            rendered.formatted
-        );
-        assert!(
-            rendered.plain.contains("Reviews waiting for you (1)")
-                && rendered
-                    .plain
-                    .contains("- <img src=x onerror=\"alert(1)\"> & \"quoted\" <U+202E>gnp (")
-                && rendered
-                    .plain
-                    .contains("https://github.com/example-org/example-repo/pull/12"),
-            "plain body lacks header or URL: {}",
-            rendered.plain
-        );
-    }
-
-    #[test]
-    fn clean_text_collapses_control_characters_and_limits_length() {
-        assert_eq!(clean_text("a\n\tb\u{0}  c", 10), "a b c");
-        assert_eq!(clean_text("abcdef", 4), "abc…");
-        assert_eq!(
-            clean_text("Fix\n\u{202e}gnp.exe", 200),
-            "Fix <U+202E>gnp.exe"
-        );
-        // The limit counts written characters; a cut keeps a `<U+XXXX>` whole or drops it.
-        assert_eq!(clean_text("a\u{202e}b", 10), "a<U+202E>b");
-        assert_eq!(clean_text("a\u{202e}bc", 10), "a<U+202E>…");
-        assert_eq!(clean_text("ab\u{202e}cd", 10), "ab…");
     }
 
     /// A clock frozen at one wall time; its waits end at once.

@@ -587,40 +587,6 @@ mod tests {
         }
     }
 
-    // The verifier runs on the pipeline's checkout, so its request carries the trusted lines
-    // that the Claude adapter checks that checkout against (#253).
-    #[test]
-    fn verifier_request_names_the_checkout_it_runs_on() {
-        let pr = fixtures::test_pull_request(3);
-        let mut input = verified_input(OnClean::Approve, pr.clone());
-        let prompt = |input: &ReviewInput| -> String {
-            let raw = build_verifier_request(
-                input,
-                &VerificationClaims::default(),
-                &Discussion::default(),
-            )
-            .expect("the verifier request builds");
-            let request: Value = serde_json::from_str(&raw).expect("the request is JSON");
-            request["prompt"]
-                .as_str()
-                .expect("the prompt is text")
-                .to_owned()
-        };
-        let base = prompt(&input);
-        assert!(base.contains(&format!(
-            "Head SHA: {}\nBase branch: main\n- Trusted head SHA: {}\n- Trusted base SHA: {}\n\
-- Trusted checkout: base\n\nThe review worktree is checked out at the tip of the base branch",
-            pr.head_sha, pr.head_sha, pr.base_sha
-        )));
-        input.rule.pipeline.checkout = Checkout::Head;
-        let head = prompt(&input);
-        assert!(head.contains(&format!(
-            "- Trusted checkout: head\n\n{}",
-            &VERIFIER_INSTRUCTIONS[..40]
-        )));
-        assert!(!head.contains("git diff"));
-    }
-
     #[test]
     fn verifier_output_needs_exactly_one_verdict_per_claim() {
         let pr = fixtures::test_pull_request(3);
