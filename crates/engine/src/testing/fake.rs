@@ -123,12 +123,6 @@ pub(crate) struct FakeState {
     ///
     /// Its reads fail transiently as `github_request_failed`.
     pub(crate) failing_credentials: BTreeMap<String, String>,
-    /// Names of the credentials whose candidate searches fail transiently.
-    pub(crate) transient_credentials: BTreeSet<String>,
-    /// GitHub's answer to each token, keyed by the token; a token without one fails.
-    pub(crate) token_answers: BTreeMap<String, TokenAnswer>,
-    /// Name of every credential whose token was checked, in order.
-    pub(crate) token_checks: Vec<String>,
     /// Every pull request state read, as `repository#number credential`, in order.
     pub(crate) state_reads: Vec<String>,
     /// Hosts whose daemon advertises the fetch of an extra ref at session start.
@@ -288,9 +282,7 @@ impl Integrations for FakeIntegration {
         let result = {
             let mut state = self.lock();
             state.listings += 1;
-            if state.transient_credentials.contains(&credential.name) {
-                Err(transient_error())
-            } else if let Some(err) = state.search_error(credential) {
+            if let Some(err) = state.search_error(credential) {
                 Err(err)
             } else {
                 let candidates = state.candidates.values().cloned().collect();
@@ -382,16 +374,10 @@ impl Integrations for FakeIntegration {
     fn check_token(
         &self,
         _cancel: &CancellationToken,
-        credential: &Credential,
+        _credential: &Credential,
     ) -> impl Future<Output = Result<TokenAnswer, Error>> + Send {
-        let mut state = self.lock();
-        state.token_checks.push(credential.name.clone());
-        let result = state
-            .token_answers
-            .get(&credential.token)
-            .cloned()
-            .ok_or_else(|| Error::workflow("github_request_failed", false, None));
-        ready(result)
+        // The fake holds no token answer, so every token check fails as a request error.
+        ready(Err(Error::workflow("github_request_failed", false, None)))
     }
 
     fn host_routes(

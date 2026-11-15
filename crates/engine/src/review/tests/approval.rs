@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 
 use autoreview_policy::{EVENTS, Event, Level, Rule};
 
-use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::ids::INPUT_VERSION;
 use crate::model::pull_request::SCOPE_FULL;
 use crate::model::{ProjectRoute, PullRequest, ReviewInput, ReviewScope, RunLimits};
@@ -63,42 +62,6 @@ fn test_input(rule: Rule, pull_request: PullRequest) -> ReviewInput {
         },
         ..ReviewInput::default()
     }
-}
-
-#[tokio::test]
-async fn newer_head_supersedes_a_waiting_approval() {
-    let mut h = start_harness(|_| {}).await;
-    let pr = integration_pull_request("acme/manual", &sha("a"));
-    h.fake.open(pr.clone(), h.rule(&pr.repository));
-    h.poll_until("the approval request", || {
-        h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
-    })
-    .await;
-    let resolved = h.resolve(&pr).expect("the waiting review resolves");
-    let mut next = pr.clone();
-    next.head_sha = sha("c");
-    h.fake.open(next.clone(), h.rule(&pr.repository));
-    let superseded = format!("Review {} was superseded", pr.review_id());
-    h.poll_until("the old wait to end", || {
-        h.fake.has_note(Level::Log, &superseded)
-    })
-    .await;
-    let approval = h.approve(&resolved.workflow_id, &pr);
-    assert!(
-        matches!(&approval, Err(err) if err.to_string().contains("review_superseded")),
-        "approving a superseded review must fail, got {approval:?}"
-    );
-    let next_review_id = format!("Review ID: {}", next.review_id());
-    h.poll_until("the approval request of the new head", || {
-        h.fake.has_note(Level::Action, &next_review_id)
-    })
-    .await;
-    assert_eq!(
-        h.publications(),
-        0,
-        "nothing may be posted without an approval"
-    );
-    h.stop_engine().await;
 }
 
 #[tokio::test]

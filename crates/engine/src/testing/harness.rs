@@ -269,21 +269,6 @@ impl Harness {
         }
     }
 
-    /// Waits until the asynchronous `condition` holds.
-    pub(crate) async fn wait_for_async(
-        &self,
-        description: &str,
-        condition: impl AsyncFn() -> bool,
-    ) {
-        let deadline = tokio::time::Instant::now() + WAIT_TIMEOUT;
-        while !condition().await {
-            if tokio::time::Instant::now() > deadline {
-                self.time_out(description);
-            }
-            tokio::time::sleep(WAIT_PAUSE).await;
-        }
-    }
-
     /// Fails the test with the state of the fake.
     fn time_out(&self, description: &str) -> ! {
         let (published, notes, started, open) = self.fake.snapshot();
