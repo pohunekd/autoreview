@@ -223,12 +223,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     ..Record::default()
                 };
                 // A failure handled on another base branch stays known, so a return there does
-                // not notify it again or restart its retries.
+                // not notify it again or restart its retries and streak counts.
                 if let Some(previous) = state.schedule.get(key)
                     && previous.identity == completed.identity
                 {
                     completed.handled_workflow = previous.handled_workflow.clone();
                     completed.handled_retries = previous.handled_retries;
+                    completed.handled_usage_limited = previous.handled_usage_limited;
+                    completed.handled_fetch_mismatches = previous.handled_fetch_mismatches;
                 }
                 state.schedule.insert(key.clone(), completed);
                 continue;
@@ -913,8 +915,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         {
             forced.attempt = previous.attempt.wrapping_add(1);
             forced.workflow_id = previous.workflow_id.clone();
-            // The notified failure stays known; the retry count restarts, as a retry asks.
+            // The notified failure stays known; the retry count restarts, as a retry asks. The
+            // streak counts stay, so a head that meets the same streak code stops at once.
             forced.handled_workflow = previous.handled_workflow.clone();
+            forced.usage_limited = previous.usage_limited;
+            forced.fetch_mismatches = previous.fetch_mismatches;
+            forced.handled_usage_limited = previous.handled_usage_limited;
+            forced.handled_fetch_mismatches = previous.handled_fetch_mismatches;
         }
         let mut latest_attempt = NO_ATTEMPT;
         // The latest attempts of the current base branch that completed and that failed.

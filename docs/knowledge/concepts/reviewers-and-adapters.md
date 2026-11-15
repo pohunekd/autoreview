@@ -197,6 +197,9 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   `claude-otel-noninteractive/v2` and whose `checked_checkout` is not the
   pipeline's checkout is
   `review_adapter_outdated` instead, whatever its exit code.
+  A line whose Claude Code result message has `is_error`, subtype `success`
+  and `api_error_status` 429 is `reviewer_usage_limited`, whatever its exit
+  code (see [troubleshooting](../runbooks/troubleshooting.md#reviewer-usage-limit)).
   Before and after the run it checks the review checkout against the trusted
   lines of the request (`- Trusted head SHA:`, `- Trusted base SHA:`,
   `- Trusted checkout:`), as the [Codex adapter](#the-codex-adapter) does, with

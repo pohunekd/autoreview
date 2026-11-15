@@ -1,0 +1,5 @@
+---
+kind: changed
+breaking: true
+---
+A Claude reviewer run that Claude Code ends on the rate or usage limit of its model account (a result message with `is_error`, subtype `success` and `api_error_status` 429) now fails with `reviewer_usage_limited` instead of keeping its code (`review_wrapper_invalid`, or `claude_result_invalid` on exit 0); Codex output names no structured limit, so Codex reviewers are unchanged. The scheduler tries such a review again after each delay of the new key `schedule.usage_limit_retry_delays_seconds` (the example's `[900, 1800, 3600, 3600, 3600, 3600, 3600]` covers 5 h 45 min) without spending `schedule.retry_delays_seconds`, and notifies only on the first limited attempt and when it stops. Every `config.yaml` now needs the key (for `scripts/env-to-config`, `HERMES_PR_REVIEW_USAGE_LIMIT_RETRY_DELAYS_SECONDS_JSON`): add it in the same window as the new binary, since the engine refuses to start without it and `autoreview validate` names it, and a rollback to an earlier release must remove it again because earlier releases refuse it as unknown.

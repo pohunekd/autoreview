@@ -40,10 +40,11 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_result_invalid: Claude adapter refused the run: claude-adapter: ...` in the log | The Claude adapter refused the worktree, before or after Claude Code ran | [Codex checkout refused](#codex-checkout-refused) |
 | `review_wrapper_invalid`, `review_wrapper_invalid: Claude Code exited with status N: ...` in the log | A Claude result line was unusable, or Claude Code itself failed | [Claude Code failed](#claude-code-failed) |
 | `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried | [Reviewer output](#reviewer-output) |
+| `reviewer_usage_limited` | Claude Code ended a reviewer run on the rate or usage limit of its model account | [Reviewer usage limit](#reviewer-usage-limit) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
 | `pohunek_head_fetch_failed`, `pohunek_head_fetch_ref_missing` | The session start could not fetch the pull request head on the review host | [Head commit unavailable](#head-commit-unavailable) |
 | `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start a review: its author started the most reviews the rule allows in the window | Wait for the window, or `retry` the pull request; see [author limit](../../policy.md#author-limit) |
-| `pohunek_head_fetch_mismatch` | At every start the fetched `refs/pull/<n>/head` was at another commit than the pull request head | [Head commit unavailable](#head-commit-unavailable) |
+| `pohunek_head_fetch_mismatch` | At each of the latest starts that a usage limit did not end, the fetched `refs/pull/<n>/head` was at another commit than the pull request head | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request, or rejected it as invalid (HTTP 422); HTTP 401 is `credential_invalid` | Check the token's permissions and the `github` section |
 | `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
@@ -298,6 +299,31 @@ result line in the session output holds the whole stderr in `stderr_base64`.
 The engine reads the stderr that every Claude adapter already sends, so no
 `autoreview profiles install` is needed for this reason.
 
+### Reviewer usage limit
+
+A Claude reviewer failed with `reviewer_usage_limited`: Claude Code ended the
+run with a result message that has `is_error`, subtype `success` and
+`api_error_status` 429, the HTTP status of the rate or usage limit of the
+model account on the review host. Only these fields count; the text of the
+result, such as `You've hit your session limit`, is never read, so a review
+that mentions a limit is not taken for one, and an error result with another
+status keeps its code (`review_wrapper_invalid`, or `claude_result_invalid` on
+exit 0). The reviewer is not run again inside the
+review, because a fresh session in the same minute meets the same limit. The
+scheduler tries the whole review again after each delay of
+[`schedule.usage_limit_retry_delays_seconds`](../../configuration.md#schedule),
+without spending `schedule.retry_delays_seconds`. The first limited attempt
+sends a `retry_scheduled` notice; the next ones send none, also after a
+`pohunek_head_fetch_mismatch` between them, which keeps the count. Any other
+end of a run starts the count again. When the
+delays are spent, the review stops with a `review_stopped` notice; run
+`autoreview retry` after the limit resets. Such a retry continues the count of
+limited attempts, so a run that meets the limit again stops at once. The
+verifier's claims are published unverified when the verifier meets the limit,
+as for any other failure of the verifier. Codex reviewers are unchanged: the
+Codex output names no structured limit, so a Codex run on a spent quota keeps
+its code.
+
 ### Head commit unavailable
 
 A review stops with `review_head_unavailable` and publishes nothing. A
@@ -345,8 +371,9 @@ after a push, so the head starts again after the debounce, without a
 notification, once for each entry in `schedule.retry_delays_seconds`. When
 the next start still fetches another commit, the review stops with a
 `review_stopped` notification that names the expected and the fetched commit.
-Only consecutive mismatching starts of one head count: any other end of a run
-starts the count again, and a new head starts its own review. Check the pull
+Only the latest mismatching starts of one head count: a
+`reviewer_usage_limited` end between them keeps the count, any other end of a
+run starts the count again, and a new head starts its own review. Check the pull
 request on GitHub, then retry it or push a new commit; a retry starts the head
 once and stops it again at once if the ref is still at the other commit.
 

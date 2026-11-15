@@ -64,6 +64,7 @@ schedule:
   max_concurrent_reviews: 8
   debounce_seconds: 120
   retry_delays_seconds: [60, 300, 900]
+  usage_limit_retry_delays_seconds: [900, 1800, 3600, 3600, 3600, 3600, 3600]
   step_retry_seconds: 900
   step_retry_initial_seconds: 2
   step_retry_max_interval_seconds: 60
