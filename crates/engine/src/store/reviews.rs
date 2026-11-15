@@ -2,6 +2,8 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::collections::BTreeMap;
+
 use autoreview_go_compat::go_time::format_rfc3339_nano;
 use autoreview_policy::AuthorClass;
 use autoreview_schedule::scheduler::Run;
@@ -12,11 +14,14 @@ use serde::de::DeserializeOwned;
 use time::OffsetDateTime;
 
 use super::discovery::DiscoveryState;
-use super::steps::StepRun;
+use super::rollup::{Rollup, add_rollup, read_rollup};
+use super::steps::{EndedStepRun, StepRun, collect_step_runs};
 use super::{Store, encode_go_json, store_error};
 use crate::Error;
 use crate::model::pull_request::is_unset_class;
 use crate::model::{ReviewInput, ReviewOutcome};
+use crate::review::input::STEP_PLAN;
+use crate::stats::rollup;
 
 /// Status of a review that is dispatched and waits to run.
 pub const REVIEW_QUEUED: &str = "queued";
@@ -97,6 +102,19 @@ pub struct StoredReview {
     /// Completion time, as RFC 3339 text.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub completed_at: String,
+}
+
+/// What `Store::stats_snapshot` reads in one transaction.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StatsSnapshot {
+    /// The review rows of `stats_reviews`.
+    pub reviews: Vec<StoredReview>,
+    /// The discovery state.
+    pub discovery: DiscoveryState,
+    /// The step runs that ended inside the range; empty without one.
+    pub steps: Vec<EndedStepRun>,
+    /// The rollup of the days of the range; empty without one.
+    pub rollup: Rollup,
 }
 
 impl StoredReview {
@@ -284,31 +302,44 @@ impl Store {
     }
 
     /// Reads the reviews of `stats_reviews`, the discovery state and, with `range`, the step
-    /// runs that ended inside it, as one snapshot.
+    /// runs that ended inside it and the rollup of its days, as one snapshot.
     ///
     /// A deferred transaction takes no write lock; in WAL mode its first read fixes the
-    /// snapshot, so a write of another process between the reads is not seen. Without `range`
-    /// the step runs are empty and not read.
+    /// snapshot, so a write of another process between the reads is not seen, and a pruned
+    /// review is either a row or in the rollup. Without `range` the step runs and the rollup
+    /// are empty and not read.
     ///
     /// # Errors
     ///
-    /// The errors of `stats_reviews`, `load_discovery` and `stats_step_runs`.
+    /// The errors of `stats_reviews`, `load_discovery`, `stats_step_runs` and `read_rollup`.
     pub fn stats_snapshot(
         &self,
         range: Option<(OffsetDateTime, OffsetDateTime)>,
-    ) -> Result<(Vec<StoredReview>, DiscoveryState, Vec<StepRun>), Error> {
+    ) -> Result<StatsSnapshot, Error> {
         let mut connection = self.lock_connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(unavailable)?;
         let reviews = Self::stats_reviews(&transaction, range)?;
         let discovery = Self::read_discovery(&transaction)?;
-        let steps = match range {
-            Some(range) => Self::stats_step_runs(&transaction, range)?,
-            None => Vec::new(),
+        let (steps, rollup) = match range {
+            Some((start, end)) => (
+                Self::stats_step_runs(&transaction, (start, end))?,
+                read_rollup(
+                    &transaction,
+                    &start.date().to_string(),
+                    &end.date().to_string(),
+                )?,
+            ),
+            None => (Vec::new(), Rollup::default()),
         };
         transaction.commit().map_err(unavailable)?;
-        Ok((reviews, discovery, steps))
+        Ok(StatsSnapshot {
+            reviews,
+            discovery,
+            steps,
+            rollup,
+        })
     }
 
     /// Lists the reviews that can make progress, oldest first: queued and running reviews, and
@@ -463,6 +494,30 @@ fn collect_reviews(
         reviews.push(decode_review_row(row)?);
     }
     Ok(reviews)
+}
+
+/// Returns the stored plan of each review matched by `filter`, by workflow ID, undecoded.
+///
+/// # Errors
+///
+/// Returns `store_unavailable` when SQLite fails.
+fn pruned_plans(
+    connection: &Connection,
+    filter: &str,
+    cutoff: &str,
+) -> Result<BTreeMap<String, String>, Error> {
+    let sql = format!(
+        "SELECT workflow_id, output FROM review_steps WHERE name = ?3 AND workflow_id IN \
+         (SELECT workflow_id FROM reviews WHERE {filter})"
+    );
+    let mut statement = connection.prepare(&sql).map_err(unavailable)?;
+    let rows = statement
+        .query_map(params![REVIEW_COMPLETED, cutoff, STEP_PLAN], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(unavailable)?;
+    rows.collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(unavailable)
 }
 
 /// Reads one text column by workflow and name; no row gives `None`.
@@ -707,24 +762,48 @@ impl Store {
         Ok(())
     }
 
-    /// Deletes the completed reviews that were last updated before `cutoff`.
+    /// Deletes the completed reviews that were last updated before `cutoff`, and adds their
+    /// counts to the rollup in the same transaction.
     ///
     /// Returns the number of deleted reviews.
     ///
     /// # Errors
     ///
-    /// Returns `store_unavailable` when SQLite fails.
+    /// Returns `store_state_invalid` when a deleted row, its step runs or its plan does not
+    /// decode, and `store_unavailable` when SQLite fails; then nothing is deleted.
     pub fn prune_reviews(&self, cutoff: OffsetDateTime) -> Result<i64, Error> {
-        let connection = self.lock_connection()?;
-        let sql = format!(
-            "DELETE FROM reviews WHERE status = ?1 AND {} < {}",
+        let filter = format!(
+            "status = ?1 AND {} < {}",
             time_key("updated_at"),
             time_key("?2")
         );
-        let rows = connection
-            .execute(&sql, params![REVIEW_COMPLETED, format_rfc3339_nano(cutoff)])
-            .map_err(unavailable)?;
-        Ok(i64::try_from(rows).unwrap_or(i64::MAX))
+        let cutoff = format_rfc3339_nano(cutoff);
+        let bound: [&dyn ToSql; 2] = [&REVIEW_COMPLETED, &cutoff];
+        self.in_tx(|transaction| {
+            let reviews = collect_reviews(
+                transaction,
+                &format!("SELECT {REVIEW_COLUMNS} FROM reviews WHERE {filter}"),
+                &bound,
+            )?;
+            if reviews.is_empty() {
+                return Ok(0);
+            }
+            let runs = collect_step_runs(
+                transaction,
+                &format!(
+                    "SELECT workflow_id, step, outcome, retries, duration_ms, finished_at \
+                     FROM review_step_runs WHERE workflow_id IN \
+                     (SELECT workflow_id FROM reviews WHERE {filter})"
+                ),
+                &bound,
+            )?;
+            let plans = pruned_plans(transaction, &filter, &cutoff)?;
+            add_rollup(transaction, &rollup(&reviews, &runs, &plans)?)?;
+            let rows = transaction
+                .execute(&format!("DELETE FROM reviews WHERE {filter}"), bound)
+                .map_err(unavailable)?;
+            Ok(i64::try_from(rows).unwrap_or(i64::MAX))
+        })
     }
 
     /// Reads the output of a review step, or `None` when the step has not been saved.

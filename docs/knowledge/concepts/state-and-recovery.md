@@ -210,7 +210,7 @@ passes:
 
 | Key | Removes | Why |
 |---|---|---|
-| `store.review_retention_seconds` | Completed reviews whose last update is older than this | Their steps are no longer needed to resume anything |
+| `store.review_retention_seconds` | Completed reviews whose last update is older than this; their counts move to the daily statistics rollup, which has no retention | Their steps are no longer needed to resume anything |
 | `store.published_retention_seconds` | Published decisions older than this | A published decision is the baseline of the next incremental review. Older baselines are not used. |
 
 Two consequences follow from the retention periods:
@@ -226,6 +226,15 @@ Two consequences follow from the retention periods:
   review is removed after `store.review_retention_seconds`, the serving
   credential reads it (see
   [GitHub identity](github-identity.md#what-a-credential-is)).
+
+Before it removes a completed review, the prune reads its row, its step runs and,
+for a published review, its plan, and adds their counts to the statistics
+rollup in the same transaction. A review that does not decode stops the prune:
+nothing is removed, every discovery pass logs `review pruning failed` with
+`error_code` `store_state_invalid`, and the store keeps growing until that
+review is repaired or removed. The `error` field of the log line names the
+review's workflow ID. Such a review is a defect or a damaged store to report
+(see the [CLI error codes](../../cli.md#error-codes)).
 
 The engine also refuses to grow the discovery state without limit. The state
 holds at most `schedule.state_entry_limit` pull request entries and review

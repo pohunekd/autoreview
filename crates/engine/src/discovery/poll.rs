@@ -23,7 +23,6 @@ use crate::model::{
     ReviewInput,
 };
 use crate::review::input::{RenderOutcome, STEP_RENDERED};
-use crate::store::discovery::save_discovery;
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
 
 /// Start value of the latest attempt, below every stored attempt.
@@ -431,7 +430,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     APPROVAL_KIND_SUPERSEDED,
                 )?;
             }
-            save_discovery(transaction, &state)
+            self.store.save_discovery(transaction, &state)
         })?;
         Ok(Pass { result, notices })
     }

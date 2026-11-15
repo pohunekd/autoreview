@@ -1,8 +1,9 @@
 //! Review statistics: the current state and a daily history, read from the store only.
 //!
 //! One review row is one attempt: a retry is a new row, so `started` and `failed` count
-//! attempts. The counts come from the `reviews` and `review_step_runs` tables and the schedule
-//! records of the discovery state; nothing asks GitHub or pohunek.
+//! attempts. The counts come from the `reviews` and `review_step_runs` tables, the rollup of
+//! the pruned reviews and the schedule records of the discovery state; nothing asks GitHub or
+//! pohunek.
 
 // Rust guideline compliant 2026-06-26
 
@@ -22,9 +23,15 @@ use crate::error::Error;
 use crate::integrations::Integrations;
 use crate::model::review::APPROVAL_KIND_APPROVE;
 use crate::model::{Decision, Outcome, ReviewOutcome};
+use crate::publish::plan::PublicationPlan;
+use crate::store::rollup::{
+    DIMENSION_DAY, DIMENSION_FAILURE, DIMENSION_REPOSITORY, DIMENSION_REVIEWER, DIMENSION_RULE,
+    DIMENSION_STEP,
+};
 use crate::store::{
-    RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
-    REVIEW_RUNNING, StepOutcome, StepRun, StoredReview,
+    EndedStepRun, RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
+    REVIEW_RUNNING, Rollup, RollupCount, RollupSample, StatsSnapshot, StepOutcome, StepRun,
+    StoredReview,
 };
 
 /// Version of the statistics document; a changed field gets a new version.
@@ -50,6 +57,12 @@ const MEDIAN_PERCENT: usize = 50;
 
 /// Percentile of the slow publication time.
 const P90_PERCENT: usize = 90;
+
+/// Counter of the published attempts that handed their notes to the author; rollup only.
+const COUNTER_NOTES: &str = "notes_to_author";
+
+/// Counter of the `failure` dimension, the field of `FailedCount`.
+const COUNTER_FAILED: &str = "failed";
 
 /// A range of whole UTC days, both ends included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,16 +329,108 @@ pub(crate) enum Published {
     Other,
 }
 
+impl Counters {
+    /// Returns each counter with its field name, the rollup's counter, without the percentiles.
+    fn named(&self) -> [(&'static str, i64); 10] {
+        [
+            ("started", self.started),
+            ("completed", self.completed),
+            ("published", self.published),
+            ("approved_without_human", self.approved_without_human),
+            ("approved_after_wait", self.approved_after_wait),
+            ("changes_requested", self.changes_requested),
+            ("commented", self.commented),
+            ("superseded", self.superseded),
+            ("approval_expired", self.approval_expired),
+            ("failed", self.failed),
+        ]
+    }
+
+    /// Returns the counter whose field name is `name`, or `None` for another name.
+    fn named_mut(&mut self, name: &str) -> Option<&mut i64> {
+        match name {
+            "started" => Some(&mut self.started),
+            "completed" => Some(&mut self.completed),
+            "published" => Some(&mut self.published),
+            "approved_without_human" => Some(&mut self.approved_without_human),
+            "approved_after_wait" => Some(&mut self.approved_after_wait),
+            "changes_requested" => Some(&mut self.changes_requested),
+            "commented" => Some(&mut self.commented),
+            "superseded" => Some(&mut self.superseded),
+            "approval_expired" => Some(&mut self.approval_expired),
+            "failed" => Some(&mut self.failed),
+            _ => None,
+        }
+    }
+}
+
+impl StepCounts {
+    /// Returns each counter with its field name, the rollup's counter, without the percentiles.
+    fn named(&self) -> [(&'static str, i64); 5] {
+        [
+            ("runs", self.runs),
+            ("succeeded", self.succeeded),
+            ("superseded", self.superseded),
+            ("failed", self.failed),
+            ("retries", self.retries),
+        ]
+    }
+
+    /// Returns the counter whose field name is `name`, or `None` for another name.
+    fn named_mut(&mut self, name: &str) -> Option<&mut i64> {
+        match name {
+            "runs" => Some(&mut self.runs),
+            "succeeded" => Some(&mut self.succeeded),
+            "superseded" => Some(&mut self.superseded),
+            "failed" => Some(&mut self.failed),
+            "retries" => Some(&mut self.retries),
+            _ => None,
+        }
+    }
+
+    /// Reports whether the rollup counter `name` is a step counter.
+    fn knows(name: &str) -> bool {
+        Self::default().named_mut(name).is_some()
+    }
+}
+
 /// The counts of one bucket while the rows are read, with the publication seconds.
 #[derive(Debug, Default)]
 struct Tally {
     /// The counts; the two percentiles are filled by `finish`.
     counters: Counters,
+    /// Published attempts that handed their notes to the author; kept in the rollup only.
+    notes: i64,
     /// Seconds to publication of every published attempt with a valid duration.
     seconds: Vec<i64>,
 }
 
 impl Tally {
+    /// Adds the counts and the seconds of `other`.
+    fn merge(&mut self, other: &Self) {
+        for (name, value) in other.counters.named() {
+            if let Some(counter) = self.counters.named_mut(name) {
+                *counter += value;
+            }
+        }
+        self.notes += other.notes;
+        self.seconds.extend_from_slice(&other.seconds);
+    }
+
+    /// Reports whether the rollup counter `name` counts in a bucket.
+    fn knows(name: &str) -> bool {
+        name == COUNTER_NOTES || Counters::default().named_mut(name).is_some()
+    }
+
+    /// Adds `value` to the rollup counter `name`; a name that `knows` refuses adds nothing.
+    fn add_named(&mut self, name: &str, value: i64) {
+        if name == COUNTER_NOTES {
+            self.notes += value;
+        } else if let Some(counter) = self.counters.named_mut(name) {
+            *counter += value;
+        }
+    }
+
     /// Counts one attempt created in the bucket.
     fn start(&mut self) {
         self.counters.started += 1;
@@ -388,6 +493,16 @@ impl StepTally {
         }
     }
 
+    /// Adds the counts and the durations of `other`.
+    fn merge(&mut self, other: Self) {
+        for (name, value) in other.counts.named() {
+            if let Some(counter) = self.counts.named_mut(name) {
+                *counter += value;
+            }
+        }
+        self.durations.extend(other.durations);
+    }
+
     /// Returns the counts with the median and the 90th percentile of the durations.
     fn finish(mut self) -> StepCounts {
         self.durations.sort_unstable();
@@ -416,8 +531,17 @@ fn stored_instant(
 
 /// Returns the `store_state_invalid` error of one review row.
 fn state_invalid(review: &StoredReview, reason: &str) -> Error {
-    let cause = format!("review {} {reason}", review.workflow_id);
+    store_invalid(format!("review {} {reason}", review.workflow_id))
+}
+
+/// Returns the `store_state_invalid` error with its cause.
+fn store_invalid(cause: String) -> Error {
     Error::workflow("store_state_invalid", true, Some(cause.into()))
+}
+
+/// Reads the UTC day of a rollup row.
+fn rollup_day(text: &str) -> Result<Date, Error> {
+    parse_day(text).map_err(|_| store_invalid(format!("rollup day {text:?} is not a day")))
 }
 
 /// Reads the completion instant of a completed review.
@@ -478,13 +602,11 @@ fn ending(review: &StoredReview, seconds: Option<i64>) -> Result<Ending, Error> 
     })
 }
 
-/// The buckets of a history while the rows are read.
+/// The buckets of one UTC day while the rows and the rollup are read.
 #[derive(Debug, Default)]
-struct HistoryTally {
-    /// The whole range.
-    totals: Tally,
-    /// One bucket per UTC day of the range.
-    days: BTreeMap<Date, Tally>,
+struct DayTally {
+    /// The whole day.
+    total: Tally,
     /// One bucket per repository.
     repositories: BTreeMap<String, Tally>,
     /// One bucket per rule `match`.
@@ -493,51 +615,281 @@ struct HistoryTally {
     reviewers: BTreeMap<String, Tally>,
     /// The `failed` attempts per stored error code.
     failures: BTreeMap<String, i64>,
+    /// One bucket per review step.
+    steps: BTreeMap<String, StepTally>,
 }
 
-impl HistoryTally {
-    /// Applies `count` to the total, the day, and the breakdowns of `review`.
-    fn add(&mut self, review: &StoredReview, day: Date, count: impl Fn(&mut Tally)) {
-        let input = &review.input;
-        count(&mut self.totals);
-        count(self.days.entry(day).or_default());
-        count(
-            self.repositories
-                .entry(input.pull_request.repository.clone())
-                .or_default(),
-        );
-        count(self.rules.entry(input.rule.match_glob.clone()).or_default());
-        let reviewers: BTreeSet<&str> = input.reviewers.iter().map(|r| r.id.as_str()).collect();
-        for reviewer in reviewers {
-            count(self.reviewers.entry(reviewer.to_owned()).or_default());
+impl DayTally {
+    /// Returns the breakdown map of a review `dimension`, or `None` for another dimension.
+    fn breakdown(&mut self, dimension: &str) -> Option<&mut BTreeMap<String, Tally>> {
+        match dimension {
+            DIMENSION_REPOSITORY => Some(&mut self.repositories),
+            DIMENSION_RULE => Some(&mut self.rules),
+            DIMENSION_REVIEWER => Some(&mut self.reviewers),
+            _ => None,
         }
     }
 }
 
-/// Builds the document from review rows, step runs and schedule records.
+/// The buckets of a history per UTC day, while the rows and the rollup are read.
+#[derive(Debug, Default)]
+struct HistoryTally {
+    /// One bucket per UTC day.
+    days: BTreeMap<Date, DayTally>,
+}
+
+impl HistoryTally {
+    /// Applies `count` to the day and its breakdowns of `review`.
+    fn add(&mut self, review: &StoredReview, day: Date, count: impl Fn(&mut Tally)) {
+        let input = &review.input;
+        let bucket = self.days.entry(day).or_default();
+        count(&mut bucket.total);
+        count(
+            bucket
+                .repositories
+                .entry(input.pull_request.repository.clone())
+                .or_default(),
+        );
+        count(
+            bucket
+                .rules
+                .entry(input.rule.match_glob.clone())
+                .or_default(),
+        );
+        let reviewers: BTreeSet<&str> = input.reviewers.iter().map(|r| r.id.as_str()).collect();
+        for reviewer in reviewers {
+            count(bucket.reviewers.entry(reviewer.to_owned()).or_default());
+        }
+    }
+
+    /// Counts the starts and completions of `reviews` on the days of `range`, every day
+    /// without one; a published attempt whose plan in `plans` handed the notes to the author
+    /// also counts them.
+    fn add_reviews(
+        &mut self,
+        reviews: &[StoredReview],
+        plans: &BTreeMap<String, String>,
+        range: Option<&StatsRange>,
+    ) -> Result<(), Error> {
+        let inside = |day: Date| range.is_none_or(|range| range.contains(day));
+        for review in reviews {
+            let created = stored_instant(review, "created_at", &review.created_at)?;
+            if inside(created.date()) {
+                self.add(review, created.date(), Tally::start);
+            }
+            if review.status != REVIEW_COMPLETED {
+                continue;
+            }
+            let completed = completed_instant(review)?;
+            if !inside(completed.date()) {
+                continue;
+            }
+            let ending = ending(review, elapsed_seconds(created, completed))?;
+            self.add(review, completed.date(), |bucket| bucket.complete(ending));
+            if ending == Ending::Failed {
+                let bucket = self.days.entry(completed.date()).or_default();
+                *bucket.failures.entry(review.failure.clone()).or_default() += 1;
+            }
+            let plan = match (ending, plans.get(&review.workflow_id)) {
+                (Ending::Published { .. }, Some(text)) => serde_json::from_str(text)
+                    .map_err(|err| state_invalid(review, &format!("plan: {err}")))?,
+                _ => PublicationPlan::default(),
+            };
+            if plan.notes_to_author {
+                self.add(review, completed.date(), |bucket| bucket.notes += 1);
+            }
+        }
+        Ok(())
+    }
+
+    /// Counts each step run on the UTC day it ended; the snapshot of a range holds only the
+    /// runs that ended inside it.
+    fn add_runs(&mut self, runs: &[EndedStepRun]) -> Result<(), Error> {
+        for ended in runs {
+            let finished = parse_rfc3339(&ended.finished_at)
+                .map(|instant| instant.to_offset(UtcOffset::UTC))
+                .map_err(|err| {
+                    store_invalid(format!(
+                        "step run of review {} finished_at: {err}",
+                        ended.workflow_id
+                    ))
+                })?;
+            let bucket = self.days.entry(finished.date()).or_default();
+            let step = bucket.steps.entry(ended.run.step.as_str().to_owned());
+            step.or_default().add(&ended.run);
+        }
+        Ok(())
+    }
+
+    /// Adds the counts and samples of the rollup; a dimension or counter it does not know
+    /// counts nowhere and adds no entry.
+    fn add_rollup(&mut self, rollup: &Rollup) -> Result<(), Error> {
+        for count in &rollup.counts {
+            let bucket = self.days.entry(rollup_day(&count.day)?).or_default();
+            let value = count.value;
+            match count.dimension.as_str() {
+                DIMENSION_DAY => {
+                    bucket.total.add_named(&count.counter, value);
+                }
+                DIMENSION_FAILURE if count.counter == COUNTER_FAILED => {
+                    *bucket.failures.entry(count.key.clone()).or_default() += value;
+                }
+                DIMENSION_STEP if StepCounts::knows(&count.counter) => {
+                    let step = bucket.steps.entry(count.key.clone()).or_default();
+                    if let Some(counter) = step.counts.named_mut(&count.counter) {
+                        *counter += value;
+                    }
+                }
+                dimension => {
+                    if let (true, Some(map)) =
+                        (Tally::knows(&count.counter), bucket.breakdown(dimension))
+                    {
+                        map.entry(count.key.clone())
+                            .or_default()
+                            .add_named(&count.counter, value);
+                    }
+                }
+            }
+        }
+        for sample in &rollup.samples {
+            let bucket = self.days.entry(rollup_day(&sample.day)?).or_default();
+            let times = usize::try_from(sample.count)
+                .map_err(|_| store_invalid(format!("rollup sample count {}", sample.count)))?;
+            let values = std::iter::repeat_n(sample.sample, times);
+            match sample.dimension.as_str() {
+                DIMENSION_DAY => bucket.total.seconds.extend(values),
+                DIMENSION_STEP => {
+                    let step = bucket.steps.entry(sample.key.clone()).or_default();
+                    step.durations.extend(values);
+                }
+                dimension => {
+                    if let Some(map) = bucket.breakdown(dimension) {
+                        map.entry(sample.key.clone())
+                            .or_default()
+                            .seconds
+                            .extend(values);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns the counts and samples of every day, as the prune adds them to the rollup.
+    fn into_rollup(self) -> Rollup {
+        let mut rollup = Rollup::default();
+        for (day, bucket) in self.days {
+            let day = day.to_string();
+            push_tally(&mut rollup, &day, DIMENSION_DAY, "", &bucket.total);
+            for (dimension, map) in [
+                (DIMENSION_REPOSITORY, &bucket.repositories),
+                (DIMENSION_RULE, &bucket.rules),
+                (DIMENSION_REVIEWER, &bucket.reviewers),
+            ] {
+                for (key, tally) in map {
+                    push_tally(&mut rollup, &day, dimension, key, tally);
+                }
+            }
+            for (code, failed) in &bucket.failures {
+                push_count(
+                    &mut rollup,
+                    &day,
+                    DIMENSION_FAILURE,
+                    code,
+                    COUNTER_FAILED,
+                    *failed,
+                );
+            }
+            for (step, tally) in &bucket.steps {
+                for (name, value) in tally.counts.named() {
+                    push_count(&mut rollup, &day, DIMENSION_STEP, step, name, value);
+                }
+                push_samples(&mut rollup, &day, DIMENSION_STEP, step, &tally.durations);
+            }
+        }
+        rollup
+    }
+}
+
+/// Adds one count to `rollup`; a zero adds nothing, so the rollup holds no empty entry.
+fn push_count(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, name: &str, value: i64) {
+    if value != 0 {
+        rollup.counts.push(RollupCount {
+            day: day.to_owned(),
+            dimension: dimension.to_owned(),
+            key: key.to_owned(),
+            counter: name.to_owned(),
+            value,
+        });
+    }
+}
+
+/// Adds each distinct value of `values` with how often it occurs.
+fn push_samples(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, values: &[i64]) {
+    let mut counted: BTreeMap<i64, i64> = BTreeMap::new();
+    for value in values {
+        *counted.entry(*value).or_default() += 1;
+    }
+    for (sample, count) in counted {
+        rollup.samples.push(RollupSample {
+            day: day.to_owned(),
+            dimension: dimension.to_owned(),
+            key: key.to_owned(),
+            sample,
+            count,
+        });
+    }
+}
+
+/// Adds the counters, the notes and the seconds of one bucket.
+fn push_tally(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, tally: &Tally) {
+    for (name, value) in tally.counters.named() {
+        push_count(rollup, day, dimension, key, name, value);
+    }
+    push_count(rollup, day, dimension, key, COUNTER_NOTES, tally.notes);
+    push_samples(rollup, day, dimension, key, &tally.seconds);
+}
+
+/// Returns the rollup of pruned reviews: their starts, completions, notes and step runs.
 ///
-/// The rows, the step runs and the schedule records are those of one `Store::stats_snapshot`.
-/// The current state counts every queued and running row, every awaiting row without an
-/// approval decision, and every schedule record in phase `failed`. With `range`, an attempt
-/// counts as started on the UTC day of `created_at` and as completed on the UTC day of
-/// `completed_at`, each only inside the range, and every step run in `steps` counts; the
-/// snapshot holds only the runs that ended inside the range.
+/// `runs` are the step runs of `reviews`, `plans` their stored plans by workflow ID.
 ///
 /// # Errors
 ///
-/// Returns `store_state_invalid` for a timestamp or an outcome that does not decode, for a
-/// completed row without `completed_at`, and for a schedule key without `#`.
-pub fn compute(
+/// Returns `store_state_invalid` as `compute` does for the same rows, and for the plan of a
+/// published attempt that does not decode.
+pub(crate) fn rollup(
     reviews: &[StoredReview],
-    steps: &[StepRun],
-    schedule: &BTreeMap<String, Record>,
+    runs: &[EndedStepRun],
+    plans: &BTreeMap<String, String>,
+) -> Result<Rollup, Error> {
+    let mut tally = HistoryTally::default();
+    tally.add_reviews(reviews, plans, None)?;
+    tally.add_runs(runs)?;
+    Ok(tally.into_rollup())
+}
+
+/// Builds the document from one `Store::stats_snapshot`.
+///
+/// The current state counts every queued and running row, every awaiting row without an
+/// approval decision, and every schedule record in phase `failed`. With `range`, an attempt
+/// counts as started on the UTC day of `created_at` and as completed on the UTC day of
+/// `completed_at`, each only inside the range, and a step run on the UTC day it ended; the
+/// rollup adds the same counts of the pruned reviews of the range's days.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` for a timestamp, an outcome or a rollup day that does not
+/// decode, for a completed row without `completed_at`, and for a schedule key without `#`.
+pub fn compute(
+    snapshot: &StatsSnapshot,
     range: Option<&StatsRange>,
     generated_at: OffsetDateTime,
     pruned_before: OffsetDateTime,
 ) -> Result<StatsDocument, Error> {
-    let current = current_state(reviews, schedule)?;
+    let current = current_state(&snapshot.reviews, &snapshot.discovery.schedule)?;
     let history = match range {
-        Some(range) => Some(history(reviews, steps, range, pruned_before)?),
+        Some(range) => Some(history(snapshot, range, pruned_before)?),
         None => None,
     };
     Ok(StatsDocument {
@@ -632,55 +984,59 @@ fn current_state(
     })
 }
 
-/// Counts the starts and completions inside `range`, and the step runs of `steps`.
+/// Counts the rows, the step runs and the rollup of the snapshot inside `range`.
 fn history(
-    reviews: &[StoredReview],
-    steps: &[StepRun],
+    snapshot: &StatsSnapshot,
     range: &StatsRange,
     pruned_before: OffsetDateTime,
 ) -> Result<History, Error> {
     let mut tally = HistoryTally::default();
+    tally.add_reviews(&snapshot.reviews, &BTreeMap::new(), Some(range))?;
+    tally.add_runs(&snapshot.steps)?;
+    tally.add_rollup(&snapshot.rollup)?;
+    let mut totals = Tally::default();
+    let mut days = BTreeMap::new();
+    let mut repositories: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut rules: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut reviewers: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut failures: BTreeMap<String, i64> = BTreeMap::new();
+    let mut steps: BTreeMap<String, StepTally> = BTreeMap::new();
     let mut day = range.since;
     while day <= range.until {
-        tally.days.insert(day, Tally::default());
+        let bucket = tally.days.remove(&day).unwrap_or_default();
+        totals.merge(&bucket.total);
+        for (target, source) in [
+            (&mut repositories, bucket.repositories),
+            (&mut rules, bucket.rules),
+            (&mut reviewers, bucket.reviewers),
+        ] {
+            for (key, counted) in source {
+                target.entry(key).or_default().merge(&counted);
+            }
+        }
+        for (code, failed) in bucket.failures {
+            *failures.entry(code).or_default() += failed;
+        }
+        for (step, counted) in bucket.steps {
+            steps.entry(step).or_default().merge(counted);
+        }
+        days.insert(day, bucket.total);
         let Some(next) = day.next_day() else {
             break;
         };
         day = next;
     }
-    for review in reviews {
-        let created = stored_instant(review, "created_at", &review.created_at)?;
-        if range.contains(created.date()) {
-            tally.add(review, created.date(), Tally::start);
-        }
-        if review.status != REVIEW_COMPLETED {
-            continue;
-        }
-        let completed = completed_instant(review)?;
-        if !range.contains(completed.date()) {
-            continue;
-        }
-        let ending = ending(review, elapsed_seconds(created, completed))?;
-        tally.add(review, completed.date(), |bucket| bucket.complete(ending));
-        if ending == Ending::Failed {
-            *tally.failures.entry(review.failure.clone()).or_default() += 1;
-        }
-    }
-    let mut step_tallies: BTreeMap<&str, StepTally> = BTreeMap::new();
-    for run in steps {
-        step_tallies.entry(run.step.as_str()).or_default().add(run);
-    }
     Ok(History {
         since: range.since.to_string(),
         until: range.until.to_string(),
         pruned_before: format_rfc3339_seconds(pruned_before),
-        totals: tally.totals.finish(),
-        days: keyed(tally.days, Tally::finish),
-        by_repository: keyed(tally.repositories, Tally::finish),
-        by_rule: keyed(tally.rules, Tally::finish),
-        by_reviewer: keyed(tally.reviewers, Tally::finish),
-        failed_by_code: keyed(tally.failures, |failed| FailedCount { failed }),
-        steps: keyed(step_tallies, StepTally::finish),
+        totals: totals.finish(),
+        days: keyed(days, Tally::finish),
+        by_repository: keyed(repositories, Tally::finish),
+        by_rule: keyed(rules, Tally::finish),
+        by_reviewer: keyed(reviewers, Tally::finish),
+        failed_by_code: keyed(failures, |failed| FailedCount { failed }),
+        steps: keyed(steps, StepTally::finish),
     })
 }
 
@@ -810,14 +1166,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let range = StatsRange::parse(since, until, now.date())?;
         live(cancel)?;
         let bounds = range.map(|range| (range.start, range.end));
-        let (reviews, discovery, steps) = self.store.stats_snapshot(bounds)?;
-        compute(
-            &reviews,
-            &steps,
-            &discovery.schedule,
-            range.as_ref(),
-            now,
-            self.prune_cutoff(),
-        )
+        let snapshot = self.store.stats_snapshot(bounds)?;
+        compute(&snapshot, range.as_ref(), now, self.prune_cutoff())
     }
 }

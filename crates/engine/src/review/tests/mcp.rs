@@ -182,7 +182,7 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
     );
     let yesterday = OffsetDateTime::now_utc().date().previous_day();
     let since = json!({ "since": yesterday.expect("a day before today").to_string() });
-    let (_, body) = call(&server, Some(READ_TOKEN), "review_stats", since).await;
+    let (_, body) = call(&server, Some(READ_TOKEN), "review_stats", since.clone()).await;
     let (content, failed) = structured(&body);
     let stats = &content["result"];
     assert!(
@@ -288,5 +288,32 @@ async fn mcp_lists_resolves_and_approves_with_one_publication() {
             && started.is_some_and(|line| line.ends_with("} 1"))
             && published.is_some_and(|line| line.ends_with(approved)),
         "metrics = {text}"
+    );
+
+    // A prune moves the counts of the reviews it deletes into the rollup: the history stays.
+    let history = async || {
+        let (_, body) = call(&server, Some(READ_TOKEN), "review_stats", since.clone()).await;
+        let mut history = structured(&body).0["result"]["history"].clone();
+        let pruned_before = history
+            .as_object_mut()
+            .and_then(|h| h.remove("pruned_before"));
+        assert!(pruned_before.is_some(), "review_stats = {body}");
+        history
+    };
+    let kept = history().await;
+    let cutoff = OffsetDateTime::now_utc() + time::Duration::days(1);
+    let pruned = h
+        .store
+        .prune_reviews(cutoff)
+        .expect("prune the completed review");
+    let rolled_up = history().await;
+    assert!(
+        pruned == 1
+            && kept["totals"]["approved_after_wait"] == json!(1)
+            && kept["steps"]
+                .as_array()
+                .is_some_and(|steps| !steps.is_empty())
+            && rolled_up == kept,
+        "pruned {pruned}: kept = {kept}, rolled up = {rolled_up}"
     );
 }

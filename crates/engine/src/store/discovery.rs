@@ -5,10 +5,13 @@
 use std::collections::BTreeMap;
 
 use autoreview_schedule::scheduler::Record;
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use time::UtcOffset;
 
+use super::reviews::unavailable;
+use super::rollup::{add_rollup, stops};
 use super::{Store, encode_go_json, store_error};
 use crate::Error;
 use crate::model::{AwaitRecord, PublishedRecord};
@@ -135,8 +138,51 @@ impl Store {
         let mut state = self.load_discovery()?;
         self.in_tx(|transaction| {
             change(&mut state, transaction)?;
-            save_discovery(transaction, &state)
+            self.save_discovery(transaction, &state)
         })
+    }
+
+    /// Writes the four entries in schedule, published, awaiting, rejected order.
+    ///
+    /// The `rejected` entry holds the host outages and the skipped pull requests as well. A
+    /// schedule record that enters `failed` adds one stop to the rollup of the current UTC day,
+    /// in the same transaction, so a restart never counts it again.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_state_invalid` when the stored schedule does not read or an entry does
+    /// not encode, and `store_unavailable` when SQLite fails.
+    pub(crate) fn save_discovery(
+        &self,
+        transaction: &Transaction<'_>,
+        state: &DiscoveryState,
+    ) -> Result<(), Error> {
+        let stored: Option<String> = transaction
+            .query_row(
+                "SELECT value FROM discovery WHERE name = ?1",
+                [STATE_SCHEDULE],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(unavailable)?;
+        let stored: BTreeMap<String, Record> = match stored {
+            Some(value) => read_entry(STATE_SCHEDULE, &value)?,
+            None => BTreeMap::new(),
+        };
+        let day = (self.now)().to_offset(UtcOffset::UTC).date().to_string();
+        add_rollup(transaction, &stops(&day, &stored, &state.schedule))?;
+        write_entry(transaction, STATE_SCHEDULE, &state.schedule)?;
+        write_entry(transaction, STATE_PUBLISHED, &state.published)?;
+        write_entry(transaction, STATE_AWAITING, &state.awaiting)?;
+        let mut rejected = state.rejected.clone();
+        for (host, code) in &state.host_outages {
+            rejected.insert(format!("{HOST_OUTAGE_PREFIX}{host}"), code.clone());
+        }
+        for (key, reason) in &state.skipped {
+            rejected.insert(format!("{SKIPPED_PREFIX}{key}"), reason.clone());
+        }
+        write_entry(transaction, STATE_REJECTED, &rejected)?;
+        Ok(())
     }
 }
 
@@ -151,27 +197,6 @@ fn read_entry<T: DeserializeOwned + Default>(name: &str, value: &str) -> Result<
                 format!("discovery entry {name}: {err}"),
             )
         })
-}
-
-/// Writes the four entries in schedule, published, awaiting, rejected order.
-///
-/// The `rejected` entry holds the host outages and the skipped pull requests as well.
-pub(crate) fn save_discovery(
-    transaction: &Transaction<'_>,
-    state: &DiscoveryState,
-) -> Result<(), Error> {
-    write_entry(transaction, STATE_SCHEDULE, &state.schedule)?;
-    write_entry(transaction, STATE_PUBLISHED, &state.published)?;
-    write_entry(transaction, STATE_AWAITING, &state.awaiting)?;
-    let mut rejected = state.rejected.clone();
-    for (host, code) in &state.host_outages {
-        rejected.insert(format!("{HOST_OUTAGE_PREFIX}{host}"), code.clone());
-    }
-    for (key, reason) in &state.skipped {
-        rejected.insert(format!("{SKIPPED_PREFIX}{key}"), reason.clone());
-    }
-    write_entry(transaction, STATE_REJECTED, &rejected)?;
-    Ok(())
 }
 
 /// Encodes one entry and upserts it into the `discovery` table.
