@@ -280,3 +280,148 @@ impl<F: FnMut(Signal, u32)> Walk<'_, F> {
         after
     }
 }
+
+/// Reports whether `from` starts a declaration: `<!` and an ASCII letter.
+fn declaration(from: &str) -> bool {
+    from.as_bytes().get(2).is_some_and(u8::is_ascii_alphabetic)
+}
+
+/// Returns where the attributes of a tag end: the first `>` outside a quoted value.
+fn tag_end(attributes: &str) -> usize {
+    let mut quote: Option<u8> = None;
+    for (at, byte) in attributes.bytes().enumerate() {
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None if matches!(byte, b'"' | b'\'') => quote = Some(byte),
+            None if byte == b'>' => return at,
+            None => {}
+        }
+    }
+    attributes.len()
+}
+
+/// Reports whether the attributes of a tag hide its element: `hidden` or a hiding style.
+fn hides(attributes: &str) -> bool {
+    let mut rest = attributes;
+    loop {
+        rest = rest.trim_start_matches(|character: char| {
+            character.is_ascii_whitespace() || character == '/'
+        });
+        if rest.is_empty() {
+            return false;
+        }
+        let name_len = rest
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '=' | '/')
+            })
+            .unwrap_or(rest.len());
+        let name = rest.get(..name_len).unwrap_or_default();
+        let after = rest.get(name_len..).unwrap_or_default().trim_start();
+        let (value, next) = match after.strip_prefix('=') {
+            Some(value) => attribute_value(value.trim_start()),
+            None => ("", after),
+        };
+        if name.eq_ignore_ascii_case("hidden") {
+            return true;
+        }
+        if name.eq_ignore_ascii_case("style") {
+            let style: String = words::decode_references(value)
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>()
+                .to_ascii_lowercase();
+            if HIDING_STYLES.iter().any(|hiding| style.contains(hiding)) {
+                return true;
+            }
+        }
+        rest = next;
+    }
+}
+
+/// Splits an attribute value, quoted or not, from the attributes that follow it.
+fn attribute_value(text: &str) -> (&str, &str) {
+    match text.chars().next() {
+        Some(quote @ ('"' | '\'')) => {
+            let inner = text.get(1..).unwrap_or_default();
+            match inner.split_once(quote) {
+                Some((value, next)) => (value, next),
+                None => (inner, ""),
+            }
+        }
+        _ => {
+            let end = text
+                .find(|character: char| character.is_ascii_whitespace())
+                .unwrap_or(text.len());
+            (
+                text.get(..end).unwrap_or_default(),
+                text.get(end..).unwrap_or_default(),
+            )
+        }
+    }
+}
+
+/// Reports whether a node is a block that GitHub renders from its source lines.
+fn renders_lines(value: &NodeValue) -> bool {
+    matches!(
+        value,
+        NodeValue::Paragraph
+            | NodeValue::Heading(_)
+            | NodeValue::CodeBlock(_)
+            | NodeValue::HtmlBlock(_)
+            | NodeValue::Table(_)
+            | NodeValue::ThematicBreak
+    )
+}
+
+/// Reads one node on entry; marks the lines it renders in `covered`.
+fn enter<F: FnMut(Signal, u32)>(walk: &mut Walk<'_, F>, node: &AstNode<'_>, covered: &mut [bool]) {
+    let data = node.data();
+    if renders_lines(&data.value) {
+        let (first, last) = (data.sourcepos.start.line, data.sourcepos.end.line);
+        for slot in covered.iter_mut().take(last.saturating_add(1)).skip(first) {
+            *slot = true;
+        }
+    }
+    match &data.value {
+        NodeValue::Text(text) => walk.text(text, false),
+        NodeValue::Code(code) => walk.text(&code.literal, true),
+        NodeValue::CodeBlock(block) => walk.text(&block.literal, true),
+        NodeValue::SoftBreak | NodeValue::LineBreak => walk.text("\n", false),
+        NodeValue::HtmlBlock(block) => {
+            let literal = block.literal.clone();
+            drop(data);
+            walk.raw_html(&literal, false);
+        }
+        NodeValue::HtmlInline(html) => {
+            let html = html.clone();
+            drop(data);
+            walk.raw_html(&html, true);
+        }
+        NodeValue::Link(link) | NodeValue::Image(link) => {
+            let image = matches!(data.value, NodeValue::Image(_));
+            let title = (!link.title.is_empty()).then(|| format!("{} {}", link.url, link.title));
+            drop(data);
+            if let Some(title) = title {
+                walk.report(Signal::LinkMetadataInstruction, &title);
+            }
+            if image {
+                walk.alt = Some(String::new());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Reads one node on exit.
+fn leave<F: FnMut(Signal, u32)>(walk: &mut Walk<'_, F>, node: &AstNode<'_>) {
+    match node.data().value {
+        NodeValue::Image(_) => {
+            if let Some(alt) = walk.alt.take() {
+                walk.report(Signal::LinkMetadataInstruction, &alt);
+            }
+        }
+        NodeValue::Paragraph => walk.end_paragraph(),
+        _ => {}
+    }
+}
