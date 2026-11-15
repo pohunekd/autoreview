@@ -7,6 +7,7 @@
 #                      [--pohunek-host HOST] [--example NAME]
 #                      [--matrix-homeserver-url URL] [--matrix-room ROOM]
 #                      [--matrix-mention-user USER]
+#                      [--pohunek-timeout-seconds SECONDS]
 #        scripts/setup --self-test
 #
 # Detection only reads. Each step that changes the machine prints its commands
@@ -21,8 +22,9 @@ set -euo pipefail
 POHUNEK_VERSION="0.41.0"
 # The oldest pohunek release that is kept.
 POHUNEK_MIN_VERSION="0.41.0"
-# The autoreview release that is installed; it must know the init layout flags.
-AUTOREVIEW_VERSION="0.3.0"
+# The autoreview release that is installed; it must know the init layout flags
+# and the --pohunek-timeout-seconds of profiles install (0.4.0 or later).
+AUTOREVIEW_VERSION="0.4.0"
 # pohunek's login service needs systemd 255 or newer.
 SYSTEMD_MIN_VERSION=255
 # The reviewer adapters need Python 3.11 or newer.
@@ -211,7 +213,7 @@ path_trust() {
 # else. The profile tables are local, so the functions under test read them.
 self_test() {
     local checks=0 failures=0 expected
-    local autoreview_bin=/h/.local/bin/autoreview
+    local autoreview_bin=/h/.local/bin/autoreview pohunek_timeout=45
     local -a install_command=()
     local -A profile_agent=([one]=claude [two]=codex) profile_model=([one]=m-1 [two]=m.2)
     local -A profile_effort=([one]=max [two]=xhigh) profile_input=([one]=1048576 [two]=2048)
@@ -311,6 +313,18 @@ self_test() {
         "$(path_trust '1000 755 directory' 1000 0 file || echo error)"
     check "trust of a malformed stat line" error \
         "$(path_trust 'x 755 directory' 1000 0 dir || echo error)"
+    seconds() {
+        if seconds_valid "$1"; then echo ok; else echo refused; fi
+    }
+    check "timeout of 45 seconds" ok "$(seconds 45)"
+    check "timeout of 1 second" ok "$(seconds 1)"
+    check "timeout of 0 seconds" refused "$(seconds 0)"
+    check "timeout with a leading zero" refused "$(seconds 045)"
+    check "negative timeout" refused "$(seconds -1)"
+    check "fractional timeout" refused "$(seconds 1.5)"
+    check "timeout of words" refused "$(seconds abc)"
+    check "timeout with a space" refused "$(seconds '45 ')"
+    check "empty timeout" refused "$(seconds '')"
     expected="/h/.local/bin/autoreview profiles install --host local --agent claude --name one"
     expected+=" --model m-1 --effort max --agent-binary /opt/my\\ tools/claude"
     expected+=" --maximum-input-bytes 1048576 --pohunek-timeout-seconds 45 "
@@ -395,6 +409,19 @@ unit_path_safe() {
     [[ $1 =~ ^(/[A-Za-z0-9._-]+)+$ && ! $1 =~ /\.\.?(/|$) ]]
 }
 
+# Reports whether $1 is a whole number of seconds above 0 without a leading
+# zero, as profiles install --pohunek-timeout-seconds takes it.
+seconds_valid() {
+    [[ $1 =~ ^[1-9][0-9]*$ ]]
+}
+
+# Stops unless pohunek_timeout is a valid --pohunek-timeout-seconds value.
+check_pohunek_timeout() {
+    seconds_valid "$pohunek_timeout" \
+        || fail 1 "--pohunek-timeout-seconds must be a whole number of seconds above 0;" \
+            "give the pohunek.timeout_seconds of config.yaml"
+}
+
 # Sets the variable named $1 to the answer of question $2 unless it holds one.
 # An empty answer stops the run.
 ask() {
@@ -444,18 +471,19 @@ in_place() {
 usage() {
     fail 1 "usage: scripts/setup [--dry-run] [--dir DIR] [--login LOGIN]" \
         "[--pohunek-host HOST] [--example NAME] [--matrix-homeserver-url URL]" \
-        "[--matrix-room ROOM] [--matrix-mention-user USER] | --self-test"
+        "[--matrix-room ROOM] [--matrix-mention-user USER]" \
+        "[--pohunek-timeout-seconds SECONDS] | --self-test"
 }
 
 parse_arguments() {
     dry_run=0
     dir="" login="" pohunek_host="" example=""
-    matrix_url="" matrix_room="" matrix_user=""
+    matrix_url="" matrix_room="" matrix_user="" pohunek_timeout=""
     while [ "$#" -gt 0 ]; do
         case $1 in
             --dry-run) dry_run=1 ;;
             --dir | --login | --pohunek-host | --example | --matrix-homeserver-url | \
-                --matrix-room | --matrix-mention-user)
+                --matrix-room | --matrix-mention-user | --pohunek-timeout-seconds)
                 if [ "$#" -lt 2 ] || [ -z "$2" ]; then
                     usage
                 fi
@@ -467,6 +495,7 @@ parse_arguments() {
                     --matrix-homeserver-url) matrix_url=$2 ;;
                     --matrix-room) matrix_room=$2 ;;
                     --matrix-mention-user) matrix_user=$2 ;;
+                    --pohunek-timeout-seconds) pohunek_timeout=$2 ;;
                 esac
                 shift
                 ;;
@@ -969,6 +998,7 @@ profile_install_command() {
         install_command+=(--maximum-result-bytes "${profile_result[$profile]}"
             --maximum-retention-seconds "${profile_retention[$profile]}")
     fi
+    install_command+=(--pohunek-timeout-seconds "$pohunek_timeout")
 }
 
 # Prints install_command as step_profiles shows it, each word quoted for the shell.
@@ -997,6 +1027,11 @@ collect_profiles() {
         esac
         is_one_of "${profile_agent[$name]}" "${agents[@]}" || agents+=("${profile_agent[$name]}")
     done
+    if [ "${#pending[@]}" -gt 0 ]; then
+        ask pohunek_timeout \
+            "Seconds after which profiles install kills a pohunek call (pohunek.timeout_seconds)"
+        check_pohunek_timeout
+    fi
 }
 
 step_packages() {
@@ -1296,7 +1331,9 @@ plan_profiles() {
                 plan "agent profile $name" "in place, skipped"
                 is_one_of "${state#ours }" "${known[@]}" || known+=("${state#ours }")
                 ;;
-            absent) plan "agent profile $name" "will run (asks agent, model, effort, limits)" ;;
+            absent)
+                plan "agent profile $name" "will run (asks agent, model, effort, limits, timeout)"
+                ;;
             *) plan "agent profile $name" "stops: not written by autoreview" ;;
         esac
     done
@@ -1356,6 +1393,7 @@ main() {
         return
     fi
     parse_arguments "$@"
+    [ -z "$pohunek_timeout" ] || check_pohunek_timeout
     detect_machine
     if [ "$dry_run" -eq 0 ]; then
         [ -t 0 ] \
