@@ -2,20 +2,25 @@
 
 // Rust guideline compliant 2026-06-26
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use autoreview_policy::Level;
+use autoreview_guard::{FieldKind, Lexicon};
+use autoreview_policy::{GuardField, Level, OnSuspect, Rule, RuleGuard};
 use autoreview_schedule::scheduler::{AUTHOR_LIMIT_REACHED, HEAD_FETCH_MISMATCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::json;
 
-use crate::config::{Config, Credential, Credentials, RouteOverride};
-use crate::integrations::SessionRequest;
-use crate::model::PullRequest;
+use crate::config::{Config, Credential, Credentials, RouteOverride, TextGuard};
+use crate::engine::STEP_ARTIFACT;
+use crate::integrations::{GuardText, SessionRequest};
+use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::review::Decision;
+use crate::model::{GuardOutcome, PullRequest};
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
 use crate::protocol::fixtures::sha;
+use crate::review::input::STEP_GUARD;
 use crate::store::ReviewFilter;
 use crate::testing::fake::{count_notes, reviewer_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
@@ -444,5 +449,106 @@ async fn author_limit_counts_every_start_of_an_author_once() {
     h.retry(&pushed).await.expect("the retry is accepted");
     h.poll_until("the retried review", || h.publications() == 5)
         .await;
+    h.stop_engine().await;
+}
+
+/// Returns the rule of `repository` with a guard on the body and the outcome `on_suspect`.
+fn guarded_rule(h: &Harness, repository: &str, on_suspect: OnSuspect) -> Rule {
+    let mut rule = h.rule(repository);
+    rule.guard = Some(RuleGuard {
+        fields: BTreeSet::from([GuardField::Kind(FieldKind::Body)]),
+        threshold: 100,
+        on_suspect,
+    });
+    rule
+}
+
+/// A suspect pull request on an approving rule waits for the user and publishes nothing before
+/// the approval; under `log` it is approved as without a guard. The guard message carries
+/// signal codes only, never the text (#345).
+#[tokio::test]
+async fn text_guard_holds_a_suspect_approval_and_log_changes_nothing() {
+    let mut h = start_harness(|config| {
+        let lexicon = Lexicon::parse("40 ignore previous instructions");
+        config.text_guard = Some(TextGuard {
+            max_input_bytes: 4096,
+            lexicon: lexicon.expect("the lexicon parses"),
+        });
+    })
+    .await;
+    // A run of Unicode tag characters spells hidden text that the page does not show.
+    let planted = "Fix the build\u{E0041}\u{E0050}\u{E0050}\u{E0052}";
+    h.fake.lock().guard_texts = vec![GuardText {
+        kind: FieldKind::Body,
+        text: planted.to_owned(),
+    }];
+    let held = integration_pull_request("acme/widget", &sha("c"));
+    h.fake.open(
+        held.clone(),
+        guarded_rule(&h, &held.repository, OnSuspect::Await),
+    );
+    h.poll_until("the approval request", || {
+        h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
+    })
+    .await;
+    let (_, notes, _, _) = h.fake.snapshot();
+    let flagged: Vec<&str> = (notes.iter())
+        .filter(|note| note.level == Level::Action && note.message.contains("Text guard flagged"))
+        .map(|note| note.message.as_str())
+        .collect();
+    assert!(
+        h.publications() == 0
+            && flagged.len() == 1
+            && flagged[0].contains("Signals: body unicode_tags x1")
+            && !flagged[0].contains("Fix the build")
+            && !flagged[0].contains('\u{E0041}')
+            && h.fake
+                .has_note(Level::Action, "the text guard flagged the pull request"),
+        "a held review published or its guard message is wrong: {flagged:?}"
+    );
+    h.wait_for("the approval to be accepted", || {
+        let Ok(resolved) = h.resolve(&held) else {
+            return false;
+        };
+        h.approve(&resolved.workflow_id, &held).is_ok()
+    })
+    .await;
+    h.wait_for("the approved publication", || h.publications() == 1)
+        .await;
+    let logged = integration_pull_request("acme/widget", &sha("d"));
+    h.fake.open(
+        logged.clone(),
+        guarded_rule(&h, &logged.repository, OnSuspect::Log),
+    );
+    h.poll_until("the logged approval", || h.publications() == 2)
+        .await;
+    h.wait_for("the logged guard message", || {
+        h.fake
+            .has_note(Level::Action, "Outcome: log, nothing changes")
+    })
+    .await;
+    let (published, _, _, _) = h.fake.snapshot();
+    let workflow_id = logged.workflow_id(0);
+    let artifact = (h.store)
+        .load_step::<serde_json::Value>(&workflow_id, STEP_ARTIFACT)
+        .expect("the artifact reads")
+        .expect("the artifact is stored");
+    let step = (h.store)
+        .load_step::<GuardOutcome>(&workflow_id, STEP_GUARD)
+        .expect("the guard step reads");
+    assert!(
+        published[0].decision == Decision::Approve
+            && published[0]
+                .body
+                .contains("The text guard flagged this pull request: `unicode_tags`.")
+            && published[1].decision == Decision::Approve
+            && !published[1].body.contains("text guard")
+            && artifact.get("guard").is_none()
+            && step.is_some_and(|step| step.suspect)
+            && h.fake.lock().guard_reads == 2,
+        "held={:?} logged={:?} artifact={artifact}",
+        published[0].body,
+        published[1].body
+    );
     h.stop_engine().await;
 }
