@@ -41,6 +41,9 @@ pub const HEAD_PREFIX_MIN_LEN: usize = 12;
 /// Longest repository name.
 const NAME_MAX_LEN: usize = 100;
 
+/// Longest branch name in bytes.
+const BRANCH_MAX_LEN: usize = 255;
+
 impl PullRequest {
     /// Returns the `repository#number` key shared by every head of the pull request.
     #[must_use]
@@ -131,6 +134,20 @@ pub fn sha_valid(value: &str) -> bool {
 pub fn head_prefix_valid(value: &str) -> bool {
     let len = value.len();
     (HEAD_PREFIX_MIN_LEN..=SHA_LEN).contains(&len) && lower_hex(value)
+}
+
+/// Reports whether a value is a branch name that discovery accepts.
+///
+/// It holds 1 to 255 bytes of ASCII letters, digits, `.`, `_`, `/` and `-`, and no `..`, so
+/// no reader can take a character of it as a line break.
+#[must_use]
+pub fn branch_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= BRANCH_MAX_LEN
+        && !value.contains("..")
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b'-'))
 }
 
 /// Reports whether a repository, number and head name one valid review head.

@@ -15,7 +15,8 @@ use crate::model::ids::{
 };
 use crate::model::pull_request::{SCOPE_FULL, SCOPE_INCREMENTAL};
 use crate::model::{
-    Artifact, PullRequest, ReviewInput, ReviewerResult, SessionIdentity, prior_key, sha_valid,
+    Artifact, PullRequest, ReviewInput, ReviewerResult, SessionIdentity, branch_valid, prior_key,
+    sha_valid,
 };
 use crate::verify::VerifierResult;
 
@@ -82,6 +83,10 @@ pub(crate) fn validate_input(input: &ReviewInput) -> Result<(), BoxError> {
         || pull_request.review_request_id < 0
     {
         return Err(BoxError::from("review identity is invalid"));
+    }
+    // The base branch is written into trusted request lines; an empty one is unknown.
+    if !pull_request.base_branch.is_empty() && !branch_valid(&pull_request.base_branch) {
+        return Err(BoxError::from("base branch is invalid"));
     }
     if input.rule.match_glob.is_empty() || input.reviewers.is_empty() {
         return Err(BoxError::from("review rule is missing"));
@@ -445,6 +450,26 @@ mod tests {
             assert!(
                 validate_input(&input).is_err(),
                 "{name}: invalid input accepted"
+            );
+        }
+        // #436: the base branch is written into trusted request lines. No character of it may
+        // be one that a reader takes as a line break; an empty base branch is unknown.
+        let mut unknown_base = valid.clone();
+        unknown_base.pull_request.base_branch = String::new();
+        if let Err(err) = validate_input(&unknown_base) {
+            panic!("an unknown base branch: {err}");
+        }
+        let breaks = [
+            '\n', '\r', '\u{000b}', '\u{000c}', '\u{001c}', '\u{001d}', '\u{001e}', '\u{0085}',
+            '\u{2028}', '\u{2029}',
+        ];
+        for separator in breaks {
+            let mut input = valid.clone();
+            input.pull_request.base_branch = format!("release{separator}x");
+            assert!(
+                validate_input(&input).is_err(),
+                "U+{:04X}: base branch accepted",
+                u32::from(separator)
             );
         }
     }

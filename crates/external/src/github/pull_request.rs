@@ -8,7 +8,7 @@
 use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::PullRequestState;
-use autoreview_engine::model::{PullRequest, repository_valid, sha_valid};
+use autoreview_engine::model::{PullRequest, branch_valid, repository_valid, sha_valid};
 use autoreview_go_compat::{go_time, null_default, null_entries};
 use autoreview_policy::{Trigger, TriggerKind, login_valid};
 use serde::{Deserialize, Serialize};
@@ -18,9 +18,6 @@ use super::{GitHub, graphql_pull_request, response_invalid};
 
 /// Largest title in bytes that a pull request may have.
 const MAX_TITLE_BYTES: usize = 1024;
-
-/// Largest branch name in bytes.
-const MAX_BRANCH_BYTES: usize = 255;
 
 /// Page size of the review events API.
 const EVENTS_PER_PAGE: usize = 100;
@@ -364,21 +361,6 @@ fn author_valid(author: &str) -> bool {
     author.is_empty() || login_valid(author)
 }
 
-/// Reports whether a branch name is non-empty, at most `MAX_BRANCH_BYTES` bytes long, and
-/// made only of ASCII letters, digits, `.`, `_`, `/` and `-`.
-fn branch_valid(branch: &str) -> bool {
-    if branch.is_empty() || branch.len() > MAX_BRANCH_BYTES {
-        return false;
-    }
-    for byte in branch.as_bytes() {
-        let valid = byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b'/' | b'-');
-        if !valid {
-            return false;
-        }
-    }
-    true
-}
-
 /// Decodes and checks a pull request against the trigger of its rule (`decodePullRequest`).
 ///
 /// The result has `review_request_id` 0 for a `review-requested` trigger; the caller reads the
@@ -436,7 +418,6 @@ pub(crate) fn decode_pull_request(
         || !sha_valid(&pull_request.head_sha)
         || !sha_valid(&pull_request.base_sha)
         || !branch_valid(&pull_request.base_branch)
-        || pull_request.base_branch.contains("..")
         || !author_valid(&author)
     {
         return Err(response_invalid(None));

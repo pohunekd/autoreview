@@ -42,6 +42,20 @@ The discussion, the issues, the prior findings and the verifier's claims are
 written as JSON with `\n`, U+0085 (next line), U+2028 and U+2029 escaped, so
 none of them holds a character that a reader takes as a line break.
 
+The trusted context also holds the base branch name, which anyone with push
+access to the repository chooses. Discovery accepts only a name of 1 to 255
+ASCII letters, digits, `.`, `_`, `/` and `-` without `..`, and refuses any
+other pull request with `github_response_invalid`. A review whose stored input
+names another base branch fails with `review_input_invalid` before it builds a
+request, so no trusted line holds a line break from a branch name.
+
+MCP tool results keep U+0085, U+2028 and U+2029 as written. They are not
+requests: autoreview never gives its MCP server to a reviewer or the verifier,
+and a result has no trusted line, only one JSON value inside the untrusted-data
+notice. In a JSON string none of these characters ends the string or starts a
+field, just as the escaped `\n` of a finding body does not, so escaping them
+would change the text without protecting anything.
+
 ## What the prompts say
 
 The generic prompt (`prompts/generic.md`) tells the reviewer:
@@ -134,6 +148,9 @@ attack it models. `scripts/gates` runs them with the other Rust tests.
 - Request building (`protocol::request`): U+0085, U+2028 or U+2029 in the
   discussion, an issue, a prior finding or a claim reaches the reviewer and
   verifier prompts only as a JSON escape.
+- Review input checks (`review::input`): a stored base branch name with a
+  character that a reader takes as a line break fails the review before it
+  builds a request.
 - Decision planning (`publish::plan`): a finding that asks for an approval is
   planned by its blocking flag only, so on an `on_clean: await` rule the
   approval still waits for a person.
