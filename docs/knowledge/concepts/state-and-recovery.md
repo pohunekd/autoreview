@@ -114,6 +114,10 @@ These rules also apply to the layers:
   mismatch stops the head with `review_stopped`. The count is read from the
   stored reviews of the head, so a restart neither resets it nor counts a start
   twice.
+- **A rule's author limit is read from the stored reviews.** A new start over a
+  rule's `author_limit` waits for the window or is skipped (`author_limit_reached`).
+  The count is the author's stored reviews of the window plus the starts of the
+  same discovery pass, so a restart neither resets it nor counts a start twice.
 - **A failure is notified once.** A pull request retargeted away from the base
   branch of a failed review and back before a new review runs gets no second
   notice for that failure. The review keeps its retry count: a review stopped

@@ -5,6 +5,7 @@
 use std::io;
 use std::path::PathBuf;
 
+mod author_limit;
 mod authors;
 mod digest;
 mod human_review;
@@ -12,6 +13,7 @@ mod parse;
 mod query;
 mod types;
 
+pub use author_limit::{AuthorLimit, OverLimit};
 pub use authors::{
     AuthorClass, AuthorType, Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview,
     login_valid, user_login_valid,
@@ -383,6 +385,28 @@ pub enum Error {
     /// A rule has no authors section.
     #[error("authors is required")]
     AuthorsMissing,
+
+    /// A rule's author limit is null.
+    #[error("author_limit must be a mapping with reviews, window_hours and over")]
+    AuthorLimitNull,
+
+    /// A rule's author limit allows no review or too many.
+    #[error("author_limit.reviews must be between 1 and {max}")]
+    AuthorLimitReviews {
+        /// Largest number of reviews allowed.
+        max: u32,
+    },
+
+    /// A rule's author limit window is missing or out of range.
+    #[error("author_limit.window_hours must be between 1 and {max}")]
+    AuthorLimitWindow {
+        /// Longest window allowed, in hours.
+        max: u32,
+    },
+
+    /// A rule's author limit outcome is unknown.
+    #[error("author_limit.over must be wait or skip")]
+    AuthorLimitOver,
 
     /// The trusted value of a rule's authors is not any or a usable mapping.
     #[error("authors.trusted must be any or a mapping with logins or permission")]

@@ -14,6 +14,7 @@ use serde::de::{self, Deserializer, Unexpected, Visitor};
 use serde_saphyr::granit_parser::{Event as YamlEvent, Parser, ScalarStyle, Tag};
 
 use crate::Error;
+use crate::author_limit::{AuthorLimit, FileAuthorLimit, parse_author_limit, present};
 use crate::authors::{Authors, FileAuthors, parse_authors, user_login_valid};
 use crate::digest::digest_of;
 use crate::human_review::{FileHumanReview, parse_human_review};
@@ -152,6 +153,9 @@ struct FileRule {
     human_review: Option<FileHumanReview>,
     /// Authors section; absent or null is refused, because no rule trusts by default.
     authors: Option<FileAuthors>,
+    /// Author limit; absent sets no limit, null is refused.
+    #[serde(deserialize_with = "present")]
+    author_limit: Option<Option<FileAuthorLimit>>,
 }
 
 /// The approval section of the policy file.
@@ -321,6 +325,7 @@ pub fn parse(
     let reviewers = parse_reviewers(&document.reviewers)?;
     let pipelines = parse_pipelines(&document.pipelines, &reviewers, &read_prompt)?;
     let (rules, rule_authors) = parse_rules(&document.repositories, &pipelines)?;
+    let author_limits = parse_author_limits(&document.repositories)?;
     let notifications = parse_notifications(&document.notifications)?;
     let reminder_hours = parse_notes_handoff(document.notes_handoff.as_ref(), &rules)?;
     let mut authors = Vec::new();
@@ -336,6 +341,7 @@ pub fn parse(
     let digest = digest_of(
         &rules,
         &rule_authors,
+        &author_limits,
         &notifications,
         document.approval.timeout_hours,
         reminder_hours,
@@ -344,6 +350,7 @@ pub fn parse(
     Ok(Policy {
         rules,
         authors: rule_authors,
+        author_limits,
         ready_draft_authors: authors,
         notifications,
         approval_timeout: Duration::from_hours(document.approval.timeout_hours.unsigned_abs()),
@@ -856,6 +863,24 @@ fn parse_rules(
     Ok((rules, authors))
 }
 
+/// Validates the author limit of each rule, in the order of the rules.
+///
+/// # Errors
+///
+/// Returns the author limit error of the first rule whose limit is invalid, with its position.
+fn parse_author_limits(raw: &[FileRule]) -> Result<Vec<Option<AuthorLimit>>, Error> {
+    let mut limits = Vec::new();
+    for (index, value) in raw.iter().enumerate() {
+        let limit =
+            parse_author_limit(value.author_limit.as_ref()).map_err(|source| Error::Rule {
+                position: rule_position(index, value),
+                source: Box::new(source),
+            })?;
+        limits.push(limit);
+    }
+    Ok(limits)
+}
+
 /// Returns the position of a rule in errors, as repositories[index] (match).
 fn rule_position(index: usize, value: &FileRule) -> String {
     format!("repositories[{index}] ({})", value.match_glob)
@@ -1075,6 +1100,7 @@ mod tests {
 
     use super::{load, parse};
     use crate::Error;
+    use crate::author_limit::{AuthorLimit, OverLimit};
     use crate::authors::{Authors, Permission, TrustedAuthors, Untrusted, UntrustedReview};
     use crate::types::{Event, Level, MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy};
 
@@ -1253,6 +1279,56 @@ notifications:
         );
     }
 
+    /// Sets author_limit on the approving acme/* rule.
+    fn with_author_limit(document: &str, value: &str) -> String {
+        document.replacen(
+            "on_findings: request_changes, on_clean: approve}",
+            &format!("on_findings: request_changes, on_clean: approve, author_limit: {value}}}"),
+            1,
+        )
+    }
+
+    #[test]
+    fn author_limit_parses_and_changes_the_digest() {
+        let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        // A policy without the key keeps the digest it had before the key existed (#401).
+        assert_eq!(
+            first.digest(),
+            "78ab635662e41adc871491ea70f495ce62d272870f22b730d69c694213c0433b",
+            "a policy without author_limit must keep its digest"
+        );
+        assert_eq!(first.author_limit("acme/other"), None);
+        assert_eq!(first.longest_author_window(), Duration::ZERO);
+        let document =
+            with_author_limit(VALID_POLICY, "{reviews: 3, window_hours: 24, over: wait}");
+        let second = parse(document.as_bytes(), prompts).expect("the author limit parses");
+        let wait = AuthorLimit {
+            reviews: 3,
+            window_hours: 24,
+            over: OverLimit::Wait,
+        };
+        assert_eq!(second.author_limit("acme/other"), Some(&wait));
+        assert_eq!(
+            second.author_limit("acme/special"),
+            None,
+            "a rule without author_limit must not get one"
+        );
+        assert_eq!(second.longest_author_window(), Duration::from_hours(24));
+        assert_ne!(
+            first.digest(),
+            second.digest(),
+            "an author_limit must change the policy digest"
+        );
+        let document =
+            with_author_limit(VALID_POLICY, "{reviews: 3, window_hours: 24, over: skip}");
+        let third = parse(document.as_bytes(), prompts).expect("a skipping limit parses");
+        assert_ne!(
+            second.digest(),
+            third.digest(),
+            "the outcome over the limit must change the policy digest"
+        );
+    }
+
     #[test]
     fn human_review_parses_and_changes_the_digest() {
         let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
@@ -1375,6 +1451,16 @@ notifications:
             ("ready draft author with the app prefix", format!("{valid}ready_draft_authors: [app/devin-ai-integration]\n"), "ready_draft_authors"),
             ("repeated ready draft author", format!("{valid}ready_draft_authors: [devin, devin]\n"), "ready_draft_authors"),
             ("weaker re-review before automatic approval", weaker_re_review, "incremental_reviewers equal to reviewers"),
+            ("null author_limit", with_author_limit(valid, "null"), "repositories[1] (acme/*): author_limit must be a mapping"),
+            ("author_limit without reviews", with_author_limit(valid, "{window_hours: 24, over: wait}"), "author_limit.reviews must be between 1 and 1000"),
+            ("author_limit without window_hours", with_author_limit(valid, "{reviews: 3, over: wait}"), "author_limit.window_hours must be between 1 and 720"),
+            ("author_limit without over", with_author_limit(valid, "{reviews: 3, window_hours: 24}"), "author_limit.over must be wait or skip"),
+            ("author_limit of no review", with_author_limit(valid, "{reviews: 0, window_hours: 24, over: wait}"), "author_limit.reviews must be between"),
+            ("author_limit over 1000 reviews", with_author_limit(valid, "{reviews: 1001, window_hours: 24, over: wait}"), "author_limit.reviews must be between"),
+            ("negative author_limit window", with_author_limit(valid, "{reviews: 3, window_hours: -24, over: wait}"), "author_limit.window_hours must be between"),
+            ("author_limit window over 720 hours", with_author_limit(valid, "{reviews: 3, window_hours: 721, over: wait}"), "author_limit.window_hours must be between"),
+            ("bad author_limit outcome", with_author_limit(valid, "{reviews: 3, window_hours: 24, over: drop}"), "author_limit.over must be wait or skip"),
+            ("unknown author_limit key", with_author_limit(valid, "{reviews: 3, window_hours: 24, over: wait, per: class}"), "field per not found"),
         ];
         for (name, document, want) in cases {
             assert_ne!(

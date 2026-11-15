@@ -4,10 +4,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use autoreview_policy::Event;
+use autoreview_go_compat::go_time::format_rfc3339_seconds;
+use autoreview_policy::{Event, OverLimit};
 use autoreview_schedule::phase;
-use autoreview_schedule::scheduler::{self, Record, Retarget, Run, Target};
-use time::{OffsetDateTime, UtcOffset};
+use autoreview_schedule::scheduler::{self, AuthorBound, Record, Retarget, Run, Target};
+use time::{Duration, OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
 use super::route::{HostPass, host_unavailable};
@@ -24,6 +25,9 @@ use crate::model::{
 };
 use crate::review::input::{RenderOutcome, STATE_FETCHED_HEAD, STEP_RENDERED};
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
+
+/// The starts dispatched in one pass, by rule match pattern and lowercase author login.
+type PassStarts = BTreeMap<(String, String), Vec<OffsetDateTime>>;
 
 /// Start value of the latest attempt, below every stored attempt.
 const NO_ATTEMPT: i64 = -1;
@@ -192,6 +196,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             self.apply_force(cancel, &mut state, &present, &history, force, now)?;
         }
         let mut dispatches = Vec::new();
+        // The dispatches of this pass are stored at its end, so the author limit counts them here.
+        let mut pass_starts = PassStarts::new();
         // A host that fails once is not asked again in this pass, so it costs one timeout; each
         // host's state is read at most once in the pass.
         let mut host_pass = HostPass::default();
@@ -312,10 +318,47 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 }
                 _ => (
                     None,
-                    scheduler::plan(previous, &target, &history, now, &self.config.schedule)
-                        .map_err(schedule_error)?,
+                    scheduler::plan(
+                        previous.clone(),
+                        &target,
+                        &history,
+                        now,
+                        &self.config.schedule,
+                    )
+                    .map_err(schedule_error)?,
                 ),
             };
+            if decision.dispatch
+                && let Some(limit) = self.policy()?.author_limit(&pr.repository)
+            {
+                let rule = candidate.rule.match_glob.as_str();
+                let starts = author_starts(&history, &pass_starts, rule, &pr.author)?;
+                let bound = AuthorBound {
+                    reviews: usize::try_from(limit.reviews).unwrap_or(usize::MAX),
+                    window: Duration::hours(i64::from(limit.window_hours)),
+                    skip: limit.over == OverLimit::Skip,
+                };
+                decision = scheduler::limit_author(decision, &previous, &starts, &bound, now)
+                    .map_err(schedule_error)?;
+                if !decision.dispatch {
+                    // A skipped review is never due; a waiting one starts at its due time.
+                    let due_at = if limit.over == OverLimit::Wait {
+                        format_rfc3339_seconds(decision.record.due_at)
+                    } else {
+                        String::new()
+                    };
+                    tracing::info!(
+                        review_id = %pr.review_id(),
+                        author = %pr.author,
+                        rule,
+                        outcome = limit.over.as_str(),
+                        limit = limit.reviews,
+                        window_hours = limit.window_hours,
+                        due_at,
+                        "review held by the author limit"
+                    );
+                }
+            }
             if let Some(reason) = reason
                 && decision.dispatch
             {
@@ -383,6 +426,10 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                             self.build_input(candidate, route, scope, prior, handoff, attempt)?;
                         let author_class = input.author_class.as_str().to_owned();
                         decision.record.workflow_id = pr.workflow_id(attempt);
+                        let starter = (pr.author.to_ascii_lowercase(), now);
+                        (pass_starts.entry((candidate.rule.match_glob.clone(), starter.0)))
+                            .or_default()
+                            .push(starter.1);
                         dispatches.push(Dispatch {
                             workflow_id: decision.record.workflow_id.clone(),
                             input,
@@ -961,6 +1008,36 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 /// that names another run, or none, came back from another base branch.
 fn follows_another_run(previous: &Record, target: &Target, workflow_id: &str) -> bool {
     previous.identity == target.identity() && previous.workflow_id != workflow_id
+}
+
+/// Returns the starts of the reviews of `author` under `rule`: stored runs and this pass's.
+///
+/// The login matches ASCII case-insensitively.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` when a counted run has no start time that parses.
+fn author_starts(
+    history: &[Run],
+    pass: &PassStarts,
+    rule: &str,
+    author: &str,
+) -> Result<Vec<OffsetDateTime>, Error> {
+    let key = (rule.to_owned(), author.to_ascii_lowercase());
+    let mut starts = pass.get(&key).cloned().unwrap_or_default();
+    let own = |run: &&Run| run.rule == rule && run.author.eq_ignore_ascii_case(author);
+    for run in history.iter().filter(own) {
+        let Some(started) = run.started_at else {
+            let cause = format!("review {} created_at does not parse", run.workflow_id);
+            return Err(Error::workflow(
+                "store_state_invalid",
+                true,
+                Some(cause.into()),
+            ));
+        };
+        starts.push(started);
+    }
+    Ok(starts)
 }
 
 /// Reports whether `previous`, the record of the head of `target`, stopped before any run.

@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use autoreview_go_compat::go_time::format_rfc3339_nano;
+use autoreview_go_compat::go_time::{format_rfc3339_nano, parse_rfc3339};
 use autoreview_policy::AuthorClass;
 use autoreview_schedule::scheduler::Run;
 use rusqlite::types::ToSql;
@@ -235,7 +235,7 @@ impl Store {
     /// Returns the newest reviews in the shape the scheduler plans with.
     ///
     /// A history larger than `limit` fails closed, so the scheduler never dispatches over a
-    /// review it cannot see.
+    /// review it cannot see. A creation time that does not parse leaves `started_at` unset.
     ///
     /// # Errors
     ///
@@ -264,6 +264,9 @@ impl Store {
                     failure: review.failure,
                     released: review.released,
                     cleanup_pending: review.cleanup_pending,
+                    author: review.input.pull_request.author,
+                    rule: review.input.rule.match_glob,
+                    started_at: parse_rfc3339(&review.created_at).ok(),
                 }
             })
             .collect())

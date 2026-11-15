@@ -578,6 +578,8 @@ Besides each key's own range, `validate` enforces:
 - `store.review_retention_seconds` is at least one day, and the policy's
   `notes_handoff.reminder_hours` is shorter than
   `store.published_retention_seconds`.
+- `store.review_retention_seconds` is at least the longest
+  `author_limit.window_hours` of the policy's rules.
 - `schedule.discovery_lock_timeout_seconds` is at most one hour.
 - `session.output_chunk_bytes` and `limits.result_max_bytes` are at most
   `session.output_max_bytes` (itself at most 16 MiB), and

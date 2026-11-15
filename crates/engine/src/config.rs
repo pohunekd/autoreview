@@ -396,6 +396,14 @@ impl Config {
                 "published retention must exceed the notes hand-off reminder",
             ));
         }
+        // Pruned reviews leave the author limit's count, so they must outlive its window.
+        if let Some(policy) = &self.policy
+            && policy.longest_author_window() > self.review_retention
+        {
+            return Err(invalid(
+                "review retention must cover the author limit window",
+            ));
+        }
         Ok(())
     }
 
@@ -1367,6 +1375,41 @@ mod tests {
                 "configuration_invalid: config: ",
                 "published retention must exceed the notes hand-off reminder"
             )
+        );
+    }
+
+    #[test]
+    fn review_retention_must_cover_the_author_limit_window() {
+        let document = crate::testing::deployed_policy_document().replacen(
+            "    on_clean: approve\n",
+            concat!(
+                "    on_clean: approve\n",
+                "    author_limit: {reviews: 5, window_hours: 72, over: wait}\n"
+            ),
+            1,
+        );
+        let loaded = autoreview_policy::parse(document.as_bytes(), |relative| {
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../testdata")
+                    .join(relative),
+            )
+        })
+        .expect("the policy with an author limit parses");
+        let mut config = valid_config();
+        config.policy = Some(loaded);
+        config.review_retention = Duration::from_secs(72 * 60 * 60);
+        assert!(
+            config.validate().is_ok(),
+            "a retention of the window is valid"
+        );
+        config.review_retention = Duration::from_secs(48 * 60 * 60);
+        let error = config
+            .validate()
+            .expect_err("a retention shorter than the window is refused");
+        assert_eq!(
+            error.to_string(),
+            "configuration_invalid: config: review retention must cover the author limit window"
         );
     }
 }

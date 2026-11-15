@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use autoreview_policy::Level;
-use autoreview_schedule::scheduler::HEAD_FETCH_MISMATCH;
+use autoreview_schedule::scheduler::{AUTHOR_LIMIT_REACHED, HEAD_FETCH_MISMATCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::json;
@@ -486,5 +486,77 @@ async fn base_checkout_session_fetches_the_head_where_the_host_supports_it() {
         "the retried head: failures={:?}",
         review_failures(&h, &stuck)
     );
+    h.stop_engine().await;
+}
+
+/// Returns the phase and error code of the schedule record of `pr`.
+fn schedule_state(h: &Harness, pr: &PullRequest) -> Option<(String, String)> {
+    let state = h.store.load_discovery().expect("the discovery state reads");
+    let record = state.schedule.get(&pr.key())?;
+    Some((record.phase.clone(), record.error_code.clone()))
+}
+
+/// A rule's author limit counts an author's starts from the store, across a restart, and from
+/// the same discovery pass, by login in any case. Over the bound a review waits, or on a
+/// skipping rule stops with one notice for the pull request until `retry` starts it (#401).
+#[tokio::test]
+async fn author_limit_counts_every_start_of_an_author_once() {
+    let mut h = start_harness(|_| {}).await;
+    let first = integration_pull_request("limit/one", &sha("a"));
+    h.fake.open(first.clone(), h.rule(&first.repository));
+    h.poll_until("the first review", || h.publications() == 1)
+        .await;
+    // The stored start counts after a restart; two more come due in one pass, and the second
+    // pull request of the pass (by key) is the one over the bound.
+    h.stop_engine().await;
+    h.start();
+    let second = integration_pull_request("limit/one", &sha("b"));
+    let third = PullRequest {
+        author: "Colleague".to_owned(),
+        ..integration_pull_request("limit/two", &sha("c"))
+    };
+    let other = PullRequest {
+        author: "maintainer".to_owned(),
+        ..integration_pull_request("limit/one", &sha("d"))
+    };
+    for pr in [&second, &third, &other] {
+        h.fake.open(pr.clone(), h.rule(&pr.repository));
+    }
+    h.poll_until("the reviews under the limit", || h.publications() == 3)
+        .await;
+    h.settle().await;
+    let waiting = Some(("waiting".to_owned(), String::new()));
+    assert!(
+        h.publications() == 3 && schedule_state(&h, &third) == waiting,
+        "the start over the stored one and the one of the pass must wait: {:?}",
+        schedule_state(&h, &third)
+    );
+    // A skipping rule stops a start over the bound, once per pull request, until a retry.
+    let allowed = integration_pull_request("limitskip/one", &sha("e"));
+    h.fake.open(allowed.clone(), h.rule(&allowed.repository));
+    h.poll_until("the review under the skip limit", || h.publications() == 4)
+        .await;
+    let skipped = integration_pull_request("limitskip/one", &sha("f"));
+    h.fake.open(skipped.clone(), h.rule(&skipped.repository));
+    let stopped = Some(("failed".to_owned(), AUTHOR_LIMIT_REACHED.to_owned()));
+    h.poll_until("the skip", || schedule_state(&h, &skipped) == stopped)
+        .await;
+    let pushed = PullRequest {
+        head_sha: sha("9"),
+        ..skipped.clone()
+    };
+    h.fake.open(pushed.clone(), h.rule(&pushed.repository));
+    h.settle().await;
+    let notice = "Diagnostic: author_limit_reached.";
+    let (_, notes, _, _) = h.fake.snapshot();
+    assert!(
+        h.publications() == 4
+            && schedule_state(&h, &pushed) == stopped
+            && count_notes(&notes, Level::Action, notice) == 1,
+        "the skips of one pull request must notify once: {notes:?}"
+    );
+    h.retry(&pushed).await.expect("the retry is accepted");
+    h.poll_until("the retried review", || h.publications() == 5)
+        .await;
     h.stop_engine().await;
 }

@@ -196,6 +196,7 @@ repositories before their owner wildcard.
 | `on_clean` | What a review without blocking findings does: `approve`, `await` (wait for a human approval) or `comment` |
 | `on_notes` | Optional. `comment`: a review whose findings are all notes goes to the author as a comment first, see [notes hand-off](knowledge/concepts/decisions.md#notes-hand-off). Pull requests authored by bots skip the hand-off and wait for approval directly |
 | `authors` | Required. Who counts as a trusted author and what an untrusted author gets, see below |
+| `author_limit` | Optional. How many reviews one author may start under the rule in a window, see [author limit](#author-limit). Without it the rule sets no limit |
 | `human_review` | Optional, needs `on_clean: approve`. The signals that hold a clean review for a person, see [human review signals](#human-review-signals) |
 
 Validation rules:
@@ -327,6 +328,43 @@ Rules for the untrusted section:
   check, and the next pass reads the permission again. A failed read never counts
   as trusted.
 
+### Author limit
+
+`author_limit` bounds the reviews started for the pull requests of one author
+under the rule. Without the key the rule has no limit. With it, every field is
+required, and `author_limit: null` is an error.
+
+```yaml
+author_limit:
+  reviews: 10        # 1-1000 reviews of one author in the window
+  window_hours: 24   # 1-720
+  over: wait         # wait or skip
+```
+
+- The count is per author login, matched without regard to case, across the
+  repositories of the rule. It covers every author the rule reviews, trusted or
+  untrusted.
+- Every started review counts: a first review, an automatic retry, a review
+  started again after a new commit, a moved base branch or a removed and
+  re-added trigger, and a `retry`. A review counts from its start for
+  `window_hours`, and the count is read from the store, so a restart keeps it.
+- A new start over the bound is held. An automatic retry of a failed review and
+  a `retry` command are never held, so a review that started can finish.
+- `over: wait`: the review waits and starts on the first discovery pass after
+  enough starts left the window. `over: skip`: the review of that head is not
+  started, and a `review_stopped` notice with the code `author_limit_reached`
+  names it. A later commit of a skipped pull request is planned again and, when
+  it is skipped too, sends no second notice; a pull request that stops asking
+  for a review and asks again is notified again. `retry` starts the skipped
+  head at once.
+- Each held review logs `review held by the author limit` with the author, the
+  rule, the outcome and, for a wait, when it is due.
+- `window_hours` must not be longer than `store.review_retention_seconds`,
+  because removed reviews leave the count; `validate` refuses a longer window.
+
+The limit counts reviews per pull request author. It does not know who added
+the label or requested the review.
+
 ## Drafts of coding agents
 
 Some coding agents open pull requests as drafts and never mark them ready.
@@ -402,3 +440,7 @@ request content itself is always untrusted input. See
 | `untrusted pipeline must use checkout base` | Use a base-checkout pipeline for untrusted authors |
 | `authors.untrusted is required unless trusted is any` | Add `untrusted: skip` or an untrusted mapping |
 | `authors.untrusted.on_clean must be comment or await, never approve` | Use `comment` or `await` |
+| `author_limit.reviews must be between 1 and 1000` | Set `reviews`; also shown when it is missing |
+| `author_limit.window_hours must be between 1 and 720` | Set `window_hours`; also shown when it is missing |
+| `author_limit.over must be wait or skip` | Set `over` |
+| `author_limit must be a mapping with reviews, window_hours and over` | Fill in the key, or remove it for no limit |
