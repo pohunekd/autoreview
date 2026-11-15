@@ -94,17 +94,17 @@ archive. Check the state as in step 5.
 
 ## Store migrations
 
-The reference pages do not describe store migrations. It is not documented
-whether a new release changes the SQLite schema, or whether such a change runs
-on the first start. Until the release notes say so, treat every upgrade that
-changes the version as one that may migrate the store. Keep the backup from
+Every command that opens the store creates or extends its schema on the first
+start of a new release, so treat every upgrade as one that may migrate the
+store. A release refuses a store whose schema version (`PRAGMA user_version`)
+is newer than its own with `store_version_unsupported`. Keep the backup from
 the first section until a published review on the new version confirms that
 the service works.
 
-The statistics rollup (#264) adds the tables `stats_rollup` and
-`stats_rollup_samples` on the first start, without a new schema version
-(`PRAGMA user_version` stays `1`). An earlier release opens such a store and
-ignores the two tables, so a rollback of this change needs no restore. While
+The release after 0.3.0 adds the statistics rollup: the tables `stats_rollup`
+and `stats_rollup_samples`, created on the first start without a new schema
+version (`PRAGMA user_version` stays `1`). An earlier release opens such a
+store and ignores the two tables, so a rollback to it needs no restore. While
 the earlier release runs, the reviews it prunes and the pull requests it stops
 are not added to the rollup, so the statistics of their days can be too low.
 

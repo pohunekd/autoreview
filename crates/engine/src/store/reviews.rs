@@ -791,7 +791,7 @@ impl Store {
             let runs = collect_step_runs(
                 transaction,
                 &format!(
-                    "SELECT step, outcome, retries, duration_ms, finished_at \
+                    "SELECT workflow_id, step, outcome, retries, duration_ms, finished_at \
                      FROM review_step_runs WHERE workflow_id IN \
                      (SELECT workflow_id FROM reviews WHERE {filter})"
                 ),

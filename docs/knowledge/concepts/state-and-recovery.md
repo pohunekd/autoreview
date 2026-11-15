@@ -227,6 +227,15 @@ Two consequences follow from the retention periods:
   credential reads it (see
   [GitHub identity](github-identity.md#what-a-credential-is)).
 
+Before it removes a completed review, the prune reads its row, its step runs and,
+for a published review, its plan, and adds their counts to the statistics
+rollup in the same transaction. A review that does not decode stops the prune:
+nothing is removed, every discovery pass logs `review pruning failed` with
+`error_code` `store_state_invalid`, and the store keeps growing until that
+review is repaired or removed. The `error` field of the log line names the
+review's workflow ID. Such a review is a defect or a damaged store to report
+(see the [CLI error codes](../../cli.md#error-codes)).
+
 The engine also refuses to grow the discovery state without limit. The state
 holds at most `schedule.state_entry_limit` pull request entries and review
 history entries. A pass that would go over the limit stops with an error rather

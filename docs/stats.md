@@ -27,8 +27,8 @@ autoreview stats [--since DATE [--until DATE]] [--json]
 - The document is read from the store only. `stats` asks neither GitHub nor pohunek, and
   changes nothing. Both forms read the discovery state. Without `--since` they read the
   reviews that are not completed, through the status index. With `--since` they read the
-  whole `reviews` and `review_step_runs` tables, so the cost grows with
-  `store.review_retention_seconds`, which decides how many reviews the store keeps, and the
+  whole `reviews` and `review_step_runs` tables (the cost grows with
+  `store.review_retention_seconds`, which decides how many reviews the store keeps) and the
   rollup rows of the range's days (see [History](#history)). The reviews, the step runs,
   the rollup and the discovery state come from one read transaction, so all counts
   describe the same moment.
@@ -244,9 +244,9 @@ step whose outcome is stored keeps its record, and the resumed review does not r
 again. A record that cannot be written fails that write like any other store error.
 
 The step runs are deleted with their review, and the prune adds their counts to the
-rollup (see `pruned_before`). Reviews that an engine before the step runs ran have no step
-runs, so they count in no step; a review that such an engine started records only the steps
-that end after the update.
+rollup (see `pruned_before`). Reviews run by an engine that predates the step runs have no
+step runs, so they count in no step; a review that such an engine started records only the
+steps that end after the update.
 
 ```sh
 autoreview stats --since 2026-11-01 --json \

@@ -708,7 +708,12 @@ impl HistoryTally {
         for ended in runs {
             let finished = parse_rfc3339(&ended.finished_at)
                 .map(|instant| instant.to_offset(UtcOffset::UTC))
-                .map_err(|err| store_invalid(format!("step run finished_at: {err}")))?;
+                .map_err(|err| {
+                    store_invalid(format!(
+                        "step run of review {} finished_at: {err}",
+                        ended.workflow_id
+                    ))
+                })?;
             let bucket = self.days.entry(finished.date()).or_default();
             let step = bucket.steps.entry(ended.run.step.as_str().to_owned());
             step.or_default().add(&ended.run);
