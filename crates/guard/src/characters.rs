@@ -31,13 +31,20 @@ const RUN_MIN: usize = 2;
 /// isolate next to a mark in right-to-left prose.
 const MIXED_RUN_MIN: usize = 3;
 
+/// Shortest run of bidi marks alone that is reported.
+///
+/// Arabic, Hebrew and Persian text puts marks around numbers and Latin words, at most two or
+/// three in a row; a payload of marks needs many more.
+const MARKS_ONLY_MIN: usize = 6;
+
 /// BRAILLE PATTERN BLANK: not whitespace, but shown as an empty cell.
 const BRAILLE_BLANK: char = '\u{2800}';
 
-/// Reports whether a character keeps a run of invisible characters open.
+/// Reports whether a character can keep a run of invisible characters open.
 ///
 /// Whitespace and blank cells show nothing either, so characters spread over them still
-/// form one run.
+/// form one run, once the run holds a character that natural text does not use
+/// (`MixedRun::unnatural`).
 fn transparent(character: char) -> bool {
     character.is_whitespace() || character == BRAILLE_BLANK
 }
@@ -186,20 +193,26 @@ struct MixedRun {
     mark: bool,
     /// The run holds a bidi embedding or isolate.
     control: bool,
+    /// The run holds a character that natural text does not use between words.
+    ///
+    /// Natural ones are ZWNJ, ZWJ, marks, embeddings and isolates (right-to-left and joining
+    /// scripts).
+    unnatural: bool,
 }
 
 impl MixedRun {
     /// Reports whether the finished run is an `invisible_run`.
     ///
-    /// It is when it has `MIXED_RUN_MIN` characters and either holds a zero-width character or
-    /// a selector together with another class, or consists of bidi marks only. A run of one
-    /// class of zero-width characters or selectors has its own signal; marks and controls
-    /// without them are right-to-left formatting.
+    /// It is when it has `MIXED_RUN_MIN` characters and holds a zero-width character or a
+    /// selector together with another class, or when it has `MARKS_ONLY_MIN` bidi marks and
+    /// nothing else. A run of one class of zero-width characters or selectors has its own
+    /// signal; marks and controls without them are right-to-left formatting.
     fn is_hit(&self) -> bool {
         let classes = [self.zero_width, self.selector, self.mark, self.control];
         let mixed = classes.iter().filter(|present| **present).count() > 1;
         let marks_only = self.mark && !self.zero_width && !self.selector && !self.control;
-        self.len >= MIXED_RUN_MIN && (((self.zero_width || self.selector) && mixed) || marks_only)
+        (self.len >= MIXED_RUN_MIN && (self.zero_width || self.selector) && mixed)
+            || (marks_only && self.len >= MARKS_ONLY_MIN)
     }
 }
 
@@ -222,6 +235,12 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
             if let Some(run) = tag_run.take() {
                 add(Signal::UnicodeTags, u32::from(!run.is_flag()));
             }
+            if !mixed.unnatural {
+                add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
+                mixed = MixedRun::default();
+                zero_width_len = 0;
+                selector_len = 0;
+            }
             previous = character;
             continue;
         }
@@ -237,6 +256,7 @@ pub(crate) fn scan(text: &str, in_patch: bool, add: &mut impl FnMut(Signal, u32)
             mixed.selector |= selector;
             mixed.mark |= mark;
             mixed.control |= control;
+            mixed.unnatural |= !(mark || control || matches!(character, '\u{200C}' | '\u{200D}'));
         } else {
             add(Signal::InvisibleRun, u32::from(mixed.is_hit()));
             mixed = MixedRun::default();

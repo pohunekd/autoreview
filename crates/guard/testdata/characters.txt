@@ -173,7 +173,7 @@ score: 100
 expect: title:invisible_run=1
 score: 100
 --- title
-x<U+200E><U+200F><U+200E>y
+x<U+200E><U+200F><U+200E><U+200F><U+200E><U+200F>y
 == rtl_marks_next_to_isolates_stay_clean
 expect: none
 --- body
@@ -276,3 +276,18 @@ score: 100
 --- comment
 Hi&NegativeThinSpace;&NegativeThinSpace;&NegativeThinSpace; there
 Hi&NoBreak;&it;&ic;&af; there &NegativeVeryThinSpace;&InvisibleTimes;
+== persian_and_rtl_marks_spread_over_spaces_stay_clean
+# Natural right-to-left text: ZWNJ inside words, a ZWNJ on both sides of a space, and marks
+# around numbers and Latin words, several per line separated only by spaces.
+expect: none
+--- body
+<U+06A9><U+062A><U+0627><U+0628><U+200C><U+0647><U+0627><U+200C> <U+200C><U+0641><U+0627><U+06CC><U+0644><U+200C><U+0647><U+0627>
+--- comment
+<U+0634><U+0643><U+0631><U+0627> <U+200F> <U+200F> <U+200F> <U+0627><U+0644><U+0625><U+0635><U+062F><U+0627><U+0631> <U+200F>2.0<U+200F>
+--- review_thread
+<U+05D7><U+05D3><U+05E9> <U+200E> <U+200F> <U+200E> <U+05E7><U+05D5><U+05D1><U+05E5> <U+200E><U+200F><U+200E>README.md<U+200E>
+== spaced_run_led_by_a_joiner_still_counts
+expect: body:zero_width_run=1
+score: 100
+--- body
+x<U+200C> <U+200B> <U+200B> y
