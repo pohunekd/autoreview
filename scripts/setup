@@ -213,9 +213,10 @@ path_trust() {
 # else. The profile tables and the paths are local, so the functions under
 # test read them.
 self_test() {
-    local checks=0 failures=0 expected
+    local checks=0 failures=0 expected name
     local autoreview_bin=/h/.local/bin/autoreview pohunek_timeout=45
     local dir=/h/autoreview env_file=/h/.config/autoreview/autoreview.env
+    local AUTOREVIEW_VERSION=0.5.0 CODEX_ADAPTER_RELEASE=0.4.0
     local -a install_command=() unit_names=() unit_texts=()
     local -A profile_agent=([one]=claude [two]=codex) profile_model=([one]=m-1 [two]=m.2)
     local -A profile_effort=([one]=max [two]=xhigh) profile_input=([one]=1048576 [two]=2048)
@@ -348,6 +349,23 @@ self_test() {
     render_units
     check "umask of the review service" 1 "$(grep -cx 'UMask=0077' <<<"${unit_texts[0]}")"
     check "umask of the queue service" 1 "$(grep -cx 'UMask=0077' <<<"${unit_texts[1]}")"
+    expected="setup: autoreview 0.5.0 refuses a Codex adapter from before 0.4.0;"
+    expected+=$'\nreviews of these profiles fail with review_nonce_mismatch until you run, with the'
+    expected+=$'\nvalues of their first install:'
+    for name in two 'x y'; do
+        expected+=$'\n  /h/.local/bin/autoreview profiles install --host local --agent codex'
+        expected+=" --name $(printf %q "$name") \\"
+        expected+=$'\n    --model <MODEL> --effort <EFFORT> --agent-binary <PATH> \\'
+        expected+=$'\n    --maximum-input-bytes <BYTES> --maximum-result-bytes <BYTES> \\'
+        expected+=$'\n    --maximum-retention-seconds <SECONDS> --pohunek-timeout-seconds <SECONDS>'
+    done
+    check "Codex notice after an upgrade from 0.3.0" "$expected" \
+        "$(codex_notice 0.3.0 two 'x y' || echo error)"
+    check "Codex notice after an unknown release" "$expected" \
+        "$(codex_notice '' two 'x y' || echo error)"
+    check "no Codex notice after 0.4.0" "" "$(codex_notice 0.4.0 two || echo error)"
+    check "no Codex notice after a newer release" "" "$(codex_notice 0.10.0 two || echo error)"
+    check "no Codex notice without a Codex profile" "" "$(codex_notice 0.3.0 || echo error)"
     if [ "$failures" -ne 0 ]; then
         echo "self-test: $failures of $checks checks failed"
         return 1
