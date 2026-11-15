@@ -12,7 +12,8 @@ intents: [setup, help]
 > **Status: after 0.3.0.** This page describes autoreview on `main` after the
 > 0.3.0 release and `scripts/setup`. The script installs the autoreview release
 > named by `AUTOREVIEW_VERSION` in the script, which must know the `init` layout
-> flags (0.3.0 or later). A part that is not available names its open issue.
+> flags and `profiles install --pohunek-timeout-seconds` (0.4.0 or later). A
+> part that is not available names its open issue.
 
 ## What autoreview does
 
@@ -104,9 +105,9 @@ scripts/setup --dir "$HOME/autoreview"
 `--dry-run` detects and prints the plan and changes nothing; it asks nothing.
 Without a terminal the script refuses to run unless `--dry-run` is given. The
 answers can be given as flags: `--dir`, `--login`, `--pohunek-host`,
-`--example`, `--matrix-homeserver-url`, `--matrix-room` and
-`--matrix-mention-user`. A missing answer is asked; an empty answer stops the
-script. There is no `--yes`.
+`--example`, `--matrix-homeserver-url`, `--matrix-room`,
+`--matrix-mention-user` and `--pohunek-timeout-seconds`. A missing answer is
+asked; an empty answer stops the script. There is no `--yes`.
 
 Before each step that changes the machine, the script prints the exact
 commands and asks `Proceed? [y/N]`. Only `y` or `yes` goes on; any other
@@ -157,7 +158,10 @@ prints it; it goes on with:
    (at most `limits.result_max_bytes`) and the time the adapter stays after
    its report (at least `session.timeout_seconds`). The agent executable is the
    one on your `PATH`. A profile written by `autoreview profiles install` is
-   kept and asks nothing.
+   kept and asks nothing. When any profile is missing, the script then asks
+   once for the seconds after which `profiles install` kills a pohunek call;
+   give the `pohunek.timeout_seconds` of `config.yaml`. It has no default: a
+   value that is not a whole number above 0 stops the script with exit code 1.
 8. **Runtime packages.** For each agent without its official pohunek package,
    `pohunek plugin install runtime/packages/<agent>.tar.zst --catalog
    runtime/runtime-catalog.json --yes` from the daemon archive of the running
@@ -165,7 +169,8 @@ prints it; it goes on with:
 9. **Hooks.** `pohunek integration install --agent <agent>`, asked on its own
    because pohunek has no dry run of it.
 10. **Agent profiles.** `autoreview profiles install --host local` with the
-    answers of step 7 ([CLI](../../cli.md#autoreview-profiles-install)).
+    answers of step 7, including `--pohunek-timeout-seconds`
+    ([CLI](../../cli.md#autoreview-profiles-install)).
 11. **User service.** Prints the `match` and `trigger` lines of the policy,
     writes `autoreview.service` (`serve`), `autoreview-queue.service` and
     `autoreview-queue.timer` (hourly, 08:00 to 20:00) with the secrets file as

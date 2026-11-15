@@ -106,11 +106,13 @@ autoreview --version
 ### Build from source
 
 Build from a checkout of the release tag when no archive fits your platform.
-rustup installs the toolchain of `rust-toolchain.toml` on the first cargo call.
+`rustup toolchain install` without arguments (rustup 1.28 or later) installs
+the toolchain of `rust-toolchain.toml`.
 
 ```sh
 git clone --branch "v$version" https://github.com/pohunekd/autoreview
 cd autoreview
+rustup toolchain install
 cargo build --release --locked -p autoreview
 sudo install -m 0755 target/release/autoreview /usr/local/bin/autoreview
 ```

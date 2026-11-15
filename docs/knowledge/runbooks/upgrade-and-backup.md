@@ -124,9 +124,12 @@ Roll back only with a backup taken before the upgrade:
    version added: an earlier release refuses an unknown key, such as
    `limits.max_issue_characters` for a release before it. On a converted
    deployment, remove the matching `HERMES_PR_REVIEW_*` variable too, or run
-   the old release's `scripts/env-to-config`, which refuses it as unknown. The
-   policy file follows the same rule: for a release before the guard sections,
-   remove `guard` from every rule of the policy and `guards` from `config.yaml`.
+   the old release's `scripts/env-to-config`, which refuses it as unknown.
+   Do the same for the policy: restore the policy of the old version, or remove
+   what the new version added, such as `intent_check` from the policy's
+   pipelines for a release before the intent check, or `guard` from every rule
+   of the policy and `guards` from `config.yaml` for a release before the guard
+   sections.
 5. Run `validate` with the old version, then start the service.
 
 A rollback goes to an earlier autoreview release (Rust).
