@@ -259,3 +259,37 @@ pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
         .collect();
     Report { hits, score }
 }
+
+/// Returns a rendered field with its character references decoded outside `code`.
+///
+/// GitHub shows a reference inside a code block as written, so it is no hidden character.
+fn rendered_text(text: &str, code: &[(usize, usize)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0_usize;
+    for &(start, end) in code {
+        out.push_str(&words::decode_references(
+            text.get(at..start).unwrap_or_default(),
+        ));
+        out.push_str(text.get(start..end).unwrap_or_default());
+        at = end;
+    }
+    out.push_str(&words::decode_references(
+        text.get(at..).unwrap_or_default(),
+    ));
+    out
+}
+
+/// Returns the added lines of a unified diff, without `+`, one per line.
+///
+/// Removed lines are not in the head and context lines are base content, so only added lines
+/// can carry text the pull request brings in.
+fn added_lines(patch: &str) -> String {
+    let mut out = String::new();
+    for line in patch.split('\n') {
+        if let Some(added) = line.strip_prefix('+') {
+            out.push_str(added);
+            out.push('\n');
+        }
+    }
+    out
+}
