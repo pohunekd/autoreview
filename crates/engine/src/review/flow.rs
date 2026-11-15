@@ -4,7 +4,7 @@
 
 use std::sync::atomic::AtomicI64;
 
-use autoreview_policy::{Event, IntentCheck, OnClean, Reviewer};
+use autoreview_policy::{Event, IntentCheck, OnClean, OnSuspect, Reviewer};
 use autoreview_schedule::scheduler::superseded;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
@@ -116,6 +116,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             verifier: None,
             discussion: Discussion::default(),
             linked: None,
+            guard: None,
             approved: false,
             retries: AtomicI64::new(0),
         };
@@ -187,6 +188,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         {
             Some(plan) => plan,
             None => {
+                // The guard runs before any reviewer session starts, and an adopted hand-off
+                // is gated by this review's own scan.
+                if let Some(guard) = review.input.rule.guard.clone() {
+                    match review.text_guard(&guard).await {
+                        Ok(outcome) => review.guard = Some(outcome),
+                        Err(err) => return review.fail(err).await,
+                    }
+                }
                 if review.input.adopts_handoff() {
                     return review.adopt_handoff().await;
                 }
@@ -439,6 +448,9 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Some(linked) = &self.linked {
             artifact.intent = Some(linked.outcome());
         }
+        // Only a result that changes the publication rides on the artifact; `log` changes nothing.
+        artifact.guard =
+            (self.guard.clone()).filter(|guard| guard.suspect && guard.outcome != OnSuspect::Log);
         let plan = plan_publication(&self.input, &artifact, &self.input.publisher_login);
         live(&self.cancel)?;
         self.engine

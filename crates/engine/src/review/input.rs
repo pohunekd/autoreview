@@ -46,6 +46,9 @@ pub(crate) const STEP_VERIFICATION: &str = "verification";
 /// Step that stores the human review signals the review matched.
 pub(crate) const STEP_HUMAN_REVIEW: &str = "human_review";
 
+/// Step that stores the text guard result of a review whose rule has a guard.
+pub(crate) const STEP_GUARD: &str = "guard";
+
 /// State that holds the deadline of the reviewer sessions.
 pub(crate) const STATE_DEADLINE: &str = "collect_deadline";
 
