@@ -391,11 +391,14 @@ def claude_arguments(
     profile_arguments: list[str],
     json_schema: str | None,
 ) -> list[str]:
+    # --strict-mcp-config without --mcp-config loads no MCP server: neither a user-scope
+    # server of the review host nor one that a `.mcp.json` of the review checkout declares.
     arguments = [
         claude_binary,
         *profile_arguments,
         "--setting-sources",
         "user",
+        "--strict-mcp-config",
         "--print",
         "--output-format",
         "json",
