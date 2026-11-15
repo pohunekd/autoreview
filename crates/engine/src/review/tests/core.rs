@@ -5,15 +5,19 @@
 use std::sync::Arc;
 
 use autoreview_policy::Level;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use serde_json::json;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{Config, Credential, Credentials};
 use crate::integrations::{SessionRequest, TokenAnswer};
-use crate::model::RejectedCandidate;
 use crate::model::review::Decision;
+use crate::model::{PullRequest, RejectedCandidate};
+use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
 use crate::protocol::fixtures::sha;
+use crate::store::ReviewFilter;
 use crate::testing::fake::{count_notes, reviewer_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
 
@@ -320,6 +324,115 @@ async fn reviewer_output_over_the_limits_gets_a_fresh_run() {
         told,
         vec![(1, false), (2, true)],
         "opus runs and the named check"
+    );
+    h.stop_engine().await;
+}
+
+/// Returns the Claude adapter's refusal of a base checkout whose head is not in the repository.
+fn head_unavailable_output() -> String {
+    let stderr =
+        "claude-adapter: trusted pull request head is unavailable in the review checkout\n";
+    let refusal = json!({
+        "protocol": CLAUDE_RESULT_PROTOCOL,
+        "mode": "structured",
+        "exit_code": 64,
+        "stdout_base64": "",
+        "stderr_base64": STANDARD.encode(stderr),
+        "refusal": "head_unavailable",
+    });
+    format!("{refusal}\n")
+}
+
+/// Returns the failure codes of the reviews of `pr`, oldest first; a success is empty.
+fn review_failures(h: &Harness, pr: &PullRequest) -> Vec<String> {
+    let filter = ReviewFilter::ReviewKey(pr.key());
+    let reviews = h.store.list_reviews(&filter, 50).expect("the reviews read");
+    reviews
+        .into_iter()
+        .rev()
+        .filter(|review| review.status == "completed")
+        .map(|review| review.failure)
+        .collect()
+}
+
+/// A base-checkout session fetches the pull request head only where the host advertises it
+/// (#255). Without the capability, or when the host does not answer the capability read, the
+/// session starts as before and a missing head stops the review; with it, a moved head
+/// re-plans the review and a failed fetch is retried.
+#[tokio::test]
+async fn base_checkout_session_fetches_the_head_where_the_host_supports_it() {
+    let mut h = start_harness(|_| {}).await;
+    // The head is in the review host's repository only when the session start fetched it.
+    let clean = reviewer_output(Vec::new());
+    h.set_output(move |request: &SessionRequest| {
+        if request.fetch_head {
+            clean(request)
+        } else {
+            head_unavailable_output()
+        }
+    });
+    let missing = integration_pull_request("claude/base", &sha("c"));
+    h.fake.open(missing.clone(), h.rule(&missing.repository));
+    h.poll_until("the stopped review", || {
+        review_failures(&h, &missing) == ["review_head_unavailable"]
+    })
+    .await;
+    h.settle().await;
+    let (_, _, started, _) = h.fake.snapshot();
+    assert!(
+        h.publications() == 0
+            && review_failures(&h, &missing) == ["review_head_unavailable"]
+            && started.len() == 1
+            && !started[0].fetch_head,
+        "without the capability: started={started:?}"
+    );
+    let host = started[0].route.host.clone();
+    {
+        let mut state = h.fake.lock();
+        state.fetch_ref_hosts.insert(host);
+        // The next capability read finds the host unavailable.
+        state.fetch_ref_failures = 1;
+    }
+    let unknown = integration_pull_request("claude/base", &sha("e"));
+    h.fake.open(unknown.clone(), h.rule(&unknown.repository));
+    h.poll_until("the review started without the fetch", || {
+        review_failures(&h, &unknown) == ["review_head_unavailable"]
+    })
+    .await;
+    let (_, _, started, _) = h.fake.snapshot();
+    assert!(
+        h.publications() == 0 && started.len() == 2 && !started[1].fetch_head,
+        "an unanswered capability read: started={started:?}"
+    );
+    {
+        let mut state = h.fake.lock();
+        state
+            .start_failures
+            .push_back(("head_changed".to_owned(), true));
+        state
+            .start_failures
+            .push_back(("pohunek_head_fetch_failed".to_owned(), false));
+    }
+    let fetched = integration_pull_request("claude/base", &sha("d"));
+    h.fake.open(fetched.clone(), h.rule(&fetched.repository));
+    h.poll_until("the approval of the fetched head", || h.publications() == 1)
+        .await;
+    h.settle().await;
+    let (published, _, started, _) = h.fake.snapshot();
+    let heads = h.fake.lock().published_heads.clone();
+    assert!(
+        published.len() == 1
+            && published[0].decision == Decision::Approve
+            && heads == [sha("d")]
+            && review_failures(&h, &fetched) == ["head_changed", ""]
+            && review_failures(&h, &missing) == ["review_head_unavailable"]
+            && review_failures(&h, &unknown) == ["review_head_unavailable"]
+            && started.len() == 3
+            && started[2].fetch_head
+            && started[2].start == 2
+            && started[2].pull_request.number == fetched.number,
+        "with the capability: failures={:?} started={started:?}",
+        review_failures(&h, &fetched)
     );
     h.stop_engine().await;
 }
