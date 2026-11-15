@@ -931,7 +931,7 @@ mod tests {
 
     use autoreview_engine::error_code;
 
-    use super::{fetch_ref_from_output, local_environment};
+    use super::{fetch_ref_from_output, local_environment, mismatch_commit};
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items
@@ -1035,6 +1035,62 @@ mod tests {
             let got = fetch_ref_from_output(&output);
             let got = got.map_err(|error| error_code(&error).to_owned());
             assert_eq!(got, want.map_err(str::to_owned), "{output}");
+        }
+    }
+
+    /// A head fetch mismatch names the fetched commit only when pohunek's message has the
+    /// shape of pohunek 0.43 and expects the trusted head (#416).
+    #[test]
+    fn head_fetch_mismatch_names_the_fetched_commit() {
+        let expected = "a".repeat(40);
+        let fetched = "b".repeat(40);
+        let other = "c".repeat(40);
+        let message = |found: &str, want: &str| {
+            let text = format!(
+                "fetching \"refs/pull/12/head\" from origin found commit {found} \
+                 but the request expected {want}"
+            );
+            serde_json::to_string(&text).expect("a JSON string")
+        };
+        let failure = |message: &str| {
+            format!(
+                concat!(
+                    r#"{{"cli_version":"0.43.0","err":{{"code":"fetch_ref_commit_mismatch","#,
+                    r#""class":"runtime","message":{},"details":null,"#,
+                    r#""hint":"fetch the ref and pass the commit it points to"}}}}"#
+                ),
+                message
+            )
+        };
+        let exact = message(&fetched, &expected);
+        let cases = [
+            (failure(&exact), fetched.as_str()),
+            (failure(&message(&fetched, &other)), ""),
+            (failure(&message(&fetched[..12], &expected)), ""),
+            (failure(&message(&"B".repeat(40), &expected)), ""),
+            (failure(&message(&expected, &expected)), ""),
+            (failure(&message(&fetched, &format!("{expected}."))), ""),
+            (failure(&exact.replacen('"', "\"note: ", 1)), ""),
+            (
+                failure(&format!(r#""at {fetched}, expected {expected}""#)),
+                "",
+            ),
+            (failure("7"), ""),
+            (failure("null"), ""),
+            (
+                format!(r#"{{"err":{{"message":{exact},"message":{exact}}}}}"#),
+                "",
+            ),
+            (
+                format!(r#"{{"err":{{"message":{exact}}},"err":{{"message":{exact}}}}}"#),
+                "",
+            ),
+            (format!(r#"{{"Err":{{"message":{exact}}}}}"#), ""),
+            (exact.clone(), ""),
+            (String::new(), ""),
+        ];
+        for (output, want) in cases {
+            assert_eq!(mismatch_commit(&output, &expected), want, "{output}");
         }
     }
 }
