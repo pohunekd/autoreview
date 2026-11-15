@@ -7,7 +7,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
-use autoreview_policy::{Event, Level, Reviewer};
+use autoreview_policy::{Checkout, Event, Level, Reviewer};
 use autoreview_schedule::diagnostic::{diagnostic, start_diagnostic};
 use autoreview_schedule::scheduler::superseded;
 use serde::de::DeserializeOwned;
@@ -687,6 +687,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 self.save_slot(&saved)?;
             }
             request.start = attempt;
+            request.fetch_head = self.fetches_head(&request).await;
             let integration = &*self.engine.integration;
             let started = integration.ensure_session(&self.cancel, &request).await;
             let started = match started {
@@ -739,6 +740,41 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             start += 1;
         }
         Err(session_fault(WORKFLOW_FAILED))
+    }
+
+    /// Reports whether the session start of `request` fetches the pull request head.
+    ///
+    /// Only a base checkout does, on a host that supports it. The host is asked before every
+    /// start attempt, so a pohunek upgrade or downgrade applies from the next attempt on. A
+    /// failed read starts without the fetch; the adapter still refuses a missing head.
+    async fn fetches_head(&self, request: &SessionRequest) -> bool {
+        if request.checkout != Checkout::Base {
+            return false;
+        }
+        let integration = &*self.engine.integration;
+        let host = &request.route.host;
+        match integration.fetch_ref_supported(&self.cancel, host).await {
+            Ok(supported) => supported,
+            Err(err) => {
+                if !self.cancel.is_cancelled() {
+                    let (code, cause) = match first_workflow(&err) {
+                        Some((code, _, cause)) => (code, cause),
+                        None => (WORKFLOW_FAILED, None),
+                    };
+                    tracing::warn!(
+                        review_id = %self.input.pull_request.review_id(),
+                        host = %host,
+                        error_code = %code,
+                        diagnostic = %start_diagnostic(
+                            cause.and_then(|cause| pohunek_error_code(&**cause)),
+                            cause.map(|cause| &**cause),
+                        ),
+                        "head fetch capability unknown, starting without the fetch"
+                    );
+                }
+                false
+            }
+        }
     }
 
     /// Removes the sessions of the first `starts` start attempts of the run of `request`.

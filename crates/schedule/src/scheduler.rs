@@ -610,6 +610,7 @@ pub fn retryable(code: &str) -> bool {
             | "pohunek_base_fetch_timeout"
             | "pohunek_base_fetch_dns_failed"
             | "pohunek_base_fetch_ref_locked"
+            | "pohunek_head_fetch_failed"
             | "github_request_failed"
     )
 }

@@ -231,6 +231,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             prompt,
             name_prefix: self.engine.config.session_name_prefix.clone(),
             branch_prefix: self.engine.config.session_branch_prefix.clone(),
+            fetch_head: false,
         };
         let key = format!("{SLOT_STATE_PREFIX}{}", reviewer.id);
         live(&self.cancel)?;

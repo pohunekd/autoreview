@@ -116,7 +116,8 @@ A stranger opens PR #88 in `pohunekd/pohunek.dev` from a fork.
 3. **Codex reviews from the base branch.** The untrusted pipeline runs Codex
    read-only with the generic prompt. The prompt treats the pull request content as
    untrusted data. Codex reads the change through git, so the head of PR #88 must
-   already be in the project repository on the review host: run
+   be in the project repository on the review host. The session start fetches
+   it with pohunek 0.43.0 or later (CLI and daemon); with an older pohunek run
    `git fetch origin refs/pull/88/head` there before the review starts, or the
    adapter refuses the run (see [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
 4. **The outcome is a comment.** Whatever the findings, the review is published as

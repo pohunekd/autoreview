@@ -445,7 +445,7 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `head_sha_invalid` | `HEAD_SHA` of `approve` (`head_sha` of the MCP tool) is not the full head commit, 40 lowercase hexadecimal characters |
 | `review_not_awaiting_approval`, `approval_not_required` | The review does not wait for an approval, or its wait ended (a newer commit, a changed review request, the deadline) and was cleared |
 | `review_superseded`, `approval_expired` | The wait ended without a publication and is not cleared yet |
-| `head_changed` | `retry` got a head that is no longer the pull request head, or a running review saw a new head (it ends as `superseded`) |
+| `head_changed` | `retry` got a head that is no longer the pull request head, or a running review saw a new head, also as a session start whose fetched `refs/pull/<n>/head` is at another commit (it ends as `superseded`) |
 | `review_already_running`, `review_retry_not_dispatched` | A retry is not needed or not possible right now |
 | `review_already_completed` | `retry` found a completed review of this head (it succeeded or went on to wait for an approval) against the current base branch and no later failed review of it, or one whose base branch is no longer known; nothing to do when that review is current, approve it if it still waits, or push a new commit for a fresh review |
 | `engine_already_running` | Another `serve` uses the same database |
@@ -466,7 +466,8 @@ must be absolute and must not exist yet (`backup_path_invalid`,
 | `pohunek_session_cleanup_failed` | A session could not be removed, see `cleanup_manual` |
 | `review_output_timeout`, `review_output_incomplete`, `review_output_invalid`, `review_output_too_large`, `review_result_invalid`, `review_nonce_mismatch`, `review_wrapper_invalid` | A reviewer did not return a usable result in time, or its output was too large |
 | `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried |
-| `review_head_unavailable` | A reviewer on a base checkout stopped because the pull request head commit is not in the review host's repository; fetch it there, then `retry` |
+| `review_head_unavailable` | A reviewer on a base checkout stopped because the pull request head commit is not in the review host's repository; with pohunek 0.43.0 or later (CLI and daemon) the session start fetches it, otherwise fetch it there, then `retry` |
+| `pohunek_head_fetch_failed`, `pohunek_head_fetch_ref_missing` | The session start could not fetch the pull request head (pohunek 0.43.0 or later); a failed fetch is retried, a missing `origin` or `refs/pull/<n>/head` is not |
 | `review_adapter_outdated` | A Codex report has no `prior_findings` or a finding without `blocking`, or a Claude result names no checked checkout or another one; the profile runs an older adapter than `adapters/codex/` or `adapters/claude/`; run `profiles install` for it |
 | `github_search_limit_exceeded` | A search returned more than `schedule.poll_limit`; narrow the rules or raise the limit |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request (`github_request_failed`, retried), or rejected it as invalid with HTTP 422 (`github_request_rejected`, not retried); HTTP 401 is `credential_invalid` |

@@ -180,6 +180,14 @@ impl Integrations for External {
         pohunek::host_capacity(&self.config, cancel, host, timeout).await
     }
 
+    async fn fetch_ref_supported(
+        &self,
+        cancel: &CancellationToken,
+        host: &str,
+    ) -> Result<bool, Error> {
+        pohunek::fetch_ref_supported(&self.config, cancel, host).await
+    }
+
     async fn ensure_session(
         &self,
         cancel: &CancellationToken,

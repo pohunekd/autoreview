@@ -41,6 +41,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `review_wrapper_invalid`, `review_wrapper_invalid: Claude Code exited with status N: ...` in the log | A Claude result line was unusable, or Claude Code itself failed | [Claude Code failed](#claude-code-failed) |
 | `claude_result_invalid`, `claude_result_mismatch` | Claude Code's result message was unusable, or its prose disagreed with its structured output; not retried | [Reviewer output](#reviewer-output) |
 | `review_head_unavailable` | A reviewer on a base checkout stopped: the pull request head commit is not in the review host's repository | [Head commit unavailable](#head-commit-unavailable) |
+| `pohunek_head_fetch_failed`, `pohunek_head_fetch_ref_missing` | The session start could not fetch the pull request head on the review host | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request, or rejected it as invalid (HTTP 422); HTTP 401 is `credential_invalid` | Check the token's permissions and the `github` section |
 | `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
@@ -298,10 +299,17 @@ The engine reads the stderr that every Claude adapter already sends, so no
 A review stops with `review_head_unavailable` and publishes nothing. A
 reviewer on a `checkout: base` pipeline, Claude or Codex, reads the change
 through git, so the pull request head commit must be in the project repository
-on the review host. Pohunek fetches only the base branch for a base checkout,
-so the head of a fork pull request, or of a branch pushed after the project
-repository last fetched, is missing. The adapter refuses the run before the
-reviewer starts: the Claude adapter with a result line whose `refusal` is
+on the review host. When the pohunek CLI and the review host's daemon are 0.43.0
+or later, autoreview has the session start fetch `refs/pull/<n>/head` at the
+trusted head; `pohunek host inspect <host> --json` then shows
+`"session_new_fetch_ref_supported": true`. When that call fails, the session starts
+without the fetch and the log shows `head fetch capability unknown, starting without the
+fetch` with the host and the error code. With an older pohunek on either side,
+pohunek fetches only the base branch for a base checkout, so the head of a fork
+pull request, or of a branch pushed after the project repository last fetched,
+is missing. Upgrade pohunek, or fetch the head by hand as below. The adapter
+refuses the run before the reviewer starts: the Claude adapter with a result
+line whose `refusal` is
 `head_unavailable`, the Codex adapter with the line
 `[autoreview-codex/v2 <nonce> refused:head_unavailable]` right before its exit
 line. Neither a fresh session nor the scheduler tries again, because the next
@@ -319,6 +327,14 @@ such as the head in the notification's Review ID; any other form is
 
 A new push to the pull request starts a new review, which stops the same way
 until its head is in the repository.
+
+When the session start fetches the head, a failed fetch stops the start and no
+reviewer runs. `pohunek_head_fetch_failed` (a network, authentication or
+timeout failure, or Git older than 2.29 on the review host) is retried.
+`pohunek_head_fetch_ref_missing` (the project repository has no `origin`, or
+`origin` has no `refs/pull/<n>/head`) is not; fix the remote, then retry the
+pull request. A head that is not the trusted head SHA ends the run as
+`head_changed`, and the review is planned again after the debounce.
 
 ### Review host checks
 

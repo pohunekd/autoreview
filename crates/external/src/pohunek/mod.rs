@@ -62,8 +62,11 @@ const DAEMON_ERROR_MARKER: &str = "daemon error: ";
 /// Prefix of the daemon codes of a package command that did not run.
 const COMMAND_CODE_PREFIX: &str = "command_";
 
+/// Capability of `host inspect` that says whether `session new` takes `--fetch-ref`.
+const FETCH_REF_CAPABILITY: &str = "session_new_fetch_ref_supported";
+
 /// Field names of the pohunek JSON, in lower case; a key that only differs in case is refused.
-const KNOWN_KEYS: [&str; 30] = [
+const KNOWN_KEYS: [&str; 31] = [
     "ok",
     "err",
     "code",
@@ -94,6 +97,7 @@ const KNOWN_KEYS: [&str; 30] = [
     "data_base64",
     "has_more",
     "timed_out",
+    FETCH_REF_CAPABILITY,
 ];
 
 /// One project of `pohunek project list --json`.
@@ -400,6 +404,41 @@ pub(crate) async fn host_routes(
 ) -> Result<Vec<ProjectRoute>, Error> {
     let output = pohunek_call(config, cancel, &projects_arguments(host)).await?;
     route_candidates(host, &config.github_host, repository, sources, &output)
+}
+
+/// Returns the arguments of `host inspect` on `host`, which names the host itself.
+fn host_inspect_arguments(host: &str) -> Vec<String> {
+    ["host", "inspect", host, "--json"]
+        .map(str::to_owned)
+        .to_vec()
+}
+
+/// Reports whether the `host inspect` `output` advertises the fetch of an extra ref.
+///
+/// Only the JSON value `true` is support: an absent, `null`, `false`, text or number value is
+/// not, because an older CLI drops the key and an older daemon omits it.
+///
+/// # Errors
+///
+/// Returns `pohunek_response_invalid` when the output holds no `ok` object.
+pub(crate) fn fetch_ref_from_output(output: &str) -> Result<bool, Error> {
+    let capabilities: Value = decode_ok(output).ok_or_else(response_invalid)?;
+    let Value::Object(map) = capabilities else {
+        return Err(response_invalid());
+    };
+    Ok(map.get(FETCH_REF_CAPABILITY) == Some(&Value::Bool(true)))
+}
+
+/// Reports whether the daemon of `host` fetches an extra ref when a session starts.
+///
+/// One `host inspect` call; a failed call is the pohunek failure of the call.
+pub(crate) async fn fetch_ref_supported(
+    config: &Config,
+    cancel: &CancellationToken,
+    host: &str,
+) -> Result<bool, Error> {
+    let output = pohunek_call(config, cancel, &host_inspect_arguments(host)).await?;
+    fetch_ref_from_output(&output)
 }
 
 /// Returns the arguments of the host-state command on `host`, limited to `timeout`.
@@ -819,7 +858,9 @@ fn is_error_code(text: &str) -> bool {
 mod tests {
     use std::ffi::OsString;
 
-    use super::local_environment;
+    use autoreview_engine::error_code;
+
+    use super::{fetch_ref_from_output, local_environment};
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items
@@ -854,5 +895,68 @@ mod tests {
                 ("PAGER", "cat"),
             ])
         );
+    }
+
+    /// Only an advertised `true` enables the head fetch; an older CLI or daemon omits the key
+    /// (#255).
+    #[test]
+    fn fetch_ref_capability_is_only_an_advertised_true() {
+        let runtimes = r#""runtimes":[{"agent":"claude","available":true}]"#;
+        let inspect = |capability: &str| {
+            let ok = format!(r#"{{"daemon_version":"0.43.0",{runtimes}{capability}}}"#);
+            format!(r#"{{"cli_version":"0.43.0","protocol":{{"min":5,"max":5}},"ok":{ok}}}"#)
+        };
+        let cases = [
+            (
+                inspect(r#","session_new_fetch_ref_supported":true"#),
+                Ok(true),
+            ),
+            (
+                inspect(r#","session_new_fetch_ref_supported":false"#),
+                Ok(false),
+            ),
+            (inspect(""), Ok(false)),
+            (
+                inspect(r#","session_new_fetch_ref_supported":null"#),
+                Ok(false),
+            ),
+            (
+                inspect(r#","session_new_fetch_ref_supported":"true""#),
+                Ok(false),
+            ),
+            (
+                inspect(r#","session_new_fetch_ref_supported":1"#),
+                Ok(false),
+            ),
+            (
+                inspect(r#","session_new_fetch_ref_supported":[true]"#),
+                Ok(false),
+            ),
+            (
+                inspect(r#","Session_New_Fetch_Ref_Supported":true"#),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                r#"{"ok":null,"session_new_fetch_ref_supported":true}"#.to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                r#"{"ok":[{"session_new_fetch_ref_supported":true}]}"#.to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                r#"{"err":{"code":"host_unreachable"}}"#.to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                "pohunek 0.43.0\n".to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+        ];
+        for (output, want) in cases {
+            let got = fetch_ref_from_output(&output);
+            let got = got.map_err(|error| error_code(&error).to_owned());
+            assert_eq!(got, want.map_err(str::to_owned), "{output}");
+        }
     }
 }

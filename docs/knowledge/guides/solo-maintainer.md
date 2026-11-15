@@ -155,9 +155,11 @@ request is sent to the review account.
 
 1. The author is not in `logins` and has no write permission, so the untrusted
    section applies: the `light` pipeline runs Codex from the base checkout.
-   The head of PR #59 must already be in the project repository on the review
-   host (`git fetch origin refs/pull/59/head` there), or the adapter refuses the
-   run (see [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
+   The session start fetches the head of PR #59 with pohunek 0.43.0 or later
+   (CLI and the review host's daemon). With an older pohunek it must already be
+   in the project repository on the review host
+   (`git fetch origin refs/pull/59/head` there), or the adapter refuses the run (see
+   [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
 2. The outcome is a comment, whatever the findings are. The engine never
    requests changes or approves for this author class.
 3. The author class is resolved when the review is dispatched and stored with

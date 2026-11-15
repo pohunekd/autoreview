@@ -100,8 +100,10 @@ Key lines:
 - `on_clean: await` keeps the agent's work behind a person's approval.
 - The untrusted section gives anyone else a comment from the base checkout.
   Its Codex reviewer needs the pull request head in the project repository on
-  the review host (`git fetch origin refs/pull/<n>/head` there), or the adapter
-  refuses the run (see [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
+  the review host. The session start fetches it with pohunek 0.43.0 or later
+  (CLI and daemon); with an older pohunek run
+  `git fetch origin refs/pull/<n>/head` there, or the adapter refuses the run (see
+  [Codex checkout refused](../runbooks/troubleshooting.md#codex-checkout-refused)).
 
 ## How the agent's login is matched
 

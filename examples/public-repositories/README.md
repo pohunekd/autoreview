@@ -8,8 +8,9 @@ out from the pull request.
 - **`pohunekd/*`:** label `ai:review`; maintainers (permission `maintain` or
   above) get a Sonnet review that can request changes
 - **Untrusted authors and forks:** Codex review from the base checkout, comment only.
-  The pull request head must already be in the project repository on the review
-  host (`git fetch origin refs/pull/<n>/head` there); see
+  The session start fetches the pull request head with pohunek 0.43.0 or later
+  (CLI and daemon); with an older pohunek it must already be in the project
+  repository on the review host (`git fetch origin refs/pull/<n>/head` there); see
   [Codex checkout refused](../../docs/knowledge/runbooks/troubleshooting.md#codex-checkout-refused)
 - **`zajca/pohunek`:** same label, write-permission authors only; everyone else is skipped
 

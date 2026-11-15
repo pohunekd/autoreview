@@ -299,9 +299,9 @@ status 64 on a host without it. It has two parts:
     refused.
     The adapter reads only the local repository: no network, no write (its git
     calls run with `--no-optional-locks`, so `git status` leaves the index
-    alone). Pohunek fetches only the base branch, and the read-only Codex
-    sandbox cannot fetch, so the head commit must already be in the repository
-    (see
+    alone). The read-only Codex sandbox cannot fetch, so the head commit must
+    already be in the repository: the session start fetches it with pohunek
+    0.43.0 or later, an older pohunek fetches only the base branch (see
     [troubleshooting](../runbooks/troubleshooting.md#codex-checkout-refused)). The
     request tells Codex that the worktree is the base and to read the change
     with `git diff <base>...<head>` and `git show <head>:<path>`.

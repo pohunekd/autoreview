@@ -8,8 +8,9 @@ like any other pull request.
 - **Ready drafts from:** `devin-ai-integration`, `copilot-swe-agent`
 - **Reviewer:** Sonnet for the agents and other trusted authors; Codex for
   untrusted authors (comment only). Codex needs the pull request head in the
-  project repository on the review host (`git fetch origin refs/pull/<n>/head`
-  there); see
+  project repository on the review host; the session start fetches it with
+  pohunek 0.43.0 or later (CLI and daemon), otherwise run
+  `git fetch origin refs/pull/<n>/head` there; see
   [Codex checkout refused](../../docs/knowledge/runbooks/troubleshooting.md#codex-checkout-refused)
 - **Outcome:** blocking findings request changes; a clean review waits for `autoreview approve`
 

@@ -234,6 +234,15 @@ pub trait Integrations {
         timeout: Duration,
     ) -> impl Future<Output = Result<HostCapacity, Error>> + Send;
 
+    /// Reports whether one pohunek host fetches an extra ref when a session starts.
+    ///
+    /// Only an advertised `session_new_fetch_ref_supported` of `true` is support.
+    fn fetch_ref_supported(
+        &self,
+        cancel: &CancellationToken,
+        host: &str,
+    ) -> impl Future<Output = Result<bool, Error>> + Send;
+
     /// Starts the reviewer session, or returns the live session with the same name.
     fn ensure_session(
         &self,
@@ -406,6 +415,11 @@ pub struct SessionRequest {
     /// Not serialized: it comes from the configuration, so the request JSON leaves it out.
     #[serde(skip)]
     pub branch_prefix: String,
+    /// Whether the session start fetches the pull request head at the trusted head SHA.
+    ///
+    /// Not serialized: it follows the host's capability at each start attempt.
+    #[serde(skip)]
+    pub fetch_head: bool,
 }
 
 autoreview_go_compat::object_only_serde!(SessionRequest);
@@ -427,10 +441,16 @@ impl SessionRequest {
     #[must_use]
     pub fn base_ref(&self) -> String {
         if self.checkout == Checkout::Head {
-            format!("refs/pull/{}/head", self.pull_request.number)
+            self.head_ref()
         } else {
             self.pull_request.base_branch.clone()
         }
+    }
+
+    /// Returns the ref of the pull request head on the GitHub remote.
+    #[must_use]
+    pub fn head_ref(&self) -> String {
+        format!("refs/pull/{}/head", self.pull_request.number)
     }
 
     fn token(&self) -> String {

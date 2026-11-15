@@ -15,7 +15,7 @@ use autoreview_engine::integrations::SessionRequest;
 use autoreview_engine::model::SessionIdentity;
 use autoreview_engine::{Error, error_code};
 use autoreview_go_compat::{null_default, null_entries};
-use autoreview_schedule::diagnostic::{SessionLoss, fetch_failure};
+use autoreview_schedule::diagnostic::{SessionLoss, fetch_failure, head_fetch_failure};
 use autoreview_schedule::metadata::{WorkSession, metadata_args};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -34,6 +34,9 @@ const SESSION_LOST: &str = "pohunek_session_lost";
 
 /// Error code of a rejected session whose removal failed.
 const SESSION_CLEANUP_FAILED: &str = "pohunek_session_cleanup_failed";
+
+/// Error code of a session start that failed for any reason but its head fetch.
+const SESSION_START_FAILED: &str = "pohunek_session_start_failed";
 
 /// One session of `pohunek session list --json`.
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -129,7 +132,8 @@ pub(crate) fn session_list_arguments(host: &str) -> Vec<String> {
 /// Returns the argument list of `session new` for the reviewer session of `request`.
 ///
 /// The list holds the request timeout in milliseconds, the terminal size and the session group
-/// metadata. The prompt is not part of the list; it is written to the child's stdin.
+/// metadata, and with `fetch_head` the pull request head ref and the trusted head SHA. The
+/// prompt is not part of the list; it is written to the child's stdin.
 pub(crate) fn start_arguments(
     request: &SessionRequest,
     group: &str,
@@ -177,6 +181,12 @@ pub(crate) fn start_arguments(
         rows,
         "--input-stdin".to_owned(),
     ];
+    if request.fetch_head {
+        arguments.push("--fetch-ref".to_owned());
+        arguments.push(request.head_ref());
+        arguments.push("--fetch-commit".to_owned());
+        arguments.push(request.pull_request.head_sha.clone());
+    }
     for item in metadata {
         arguments.push(item);
     }
@@ -345,16 +355,14 @@ where
         Err(error) => {
             let output = error.stdout().to_owned();
             let code = failure_code(&output);
+            let (name, permanent) =
+                head_fetch_failure(&code).unwrap_or((SESSION_START_FAILED, false));
             let cause: BoxError = if code.is_empty() {
                 Box::new(error)
             } else {
                 Box::new(Error::pohunek_code(code, Box::new(error)))
             };
-            Err(Error::workflow(
-                "pohunek_session_start_failed",
-                false,
-                Some(cause),
-            ))
+            Err(Error::workflow(name, permanent, Some(cause)))
         }
         Ok(_) => Err(response_invalid()),
     }

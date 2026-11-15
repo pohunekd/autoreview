@@ -206,9 +206,10 @@ A third run with the same `--dir` on the finished setup prints every step as
   first review as the [quickstart](quickstart.md) describes from step 9 on. A
   reviewer on a `checkout: base` pipeline (the examples use it) reads the change
   through git, so the pull request head must be in that project repository on
-  the review host: run `git -C <project repository> fetch origin
-  refs/pull/<n>/head` there before the review, or the review stops with
-  `review_head_unavailable`; see
+  the review host. With pohunek 0.43.0 or later, both the CLI and the review
+  host's daemon, the session start fetches it. With an older pohunek, run
+  `git -C <project repository> fetch origin refs/pull/<n>/head` there before
+  the review, or the review stops with `review_head_unavailable`; see
   [Head commit unavailable](../runbooks/troubleshooting.md#head-commit-unavailable).
 - After an upgrade of autoreview, run `autoreview profiles install` with the
   same flags for each profile, and `--pohunek-timeout-seconds`, which 0.3.0 and
