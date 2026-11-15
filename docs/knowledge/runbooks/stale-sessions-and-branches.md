@@ -51,7 +51,8 @@ a leftover. If a session is still running, check its output before you remove it
 [`autoreview prune-branches`](../../cli.md#autoreview-prune-branches) lists
 the branches under `session.branch_prefix` that no review needs, and deletes them with
 `--yes`. Run it on the machine that holds the store and the review host's repositories, as
-the user of the service, while `serve` runs or not:
+the user of the service, while `serve` runs or not. The repositories must be owned by that
+user ([details](../../cli.md#autoreview-prune-branches)):
 
 ```sh
 autoreview prune-branches --git-binary /usr/bin/git                    # list only

@@ -479,10 +479,18 @@ and the commit. A deletion runs `git update-ref --no-deref -d` with the listed c
 branch that moved since the listing stays and gets `"error": "git_command_failed"`. Restore a
 deleted branch with `git -C <path> branch <branch> <commit>` while the commit still exists.
 git runs without the system and the user configuration (`GIT_CONFIG_NOSYSTEM`,
-`GIT_CONFIG_GLOBAL=/dev/null`, no `HOME`), without hooks and file system monitor, and
-only in the repository at the root itself, never in one above it. A host whose pohunek calls
-fail is reported with the error code in `skipped`, and a repository whose git calls fail with
-it in `error`; the other hosts go on. A missing store database is `store_unavailable`.
+`GIT_CONFIG_GLOBAL=/dev/null`, no `HOME`), without the hooks directory
+(`core.hooksPath=/dev/null`) and file system monitor, and only in the repository at the root
+itself, never in one above it. From git 2.55, `hook.reference-transaction.enabled=false` also
+stops every `reference-transaction` hook that the repository configuration names; git 2.54
+reads the key as the switch of one hook of that name, and older git has no such hooks.
+
+The repositories must be owned by the user who runs the command: git reads `safe.directory`
+only from the system, the user and the command-line configuration, none of which sets it
+here, so a repository of another user fails with `git_command_failed`. A host whose pohunek
+calls fail is reported with the error code in `skipped`, and a repository whose git calls
+fail with it in `error`; the other hosts go on. A missing store database is
+`store_unavailable`.
 
 The document is printed in every case once the hosts were read. The command then exits with
 status 1 and logs `command failed` with `branch_prune_incomplete`, without a second object on
@@ -517,7 +525,7 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `state_entry_limit_exceeded` | The discovery state hit `schedule.state_entry_limit` |
 | `store_unavailable` | The SQLite store could not be opened or written |
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
-| `host_not_local`, `git_command_failed` | `prune-branches` skipped a host whose repositories are not on this machine, or a git call failed |
+| `host_not_local`, `git_command_failed` | `prune-branches` skipped a host whose repositories are not on this machine, or a git call failed (also for a repository owned by another user) |
 | `branch_prune_incomplete` | `prune-branches` printed its document and exits with status 1: a deletion failed, or the `--host` host or one of its repositories was skipped |
 | `stats_range_invalid` | `--since` or `--until` of `stats` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
 | `stats_range_too_long` | The `stats` range covers more than 366 days |
