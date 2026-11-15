@@ -219,10 +219,13 @@ pub struct Decision {
 }
 
 /// Applies durable completion evidence to a record after its workflows were cleaned up.
+///
+/// A completed review ends the streak of runs that spend no retry, so both of its counts are 0.
 pub fn reconcile_completed(mut record: Record, workflow_ids: &BTreeSet<String>) -> Record {
     if !record.workflow_id.is_empty() && workflow_ids.contains(&record.workflow_id) {
         record.phase = phase::COMPLETED.to_owned();
         record.error_code = String::new();
+        (record.usage_limited, record.fetch_mismatches) = (0, 0);
     }
     let mut retained = Vec::new();
     for workflow_id in record.blocking_workflows {
@@ -255,6 +258,7 @@ pub fn plan(
     let target_key = target.key();
     let target_identity = target.identity();
     let fresh = previous.identity != target_identity || previous.phase == phase::WITHDRAWN;
+    let mut withdrawn_handled = String::new();
     let mut r = if fresh {
         let mut blocking = previous.blocking_workflows.clone();
         if previous.phase == phase::RUNNING && !previous.workflow_id.is_empty() {
@@ -263,7 +267,7 @@ pub fn plan(
         // A new head of a pull request whose skip by the author limit was notified keeps the
         // code, so a skip of the new head sends no second notice.
         let skipped = skip_was_notified(&previous);
-        Record {
+        let mut record = Record {
             identity: target_identity.clone(),
             phase: phase::WAITING.to_owned(),
             due_at: due_after(now, policy.debounce)?,
@@ -285,7 +289,17 @@ pub fn plan(
             handled_fetch_mismatches: 0,
             continues: false,
             skip_notified: false,
+        };
+        // A withdrawn record of this identity keeps its streak counts: neither its head nor its
+        // request changed, and a failed listing of its candidate is enough to withdraw it.
+        if previous.identity == target_identity {
+            record.usage_limited = previous.usage_limited;
+            record.fetch_mismatches = previous.fetch_mismatches;
+            record.handled_usage_limited = previous.handled_usage_limited;
+            record.handled_fetch_mismatches = previous.handled_fetch_mismatches;
+            withdrawn_handled = previous.handled_workflow;
         }
+        record
     } else {
         previous
     };
@@ -364,6 +378,12 @@ pub fn plan(
                     r.usage_limited = r.handled_usage_limited;
                     r.fetch_mismatches = r.handled_fetch_mismatches;
                 } else {
+                    // The run that a withdrawn record handled counts once, from its snapshots.
+                    if !withdrawn_handled.is_empty() && withdrawn_handled == latest_run.workflow_id
+                    {
+                        r.usage_limited = r.handled_usage_limited;
+                        r.fetch_mismatches = r.handled_fetch_mismatches;
+                    }
                     r.handled_workflow = latest_run.workflow_id.clone();
                     r.handled_retries = r.retries;
                     r.handled_usage_limited = r.usage_limited;
@@ -1543,6 +1563,65 @@ mod tests {
         plan_on_base(away.record, target, runs, &main, workflow_id, now, policy).expect("plan")
     }
 
+    /// Publishes a successful run of `record` on `main` and retargets the head to `dev` before
+    /// discovery plans the success; the run on `dev` ends with a usage limit at `now`.
+    fn published_then_limited_on_dev(
+        record: Record,
+        target: &Target,
+        runs: &mut Vec<Run>,
+        now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let ended = |record: &Record, failure: &str| Run {
+            target: target.clone(),
+            workflow_id: format!("w{}", record.attempt),
+            attempt: record.attempt,
+            status: "completed".to_owned(),
+            result: if failure.is_empty() {
+                "success"
+            } else {
+                "failure"
+            }
+            .to_owned(),
+            failure: failure.to_owned(),
+            ..Run::default()
+        };
+        let earlier = now - policy.debounce;
+        let due = plan(record, target, runs, earlier, policy).expect("plan");
+        assert!(due.dispatch, "not dispatched on main: {due:?}");
+        let mut running = due.record;
+        running.workflow_id = format!("w{}", running.attempt);
+        runs.push(ended(&running, ""));
+        let published = BTreeSet::from([running.workflow_id.clone()]);
+        let completed = reconcile_completed(running, &published);
+        let on_main: BTreeMap<String, String> = (runs.iter())
+            .map(|run| (run.workflow_id.clone(), "main".to_owned()))
+            .collect();
+        let workflow_id = |attempt: i64| format!("w{attempt}");
+        let dev = Retarget {
+            base_branch: "dev",
+            run_bases: &on_main,
+            published_workflow: "published",
+        };
+        let away = plan_retarget(&completed, target, runs, &dev, workflow_id, earlier, policy)
+            .expect("plan")
+            .expect("no run reviewed dev");
+        let due = plan_retarget(&away.record, target, runs, &dev, workflow_id, now, policy)
+            .expect("plan")
+            .expect("no run reviewed dev");
+        assert!(due.dispatch, "not dispatched on dev: {due:?}");
+        let mut limited = due.record;
+        limited.workflow_id = format!("w{}", limited.attempt);
+        runs.push(ended(&limited, REVIEWER_USAGE_LIMITED));
+        let mut with_dev = on_main.clone();
+        with_dev.insert(limited.workflow_id.clone(), "dev".to_owned());
+        let dev = Retarget {
+            run_bases: &with_dev,
+            ..dev
+        };
+        plan_on_base(limited, target, runs, &dev, workflow_id, now, policy).expect("plan")
+    }
+
     // A run that a usage limit ended waits on the usage limit delays and keeps the retry budget;
     // it notifies on the first limited run of its streak and when the delays are spent. A
     // fetch mismatch and a usage limit share one streak, so neither resets the other's count;
@@ -1553,12 +1632,14 @@ mod tests {
         const G: &str = "github_request_failed";
         const M: &str = HEAD_FETCH_MISMATCH;
         const BACK: &str = "retarget away and back";
+        const GONE: &str = "withdrawn and back";
+        const PUBLISHED: &str = "published, then limited on another base branch";
         let wait = |notify: bool, minutes: i64| ("retry_wait", notify, minutes);
         let stop = ("failed", true, 0);
         // Each case: its name, the ending of each run, the phase, notice and delay after each, and
         // the retries spent at the end.
         type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool, i64)], i64);
-        let cases: [Case<'_>; 9] = [
+        let cases: [Case<'_>; 11] = [
             (
                 "stops after its own delays",
                 &[U, U, U, U],
@@ -1660,6 +1741,24 @@ mod tests {
                 ],
                 0,
             ),
+            (
+                "a withdrawal and return keeps the count",
+                &[U, U, GONE, U, U],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(false, 30),
+                    wait(false, 60),
+                    stop,
+                ],
+                0,
+            ),
+            (
+                "a published success ends the count before a retarget",
+                &[U, U, PUBLISHED],
+                &[wait(true, 15), wait(false, 30), wait(true, 15)],
+                0,
+            ),
         ];
         for (name, endings, want, retries) in cases {
             let (target, mut now, policy) = fixture();
@@ -1673,6 +1772,15 @@ mod tests {
                 }
                 let decision = if *ending == BACK {
                     away_and_back(record, &target, &runs, now, &policy)
+                } else if *ending == GONE {
+                    // Discovery withdraws a waiting record whose candidate it did not list.
+                    let withdrawn = Record {
+                        phase: phase::WITHDRAWN.to_owned(),
+                        ..record
+                    };
+                    plan(withdrawn, &target, &runs, now, &policy).expect("plan")
+                } else if *ending == PUBLISHED {
+                    published_then_limited_on_dev(record, &target, &mut runs, now, &policy)
                 } else {
                     dispatch_and_end(record, &target, &mut runs, ending, now, &policy)
                 };

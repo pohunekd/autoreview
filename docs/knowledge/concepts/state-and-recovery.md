@@ -123,9 +123,12 @@ These rules also apply to the layers:
   streak, and each count is the number of its own code in it. Neither code
   resets the other's count, and any other ending of a run ends the streak, so
   a head that alternates the two stops at the first bound it reaches. The
-  schedule record of the head keeps both counts, like its retries, so a
-  restart, a pruned review, a retarget and `autoreview retry` neither reset
-  them nor count a run twice.
+  schedule record of the head keeps both counts, so a restart, a pruned
+  review, a retarget, a withdrawal that is listed again on the next pass and
+  `autoreview retry` neither reset them nor count a run twice. A published
+  review sets both to 0. A withdrawn record that is still not listed on the
+  next pass is dropped, and the head then starts both counts again, as it does
+  its retries.
 - **A rule's author limit is read from the stored reviews.** A new start over a
   rule's `author_limit` waits for the window or is skipped (`author_limit_reached`).
   The count is the author's stored reviews of the window plus the starts of the
