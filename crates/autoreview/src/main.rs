@@ -11,6 +11,7 @@ mod mcp_server;
 mod metrics_server;
 mod profiles;
 mod prune_branches;
+mod store_mode;
 
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -433,11 +434,13 @@ async fn run_engine(
 /// Prints the policy digest, the agent profiles and the pohunek version, and with `check` each
 /// credential's check.
 ///
-/// Without `check`, it makes no GitHub call; it always runs `pohunek --version`.
+/// Without `check`, it makes no GitHub call; it always runs `pohunek --version`. It first
+/// checks that the store and its directory are private to their owner.
 async fn validate(config: &Config, check: bool, cancel: &CancellationToken) -> Result<(), Error> {
     let Some(policy) = config.policy.as_ref() else {
         return Err(Error::config(CONFIGURATION_INVALID, POLICY_KEY, None));
     };
+    store_mode::check(Path::new(&config.state_db_path))?;
     let external = External::new(config.clone())?;
     let pohunek_version = external.pohunek_version(cancel).await?;
     let credentials = if check {
