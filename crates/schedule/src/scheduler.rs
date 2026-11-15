@@ -751,8 +751,9 @@ mod tests {
     use time::{Duration, OffsetDateTime};
 
     use super::{
-        Decision, HEAD_FETCH_MISMATCH, Policy, Record, Retarget, Run, Target, after_failure, plan,
-        plan_on_base, plan_retarget, reconcile_completed, retryable, wait_for_host,
+        Decision, HEAD_FETCH_MISMATCH, Policy, Record, Retarget, Run, Target, after_failure,
+        head_mismatch_notification, plan, plan_on_base, plan_retarget, reconcile_completed,
+        retryable, wait_for_host,
     };
     use crate::diagnostic::{diagnostic, failure_explanation};
     use crate::phase;
@@ -1339,6 +1340,122 @@ mod tests {
                 );
             }
         }
+    }
+
+    // The mismatch count belongs to one head: a new head starts its own, a retarget keeps it,
+    // and the stop notice names both commits (#416).
+    #[test]
+    fn head_fetch_mismatch_count_follows_the_head() {
+        const M: &str = HEAD_FETCH_MISMATCH;
+        let wait = ("waiting", false);
+        let stop = ("failed", true);
+
+        // A new head seen by discovery is a new identity and starts its own count.
+        let (target, mut now, policy) = fixture();
+        let mut runs = Vec::new();
+        let mut record = Record::default();
+        for _ in 0..3 {
+            now += Duration::hours(1);
+            record = dispatch_and_end(record, &target, &mut runs, M, now, &policy).record;
+        }
+        let mut moved = target.clone();
+        moved.head_sha = "b".repeat(40);
+        for want in [wait, wait, wait, stop] {
+            now += Duration::hours(1);
+            let decision = dispatch_and_end(record, &moved, &mut runs, M, now, &policy);
+            assert!(
+                (decision.record.phase.as_str(), decision.notify) == want,
+                "new head: {decision:?}"
+            );
+            record = decision.record;
+        }
+
+        // A retarget while the head waits does not reset the count of the head.
+        let (target, mut now, policy) = fixture();
+        let mut runs = Vec::new();
+        let mut record = Record::default();
+        for _ in 0..3 {
+            now += Duration::hours(1);
+            record = dispatch_and_end(record, &target, &mut runs, M, now, &policy).record;
+        }
+        let mut run_bases: BTreeMap<String, String> = runs
+            .iter()
+            .map(|run| (run.workflow_id.clone(), "main".to_owned()))
+            .collect();
+        let workflow_id = |attempt: i64| format!("w{attempt}");
+        let planned = {
+            let retarget = Retarget {
+                base_branch: "dev",
+                run_bases: &run_bases,
+                published_workflow: "published",
+            };
+            now += Duration::hours(1);
+            let first = plan_retarget(
+                &record,
+                &target,
+                &runs,
+                &retarget,
+                workflow_id,
+                now,
+                &policy,
+            )
+            .expect("plan")
+            .expect("a mismatch on another base branch reviewed nothing here");
+            now += policy.debounce;
+            let waited = &first.record;
+            plan_retarget(waited, &target, &runs, &retarget, workflow_id, now, &policy)
+                .expect("plan")
+                .expect("a mismatch on another base branch reviewed nothing here")
+        };
+        assert!(planned.dispatch, "retarget not dispatched: {planned:?}");
+        let mut record = planned.record;
+        record.workflow_id = format!("w{}", record.attempt);
+        runs.push(Run {
+            target: target.clone(),
+            workflow_id: record.workflow_id.clone(),
+            attempt: record.attempt,
+            status: "completed".to_owned(),
+            result: "failure".to_owned(),
+            failure: M.to_owned(),
+            ..Run::default()
+        });
+        run_bases.insert(record.workflow_id.clone(), "dev".to_owned());
+        let retarget = Retarget {
+            base_branch: "dev",
+            run_bases: &run_bases,
+            published_workflow: "published",
+        };
+        let on_dev = plan_retarget(
+            &record,
+            &target,
+            &runs,
+            &retarget,
+            workflow_id,
+            now,
+            &policy,
+        )
+        .expect("plan");
+        assert!(
+            on_dev.is_none(),
+            "the mismatch on dev was skipped: {on_dev:?}"
+        );
+        let decision = plan_on_base(record, &target, &runs, &retarget, workflow_id, now, &policy)
+            .expect("plan");
+        assert!(
+            decision.record.phase == "failed" && decision.notify,
+            "the retargeted head did not stop: {decision:?}"
+        );
+        let fetched = "c".repeat(40);
+        let text = head_mismatch_notification(&target, &decision.record, &fetched);
+        assert!(
+            text.contains(&target.head_sha) && text.contains(&fetched) && text.contains(M),
+            "{text}"
+        );
+        let unknown = head_mismatch_notification(&target, &decision.record, "");
+        assert!(
+            unknown.contains("Fetched commit: not reported."),
+            "{unknown}"
+        );
     }
 
     #[test]
