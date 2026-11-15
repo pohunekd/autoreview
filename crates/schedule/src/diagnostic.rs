@@ -200,7 +200,7 @@ pub fn failure_explanation(code: &str) -> &'static str {
             "Git could not fetch the pull request head on the review host: a network, authentication or timeout failure, or Git older than 2.29 there. Check GitHub access and the Git version on the review host."
         }
         HEAD_FETCH_MISMATCH => {
-            "At every start of the review, `refs/pull/<n>/head` fetched on the review host was at another commit than the head GitHub reports for the pull request, so GitHub did not update the ref. Check the pull request on GitHub, then retry this PR or push a new commit."
+            "At each of the latest starts of the review that a usage limit did not end, `refs/pull/<n>/head` fetched on the review host was at another commit than the head GitHub reports for the pull request, so GitHub did not update the ref. Check the pull request on GitHub, then retry this PR or push a new commit."
         }
         "pohunek_session_warning" => {
             "The reviewer session reported a warning other than a failed base fetch, for example an existing branch checked out instead of the review base, or a failed setup script or hook. The session was removed; check the project's setup scripts and hooks and stale branches under `session.branch_prefix` on the review host before retrying."
