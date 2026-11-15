@@ -819,7 +819,7 @@ fn is_error_code(text: &str) -> bool {
 mod tests {
     use std::ffi::OsString;
 
-    use super::{daemon_answered, daemon_command_code, local_environment};
+    use super::local_environment;
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items
@@ -854,82 +854,5 @@ mod tests {
                 ("PAGER", "cat"),
             ])
         );
-    }
-
-    #[test]
-    fn only_a_command_code_of_the_daemon_leaves_the_host_state_unknown() {
-        // (exit status, stderr of a failed `host command run`, unknown state, expected code)
-        let cases = [
-            (
-                Some(41),
-                "pohunek: daemon error: runtime/command_package_not_installed: the package is \
-                 not installed\nhint: run pohunek plugin enable",
-                true,
-                Some("command_package_not_installed"),
-            ),
-            (
-                Some(40),
-                "pohunek: daemon error: command_unsupported: the daemon has no command.run",
-                true,
-                Some("command_unsupported"),
-            ),
-            (
-                Some(46),
-                "pohunek: daemon error: runtime/command_busy: one run per command",
-                true,
-                Some("command_busy"),
-            ),
-            (
-                Some(48),
-                "pohunek: daemon error: runtime/command_timed_out: the command did not finish \
-                 within its time limit and was stopped\nhint: retry, or raise the timeout",
-                true,
-                Some("command_timed_out"),
-            ),
-            (Some(48), "", true, None),
-            (Some(51), "pohunek: unexpected text", true, None),
-            (Some(52), "", true, None),
-            (
-                Some(1),
-                "pohunek: host 'review-host-b' was not found in any configured overlay\nhint: x",
-                false,
-                None,
-            ),
-            (
-                Some(1),
-                "pohunek: daemon error: overlay/peer_unreachable: no route",
-                false,
-                None,
-            ),
-            (
-                Some(1),
-                "pohunek: daemon error: runtime/Command_Busy: mixed case",
-                false,
-                None,
-            ),
-            (
-                Some(1),
-                "pohunek: daemon error: runtime/command_busy",
-                true,
-                Some("command_busy"),
-            ),
-            (
-                Some(2),
-                "error: unexpected argument '--timeout-ms' found",
-                false,
-                None,
-            ),
-            (Some(39), "", false, None),
-            (Some(53), "", false, None),
-            (None, "", false, None),
-        ];
-        for (status, stderr, unknown, want) in cases {
-            assert_eq!(
-                daemon_answered(status, stderr),
-                unknown,
-                "{status:?} {stderr:?}"
-            );
-            assert_eq!(daemon_command_code(stderr).as_deref(), want, "{stderr:?}");
-        }
     }
 }

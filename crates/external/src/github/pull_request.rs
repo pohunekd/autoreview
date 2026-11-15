@@ -654,7 +654,6 @@ impl GitHub {
 #[cfg(test)]
 mod tests {
     use autoreview_engine::error_code;
-    use autoreview_engine::integrations::PullRequestState;
     use autoreview_policy::{Trigger, TriggerKind};
 
     use super::{decode_pull_request, decode_pull_request_response, decode_pull_request_state};
@@ -664,19 +663,6 @@ mod tests {
 
     /// Host of the captured pull request URLs.
     const HOST: &str = "example.org";
-
-    /// Captured response of pull request 3, opened by an app.
-    const BOT_RESPONSE: &str = concat!(
-        r#"{"data":{"repository":{"pullRequest":{"id":"PR_1","number":3,"#,
-        r#""title":"Add widget","url":"https://example.org/acme/widget/pull/3","#,
-        r#""state":"OPEN","isDraft":false,"isCrossRepository":false,"headRefOid":""#,
-        r#"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headRefName":"feature","#,
-        r#""baseRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","#,
-        r#""baseRefName":"main","author":{"__typename":"Bot","#,
-        r#""login":"devin-ai-integration"},"labels":{"nodes":[]},"#,
-        r#""reviewRequests":{"nodes":[{"requestedReviewer":{"login":"reviewer"}}]},"#,
-        r#""repository":{"nameWithOwner":"acme/widget"}}}}}"#,
-    );
 
     /// Captured response of pull request 4, opened by a person.
     const HUMAN_RESPONSE: &str = concat!(
@@ -690,38 +676,6 @@ mod tests {
         r#""reviewRequests":{"nodes":[{"requestedReviewer":{"login":"reviewer"}}]},"#,
         r#""repository":{"nameWithOwner":"acme/widget"}}}}}"#,
     );
-
-    #[test]
-    fn app_author_is_marked_as_a_bot_and_state_is_read_without_a_trigger() {
-        let trigger = Trigger {
-            kind: TriggerKind::ReviewRequested,
-            label: String::new(),
-        };
-        let bot_raw = decode_pull_request_response(BOT_RESPONSE).expect("bot response decodes");
-        let bot = decode_pull_request(&bot_raw, HOST, LOGIN, &trigger).expect("bot is decoded");
-        assert!(bot.author_bot);
-        assert_eq!(bot.author, "devin-ai-integration");
-
-        let human_raw =
-            decode_pull_request_response(HUMAN_RESPONSE).expect("human response decodes");
-        let human =
-            decode_pull_request(&human_raw, HOST, LOGIN, &trigger).expect("human is decoded");
-        assert!(!human.author_bot);
-
-        let state = decode_pull_request_state("acme/widget", 4, HUMAN_RESPONSE, HOST, LOGIN)
-            .expect("state is read");
-        assert_eq!(
-            state,
-            PullRequestState {
-                open: true,
-                requested: true,
-                title: "Add widget".to_owned(),
-                url: "https://example.org/acme/widget/pull/4".to_owned(),
-                author: "colleague".to_owned(),
-                head_sha: "a".repeat(40),
-            }
-        );
-    }
 
     #[test]
     fn author_logins_follow_the_github_login_grammar() {

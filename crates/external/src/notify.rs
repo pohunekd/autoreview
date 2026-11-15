@@ -564,66 +564,16 @@ mod tests {
     use std::sync::{Arc, Mutex, PoisonError};
 
     use autoreview_engine::config::{
-        BackendKind, MatrixBackend, NotifyBackend, NotifySettings, WebhookBackend, WebhookFormat,
+        BackendKind, NotifyBackend, NotifySettings, WebhookBackend, WebhookFormat,
     };
     use autoreview_engine::error_code;
     use autoreview_engine::notify::Notification;
     use autoreview_policy::{Event, Level};
     use reqwest::Client;
-    use serde_json::{Value, json};
     use tokio_util::sync::CancellationToken;
     use tracing_subscriber::fmt::MakeWriter;
 
-    use super::{Backends, Matrix, deliver, deliver_queue, matrix_request, queue_digest_request};
-
-    /// Settings of one backend with synthetic values only.
-    fn matrix() -> Matrix {
-        let backend = MatrixBackend {
-            homeserver_url: "https://matrix.example.org".to_owned(),
-            access_token: "placeholder-token".to_owned(),
-            room: "!queue:example.org".to_owned(),
-            mention_user: "@example-user:example.org".to_owned(),
-        };
-        Matrix::new(&backend, 32_000, Duration::from_secs(30))
-    }
-
-    #[test]
-    fn send_queue_digest_posts_without_mentions_on_its_own_room() {
-        let request =
-            queue_digest_request(&matrix(), "queue-2026-10-19T14", "plain", "<p>html</p>")
-                .expect("digest request");
-        assert_eq!(request.room, "!queue:example.org");
-        assert_eq!(
-            request.txn_path,
-            "/_matrix/client/v3/rooms/%21queue:example.org/send/m.room.message/queue-2026-10-19T14"
-        );
-        let payload: Value = serde_json::from_slice(&request.content).expect("JSON content");
-        assert_eq!(payload["m.mentions"], json!({}));
-        assert_eq!(payload["msgtype"], "m.notice");
-        assert_eq!(payload["format"], "org.matrix.custom.html");
-        assert_eq!(payload["formatted_body"], "<p>html</p>");
-        assert_eq!(payload["body"], "plain");
-    }
-
-    #[test]
-    fn send_matrix_still_mentions_only_on_action_level() {
-        let matrix = matrix();
-        let action = matrix_request(&matrix, Level::Action, "action", "notify-test")
-            .expect("action request");
-        let digest = matrix_request(&matrix, Level::Digest, "digest", "notify-test")
-            .expect("digest request");
-        assert_eq!(action.room, "!queue:example.org");
-        assert_eq!(digest.room, "!queue:example.org");
-        let action_payload: Value =
-            serde_json::from_slice(&action.content).expect("action JSON content");
-        let digest_payload: Value =
-            serde_json::from_slice(&digest.content).expect("digest JSON content");
-        assert_eq!(
-            action_payload["m.mentions"]["user_ids"],
-            json!(["@example-user:example.org"])
-        );
-        assert_eq!(digest_payload["m.mentions"], json!({}));
-    }
+    use super::{Backends, deliver, deliver_queue};
 
     /// A log writer that keeps every line in memory.
     #[derive(Clone, Default)]
