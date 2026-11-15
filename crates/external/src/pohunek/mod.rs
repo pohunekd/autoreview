@@ -858,7 +858,9 @@ fn is_error_code(text: &str) -> bool {
 mod tests {
     use std::ffi::OsString;
 
-    use super::local_environment;
+    use autoreview_engine::error_code;
+
+    use super::{fetch_ref_from_output, local_environment};
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items
@@ -893,5 +895,68 @@ mod tests {
                 ("PAGER", "cat"),
             ])
         );
+    }
+
+    /// Only an advertised `true` enables the head fetch; an older CLI or daemon omits the key
+    /// (#255).
+    #[test]
+    fn fetch_ref_capability_is_only_an_advertised_true() {
+        let runtimes = r#""runtimes":[{"agent":"claude","available":true}]"#;
+        let inspect = |capability: &str| {
+            let ok = format!(r#"{{"daemon_version":"0.43.0",{runtimes}{capability}}}"#);
+            format!(r#"{{"cli_version":"0.43.0","protocol":{{"min":5,"max":5}},"ok":{ok}}}"#)
+        };
+        let cases = [
+            (
+                inspect(r#","session_new_fetch_ref_supported":true"#),
+                Ok(true),
+            ),
+            (
+                inspect(r#","session_new_fetch_ref_supported":false"#),
+                Ok(false),
+            ),
+            (inspect(""), Ok(false)),
+            (
+                inspect(r#","session_new_fetch_ref_supported":null"#),
+                Ok(false),
+            ),
+            (
+                inspect(r#","session_new_fetch_ref_supported":"true""#),
+                Ok(false),
+            ),
+            (
+                inspect(r#","session_new_fetch_ref_supported":1"#),
+                Ok(false),
+            ),
+            (
+                inspect(r#","session_new_fetch_ref_supported":[true]"#),
+                Ok(false),
+            ),
+            (
+                inspect(r#","Session_New_Fetch_Ref_Supported":true"#),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                r#"{"ok":null,"session_new_fetch_ref_supported":true}"#.to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                r#"{"ok":[{"session_new_fetch_ref_supported":true}]}"#.to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                r#"{"err":{"code":"host_unreachable"}}"#.to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                "pohunek 0.43.0\n".to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+        ];
+        for (output, want) in cases {
+            let got = fetch_ref_from_output(&output);
+            let got = got.map_err(|error| error_code(&error).to_owned());
+            assert_eq!(got, want.map_err(str::to_owned), "{output}");
+        }
     }
 }
