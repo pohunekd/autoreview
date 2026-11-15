@@ -417,10 +417,14 @@ pub(crate) fn decode_pull_request(
         || !url_matches(&pull_request.url, host, &repository, pull_request.number)
         || !sha_valid(&pull_request.head_sha)
         || !sha_valid(&pull_request.base_sha)
-        || !branch_valid(&pull_request.base_branch)
+        || pull_request.base_branch.is_empty()
         || !author_valid(&author)
     {
         return Err(response_invalid(None));
+    }
+    // GitHub allows base branch names that the trusted request lines cannot hold.
+    if !branch_valid(&pull_request.base_branch) {
+        return Err(Error::workflow("base_branch_unsupported", true, None));
     }
     if raw.is_draft {
         return Err(Error::workflow("pull_request_draft", true, None));

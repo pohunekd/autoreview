@@ -45,7 +45,7 @@ none of them holds a character that a reader takes as a line break.
 The trusted context also holds the base branch name, which anyone with push
 access to the repository chooses. Discovery accepts only a name of 1 to 255
 ASCII letters, digits, `.`, `_`, `/` and `-` without `..`, and refuses any
-other pull request with `github_response_invalid`. A review whose stored input
+other pull request with `base_branch_unsupported`. A review whose stored input
 names another base branch fails with `review_input_invalid` before it builds a
 request, so no trusted line holds a line break from a branch name.
 
