@@ -73,6 +73,22 @@ pub async fn worktrees(
     git_call(config, cancel, git, root, &command).await
 }
 
+/// Lists the configuration that git reads in the repository at `root`, `key LF value` entries
+/// ended by NUL.
+///
+/// # Errors
+///
+/// Returns `git_command_failed` when the call fails.
+pub async fn config_entries(
+    config: &Config,
+    cancel: &CancellationToken,
+    git: &str,
+    root: &str,
+) -> Result<String, Error> {
+    let command = ["config", "--list", "-z"];
+    git_call(config, cancel, git, root, &command).await
+}
+
 /// Deletes `refname` in the repository at `root` only while it still points at `commit`.
 ///
 /// # Errors

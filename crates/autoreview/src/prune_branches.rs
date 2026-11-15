@@ -18,7 +18,8 @@ use autoreview_engine::config::Config;
 use autoreview_engine::store::{ReviewFilter, Store};
 use autoreview_engine::{Error, error_code};
 use autoreview_external::{
-    branch_refs, delete_ref, host_is_local, project_roots, session_branches, worktrees,
+    branch_refs, config_entries, delete_ref, host_is_local, project_roots, session_branches,
+    worktrees,
 };
 use clap::Args;
 use serde::Serialize;
@@ -27,6 +28,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::command_invalid;
 use plan::{BranchPlan, HEADS, Owners, Rules, Verdict};
+
+/// Error of a repository whose configuration names a hook that a deletion would run.
+const REPOSITORY_HOOK_CONFIGURED: &str = "repository_hook_configured";
 
 /// Reason of a host whose repositories are not on this machine.
 const HOST_NOT_LOCAL: &str = "host_not_local";
@@ -134,8 +138,8 @@ struct RepositoryReport {
 struct Listing {
     /// Repository root.
     path: String,
-    /// `git for-each-ref` and `git worktree list` output, or the error of the first that failed.
-    output: Result<(String, String), Error>,
+    /// `for-each-ref`, `worktree list` and `config --list` output, or the first error.
+    output: Result<(String, String, String), Error>,
 }
 
 /// Lists the review branches of the selected hosts and, with `--yes`, deletes the ones with
@@ -258,15 +262,23 @@ async fn list_host(
     })?;
     let mut listings = Vec::new();
     for path in roots {
-        let output = match branch_refs(config, cancel, git, &path).await {
-            Ok(refs) => worktrees(config, cancel, git, &path)
-                .await
-                .map(|trees| (refs, trees)),
-            Err(error) => Err(error),
-        };
+        let output = read_repository(config, cancel, git, &path).await;
         listings.push(Listing { path, output });
     }
     Ok(listings)
+}
+
+/// Reads the branches, the worktrees and the configuration of the repository at `root`.
+async fn read_repository(
+    config: &Config,
+    cancel: &CancellationToken,
+    git: &str,
+    root: &str,
+) -> Result<(String, String, String), Error> {
+    let refs = branch_refs(config, cancel, git, root).await?;
+    let trees = worktrees(config, cancel, git, root).await?;
+    let entries = config_entries(config, cancel, git, root).await?;
+    Ok((refs, trees, entries))
 }
 
 /// Plans the branches of one repository and, when `delete` is set, deletes the `delete` ones.
@@ -282,7 +294,7 @@ async fn prune_repository(
     rules: &Rules<'_>,
     delete: bool,
 ) -> RepositoryReport {
-    let (refs, trees) = match listing.output {
+    let (refs, trees, entries) = match listing.output {
         Ok(output) => output,
         Err(error) => {
             let path = listing.path.as_str();
@@ -294,6 +306,20 @@ async fn prune_repository(
             };
         }
     };
+    // git 2.54 runs a configured `reference-transaction` hook despite the event switch.
+    if plan::deletion_hook(&entries) {
+        let path = listing.path.as_str();
+        tracing::warn!(
+            host,
+            repository = path,
+            "prune repository skipped: hook configured"
+        );
+        return RepositoryReport {
+            error: REPOSITORY_HOOK_CONFIGURED.to_owned(),
+            path: listing.path,
+            branches: Vec::new(),
+        };
+    }
     let mut branches = plan::plan(&refs, &trees, rules);
     if delete {
         let path = listing.path.as_str();

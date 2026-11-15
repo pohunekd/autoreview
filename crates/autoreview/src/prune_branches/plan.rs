@@ -18,6 +18,9 @@ pub(crate) const HEADS: &str = "refs/heads/";
 /// Text before the ref of a `branch` field of `git worktree list --porcelain -z`.
 const WORKTREE_BRANCH: &str = "branch ";
 
+/// The hook event that `git update-ref` fires.
+const DELETION_EVENT: &str = "reference-transaction";
+
 /// Hex digits of the digest that follows [`WORKFLOW_ID_PREFIX`] in a workflow ID.
 const WORKFLOW_DIGEST_LEN: usize = 64;
 
@@ -194,4 +197,20 @@ fn workflow_id<'a>(branch: &'a str, prefix: &str) -> Option<&'a str> {
 /// Reports whether `elapsed` is at least `minimum`; a negative `elapsed` never is.
 fn elapsed_at_least(elapsed: time::Duration, minimum: Duration) -> bool {
     time::Duration::try_from(minimum).is_ok_and(|minimum| elapsed >= minimum)
+}
+
+/// Reports whether `entries` (`git config --list -z`) name a hook for the event of a deletion.
+///
+/// Every `hook.<name>.event` entry with that value counts, also one that a later empty value
+/// resets, so the check never misses a hook that git would run.
+pub(crate) fn deletion_hook(entries: &str) -> bool {
+    entries
+        .split('\0')
+        .filter_map(|entry| entry.split_once('\n'))
+        .any(|(key, value)| {
+            let event = key
+                .strip_prefix("hook.")
+                .is_some_and(|rest| rest.ends_with(".event"));
+            event && value.trim().eq_ignore_ascii_case(DELETION_EVENT)
+        })
 }
