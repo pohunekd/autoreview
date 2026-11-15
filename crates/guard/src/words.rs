@@ -247,3 +247,152 @@ const OVERRIDE_OBJECTS: [&str; 10] = [
 
 /// Most words after an override verb that may hold its qualifier and object.
 const OVERRIDE_WINDOW: usize = 5;
+
+/// Named character references that are decoded, with their text.
+///
+/// The usual escapes, and every HTML5 name whose text holds a character of a guard class
+/// (zero-width characters, variation selectors, bidi marks): the full list as of HTML5.
+const NAMED_REFERENCES: [(&str, &str); 43] = [
+    ("amp", "&"),
+    ("lt", "<"),
+    ("gt", ">"),
+    ("quot", "\""),
+    ("apos", "'"),
+    ("nbsp", "\u{00A0}"),
+    ("ApplyFunction", "\u{2061}"),
+    ("InvisibleComma", "\u{2063}"),
+    ("InvisibleTimes", "\u{2062}"),
+    ("NegativeMediumSpace", "\u{200B}"),
+    ("NegativeThickSpace", "\u{200B}"),
+    ("NegativeThinSpace", "\u{200B}"),
+    ("NegativeVeryThinSpace", "\u{200B}"),
+    ("NoBreak", "\u{2060}"),
+    ("ZeroWidthSpace", "\u{200B}"),
+    ("af", "\u{2061}"),
+    ("caps", "\u{2229}\u{FE00}"),
+    ("cups", "\u{222A}\u{FE00}"),
+    ("gesl", "\u{22DB}\u{FE00}"),
+    ("gvertneqq", "\u{2269}\u{FE00}"),
+    ("gvnE", "\u{2269}\u{FE00}"),
+    ("ic", "\u{2063}"),
+    ("it", "\u{2062}"),
+    ("lates", "\u{2AAD}\u{FE00}"),
+    ("lesg", "\u{22DA}\u{FE00}"),
+    ("lrm", "\u{200E}"),
+    ("lvertneqq", "\u{2268}\u{FE00}"),
+    ("lvnE", "\u{2268}\u{FE00}"),
+    ("rlm", "\u{200F}"),
+    ("shy", "\u{00AD}"),
+    ("smtes", "\u{2AAC}\u{FE00}"),
+    ("sqcaps", "\u{2293}\u{FE00}"),
+    ("sqcups", "\u{2294}\u{FE00}"),
+    ("varsubsetneq", "\u{228A}\u{FE00}"),
+    ("varsubsetneqq", "\u{2ACB}\u{FE00}"),
+    ("varsupsetneq", "\u{228B}\u{FE00}"),
+    ("varsupsetneqq", "\u{2ACC}\u{FE00}"),
+    ("vsubnE", "\u{2ACB}\u{FE00}"),
+    ("vsubne", "\u{228A}\u{FE00}"),
+    ("vsupnE", "\u{2ACC}\u{FE00}"),
+    ("vsupne", "\u{228B}\u{FE00}"),
+    ("zwj", "\u{200D}"),
+    ("zwnj", "\u{200C}"),
+];
+
+/// Named references that HTML also decodes without their `;` (legacy names).
+const LEGACY_NAMES: [&str; 6] = ["amp", "lt", "gt", "quot", "nbsp", "shy"];
+
+/// Most characters of a reference name ("CounterClockwiseContourIntegral" has 31).
+const REFERENCE_MAX: usize = 32;
+
+/// Most significant digits of a numeric reference that can still name a character.
+///
+/// U+10FFFF is 1114111 in decimal; more digits always give the replacement character.
+const NUMBER_DIGITS_MAX: usize = 7;
+
+/// Reports whether hidden text instructs a reviewer (the cue rule).
+///
+/// It does when it holds an override phrase or a chat-template token (`overrides_in`), or
+/// when, with its web addresses left out (their paths hold arbitrary words), it names a model
+/// and holds a directive verb. Character references are decoded first, as a reader would.
+pub(crate) fn instructs(text: &str) -> bool {
+    let text = decode_references(text);
+    if overrides_decoded(&text) {
+        return true;
+    }
+    let without_addresses = normalize(&without_web_addresses(&text));
+    let has = |phrases: &[&str]| {
+        phrases
+            .iter()
+            .any(|phrase| without_addresses.contains(phrase))
+    };
+    has(&ADDRESSEES) && has(&DIRECTIVES)
+}
+
+/// Reports whether text holds an override phrase or a chat-template token.
+///
+/// The override phrases include the window rule (`overrides`) and words written together
+/// (`glued`); character references are decoded first.
+pub(crate) fn overrides_in(text: &str) -> bool {
+    overrides_decoded(&decode_references(text))
+}
+
+/// Reports `overrides_in` for text whose references are already decoded.
+fn overrides_decoded(text: &str) -> bool {
+    let words = normalize(text);
+    OVERRIDES.iter().any(|phrase| words.contains(phrase))
+        || overrides(&words)
+        || glued(&words)
+        || template::count(text) > 0
+}
+
+/// Reports whether one normalized word holds an override written without spaces.
+///
+/// The match never crosses a word boundary: "approve this proposal" holds no override.
+fn glued(words: &str) -> bool {
+    let shortest = GLUED_OVERRIDES
+        .iter()
+        .map(|glued| glued.len())
+        .min()
+        .unwrap_or_default();
+    words
+        .split(' ')
+        .filter(|word| word.len() >= shortest)
+        .any(|word| {
+            OVERRIDES
+                .iter()
+                .zip(GLUED_OVERRIDES)
+                .any(|(phrase, glued)| {
+                    let tail = phrase.trim().rsplit(' ').next().unwrap_or_default();
+                    word == glued || (tail.len() >= GLUED_TAIL_MIN && word.contains(glued))
+                })
+        })
+}
+
+/// Reports whether normalized words hold an override verb, then a qualifier and an object.
+///
+/// "Ignore all the previous instructions" and "disregard prior rules" are overrides; "ignore
+/// this rule if it does not apply" is not, as no qualifier points back.
+fn overrides(words: &str) -> bool {
+    if !OVERRIDE_VERBS.iter().any(|verb| words.contains(verb)) {
+        return false;
+    }
+    let tokens: Vec<&str> = words.split(' ').filter(|token| !token.is_empty()).collect();
+    tokens.iter().enumerate().any(|(index, token)| {
+        if !OVERRIDE_VERBS.contains(token) {
+            return false;
+        }
+        let window = tokens
+            .get(index.saturating_add(1)..)
+            .unwrap_or_default()
+            .iter()
+            .take(OVERRIDE_WINDOW);
+        let mut qualified = false;
+        for word in window {
+            qualified |= OVERRIDE_QUALIFIERS.contains(word);
+            if qualified && OVERRIDE_OBJECTS.contains(word) {
+                return true;
+            }
+        }
+        false
+    })
+}
