@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -61,6 +62,13 @@ LEGACY_MARKERS = Markers(
     reason_format="[pohunek-codex-review-reason-v1:{}]",
 )
 REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
+REFUSAL_REPOSITORY_SKILLS = "repository_skills"
+# Codex 0.167.0 loads the skills in `.agents/skills` and `.codex/skills` of every directory
+# from the project root to its working directory, without host trust, through folder links.
+SKILL_PARENT_FOLDERS = (".agents", ".codex")
+# Git's modes of a file and of an executable file, which the skills check compares with the base.
+REGULAR_FILE_MODE = "100644"
+EXECUTABLE_FILE_MODE = "100755"
 # Most UTF-8 bytes of a reason, as the engine's bound; a longer one is cut at a character.
 REASON_MAX_BYTES = 512
 # Codex prints a failed turn as `ERROR: ...`; its argument parser prints `error: ...`.
@@ -68,6 +76,10 @@ ERROR_LINE_PREFIXES = (b"ERROR:", b"error:")
 # Most bytes of Codex's stderr that the adapter keeps to find the reason in. Not a tunable:
 # it bounds the adapter's own memory, and no operator decision depends on it.
 STDERR_TAIL_BYTES = 65536
+# Most entries that the skills check lists in the skill folders of a head checkout before it
+# refuses. Not a tunable: it bounds a walk of folders that head code can fill, and no operator
+# decision depends on it.
+SKILL_ENTRIES_MAX = 10000
 # Longest wait for the end of Codex's stderr after Codex and the processes it left ended:
 # a process outside the adapter's tree that got the pipe may keep it open, and the exit
 # line must not wait for it. Not a tunable: it bounds the wait for such a process, and no
@@ -206,6 +218,10 @@ class HeadUnavailableError(InputFrameError):
     """Raised when the trusted pull request head is not in the review checkout."""
 
 
+class RepositorySkillsError(InputFrameError):
+    """Raised when a head checkout holds skills for Codex that the trusted base does not."""
+
+
 def read_exact(stream: BinaryIO, size: int) -> bytes:
     data = bytearray()
     while len(data) < size:
@@ -326,6 +342,8 @@ def refusal_marker(error: InputFrameError, after_run: bool, markers: Markers) ->
         lines.append(reason_marker(f"{PROGRAM_NAME}: {error}".encode("utf-8"), markers))
     if isinstance(error, HeadUnavailableError):
         lines.append(markers.refusal_format.format(REFUSAL_HEAD_UNAVAILABLE))
+    if isinstance(error, RepositorySkillsError):
+        lines.append(markers.refusal_format.format(REFUSAL_REPOSITORY_SKILLS))
     return "\n".join(lines)
 
 
@@ -512,6 +530,10 @@ def codex_arguments(
         # marked untrusted; a zero byte budget reads none. The prompt names the trusted guidance.
         "--config",
         "project_doc_max_bytes=0",
+        # This drops the catalog of the skills that Codex loads, which every turn lists. A skill
+        # that the prompt names still loads, so the checkout check refuses a head's new skills.
+        "--config",
+        "skills.include_instructions=false",
         "--sandbox",
         "read-only",
         "--ignore-user-config",
@@ -661,6 +683,124 @@ def verify_checkout_head(prompt: str, cwd: Path | None = None) -> str:
     return expected_head_sha
 
 
+def git_entries(arguments: list[str], cwd: Path | None = None) -> list[str]:
+    """Returns the NUL-separated entries that a git listing prints."""
+    listed = subprocess.run(git_command(*arguments), capture_output=True, check=False, cwd=cwd)
+    if listed.returncode != 0:
+        raise InputFrameError("review checkout skills are unavailable")
+    entries = listed.stdout.split(b"\0")
+    return [entry.decode("utf-8", errors="surrogateescape") for entry in entries if entry]
+
+
+def skill_levels(cwd: Path | None = None) -> tuple[Path, list[str]]:
+    """Returns the checkout root and the directories from it to `cwd`, as root-relative prefixes."""
+    shown = subprocess.run(
+        git_command("rev-parse", "--show-prefix"), capture_output=True, check=False, cwd=cwd
+    )
+    if shown.returncode != 0:
+        raise InputFrameError("review checkout directory is unavailable")
+    prefix = shown.stdout.removesuffix(b"\n").decode("utf-8", errors="surrogateescape")
+    parts = [part for part in prefix.split("/") if part]
+    # Git computes the prefix on the real path, so the root is the resolved `cwd` without it.
+    root = (Path.cwd() if cwd is None else cwd).resolve()
+    for part in reversed(parts):
+        if root.name != part:
+            raise InputFrameError("review checkout directory is unavailable")
+        root = root.parent
+    return root, ["".join(part + "/" for part in parts[:count]) for count in range(len(parts) + 1)]
+
+
+def base_skill_entries(
+    base_sha: str, levels: list[str], cwd: Path | None = None
+) -> dict[str, tuple[str, str, str]]:
+    """Returns the mode, object and size of each path below `.agents` and `.codex` in the base."""
+    pathspecs = [
+        f":(top,literal){level}{parent}" for level in levels for parent in SKILL_PARENT_FOLDERS
+    ]
+    entries = {}
+    listing = ["ls-tree", "-r", "-l", "-z", "--full-tree", base_sha, "--", *pathspecs]
+    for entry in git_entries(listing, cwd):
+        fields, _, path = entry.partition("\t")
+        details = fields.split()
+        if len(details) != 4 or not path:
+            raise InputFrameError("review checkout skills are unavailable")
+        entries[path] = (details[0], details[2], details[3])
+    return entries
+
+
+def open_without_links(name: str, flags: int) -> int:
+    return os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK)
+
+
+def skill_file_matches(path: Path, expected: tuple[str, str, str] | None) -> bool:
+    """Reports whether the file at `path` has the mode, size and content of its base entry."""
+    if expected is None:
+        return False
+    base_mode, base_object, base_size = expected
+    try:
+        with open(path, "rb", opener=open_without_links) as handle:
+            status = os.fstat(handle.fileno())
+            executable = status.st_mode & stat.S_IXUSR
+            mode = EXECUTABLE_FILE_MODE if executable else REGULAR_FILE_MODE
+            if not stat.S_ISREG(status.st_mode) or (mode, str(status.st_size)) != (
+                base_mode, base_size
+            ):
+                return False
+            content = handle.read(status.st_size + 1)
+    except OSError as error:
+        raise InputFrameError("review checkout skills are unavailable") from error
+    # Objects are SHA-1 ones: the trusted base SHA has 40 hex characters.
+    blob = hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+    return len(content) == status.st_size and blob == base_object
+
+
+def verify_repository_skills(prompt: str, cwd: Path | None = None) -> None:
+    """Refuses a clean head checkout whose skill folders on disk differ from the trusted base.
+
+    Codex reads the disk, which index flags, ignore rules and nested repositories hide from
+    git, so every entry there must be a folder or a file of the base, with its mode and content;
+    a base path that the disk lacks passes. Of `.agents` and `.codex`, only `skills` loads.
+    """
+    root, levels = skill_levels(cwd)
+    entries = base_skill_entries(trusted_base_sha(prompt), levels, cwd)
+    folders = {
+        path.rsplit("/", depth)[0] for path in entries for depth in range(1, path.count("/") + 1)
+    }
+    pending = [(f"{level}{parent}", True) for level in levels for parent in SKILL_PARENT_FOLDERS]
+    listed = 0
+    while pending:
+        path, is_parent = pending.pop()
+        try:
+            mode = os.lstat(root / path).st_mode
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise InputFrameError("review checkout skills are unavailable") from error
+        if stat.S_ISREG(mode):
+            matches = skill_file_matches(root / path, entries.get(path))
+        else:
+            matches = stat.S_ISDIR(mode) and (is_parent or path in folders)
+        if not matches:
+            raise RepositorySkillsError(
+                "review checkout adds or changes repository skills that Codex would load"
+            )
+        if not stat.S_ISDIR(mode):
+            continue
+        if is_parent:
+            # A `.git` there is a nested repository, which is never a base path.
+            pending += [(f"{path}/skills", False), (f"{path}/.git", False)]
+            continue
+        try:
+            with os.scandir(root / path) as children:
+                for child in children:
+                    listed += 1
+                    if listed > SKILL_ENTRIES_MAX:
+                        raise InputFrameError("review checkout skills are unavailable")
+                    pending.append((f"{path}/{child.name}", False))
+        except OSError as error:
+            raise InputFrameError("review checkout skills are unavailable") from error
+
+
 def verify_base_checkout(prompt: str, cwd: Path | None = None) -> str:
     """Checks a base checkout and returns its HEAD; it reads only the local repository.
 
@@ -693,6 +833,7 @@ def verify_review_checkout(prompt: str, cwd: Path | None = None) -> tuple[str, s
     if trusted_checkout(prompt) == CHECKOUT_BASE:
         return trusted_head_sha(prompt), verify_base_checkout(prompt, cwd)
     head_sha = verify_checkout_head(prompt, cwd)
+    verify_repository_skills(prompt, cwd)
     return head_sha, head_sha
 
 
