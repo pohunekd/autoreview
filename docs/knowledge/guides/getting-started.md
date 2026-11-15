@@ -223,7 +223,9 @@ A third run with the same `--dir` on the finished setup prints every step as
 - A directory made by an earlier setup run may have mode 0755 and its store
   0644, which lets other local users read the review history. From the first
   release after 0.4.0, `validate`, and with it the script, stops on such a store
-  and prints the `chmod` command for each path; run them, then run the script
+  with exit code 9 and prints the `chmod` command for each path. Run
+  `chmod 700 <dir>` and `chmod 600 <dir>/autoreview.db*`, with the `--dir` you
+  gave the script, before the upgrade or when it stops, then run the script
   again.
 - Before you leave it running, read the
   [threat model](../safety/threat-model.md).
