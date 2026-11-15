@@ -17,6 +17,7 @@ mod words;
 #[cfg(test)]
 mod tests;
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use lexicon::{LEXICON_MAX_WEIGHT, Lexicon};
@@ -211,20 +212,20 @@ pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
     let mut entries_by_kind: BTreeMap<FieldKind, BTreeSet<usize>> = BTreeMap::new();
     for field in fields {
         let rendered = field.kind.renders_markdown();
+        let source = if rendered {
+            unix_lines(field.text)
+        } else {
+            Cow::Borrowed(field.text)
+        };
         let mut add = |signal: Signal, count: u32| {
             if count > 0 {
                 let total = counts.entry((field.kind, signal)).or_insert(0);
                 *total = total.saturating_add(count);
             }
         };
-        let code = if rendered {
-            markdown::scan(field.text, &mut add)
-        } else {
-            Vec::new()
-        };
         let shown = match field.kind {
             FieldKind::Patch => added_lines(field.text),
-            _ if rendered => rendered_text(field.text, &code),
+            _ if rendered => rendered_text(&source, markdown::scan(&source, &mut add).as_deref()),
             _ => field.text.to_owned(),
         };
         characters::scan(&shown, field.kind == FieldKind::Patch, &mut add);
@@ -262,21 +263,38 @@ pub fn scan(fields: &[Field<'_>], lexicon: &Lexicon) -> Report {
 
 /// Returns a rendered field with its character references decoded outside `code`.
 ///
-/// GitHub shows a reference inside a code block as written, so it is no hidden character.
-fn rendered_text(text: &str, code: &[(usize, usize)]) -> String {
+/// GitHub shows a reference inside code as written, so it is no hidden character. Without
+/// checked code ranges (`None`), or with a range that does not fit the text, the whole field
+/// is decoded: no text is ever left out.
+fn rendered_text(text: &str, code: Option<&[(usize, usize)]>) -> String {
+    let Some(code) = code else {
+        return words::decode_references(text);
+    };
     let mut out = String::with_capacity(text.len());
     let mut at = 0_usize;
     for &(start, end) in code {
-        out.push_str(&words::decode_references(
-            text.get(at..start).unwrap_or_default(),
-        ));
-        out.push_str(text.get(start..end).unwrap_or_default());
+        let (Some(before), Some(inside)) = (text.get(at..start), text.get(start..end)) else {
+            return words::decode_references(text);
+        };
+        out.push_str(&words::decode_references(before));
+        out.push_str(inside);
         at = end;
     }
-    out.push_str(&words::decode_references(
-        text.get(at..).unwrap_or_default(),
-    ));
+    let Some(rest) = text.get(at..) else {
+        return words::decode_references(text);
+    };
+    out.push_str(&words::decode_references(rest));
     out
+}
+
+/// Returns `text` with every line ending as `\n`: a CR LF pair or a bare CR, as GitHub's
+/// parser ends lines, becomes one line feed.
+fn unix_lines(text: &str) -> Cow<'_, str> {
+    if text.contains('\r') {
+        Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 /// Returns the added lines of a unified diff, without `+`, one per line.

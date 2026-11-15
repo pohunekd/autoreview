@@ -503,15 +503,39 @@ fn unrendered_lines(text: &str, covered: &[bool], add: &mut impl FnMut(Signal, u
     flush(&mut run);
 }
 
+/// Returns the byte range of a code node when the source there holds it, else `None`.
+///
+/// A code span's range must start and end with a backtick; a code block's range must hold
+/// the first non-blank line of its content.
+fn checked_code(text: &str, lines: &Lines, node: &AstNode<'_>) -> Option<(usize, usize)> {
+    let data = node.data();
+    let (start, end) = lines.range(data.sourcepos);
+    let source = text.get(start..end)?;
+    let holds = match &data.value {
+        NodeValue::Code(_) => source.starts_with('`') && source.ends_with('`'),
+        NodeValue::CodeBlock(block) => block
+            .literal
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .is_none_or(|line| source.contains(line)),
+        _ => false,
+    };
+    holds.then_some((start, end))
+}
+
 /// Reports the hidden Markdown signals of a rendered field to `add`.
 ///
-/// Returns the byte ranges of its code: fenced and indented code blocks and code spans.
-pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Vec<(usize, usize)> {
+/// Returns the byte ranges of its code (fenced and indented code blocks and code spans), or
+/// `None` when any code position does not match the source: the caller then treats the whole
+/// field as shown text (fail closed).
+pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Option<Vec<(usize, usize)>> {
     let arena = Arena::new();
     let root = parse_document(&arena, text, &options());
     let lines = Lines::new(text);
     let mut covered = vec![false; lines.starts.len().saturating_add(1)];
     let mut code = Vec::new();
+    let mut code_checked = true;
     let mut walk = Walk {
         add,
         frames: Vec::new(),
@@ -527,7 +551,10 @@ pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Vec<(usize,
                     node.data().value,
                     NodeValue::CodeBlock(_) | NodeValue::Code(_)
                 ) {
-                    code.push(lines.range(node.data().sourcepos));
+                    match checked_code(text, &lines, node) {
+                        Some(range) => code.push(range),
+                        None => code_checked = false,
+                    }
                 }
                 enter(&mut walk, node, &mut covered);
             }
@@ -538,5 +565,9 @@ pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Vec<(usize,
     walk.close_comment();
     unrendered_lines(text, &covered, walk.add);
     code.sort_unstable();
-    code
+    let disjoint = code.windows(2).all(|pair| match pair {
+        [(_, end), (start, _)] => end <= start,
+        _ => true,
+    });
+    (code_checked && disjoint).then_some(code)
 }
