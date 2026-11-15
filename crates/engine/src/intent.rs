@@ -33,9 +33,25 @@ const INTENT_UNREADABLE: &str = concat!(
     "nothing to compare. Say so in the summary."
 );
 
+/// Intent pass of a reviewer whose pull request closes only issues of other repositories.
+const INTENT_OTHER_ONLY: &str = concat!(
+    "Intent check: this pull request closes only issues of other repositories, which are not ",
+    "compared, so there is nothing to compare. Do not report this as a finding."
+);
+
 /// Sentence added when the pull request closes more issues than the list holds.
 const INTENT_MORE: &str =
     "The pull request closes more issues than the list holds; compare only these.";
+
+/// Sentence added when the pull request also closes issues of other repositories.
+const INTENT_OTHER: &str =
+    "It also closes issues of other repositories, which are not compared and not listed.";
+
+/// Sentence of the published review when issues of other repositories were not compared.
+///
+/// It names neither those repositories nor numbers: another repository may be private.
+const OTHER_NOT_COMPARED: &str =
+    "Issues of other repositories that this pull request closes were not compared.";
 
 /// Instructions of the verifier when the pull request closes issues.
 const INTENT_VERIFIER_INSTRUCTIONS: &str = concat!(
@@ -81,17 +97,25 @@ pub(crate) fn reviewer_section(linked: Option<&LinkedIssues>) -> Result<Option<S
         return Ok(Some(INTENT_UNREADABLE.to_owned()));
     }
     if linked.issues.is_empty() {
-        return Ok(Some(INTENT_NO_ISSUE.to_owned()));
+        let only = if linked.other_repositories {
+            INTENT_OTHER_ONLY
+        } else {
+            INTENT_NO_ISSUE
+        };
+        return Ok(Some(only.to_owned()));
     }
-    let more = if linked.more {
-        format!(" {INTENT_MORE}")
-    } else {
-        String::new()
-    };
+    let mut instructions = INTENT_INSTRUCTIONS.to_owned();
+    for (set, sentence) in [
+        (linked.more, INTENT_MORE),
+        (linked.other_repositories, INTENT_OTHER),
+    ] {
+        if set {
+            instructions.push(' ');
+            instructions.push_str(sentence);
+        }
+    }
     let issues = go_json(&linked.issues).map_err(request_invalid)?;
-    Ok(Some(format!(
-        "{INTENT_INSTRUCTIONS}{more}\n\n{ISSUES_LABEL}\n{issues}"
-    )))
+    Ok(Some(format!("{instructions}\n\n{ISSUES_LABEL}\n{issues}")))
 }
 
 /// Returns the intent section of a verifier request, or `None` when it has no issue to read.
@@ -125,6 +149,9 @@ pub(crate) fn intent_line(outcome: &IntentOutcome) -> String {
                 change was not compared with them."
             .to_owned();
     }
+    if outcome.compared.is_empty() && outcome.other_repositories {
+        return format!("Intent check: {OTHER_NOT_COMPARED}");
+    }
     if outcome.compared.is_empty() {
         return "Intent check: this pull request closes no issue, so the change was not \
                 compared with one."
@@ -142,6 +169,10 @@ pub(crate) fn intent_line(outcome: &IntentOutcome) -> String {
     }
     if outcome.more {
         line.push_str(" The pull request closes more issues than were read.");
+    }
+    if outcome.other_repositories {
+        line.push(' ');
+        line.push_str(OTHER_NOT_COMPARED);
     }
     line
 }
@@ -174,6 +205,7 @@ mod tests {
             read: true,
             issues,
             more: false,
+            other_repositories: false,
         }
     }
 

@@ -48,6 +48,7 @@ async fn closed_issues_reach_the_reviewers_only_with_an_intent_check() {
         read: true,
         issues: vec![issue.clone()],
         more: false,
+        other_repositories: true,
     });
     let checked = integration_pull_request("intent/app", &sha("a"));
     h.fake.open(checked.clone(), h.rule(&checked.repository));
@@ -73,9 +74,15 @@ async fn closed_issues_reach_the_reviewers_only_with_an_intent_check() {
     };
     assert_eq!(carried, [cut], "prompt = {prompt}");
     assert!(
+        prompt.contains("It also closes issues of other repositories, which are not compared"),
+        "prompt = {prompt}"
+    );
+    // Issues of another repository are named neither by repository nor by number.
+    assert!(
         body_of(&published, &heads, &checked).contains(concat!(
             "Intent check: the change was compared with `intent/app#12`. ",
-            "The text of `intent/app#12` was cut to the configured limit."
+            "The text of `intent/app#12` was cut to the configured limit. ",
+            "Issues of other repositories that this pull request closes were not compared."
         )),
         "published = {published:?}"
     );

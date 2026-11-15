@@ -306,9 +306,10 @@ pub trait Integrations {
         prior: &[PriorFinding],
     ) -> impl Future<Output = Result<Discussion, Error>> + Send;
 
-    /// Reads the issues that the pull request closes, with their full title and body.
+    /// Reads the issues that the pull request closes in its own repository, with full text.
     ///
-    /// It reads with `credential`'s token, so GitHub returns only issues that it can read. A
+    /// It reads with `credential`'s token. Issues of other repositories are never read, as one
+    /// may be private while the review is public; `other_repositories` tells of them. A
     /// response that GitHub answers only in part is an error, never a shorter list.
     fn list_closing_issues(
         &self,

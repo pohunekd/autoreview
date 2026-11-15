@@ -121,6 +121,8 @@ pub struct LinkedIssues {
     pub issues: Vec<LinkedIssue>,
     /// Set when the pull request closes more issues than one read returns.
     pub more: bool,
+    /// Set when it also closes issues of other repositories, which are never read.
+    pub other_repositories: bool,
 }
 
 autoreview_go_compat::object_only_serde!(LinkedIssues);
@@ -140,6 +142,7 @@ impl LinkedIssues {
             compared: references(false),
             truncated: references(true),
             more: self.more,
+            other_repositories: self.other_repositories,
         }
     }
 }
@@ -158,6 +161,8 @@ pub struct IntentOutcome {
     pub truncated: Vec<String>,
     /// Set when the pull request closes more issues than one read returns.
     pub more: bool,
+    /// Set when it also closes issues of other repositories, which were not compared.
+    pub other_repositories: bool,
 }
 
 autoreview_go_compat::object_only_serde!(IntentOutcome);
