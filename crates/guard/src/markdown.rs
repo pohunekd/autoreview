@@ -1,0 +1,691 @@
+//! Hidden Markdown: text that GitHub does not show, reported when it instructs a reviewer.
+//!
+//! A GitHub Flavored Markdown parser (comrak) decides what is code, what is raw HTML, what is
+//! a link title and what is alt text, as GitHub's own parser does. The raw HTML pieces are then
+//! read in document order: comments and other markup, tag attributes, and the elements that
+//! hide their content (`<details>`, `hidden`, a hiding style, `script`/`style`/`template`).
+//! Reference definitions and unreferenced footnotes render nothing, so they are found as the
+//! source lines that no rendered block covers. Each hidden text goes through the cue rule.
+
+// Rust guideline compliant 2026-06-26
+
+use std::collections::BTreeMap;
+
+use comrak::arena_tree::NodeEdge;
+use comrak::nodes::{AstNode, NodeValue, Sourcepos};
+use comrak::{Arena, Options, parse_document};
+
+use crate::{Signal, words};
+
+/// Style declarations that hide an element, compared lowercased and without whitespace.
+const HIDING_STYLES: [&str; 2] = ["display:none", "visibility:hidden"];
+
+/// Elements whose content a page never shows.
+///
+/// Opened inline, they hide only up to the end of their paragraph: an unclosed one there is
+/// usually prose that names the tag.
+const HIDDEN_ELEMENTS: [&str; 3] = ["script", "style", "template"];
+
+/// The opener of an HTML comment.
+const COMMENT_OPEN: &str = "<!--";
+
+/// The closer of an HTML comment.
+const COMMENT_CLOSE: &str = "-->";
+
+/// Raw HTML that is never shown besides tags: opener, closer and how the opener is matched.
+const HIDDEN_MARKUP: [(&str, &str); 4] = [
+    (COMMENT_OPEN, COMMENT_CLOSE),
+    ("<![cdata[", "]]>"),
+    ("<?", "?>"),
+    ("<!", ">"),
+];
+
+/// Elements that never have content, where a trailing `/` closes the tag (HTML void
+/// elements). On any other element `<x/>` opens it, as a browser reads it.
+const VOID_ELEMENTS: [&str; 13] = [
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track",
+    "wbr",
+];
+
+/// Returns the parser options of GitHub comments and descriptions (GFM extensions).
+fn options() -> Options<'static> {
+    let mut options = Options::default();
+    options.extension.strikethrough = true;
+    options.extension.table = true;
+    options.extension.autolink = true;
+    options.extension.tasklist = true;
+    options.extension.footnotes = true;
+    options
+}
+
+/// Byte offsets of the line starts of a text, for source positions.
+struct Lines {
+    /// The offset of each line start, the first line at index 0.
+    starts: Vec<usize>,
+    /// The length of the text.
+    len: usize,
+}
+
+impl Lines {
+    /// Indexes the line starts of `text`.
+    fn new(text: &str) -> Self {
+        let mut starts = vec![0];
+        starts.extend(text.match_indices('\n').map(|(at, _)| at.saturating_add(1)));
+        Self {
+            starts,
+            len: text.len(),
+        }
+    }
+
+    /// Returns the byte offset of a 1-based line and byte column.
+    fn offset(&self, line: usize, column: usize) -> usize {
+        let start = self
+            .starts
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or(self.len);
+        start.saturating_add(column.saturating_sub(1)).min(self.len)
+    }
+
+    /// Returns the text of a 1-based source line from a 1-based byte column, without its line
+    /// break, if the column falls on a character boundary of the text.
+    fn line<'t>(&self, text: &'t str, line: usize, column: usize) -> Option<&'t str> {
+        let start = self.offset(line, column);
+        let end = self
+            .starts
+            .get(line)
+            .copied()
+            .unwrap_or(self.len)
+            .max(start);
+        text.get(start..end).map(|line| line.trim_end_matches('\n'))
+    }
+
+    /// Returns the byte range of a source position, whose end column is inclusive.
+    fn range(&self, position: Sourcepos) -> (usize, usize) {
+        let start = self.offset(position.start.line, position.start.column);
+        let end = self
+            .offset(position.end.line, position.end.column)
+            .saturating_add(1)
+            .min(self.len);
+        (start, end.max(start))
+    }
+}
+
+/// An open element that hides its content.
+#[derive(Debug)]
+struct Frame {
+    /// The lowercase element name.
+    name: String,
+    /// The signal its content gives when it instructs.
+    signal: Signal,
+    /// Opened inline, the element hides only up to the end of its paragraph.
+    paragraph_only: bool,
+    /// Its text, code included.
+    all: String,
+    /// Its text without code.
+    plain: String,
+}
+
+/// The walk over one parsed field.
+struct Walk<'a, F: FnMut(Signal, u32)> {
+    /// Where signals go.
+    add: &'a mut F,
+    /// The open hiding elements, outermost first; only the outermost collects text.
+    frames: Vec<Frame>,
+    /// How many open frames have each element name.
+    open: BTreeMap<String, usize>,
+    /// The alt text of the outermost image being read, inner images' text included.
+    alt: Option<String>,
+    /// How many images are open; only the outermost one collects and reports alt text.
+    alt_depth: usize,
+    /// The text of an HTML comment that an HTML block opened and did not close.
+    ///
+    /// The browser keeps such a comment open across the following Markdown blocks, so
+    /// everything up to a `-->` in later raw HTML, or the end of the field, is hidden.
+    comment: Option<String>,
+}
+
+impl<F: FnMut(Signal, u32)> Walk<'_, F> {
+    /// Takes shown text, or code when `code` is set, in document order.
+    fn text(&mut self, text: &str, code: bool) {
+        if let Some(comment) = self.comment.as_mut() {
+            comment.push_str(text);
+        }
+        if let Some(alt) = self.alt.as_mut() {
+            alt.push_str(text);
+        }
+        if let Some(frame) = self.frames.first_mut() {
+            frame.all.push_str(text);
+            if !code {
+                frame.plain.push_str(text);
+            }
+        }
+    }
+
+    /// Adds one `signal` when the hidden `text` instructs a reviewer.
+    fn report(&mut self, signal: Signal, text: &str) {
+        if words::instructs(text) {
+            (self.add)(signal, 1);
+        }
+    }
+
+    /// Closes an open comment, if any, and reports its text.
+    fn close_comment(&mut self) {
+        if let Some(comment) = self.comment.take() {
+            self.report(Signal::HiddenCommentInstruction, &comment);
+        }
+    }
+
+    /// Closes every open frame and reports the outermost one.
+    ///
+    /// A collapsed block shows its code as code once opened, and logs are its usual content,
+    /// so the model-and-directive part of the cue rule leaves code out; override phrases and
+    /// chat-template tokens count in code too.
+    fn close_all(&mut self) {
+        let frames = std::mem::take(&mut self.frames);
+        self.open.clear();
+        if let Some(frame) = frames.into_iter().next() {
+            let hit = if frame.signal == Signal::CollapsedBlockInstruction {
+                words::instructs(&frame.plain) || words::overrides_in(&frame.all)
+            } else {
+                words::instructs(&frame.all)
+            };
+            if hit {
+                (self.add)(frame.signal, 1);
+            }
+        }
+    }
+
+    /// Opens a frame for the element `name`.
+    fn push(&mut self, name: String, signal: Signal, paragraph_only: bool) {
+        let count = self.open.entry(name.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+        self.frames.push(Frame {
+            name,
+            signal,
+            paragraph_only,
+            all: String::new(),
+            plain: String::new(),
+        });
+    }
+
+    /// Closes the innermost open frame of the element `name`, and those opened inside it.
+    fn pop(&mut self, name: &str) {
+        if self.open.get(name).copied().unwrap_or_default() == 0 {
+            return;
+        }
+        let Some(index) = self.frames.iter().rposition(|frame| frame.name == name) else {
+            return;
+        };
+        if index == 0 {
+            self.close_all();
+            return;
+        }
+        for frame in self.frames.drain(index..) {
+            if let Some(count) = self.open.get_mut(&frame.name) {
+                *count = count.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Ends a paragraph: an inline `HIDDEN_ELEMENTS` element still open there was prose.
+    fn end_paragraph(&mut self) {
+        if self
+            .frames
+            .first()
+            .is_some_and(|frame| frame.paragraph_only)
+        {
+            self.frames.clear();
+            self.open.clear();
+        }
+    }
+
+    /// Reads one raw HTML piece; `inline` is set for inline HTML inside a paragraph.
+    fn raw_html(&mut self, html: &str, inline: bool) {
+        let mut rest = html;
+        if self.comment.is_some() {
+            let Some(end) = rest.find(COMMENT_CLOSE) else {
+                self.text(rest, false);
+                return;
+            };
+            let (inside, after) = split(rest, end);
+            self.text(inside, false);
+            self.close_comment();
+            rest = split(after, COMMENT_CLOSE.len()).1;
+        }
+        while let Some(start) = rest.find('<') {
+            let (before, from) = split(rest, start);
+            self.text(before, false);
+            self.text(" ", false);
+            let markup = HIDDEN_MARKUP.iter().find(|(open, _)| {
+                from.as_bytes()
+                    .get(..open.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(open.as_bytes()))
+                    && (*open != "<!" || declaration(from))
+            });
+            if let Some((open, close)) = markup {
+                let body = split(from, open.len()).1;
+                if *open == COMMENT_OPEN && !inline && !body.contains(close) {
+                    self.comment = Some(body.to_owned());
+                    rest = "";
+                    continue;
+                }
+                let (content, after) = match body.find(close) {
+                    Some(end) => {
+                        let (content, rest) = split(body, end);
+                        (content, split(rest, close.len()).1)
+                    }
+                    None => (body, ""),
+                };
+                self.report(Signal::HiddenCommentInstruction, content);
+                rest = after;
+                continue;
+            }
+            rest = self.tag(from, inline);
+        }
+        self.text(rest, false);
+    }
+
+    /// Reads the tag that starts `from` and returns the text after it.
+    fn tag<'h>(&mut self, from: &'h str, inline: bool) -> &'h str {
+        let closing = from.starts_with("</");
+        let name_from = split(from, if closing { 2 } else { 1 }).1;
+        let name_len = name_from
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
+            .count();
+        if name_len == 0 {
+            self.text("<", false);
+            return split(from, 1).1;
+        }
+        let (name, attributes_from) = split(name_from, name_len);
+        let name = name.to_ascii_lowercase();
+        let (attributes, after) = split(attributes_from, tag_end(attributes_from));
+        let after = split(after, 1).1;
+        if closing {
+            self.pop(&name);
+            return after;
+        }
+        self.report(Signal::LinkMetadataInstruction, attributes);
+        let hidden_element = HIDDEN_ELEMENTS.contains(&name.as_str());
+        let signal = if name == "details" {
+            Some(Signal::CollapsedBlockInstruction)
+        } else if hides(attributes)
+            || hidden_element
+            || self.open.get(&name).copied().unwrap_or_default() > 0
+        {
+            Some(Signal::HiddenElementInstruction)
+        } else {
+            None
+        };
+        let self_closing = attributes.trim_end().ends_with('/');
+        if let Some(signal) = signal
+            && !(self_closing && VOID_ELEMENTS.contains(&name.as_str()))
+        {
+            let paragraph_only = inline && hidden_element && self.frames.is_empty();
+            self.push(name, signal, paragraph_only);
+        }
+        after
+    }
+}
+
+/// Splits `text` at byte `at`, moved up to the next character boundary.
+///
+/// The raw HTML reader splits only at ASCII bytes it found, so the split is exact; the
+/// rounding and the fallback (everything in the head) mean a split can neither fail nor
+/// drop text.
+fn split(text: &str, at: usize) -> (&str, &str) {
+    text.split_at_checked(text.ceil_char_boundary(at.min(text.len())))
+        .unwrap_or((text, ""))
+}
+
+/// Reports whether `from` starts a declaration: `<!` and an ASCII letter.
+fn declaration(from: &str) -> bool {
+    from.as_bytes().get(2).is_some_and(u8::is_ascii_alphabetic)
+}
+
+/// Returns where the attributes of a tag end: the first `>` outside a quoted value.
+fn tag_end(attributes: &str) -> usize {
+    let mut quote: Option<u8> = None;
+    for (at, byte) in attributes.bytes().enumerate() {
+        match quote {
+            Some(open) if byte == open => quote = None,
+            Some(_) => {}
+            None if matches!(byte, b'"' | b'\'') => quote = Some(byte),
+            None if byte == b'>' => return at,
+            None => {}
+        }
+    }
+    attributes.len()
+}
+
+/// Reports whether the attributes of a tag hide its element: `hidden` or a hiding style.
+fn hides(attributes: &str) -> bool {
+    let mut rest = attributes;
+    loop {
+        rest = rest.trim_start_matches(|character: char| {
+            character.is_ascii_whitespace() || character == '/'
+        });
+        if rest.is_empty() {
+            return false;
+        }
+        let name_len = rest
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '=' | '/')
+            })
+            .unwrap_or(rest.len());
+        let (name, after) = split(rest, name_len);
+        let after = after.trim_start();
+        let (value, next) = match after.strip_prefix('=') {
+            Some(value) => attribute_value(value.trim_start()),
+            None => ("", after),
+        };
+        if name.eq_ignore_ascii_case("hidden") {
+            return true;
+        }
+        if name.eq_ignore_ascii_case("style") {
+            let style: String = words::decode_references(value)
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>()
+                .to_ascii_lowercase();
+            if HIDING_STYLES.iter().any(|hiding| style.contains(hiding)) {
+                return true;
+            }
+        }
+        rest = next;
+    }
+}
+
+/// Splits an attribute value, quoted or not, from the attributes that follow it.
+fn attribute_value(text: &str) -> (&str, &str) {
+    match text.chars().next() {
+        Some(quote @ ('"' | '\'')) => {
+            let inner = split(text, 1).1;
+            match inner.split_once(quote) {
+                Some((value, next)) => (value, next),
+                None => (inner, ""),
+            }
+        }
+        _ => {
+            let end = text
+                .find(|character: char| character.is_ascii_whitespace())
+                .unwrap_or(text.len());
+            split(text, end)
+        }
+    }
+}
+
+/// Reports whether a node is a block that GitHub renders from its source lines.
+fn renders_lines(value: &NodeValue) -> bool {
+    matches!(
+        value,
+        NodeValue::Paragraph
+            | NodeValue::Heading(_)
+            | NodeValue::CodeBlock(_)
+            | NodeValue::HtmlBlock(_)
+            | NodeValue::Table(_)
+            | NodeValue::ThematicBreak
+    )
+}
+
+/// Returns how many lines a block shows: its line breaks plus one, plus a setext underline
+/// or a table delimiter row. `None` for blocks whose lines are all shown.
+fn shown_lines<'a>(node: &'a AstNode<'a>) -> Option<usize> {
+    let breaks = || {
+        node.descendants()
+            .filter(|inner| {
+                matches!(
+                    inner.data().value,
+                    NodeValue::SoftBreak | NodeValue::LineBreak
+                )
+            })
+            .count()
+    };
+    match &node.data().value {
+        NodeValue::Paragraph => Some(breaks().saturating_add(1)),
+        NodeValue::Heading(heading) => Some(
+            breaks()
+                .saturating_add(1)
+                .saturating_add(usize::from(heading.setext)),
+        ),
+        NodeValue::Table(_) => Some(
+            node.children()
+                .filter(|row| matches!(row.data().value, NodeValue::TableRow(_)))
+                .count()
+                .saturating_add(1),
+        ),
+        _ => None,
+    }
+}
+
+/// Reports whether a source line starts a reference definition after its container
+/// markers: `[`, then the first unescaped `]` followed by `:`, or no unescaped `]` on the line
+/// (a label over lines). A backslash escapes the character after it, as in a label.
+fn starts_definition(line: &str) -> bool {
+    let rest = line.trim_start_matches(|character: char| {
+        character.is_ascii_whitespace()
+            || character.is_ascii_digit()
+            || matches!(character, '>' | '-' | '*' | '+' | '.' | ')')
+    });
+    let Some(label) = rest.strip_prefix('[') else {
+        return false;
+    };
+    let mut escaped = false;
+    let close = label.char_indices().find(|&(_, character)| {
+        let closes = !escaped && character == ']';
+        escaped = !escaped && character == '\\';
+        closes
+    });
+    !label.starts_with('^')
+        && close.is_none_or(|(at, _)| {
+            label
+                .get(at.saturating_add(1)..)
+                .is_some_and(|after| after.starts_with(':'))
+        })
+}
+
+/// Reads one node on entry; marks the lines it renders in `covered`.
+///
+/// comrak counts the reference definitions that open a paragraph, a setext heading or a
+/// table into its source lines, and moves its inline positions onto them. Such a block
+/// renders only its last lines, so the leading ones stay unrendered and are checked as
+/// definitions, and the field's code positions are no longer trusted (`*shifted`). Only a
+/// block whose first line starts a definition can hold such lines; the line is read from
+/// column 1 after container markers and from the block's own start column (a footnote
+/// definition's text starts after `[^x]: `), and either reading counts. That line is always
+/// checked, also when the parser shows it (a table that splits off the paragraph). A line
+/// break that the tree does not show (in a title, a code span or inline HTML) makes more
+/// lines count as definitions, never fewer; when the counts do not fit, every line is
+/// checked (fail closed).
+fn enter<'a, F: FnMut(Signal, u32)>(
+    walk: &mut Walk<'_, F>,
+    node: &'a AstNode<'a>,
+    source: (&str, &Lines),
+    covered: &mut [bool],
+    shifted: &mut bool,
+) {
+    if renders_lines(&node.data().value) {
+        let (first, last) = (
+            node.data().sourcepos.start.line,
+            node.data().sourcepos.end.line,
+        );
+        let span = last.saturating_add(1).saturating_sub(first);
+        let (text, lines) = source;
+        let column = node.data().sourcepos.start.column;
+        let definition = lines.line(text, first, 1).is_none_or(starts_definition)
+            || lines
+                .line(text, first, column)
+                .is_none_or(starts_definition);
+        let shown = if definition {
+            shown_lines(node)
+                .unwrap_or(span)
+                .min(span.saturating_sub(1))
+        } else {
+            span
+        };
+        let start = if shown <= span {
+            first.saturating_add(span - shown)
+        } else {
+            last.saturating_add(1)
+        };
+        *shifted |= start != first;
+        for slot in covered.iter_mut().take(last.saturating_add(1)).skip(start) {
+            *slot = true;
+        }
+    }
+    let data = node.data();
+    match &data.value {
+        NodeValue::Text(text) => walk.text(text, false),
+        NodeValue::Code(code) => walk.text(&code.literal, true),
+        NodeValue::CodeBlock(block) => walk.text(&block.literal, true),
+        NodeValue::SoftBreak | NodeValue::LineBreak => walk.text("\n", false),
+        NodeValue::HtmlBlock(block) => {
+            let literal = block.literal.clone();
+            drop(data);
+            walk.raw_html(&literal, false);
+        }
+        NodeValue::HtmlInline(html) => {
+            let html = html.clone();
+            drop(data);
+            walk.raw_html(&html, true);
+        }
+        NodeValue::Link(link) | NodeValue::Image(link) => {
+            let image = matches!(data.value, NodeValue::Image(_));
+            let title = (!link.title.is_empty()).then(|| format!("{} {}", link.url, link.title));
+            drop(data);
+            if let Some(title) = title {
+                walk.report(Signal::LinkMetadataInstruction, &title);
+            }
+            if image {
+                if walk.alt_depth == 0 {
+                    walk.alt = Some(String::new());
+                }
+                walk.alt_depth = walk.alt_depth.saturating_add(1);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Reads one node on exit.
+fn leave<F: FnMut(Signal, u32)>(walk: &mut Walk<'_, F>, node: &AstNode<'_>) {
+    match node.data().value {
+        NodeValue::Image(_) => {
+            walk.alt_depth = walk.alt_depth.saturating_sub(1);
+            if walk.alt_depth == 0
+                && let Some(alt) = walk.alt.take()
+            {
+                walk.report(Signal::LinkMetadataInstruction, &alt);
+            }
+        }
+        NodeValue::Paragraph => walk.end_paragraph(),
+        _ => {}
+    }
+}
+
+/// Reports the runs of non-blank source lines that no rendered block covers.
+///
+/// They are reference definitions and unreferenced footnote definitions, which render
+/// nothing; a line that starts a definition after its container markers starts a new run.
+fn unrendered_lines(text: &str, covered: &[bool], add: &mut impl FnMut(Signal, u32)) {
+    let mut run = String::new();
+    let mut flush = |run: &mut String| {
+        if !run.is_empty() && words::instructs(run) {
+            add(Signal::ReferenceDefinitionInstruction, 1);
+        }
+        run.clear();
+    };
+    for (index, line) in text.split('\n').enumerate() {
+        let rendered = covered
+            .get(index.saturating_add(1))
+            .copied()
+            .unwrap_or_default();
+        let blank = line.trim().is_empty();
+        let starts_definition = line
+            .trim_start_matches(|character: char| {
+                character.is_ascii_whitespace()
+                    || character.is_ascii_digit()
+                    || matches!(character, '>' | '-' | '*' | '+' | '.' | ')')
+            })
+            .starts_with('[');
+        if rendered || blank || starts_definition {
+            flush(&mut run);
+        }
+        if !rendered && !blank {
+            run.push_str(line);
+            run.push('\n');
+        }
+    }
+    flush(&mut run);
+}
+
+/// Returns the byte range of a code node when the source there holds it, else `None`.
+///
+/// A code span's range must start and end with a backtick; a code block's range must hold
+/// the first non-blank line of its content.
+fn checked_code(text: &str, lines: &Lines, node: &AstNode<'_>) -> Option<(usize, usize)> {
+    let data = node.data();
+    let (start, end) = lines.range(data.sourcepos);
+    let source = text.get(start..end)?;
+    let holds = match &data.value {
+        NodeValue::Code(_) => source.starts_with('`') && source.ends_with('`'),
+        NodeValue::CodeBlock(block) => block
+            .literal
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .is_none_or(|line| source.contains(line)),
+        _ => false,
+    };
+    holds.then_some((start, end))
+}
+
+/// Reports the hidden Markdown signals of a rendered field to `add`.
+///
+/// Returns the byte ranges of its code (fenced and indented code blocks and code spans), or
+/// `None` when any code position does not match the source: the caller then treats the whole
+/// field as shown text (fail closed).
+pub(crate) fn scan(text: &str, add: &mut impl FnMut(Signal, u32)) -> Option<Vec<(usize, usize)>> {
+    let arena = Arena::new();
+    let root = parse_document(&arena, text, &options());
+    let lines = Lines::new(text);
+    let mut covered = vec![false; lines.starts.len().saturating_add(1)];
+    let mut code = Vec::new();
+    let mut code_checked = true;
+    let mut shifted = false;
+    let mut walk = Walk {
+        add,
+        frames: Vec::new(),
+        open: BTreeMap::new(),
+        alt: None,
+        alt_depth: 0,
+        comment: None,
+    };
+    for edge in root.traverse() {
+        match edge {
+            NodeEdge::Start(node) => {
+                if matches!(
+                    node.data().value,
+                    NodeValue::CodeBlock(_) | NodeValue::Code(_)
+                ) {
+                    match checked_code(text, &lines, node) {
+                        Some(range) => code.push(range),
+                        None => code_checked = false,
+                    }
+                }
+                enter(&mut walk, node, (text, &lines), &mut covered, &mut shifted);
+            }
+            NodeEdge::End(node) => leave(&mut walk, node),
+        }
+    }
+    walk.close_all();
+    walk.close_comment();
+    unrendered_lines(text, &covered, walk.add);
+    code.sort_unstable();
+    let disjoint = code.windows(2).all(|pair| match pair {
+        [(_, end), (start, _)] => end <= start,
+        _ => true,
+    });
+    (code_checked && disjoint && !shifted).then_some(code)
+}
