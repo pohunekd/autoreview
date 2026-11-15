@@ -103,3 +103,78 @@ fn unreadable(path: &Path, error: io::Error) -> Error {
         Some(Box::new(error)),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A case name, the modes of the directory, database, log and memory, the reported ones.
+    type Case = (&'static str, [Option<u32>; 4], &'static [usize]);
+
+    /// The directory must be 0700 and each existing store file 0600 or narrower (#439, D3).
+    #[test]
+    fn store_modes_wider_than_owner_only_are_reported() {
+        let paths = ["/s", "/s/a.db", "/s/a.db-wal", "/s/a.db-shm"];
+        let fixes = ["700", "600", "600", "600"];
+        let (absent, private) = ([None; 4], Some(0o700));
+        let cases: [Case; 10] = [
+            ("nothing exists yet", absent, &[]),
+            ("private", [private, Some(0o600), None, None], &[]),
+            (
+                "narrower",
+                [Some(0o500), Some(0o400), Some(0o600), Some(0o600)],
+                &[],
+            ),
+            ("setgid only", [Some(0o2700), Some(0o600), None, None], &[]),
+            (
+                "umask 022",
+                [Some(0o755), Some(0o644), Some(0o644), Some(0o644)],
+                &[0, 1, 2, 3],
+            ),
+            ("group may search", [Some(0o710), None, None, None], &[0]),
+            ("others may search", [Some(0o701), None, None, None], &[0]),
+            ("group may read", [private, Some(0o640), None, None], &[1]),
+            (
+                "others may write the log",
+                [private, Some(0o600), Some(0o602), None],
+                &[2],
+            ),
+            (
+                "group may read the memory",
+                [private, Some(0o600), None, Some(0o640)],
+                &[3],
+            ),
+        ];
+        for (case, modes, reported) in cases {
+            let entries: Vec<(PathBuf, Option<u32>, &str)> = (0..4)
+                .map(|i| (PathBuf::from(paths[i]), modes[i], fixes[i]))
+                .collect();
+            let expected = (!reported.is_empty()).then(|| {
+                let shown: Vec<String> = reported
+                    .iter()
+                    .map(|&i| {
+                        let mode = modes[i].unwrap_or_default();
+                        format!(
+                            "{} has mode {mode:04o}, run chmod {} {}",
+                            paths[i], fixes[i], paths[i]
+                        )
+                    })
+                    .collect();
+                format!(
+                    "store.path must be private to the service user: {}. validate changes no \
+mode.",
+                    shown.join("; ")
+                )
+            });
+            assert_eq!(exposure(&entries), expected, "{case}");
+        }
+        let entries = [(PathBuf::from("/s"), Some(0o755), "700")];
+        assert_eq!(
+            exposure(&entries).as_deref(),
+            Some(
+                "store.path must be private to the service user: /s has mode 0755, run chmod 700 \
+/s. validate changes no mode."
+            )
+        );
+    }
+}

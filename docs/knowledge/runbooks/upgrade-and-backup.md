@@ -49,7 +49,9 @@ retention settings (`store.review_retention_seconds`,
    ```
 
    `validate` loads `config.yaml`, the policy and every prompt. A new key or a changed
-   policy rule shows up here as a named error. Fix it before the restart.
+   policy rule shows up here as a named error. Fix it before the restart. After
+   0.4.0 it also refuses a store directory or store file that grants the group
+   or other users any access, and names the `chmod` that fixes each path.
 4. Compare `agent_profiles` in the output with the profiles on each review host.
    On each review host, install the new binary as well and run
    [`autoreview profiles install`](../../cli.md#autoreview-profiles-install)
