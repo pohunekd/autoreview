@@ -61,10 +61,11 @@ links to them. Edit only `.agents/skills/`.
 ## Commands
 
 ```bash
-scripts/gates                  # every gate: docs, adapters, rust
+scripts/gates                  # every gate: docs, adapters, rust, deny
 scripts/gates docs             # documentation and example checks only
 scripts/gates adapters         # the test suite of every adapters/<name>/tests directory
 scripts/gates rust             # fmt, clippy and test of the Cargo workspace
+scripts/gates deny             # cargo-deny licence and advisory check of Cargo.lock
 python3 -I scripts/check-docs  # the documentation checker alone
 ```
 
