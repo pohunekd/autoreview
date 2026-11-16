@@ -106,6 +106,17 @@ Its line `autoreview.service restarted` is the restart of step 4's window. When
 fix the configuration and run it again. It also installs the units of the new
 archive. Check the state as in step 5.
 
+### With scripts/setup
+
+Back up the store first, then run `scripts/setup` from a checkout of the new
+release tag with the same `--dir`: it installs the release that its
+`AUTOREVIEW_VERSION` names, runs `validate` with the secrets file before it
+touches the service, and asks to restart the service on the new binary. Then do
+step 4 for every profile. On a Mac the restart is
+`launchctl kickstart -k gui/$(id -u)/io.github.pohunekd.autoreview` (the script
+runs it after its question), and `scripts/macos-check service` checks the state:
+every line `ok`, and the service running the new binary.
+
 ## Store migrations
 
 Every command that opens the store creates or extends its schema on the first
@@ -140,8 +151,16 @@ and nothing prunes the tables.
 
 Roll back only with a backup taken before the upgrade:
 
-1. Stop the service: `sudo systemctl stop autoreview.service`.
-2. Restore the old binary (`/usr/local/bin/autoreview.previous`).
+1. Stop the service: `sudo systemctl stop autoreview.service` (with
+   `scripts/setup`, `systemctl --user stop autoreview.service`; on a Mac,
+   `launchctl bootout gui/$(id -u)/io.github.pohunekd.autoreview`, and
+   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.pohunekd.autoreview.plist`
+   to start it again after the steps below; the service can take 90 s to stop,
+   and the bootstrap fails while
+   `launchctl print gui/$(id -u)/io.github.pohunekd.autoreview` still finds it).
+2. Restore the old binary (`/usr/local/bin/autoreview.previous`; with
+   `scripts/setup`, install the binary of the old release archive as
+   `~/.local/bin/autoreview`).
 3. If the new version may have changed the store, restore the backup over
    `store.path` while the service is stopped. Reviews published after the backup
    are not in the restored store; check them on GitHub before you retry.

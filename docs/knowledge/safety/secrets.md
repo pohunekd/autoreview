@@ -61,6 +61,13 @@ The review agents are started by the pohunek daemon, not by autoreview, and run
 with the daemon's environment, which autoreview does not control. Keep secrets
 out of the daemon's environment and out of the pohunek profile.
 
+On macOS, the launchd agents that `scripts/setup` writes for autoreview carry no
+secret either. Their `EnvironmentVariables` hold only `PATH`, `XDG_CONFIG_HOME`,
+`XDG_DATA_HOME` and `XDG_STATE_HOME`, plus `XDG_CACHE_HOME` and
+`XDG_RUNTIME_DIR` when they are set. The secrets reach the service through
+`--env-file`, which must be yours with mode 0600. `scripts/macos-check service`
+refuses an agent that holds any other variable.
+
 ## Blast radius of a token
 
 The one token reaches what its own scope allows on GitHub; a leaked token

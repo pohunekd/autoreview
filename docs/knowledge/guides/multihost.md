@@ -36,6 +36,9 @@ They are joined by pohunek remote hosts: the server's pohunek CLI reaches each
 review host by its pohunek name over an overlay network (see
 [below](#reach-a-remote-host-over-an-overlay-network)), and `pohunek.hosts`
 lists those names. autoreview itself opens no connection to a review host.
+From the first release after 0.5.0 on (#513), either role can be a Mac with
+Apple Silicon. A Mac review host runs Claude reviewers only: the Codex adapter
+needs Linux ([below](#install-the-agent-profiles-on-every-host)).
 
 `scripts/setup` sets up one machine with both roles. On several machines its
 steps split like this:

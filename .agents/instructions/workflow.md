@@ -95,7 +95,10 @@ It never creates a tag and never publishes.
    exception to the branch convention), set `version = "X.Y.Z"` under
    `[workspace.package]` in `Cargo.toml`, then run `cargo update --workspace`.
    It updates only the workspace crates in `Cargo.lock`; `--locked` fails
-   without it.
+   without it. Set `AUTOREVIEW_VERSION="X.Y.Z"` near the start of
+   `scripts/setup` too: setup on the tag installs that release, and on a Mac
+   the first release with the `aarch64-apple-darwin` archive is the first one
+   it can install.
 2. Run `scripts/changelog fold X.Y.Z`. It moves every fragment into a new
    section of `CHANGELOG.md` and deletes the fragments. Run `scripts/gates`.
 3. Open the pull request with the label `no-changelog` and merge it when `ci`
