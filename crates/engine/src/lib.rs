@@ -19,6 +19,7 @@ pub mod notify;
 pub(crate) mod prior;
 pub(crate) mod protocol;
 pub mod publish;
+pub mod report;
 pub(crate) mod review;
 pub(crate) mod review_queue;
 pub mod stats;
