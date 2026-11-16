@@ -1152,7 +1152,7 @@ fn state_line(counts: &StateCounts) -> String {
 }
 
 /// Returns seconds as text, or `none` without a published review.
-fn seconds_text(seconds: Option<i64>) -> String {
+pub(crate) fn seconds_text(seconds: Option<i64>) -> String {
     seconds.map_or_else(|| "none".to_owned(), |value| format!("{value} s"))
 }
 

@@ -6,6 +6,7 @@
 // Rust guideline compliant 2026-06-26
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use autoreview_go_compat::go_time::format_rfc3339_seconds;
 use serde::Serialize;
@@ -17,7 +18,9 @@ use crate::engine::{Clock, Engine};
 use crate::error::Error;
 use crate::integrations::Integrations;
 use crate::model::repository_valid;
-use crate::stats::{Counters, Keyed, STATS_RANGE_INVALID, StatsRange, history, keyed};
+use crate::stats::{
+    Counters, Keyed, STATS_RANGE_INVALID, StatsRange, history, keyed, seconds_text,
+};
 use crate::store::outcome_checks::{OUTCOME_OPEN_AT_CLOSE, OUTCOME_OPEN_AT_MERGE};
 use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup};
 
@@ -229,6 +232,105 @@ pub fn finding_metrics(
         by_reviewer: keyed(reviewers, OutcomeCounts::finish),
         by_severity: keyed(severities, OutcomeCounts::finish),
         by_repository: keyed(repositories, OutcomeCounts::finish),
+    }
+}
+
+/// Column headers of the findings table, in the order of `OutcomeCounts::cells`.
+const COLUMNS: [&str; 7] = [
+    "findings",
+    "blocking",
+    "open",
+    "fixed",
+    "open_at_merge",
+    "fixed%",
+    "demoted",
+];
+
+/// Header of the label column of the findings table.
+const LABEL_HEADER: &str = "Findings";
+
+impl OutcomeCounts {
+    /// Returns the cells of one table row; `demoted` is `refuted` plus `not_blocking`.
+    fn cells(&self) -> [String; 7] {
+        [
+            self.findings.to_string(),
+            self.blocking.to_string(),
+            self.open.to_string(),
+            self.fixed.to_string(),
+            self.open_at_merge.to_string(),
+            percent_text(self.fixed_percent),
+            (self.refuted + self.not_blocking).to_string(),
+        ]
+    }
+}
+
+/// Returns a percentage as text with one decimal, or `none` without a whole.
+fn percent_text(value: Option<f64>) -> String {
+    value.map_or_else(|| "none".to_owned(), |value| format!("{value:.1}%"))
+}
+
+impl fmt::Display for ReportDocument {
+    /// Writes the short text table that `autoreview report` prints without `--json`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let every = |value: &Option<String>| value.clone().unwrap_or_else(|| "every".to_owned());
+        writeln!(
+            f,
+            "Report {} to {} (UTC days), repository {}, pipeline {}",
+            self.since,
+            self.until,
+            every(&self.repository),
+            every(&self.pipeline)
+        )?;
+        let reviews = &self.reviews;
+        writeln!(
+            f,
+            "Reviews: {} decided, {} published, {} approval expired",
+            reviews.decided, reviews.published, reviews.approval_expired
+        )?;
+        writeln!(
+            f,
+            "  approved without a human {}, waited for a human {}",
+            percent_text(reviews.approved_without_human_percent),
+            percent_text(reviews.waited_for_human_percent)
+        )?;
+        writeln!(
+            f,
+            "  changes requested {}, commented {}",
+            percent_text(reviews.changes_requested_percent),
+            percent_text(reviews.commented_percent)
+        )?;
+        writeln!(
+            f,
+            "  attempt creation to publication: median {}, p90 {}",
+            seconds_text(reviews.attempt_to_publication_median_seconds),
+            seconds_text(reviews.attempt_to_publication_p90_seconds)
+        )?;
+        let findings = &self.findings;
+        let mut rows = vec![("total".to_owned(), &findings.total)];
+        for (kind, entries) in [
+            ("reviewer", &findings.by_reviewer),
+            ("severity", &findings.by_severity),
+            ("repository", &findings.by_repository),
+        ] {
+            for entry in entries {
+                rows.push((format!("{kind} {}", entry.key), &entry.counts));
+            }
+        }
+        let labels = rows.iter().map(|(label, _)| label.chars().count());
+        let width = labels.max().unwrap_or(0).max(LABEL_HEADER.len());
+        write!(f, "{LABEL_HEADER:<width$}")?;
+        for column in COLUMNS {
+            write!(f, " {column}")?;
+        }
+        writeln!(f)?;
+        for (label, counts) in rows {
+            write!(f, "{label:<width$}")?;
+            for (column, cell) in COLUMNS.iter().zip(counts.cells()) {
+                write!(f, " {cell:>column_width$}", column_width = column.len())?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
     }
 }
 

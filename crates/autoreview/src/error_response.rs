@@ -25,7 +25,8 @@ const DISCOVERY_BUSY: &str = "discovery_busy";
 const USAGE: &str = "usage: autoreview [--config PATH] [--env-file PATH] serve | mcp | \
 validate [--check-credentials] | poll | retry|resolve|approve --repository OWNER/REPO NUMBER \
 HEAD | review --repository OWNER/REPO NUMBER | reviews [LIMIT] | stats [--since DATE \
-[--until DATE]] [--json] | findings list --repo OWNER/REPO --since DATE | candidates | \
+[--until DATE]] [--json] | report --since DATE [--until DATE] [--repo OWNER/REPO] \
+[--pipeline NAME] [--json] | findings list --repo OWNER/REPO --since DATE | candidates | \
 awaiting | review-queue | backup-db PATH | \
 prune-branches --git-binary PATH [--host HOST] [--older-than-days DAYS] [--yes]; \
 autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME [--store-path PATH] \
