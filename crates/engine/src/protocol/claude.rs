@@ -26,6 +26,12 @@ const LEGACY_CLAUDE_RESULT_PROTOCOL: &str = "claude-otel-noninteractive/v2";
 /// Severities that hold the merge back when a finding flags itself as blocking.
 const BLOCKING_SEVERITIES: [&str; 2] = ["critical", "high"];
 
+/// Mode of a wrapper whose adapter ran the session input as a plain prompt.
+///
+/// The engine sends only structured requests, so only an adapter that does not know their
+/// protocol name answers in it.
+const MODE_PLAIN_PROMPT: &str = "text";
+
 /// Refusal of the adapter when the pull request head is not in the review checkout.
 const REFUSAL_HEAD_UNAVAILABLE: &str = "head_unavailable";
 
@@ -212,10 +218,12 @@ pub(crate) fn parse_claude_output(
 /// Reads the schema-enforced structured output of a finished Claude session on `checkout`.
 ///
 /// The prose result is checked against the structured output by `check_prose_agreement`. A
-/// refusal of the adapter is `review_head_unavailable` for a missing head, and
-/// `review_result_invalid` otherwise. A wrapper of the protocol whose `checked_checkout` is not
-/// the name of `checkout` is `review_adapter_outdated`, whatever its exit code: only an adapter
-/// that checked the review checkout writes it, outside the base64 output of the run. A
+/// wrapper of the protocol in mode `text` is `review_adapter_outdated`, with or without a
+/// refusal: its adapter ran the request as a plain prompt. Any other refusal of the adapter is
+/// `review_head_unavailable` for a missing head, and `review_result_invalid` otherwise. A
+/// wrapper of the protocol whose `checked_checkout` is not the name of `checkout` is
+/// `review_adapter_outdated`, whatever its exit code: only an adapter that checked the review
+/// checkout writes it, outside the base64 output of the run. A
 /// `review_wrapper_invalid` of a run whose exit code is not 0 carries the end of its stderr.
 /// A `review_result_invalid` of a refusal carries the adapter's message from its stderr.
 /// A run that `usage_limited` reports is `reviewer_usage_limited`, whatever its exit code and
@@ -229,6 +237,9 @@ where
     }
     refuse_case_variant_keys(raw, "review_wrapper_invalid")?;
     let wrapper: ClaudeWrapper = serde_json::from_str(raw).map_err(|_| wrapper_invalid())?;
+    if is_result_protocol(&wrapper.protocol) && wrapper.mode == MODE_PLAIN_PROMPT {
+        return Err(review_adapter_outdated());
+    }
     if !wrapper.refusal.is_empty() {
         return Err(adapter_refusal(&wrapper));
     }
@@ -532,9 +543,11 @@ mod tests {
     // A refusal envelope of the adapter names its reason. A head that is not in the review
     // checkout stops the review; a fresh run on the same repository cannot find it either (#253).
     // A result without the checkout that the adapter checked comes from an adapter that may not
-    // have checked it, and a fresh run of that adapter would write the same result. Any other
-    // refusal gets the adapter's message from its stderr, bounded and neutralized, as the
-    // cause of `review_result_invalid` (#323).
+    // have checked it, and a fresh run of that adapter would write the same result. An adapter
+    // that does not know the request's protocol name runs the request as a plain prompt and
+    // answers in mode `text`, with or without a refusal, so its answer stops the review too
+    // (#392). Any other refusal gets the adapter's message from its stderr, bounded and
+    // neutralized, as the cause of `review_result_invalid` (#323).
     #[test]
     fn adapter_refusal_of_a_missing_head_is_not_retried() {
         let pr = test_pull_request(3);
@@ -548,6 +561,19 @@ mod tests {
             .remove("checked_checkout");
         let mut other_checkout = success.clone();
         other_checkout["checked_checkout"] = json!("head");
+        let mut plain_run = success.clone();
+        plain_run["protocol"] = json!("claude-otel-noninteractive/v2");
+        plain_run["mode"] = json!("text");
+        // The line that an adapter older than #24 writes for every structured request.
+        let older_refusal = json!({
+            "protocol": "claude-otel-noninteractive/v2",
+            "mode": "text",
+            "exit_code": 64,
+            "stdout_base64": "",
+            "stderr_base64": STANDARD
+                .encode("claude-adapter: trusted pull request head is missing or ambiguous\n"),
+            "refusal": "checkout_invalid"
+        });
         success["refusal"] = json!("head_unavailable");
         let refusal = |reason: &str, exit_code: i64, message: &str| {
             let stderr = STANDARD.encode(format!("claude-adapter: {message}\n"));
@@ -599,6 +625,18 @@ mod tests {
             (
                 "other checked checkout",
                 format!("{other_checkout}\n"),
+                "review_adapter_outdated",
+                None,
+            ),
+            (
+                "older adapter refusal of the request",
+                format!("{older_refusal}\n"),
+                "review_adapter_outdated",
+                None,
+            ),
+            (
+                "plain prompt run of the request",
+                format!("{plain_run}\n"),
                 "review_adapter_outdated",
                 None,
             ),
@@ -752,7 +790,8 @@ mod tests {
 
     // Claude Code ends a run on a rate or usage limit with a result message whose
     // `api_error_status` is 429 (#461). Only these structured fields name the limit: a review
-    // that mentions one, another status and the limit text alone keep their codes.
+    // that mentions one, another status and the limit text alone keep their codes. A wrapper in
+    // mode `text` comes from an adapter that ran the request as a plain prompt.
     #[test]
     fn usage_limit_is_named_only_by_the_structured_result_fields() {
         let pr = test_pull_request(3);
@@ -838,7 +877,7 @@ mod tests {
                 wrapper(1, &json!(["result", "success", true, 429]), ""),
                 INVALID,
             ),
-            ("text mode", text_mode, INVALID),
+            ("text mode", text_mode, "review_adapter_outdated"),
         ];
         for (name, output, code) in cases {
             let err =

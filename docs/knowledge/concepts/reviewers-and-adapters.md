@@ -40,7 +40,9 @@ the run for a summary outside them. The free-text answer of the run may be
 prose. When it is JSON it has to agree with the structured output, or the run
 is rejected. A result line without the checkout that the adapter checked, or
 with another checkout than the request names, comes from an older adapter and
-is refused with `review_adapter_outdated`, without a fresh session.
+is refused with `review_adapter_outdated`, without a fresh session. So is a
+result line in mode `text`, with or without a refusal: its adapter ran the
+request as a plain prompt (see [wire names](#wire-names)).
 
 With `codex-envelope` the engine looks for one result frame at the end of the
 output and decodes it strictly. The frame must not be larger than
@@ -53,19 +55,23 @@ reviewed head SHA. A report without `prior_findings`, or with a finding without
 
 Between the engine and an adapter the protocols are named `autoreview-claude/v1`
 and `autoreview-codex/v2`. Each adapter answers in the name of the request it
-got. The engine reads the legacy Claude names too, so a Claude profile from an
-earlier release keeps working; a later release removes the legacy names (#393).
-A Codex profile must be installed from this release before the engine is
-updated (see below); a rollback of the engine needs no reinstall.
+got. The engine reads the legacy Claude result name too, so a review that an
+earlier engine started still finishes; a later release removes the legacy
+names (#393). Claude and Codex profiles must be installed from this release
+before the engine is updated (see below); a rollback of the engine needs no
+reinstall.
 
 - `autoreview-claude/v1` is the `protocol` field of the request and of the
-  result line. The adapter accepts a request of that name or of the legacy name
+  result line, and the engine sends every Claude request under it. The adapter
+  accepts a request of that name or of the legacy name
   `claude-otel-noninteractive/request-v1`, and answers in `autoreview-claude/v1`
   or in the legacy result name `claude-otel-noninteractive/v2`; a plain prompt
   gets the legacy name. The engine reads a result line of either name with the
-  same checks. It sends its requests under the legacy name until every review
-  host runs an adapter that reads the new one (#392), because an older adapter
-  runs a request of another name as a plain prompt.
+  same checks. An adapter from release 0.3.0 or earlier runs a request of the
+  new name as a plain prompt: it answers in mode `text`, with the refusal
+  `checkout_invalid`, as it finds no trusted line in the one-line request. The
+  engine stops such a review with `review_adapter_outdated`, without a fresh
+  session; run `autoreview profiles install` for the profile (#392).
 - `autoreview-codex/v2` is named in the trusted line
   `- Trusted protocol: autoreview-codex/v2` of the request, followed by the line
   `- Trusted nonce: <nonce>`: 16 bytes from the engine host's random source in
@@ -196,7 +202,9 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   without a `refusal` whose protocol is `autoreview-claude/v1` or
   `claude-otel-noninteractive/v2` and whose `checked_checkout` is not the
   pipeline's checkout is
-  `review_adapter_outdated` instead, whatever its exit code.
+  `review_adapter_outdated` instead, whatever its exit code. A line of either
+  name in mode `text` is `review_adapter_outdated` too, with or without a
+  `refusal`: only an adapter that ran the request as a plain prompt writes it.
   A line whose Claude Code result message has `is_error`, subtype `success`
   and `api_error_status` 429 is `reviewer_usage_limited`, whatever its exit
   code (see [troubleshooting](../runbooks/troubleshooting.md#reviewer-usage-limit)).
