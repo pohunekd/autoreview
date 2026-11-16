@@ -40,7 +40,9 @@ publishes the same findings again, and their rows stay as they are.
 Each review numbers its findings from `001`, so a later review of the same head
 (a retarget, a new review request or a retry) can publish a finding whose key is
 already stored. That finding adds no row: the first row stays as it is, and the
-later finding has no row of its own.
+later finding has no row of its own. Unless the later review carried the first
+finding as an earlier one, the first row loses its tracked key and stays
+`open`, so no review settles it with the verdict on the other finding.
 
 ## Outcomes
 

@@ -26,11 +26,16 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ) {
         let published_at = format_rfc3339_nano(published_at);
         let published = published_outcomes(workflow_id, input, artifact, &published_at);
+        // An adopted hand-off publishes the findings of the review that wrote them.
+        let origin = match &input.handoff {
+            Some(handoff) if handoff.adopt => &handoff.workflow_id,
+            _ => workflow_id,
+        };
         let recorded = self.store.record_outcomes(
             &artifact.repository,
             artifact.number,
             &artifact.head_sha,
-            &settlements(artifact),
+            &settlements(origin, artifact),
             &published,
         );
         if let Err(err) = recorded {
@@ -98,7 +103,9 @@ fn published_outcomes(
 ///
 /// `fixed` is fixed; `answered` is fixed when the verifier upheld it and `answered` otherwise.
 /// An open one published again moves to the key of its new finding; any other stays open.
-fn settlements(artifact: &Artifact) -> Vec<Settlement> {
+/// A new finding whose key no earlier finding of `artifact` has untracks the stored rows of
+/// that key that a review other than `origin` published: they belong to another finding.
+fn settlements(origin: &str, artifact: &Artifact) -> Vec<Settlement> {
     let upheld = |key: &str| {
         artifact.verification.as_ref().is_some_and(|verification| {
             verification.error_code.is_empty()
@@ -122,6 +129,16 @@ fn settlements(artifact: &Artifact) -> Vec<Settlement> {
             settlements.push(Settlement::Republished { key, republished });
         }
     }
+    for finding in &artifact.findings {
+        let key = prior_key(&artifact.head_sha, &finding.id);
+        let earlier = (artifact.prior_results)
+            .iter()
+            .any(|result| result.finding.key == key || result.republished == finding.id);
+        if !earlier {
+            let origin = origin.to_owned();
+            settlements.push(Settlement::Untracked { key, origin });
+        }
+    }
     settlements
 }
 
@@ -129,7 +146,7 @@ fn settlements(artifact: &Artifact) -> Vec<Settlement> {
 mod tests {
     use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN, prior_key};
     use crate::model::{
-        Artifact, PriorCheck, PriorFinding, PriorResult, PriorVerdict, Verification,
+        Artifact, Finding, PriorCheck, PriorFinding, PriorResult, PriorVerdict, Verification,
     };
     use crate::protocol::fixtures::sha;
     use crate::store::Settlement;
@@ -193,8 +210,28 @@ mod tests {
                     outcome: outcome.to_owned(),
                 }],
             };
-            let settled = settlements(&artifact(status, republished, check));
+            let settled = settlements("w1", &artifact(status, republished, check));
             assert_eq!(settled, want, "{name}");
         }
+
+        // Only O002 is a new key here: O001 is the earlier finding, P001 publishes it again.
+        let mut reused = artifact(PRIOR_OPEN, "P001", None);
+        reused.prior_results[0].finding.key = prior_key(&sha("c"), "O001");
+        let finding = |id: &str| Finding {
+            id: id.to_owned(),
+            ..Finding::default()
+        };
+        reused.findings = vec![finding("O001"), finding("O002"), finding("P001")];
+        let want = vec![
+            Settlement::Republished {
+                key: prior_key(&sha("c"), "O001"),
+                republished: prior_key(&sha("c"), "P001"),
+            },
+            Settlement::Untracked {
+                key: prior_key(&sha("c"), "O002"),
+                origin: "w1".to_owned(),
+            },
+        ];
+        assert_eq!(settlements("w1", &reused), want, "a reused key");
     }
 }

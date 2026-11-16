@@ -68,7 +68,7 @@ pub struct FindingOutcome {
     /// Key that later reviews of the pull request settle the finding by.
     ///
     /// It starts as `finding_key` and becomes the key of the new finding when the finding
-    /// is published again.
+    /// is published again. It is empty once a finding of another review reuses the key.
     pub tracked_key: String,
     /// Workflow ID of the review that published the finding first.
     pub workflow_id: String,
@@ -118,6 +118,13 @@ pub enum Settlement {
         key: String,
         /// Key of the new finding that publishes it again.
         republished: String,
+    },
+    /// A new finding reuses `key`, so an open row of another review stops being tracked by it.
+    Untracked {
+        /// The reused key.
+        key: String,
+        /// Workflow ID of the review that first published the new finding; its rows stay.
+        origin: String,
     },
 }
 
@@ -218,7 +225,9 @@ fn open_rows(
     number: i64,
     settlement: &Settlement,
 ) -> Result<Vec<i64>, Error> {
-    let (Settlement::Decided { key, .. } | Settlement::Republished { key, .. }) = settlement;
+    let (Settlement::Decided { key, .. }
+    | Settlement::Republished { key, .. }
+    | Settlement::Untracked { key, .. }) = settlement;
     let mut statement = connection
         .prepare(
             "SELECT rowid FROM finding_outcomes \
@@ -234,6 +243,8 @@ fn open_rows(
 }
 
 /// Applies one settlement to the row with the ID `row`.
+///
+/// An untracked row keeps its outcome; an empty tracked key matches no later settlement.
 fn settle(
     connection: &Connection,
     row: i64,
@@ -250,6 +261,11 @@ fn settle(
         Settlement::Republished { republished, .. } => connection.execute(
             "UPDATE finding_outcomes SET tracked_key = ?2, updated_at = ?3 WHERE rowid = ?1",
             params![row, republished, now],
+        ),
+        Settlement::Untracked { origin, .. } => connection.execute(
+            "UPDATE finding_outcomes SET tracked_key = '', updated_at = ?3 \
+             WHERE rowid = ?1 AND workflow_id != ?2",
+            params![row, origin, now],
         ),
     }
     .map_err(unavailable)?;
