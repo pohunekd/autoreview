@@ -35,7 +35,10 @@ reviews, and it reports what needs attention to Matrix. The details are in
 
 `scripts/setup` sets up one Linux machine on which autoreview and the pohunek
 daemon run together, as your own user, without `sudo`. Several machines are
-described in [several review hosts](multihost.md#deployment-layout).
+described in [several review hosts](multihost.md#deployment-layout). To set up
+each step by hand, or on a system without systemd user units, follow the
+[quickstart](quickstart.md); for a dedicated server user, see
+[install](../../install.md).
 
 | What | Where |
 |---|---|

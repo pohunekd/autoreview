@@ -55,15 +55,17 @@ own user, run `scripts/setup` from a checkout of the repository: it installs
 both from their release archives, writes the configuration and the user
 service, and asks before every change. See
 [getting started](knowledge/guides/getting-started.md). The paths below are for
-a dedicated server user.
+a dedicated server user. To learn the steps on one repository first, follow the
+[quickstart](knowledge/guides/quickstart.md).
 
 | Path | Use it when | You get |
 |---|---|---|
 | a. Release binary (default) | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
 | b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `deploy/install.sh`, which installs `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
 
-Paths a and b need the `autoreview` system user that path b creates. A
-container image is not available (#40).
+Paths a and b need the `autoreview` system user. The installer of path b
+creates it; with path a only, create it yourself. A container image is not
+available (#40).
 
 ## a. Release binary
 
@@ -226,8 +228,11 @@ The output is one JSON object; error messages are listed in [policy validation e
 
 ## First review
 
-Start the service, then check what discovery picks up and run one pass. A review
-starts after `schedule.debounce_seconds`.
+With path b, the installer has started `autoreview.service` once the
+configuration exists. With path a, start `autoreview serve` as the `autoreview`
+user with the same `--config` and `--env-file` as below. Then check what
+discovery picks up and run one pass. A review starts after
+`schedule.debounce_seconds`.
 
 ```sh
 run() { sudo -u autoreview autoreview --config /etc/autoreview/config.yaml \
