@@ -88,6 +88,7 @@ VARIABLES = (
     ("SESSION_GROUP", "text", "session.group"),
     ("POHUNEK_HOSTS_JSON", "hosts", "pohunek.hosts"),
     ("ROUTE_OVERRIDES_JSON", "routes", "pohunek.route_overrides"),
+    ("HEAD_CHECKOUT_HOST_HOOKS", "host_hooks", "pohunek.head_checkout_host_hooks"),
     ("MATRIX_ACTION_ROOM", "text", None),
     ("MATRIX_DIGEST_ROOM", "text", None),
     ("MATRIX_LOG_ROOM", "text", None),
@@ -318,6 +319,13 @@ def json_value(name, value):
     return parsed
 
 
+def host_hooks(name, value):
+    """`refuse` or `allow`, for `pohunek.head_checkout_host_hooks`; no other text."""
+    if value not in ("refuse", "allow"):
+        raise Finding(f"{name}: must be refuse or allow")
+    return value
+
+
 def text_list(name, value):
     """A JSON list of strings."""
     parsed = json_value(name, value)
@@ -378,6 +386,8 @@ def convert(values, secrets):
             converted = text_list(name, value)
         elif kind == "delays":
             converted = delays(name, value)
+        elif kind == "host_hooks":
+            converted = host_hooks(name, value)
         else:
             converted = routes(name, value)
         out[key or name] = converted
@@ -470,6 +480,7 @@ def render(out):
         f"  hosts: {flow(out['pohunek.hosts'])}",
         "  route_overrides: {}" if not route_lines else "  route_overrides:",
         *route_lines,
+        f"  head_checkout_host_hooks: {scalar('pohunek.head_checkout_host_hooks')}",
         "",
         "session:",
         f"  group: {scalar('session.group')}",

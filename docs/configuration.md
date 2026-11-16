@@ -33,10 +33,11 @@ other name is `configuration_invalid` naming the key.
 The service finds the file through `--config <path>` or the
 `AUTOREVIEW_CONFIG` environment variable; with neither it refuses to start.
 
-A `config.yaml` written for 0.4.0 needs four more keys after 0.4.0:
+A `config.yaml` written for 0.4.0 needs five more keys after 0.4.0:
 `schedule.usage_limit_retry_delays_seconds`,
-`schedule.outcome_check_interval_seconds`, `limits.max_issue_characters` and
-`store.outcome_retention_seconds`. `validate` names each missing one. A rollback
+`schedule.outcome_check_interval_seconds`, `limits.max_issue_characters`,
+`store.outcome_retention_seconds` and `pohunek.head_checkout_host_hooks`.
+`validate` names each missing one. A rollback
 to 0.4.0 removes them again, see
 [roll back](knowledge/runbooks/upgrade-and-backup.md#roll-back).
 
@@ -70,6 +71,9 @@ pohunek:
   timeout_seconds: 45
   hosts: [review-host]
   route_overrides: {}
+  # refuse: a checkout: head review never starts on a host whose own pohunek
+  # hook scripts would run in the pull request's worktree (see host inspect).
+  head_checkout_host_hooks: refuse
 
 session:
   group: autoreview
@@ -261,6 +265,7 @@ token needs and when to use a machine user.
 | `timeout_seconds` | Timeout of one pohunek call, including a session start with its base fetch |
 | `hosts` | pohunek host names that may run reviewers, in priority order; one or more |
 | `route_overrides` | Map `owner/repo: {host, project_id}` that pins a repository to one host and project; an entry's optional `untrusted: {host, project_id}` pins its untrusted authors' pull requests instead |
+| `head_checkout_host_hooks` | `refuse` or `allow`. A `checkout: head` session always starts with `--no-repo-hooks`, so the pull request's own pohunek hooks never run, but the host's own scripts (`hooks/<event>` in pohunek's config directory) still run in its worktree. `refuse` starts such a review only when `pohunek host inspect --json` reports `host_hooks` with no script for `post_create`, `session_start`, `session_stop`, `agent_state` and `pre_remove`, and refuses it with `review_host_hooks_refused` otherwise, also when the host does not report `host_hooks`. `allow` starts it whatever scripts the host has; use it only when those scripts run nothing from the checkout. A `checkout: base` review is not affected |
 
 For each review autoreview asks the hosts in `hosts` in order for their pohunek
 projects and takes the first host with a project that matches the repository, by

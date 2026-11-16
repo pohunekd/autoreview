@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{
-    BackendKind, Config, Credential, Credentials, HostOrder, HostStateChoice, HostStateRules,
-    MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, TextGuard, WebhookBackend,
-    WebhookFormat, signature_text,
+    BackendKind, Config, Credential, Credentials, HostHooksChoice, HostOrder, HostStateChoice,
+    HostStateRules, MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, TextGuard,
+    WebhookBackend, WebhookFormat, signature_text,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
@@ -331,6 +331,8 @@ struct PohunekFile {
     hosts: Option<Value>,
     /// Pins a repository registered on more than one host.
     route_overrides: Option<BTreeMap<String, RouteOverrideFile>>,
+    /// `refuse` or `allow` a head checkout on a host whose hook scripts run in its worktree.
+    head_checkout_host_hooks: Option<Value>,
     /// Picks review hosts by their state; without it the hosts are tried in configured order.
     /// A null section reads as a section without keys, so its first key is reported missing.
     #[serde(default, deserialize_with = "present_section")]
@@ -895,6 +897,7 @@ fn map_file(
         Some(overrides) => route_overrides(overrides)?,
         None => return Err(missing("pohunek.route_overrides")),
     };
+    let head_checkout_host_hooks = host_hooks_choice(&pohunek.head_checkout_host_hooks)?;
     let host_state = host_state_rules(&pohunek.host_state, pohunek_timeout)?;
     let session = section(&file.session, "session")?;
     let session_branch_prefix = branch_prefix(&session.branch_prefix)?;
@@ -1056,6 +1059,7 @@ fn map_file(
         pohunek_hosts,
         route_overrides,
         untrusted_route_overrides,
+        head_checkout_host_hooks,
         host_state,
         text_guard,
         notify,
@@ -1317,6 +1321,16 @@ fn host_state_rules(
         required_models,
         outside_window,
     }))
+}
+
+/// Reads `pohunek.head_checkout_host_hooks`: `refuse` or `allow`.
+fn host_hooks_choice(value: &Option<Value>) -> Result<HostHooksChoice, Error> {
+    let key = "pohunek.head_checkout_host_hooks";
+    match text(value, key)?.as_str() {
+        "refuse" => Ok(HostHooksChoice::Refuse),
+        "allow" => Ok(HostHooksChoice::Allow),
+        _ => Err(invalid(key, "must be refuse or allow")),
+    }
 }
 
 /// Reads `skip` or `eligible`.
@@ -2967,6 +2981,14 @@ pub(crate) mod tests {
                 "  hosts: [review-host]",
                 "  hosts: []",
                 "configuration_invalid: pohunek.hosts: must list at least one host",
+            ),
+            (
+                "  head_checkout_host_hooks: refuse",
+                "  head_checkout_host_hooks: ignore",
+                concat!(
+                    "configuration_invalid: pohunek.head_checkout_host_hooks: ",
+                    "must be refuse or allow"
+                ),
             ),
             (
                 "  discovery_lock_poll_ms: 500",
