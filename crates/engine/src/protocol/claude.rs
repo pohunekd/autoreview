@@ -532,9 +532,11 @@ mod tests {
     // A refusal envelope of the adapter names its reason. A head that is not in the review
     // checkout stops the review; a fresh run on the same repository cannot find it either (#253).
     // A result without the checkout that the adapter checked comes from an adapter that may not
-    // have checked it, and a fresh run of that adapter would write the same result. Any other
-    // refusal gets the adapter's message from its stderr, bounded and neutralized, as the
-    // cause of `review_result_invalid` (#323).
+    // have checked it, and a fresh run of that adapter would write the same result. An adapter
+    // that does not know the request's protocol name runs the request as a plain prompt and
+    // answers in mode `text`, with or without a refusal, so its answer stops the review too
+    // (#392). Any other refusal gets the adapter's message from its stderr, bounded and
+    // neutralized, as the cause of `review_result_invalid` (#323).
     #[test]
     fn adapter_refusal_of_a_missing_head_is_not_retried() {
         let pr = test_pull_request(3);
@@ -548,6 +550,19 @@ mod tests {
             .remove("checked_checkout");
         let mut other_checkout = success.clone();
         other_checkout["checked_checkout"] = json!("head");
+        let mut plain_run = success.clone();
+        plain_run["protocol"] = json!("claude-otel-noninteractive/v2");
+        plain_run["mode"] = json!("text");
+        // The line that an adapter older than #24 writes for every structured request.
+        let older_refusal = json!({
+            "protocol": "claude-otel-noninteractive/v2",
+            "mode": "text",
+            "exit_code": 64,
+            "stdout_base64": "",
+            "stderr_base64": STANDARD
+                .encode("claude-adapter: trusted pull request head is missing or ambiguous\n"),
+            "refusal": "checkout_invalid"
+        });
         success["refusal"] = json!("head_unavailable");
         let refusal = |reason: &str, exit_code: i64, message: &str| {
             let stderr = STANDARD.encode(format!("claude-adapter: {message}\n"));
@@ -599,6 +614,18 @@ mod tests {
             (
                 "other checked checkout",
                 format!("{other_checkout}\n"),
+                "review_adapter_outdated",
+                None,
+            ),
+            (
+                "older adapter refusal of the request",
+                format!("{older_refusal}\n"),
+                "review_adapter_outdated",
+                None,
+            ),
+            (
+                "plain prompt run of the request",
+                format!("{plain_run}\n"),
                 "review_adapter_outdated",
                 None,
             ),
