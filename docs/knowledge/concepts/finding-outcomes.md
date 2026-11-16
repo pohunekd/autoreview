@@ -2,7 +2,7 @@
 type: Concept
 id: concept/finding-outcomes
 title: Finding outcomes
-description: The record the engine keeps of every published finding, which outcome each finding gets from the verifier at publication, from later reviews and when its pull request is merged or closed, what happens when the record cannot be written, and how long the records stay.
+description: The record the engine keeps of every published finding, which outcome each finding gets from the verifier at publication, from later reviews and when its pull request is merged or closed, what happens when the record cannot be written, how to list the records, and how long they stay.
 source_kind: manual
 intents: [help, debug]
 ---
@@ -97,6 +97,15 @@ that the review neither settles nor moves, loses its tracked key instead, so a
 later verdict on that key does not also settle the moved finding. If the store
 fails while a pull request ends, the engine logs `finding outcome check
 failed`, and the next check after the interval ends it.
+
+## Listing the outcomes
+
+`autoreview findings list --repo OWNER/REPO --since DATE` prints the rows of
+one repository published at or after midnight UTC of `DATE`, oldest first, one
+JSON object per line, each with how its pull request ended. The
+[CLI reference](../../cli.md#autoreview-findings-list) lists every field. A
+pull request that is reopened after it ended keeps its earlier end in the list
+until it ends again.
 
 ## Retention
 
