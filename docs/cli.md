@@ -469,7 +469,7 @@ status 0.
 | `outcome` | `open`, `refuted`, `not_blocking`, `fixed`, `answered`, `open_at_merge` or `open_at_close` |
 | `outcome_head_sha` | The head the outcome was decided at; empty while `open` |
 | `published_at`, `updated_at` | When the finding was published and when its row last changed, RFC 3339 in UTC |
-| `ended` | `merged` or `closed` once a state read saw the pull request end, empty before; only a pull request with an `open` row is read, so `ended` stays empty for one whose rows were all decided before it ended; a reopened pull request keeps its earlier end until it ends again |
+| `ended` | `merged` or `closed` once a state read saw the pull request end, empty before; only a pull request with an `open` row is read, so `ended` stays empty for one whose rows were all decided before it ended; a reopened pull request keeps its earlier end until it ends again with an `open` row, which only a review after the reopen adds |
 | `end_head_sha` | The head the pull request ended on; empty while `ended` is empty |
 
 The fields always come in this order. A row holds no title or body of a finding.
