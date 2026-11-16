@@ -2,6 +2,8 @@
 
 // Rust guideline compliant 2026-06-26
 
+mod rotating_file;
+
 use autoreview_engine::BoxError;
 use tracing::Level;
 
