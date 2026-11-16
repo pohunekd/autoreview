@@ -35,8 +35,9 @@ const HOST_OUTAGE_PREFIX: &str = "host:";
 /// Key prefix of a pull request that the last pass skipped, in the `rejected` entry.
 const SKIPPED_PREFIX: &str = "skipped:";
 
-/// Key of the last weekly report send in the `rejected` entry, which has no `owner/name#N`
-/// key with a `:` before its `/`.
+/// Key of the last weekly report send in the `rejected` entry.
+///
+/// No `owner/name#N` key starts with `report:`, because an owner has no `:`.
 const WEEKLY_REPORT_SENT_KEY: &str = "report:weekly_report_sent";
 
 /// The discovery maps; all but `host_outages` are keyed by the `repository#number` key of a
@@ -154,9 +155,9 @@ impl Store {
     /// Writes the four entries in schedule, published, awaiting, rejected order.
     ///
     /// The `rejected` entry holds the host outages, the skipped pull requests and the last
-    /// weekly report send as well. A
-    /// schedule record that enters `failed` adds one stop to the rollup of the current UTC day,
-    /// in the same transaction, so a restart never counts it again.
+    /// weekly report send as well. A schedule record that enters `failed` adds one stop to
+    /// the rollup of the current UTC day, in the same transaction, so a restart never counts
+    /// it again.
     ///
     /// # Errors
     ///

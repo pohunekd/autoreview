@@ -29,10 +29,19 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   reviews that are not completed, through the status index. With `--since` they read the
   whole `reviews` and `review_step_runs` tables (the cost grows with
   `store.review_retention_seconds`, which decides how many reviews the store keeps), the
-  stored publication plans of the reviews completed in the range, and the rollup rows of
-  the range's days (see [History](#history)). The reviews, the plans, the step runs, the
-  rollup and the discovery state come from one read transaction, so all counts describe
-  the same moment.
+  stored publication plans, reviewer slots (`slot/<id>`) and verifier steps
+  (`verification`, `artifact/combined`) of the reviews completed in the range, the rollup
+  rows of the range's days (see [History](#history)), and the `request_id` rows of the
+  rollup of every day, one per review request whose first publication was pruned (a scan
+  of the whole `stats_rollup` table). The slots, the verifier steps and the `request_id`
+  rows serve `autoreview report`; `stats` reads them and drops what they count. All of it
+  comes from one read transaction, so all counts describe the same moment.
+- With `--since`, `stats` decodes the reviews that are not completed, those created or
+  completed in the range, and every review of a pull request with a review completed in
+  the range. One of them that does not decode stops it with `store_state_invalid` naming
+  the review, and so does the plan or a reviewer slot of a review published in the range,
+  or the verification of a review completed in the range and, when that verification
+  finished, its combined artifact. A `request_id` row is read as a key and never decoded.
 - `autoreview serve` can serve the same numbers to Prometheus; see
   [Prometheus metrics](#prometheus-metrics).
 - `autoreview report` turns the counts of a range into shares, beside the outcomes of
@@ -336,6 +345,7 @@ scrape_configs:
 - A series appears with its first count, so a missing series means zero. The labels are
   `repository`, `host` (the review host chosen at dispatch), `rule` (the `match` value of
   the rule), `decision`, `error_code`, `step` and `outcome`; no label holds review text.
+- The query blocks below are PromQL, for the Prometheus expression browser or a dashboard.
 
 ### Gauges
 
@@ -346,7 +356,7 @@ scrape_configs:
 - `autoreview_pull_requests_stopped` (label `repository`): `current.stopped_by_repository`,
   the pull requests stopped after their retries.
 
-```promql
+```text
 sum by (repository) (autoreview_reviews_queued + autoreview_reviews_running)
 sum by (host) (autoreview_reviews_running)
 sum(autoreview_pull_requests_stopped) > 0
@@ -371,7 +381,7 @@ document counts, over the life of the process instead of per UTC day.
 - `autoreview_reviews_failed_total` (label `error_code`): `failed` per stored error code, as
   `failed_by_code`.
 
-```promql
+```text
 sum by (decision) (increase(autoreview_reviews_published_total[1d]))
 sum by (error_code) (increase(autoreview_reviews_failed_total[1d]))
 sum(increase(autoreview_reviews_published_total{decision="approved_without_human"}[7d]))
@@ -386,7 +396,7 @@ sum(increase(autoreview_reviews_published_total{decision="approved_without_human
   43200, 86400 and 259200 seconds and `+Inf`. A publication whose completion is earlier
   than its creation is left out, so `_count` can be below the publications.
 
-```promql
+```text
 histogram_quantile(0.9,
   sum by (le) (rate(autoreview_review_publication_seconds_bucket[1d])))
 ```
@@ -408,7 +418,7 @@ appear with its first run.
   `duration_median_ms` and `duration_p90_ms`. The buckets `le` are 1, 5, 15, 60, 300, 900,
   1800, 3600, 14400, 43200, 86400 and 259200 seconds and `+Inf`; `_sum` has three decimals.
 
-```promql
+```text
 sum by (step, outcome) (increase(autoreview_review_steps_total[1d]))
 sum by (step) (increase(autoreview_review_step_retries_total[1d]))
   / sum by (step) (increase(autoreview_review_steps_total[1d]))

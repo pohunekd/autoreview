@@ -14,11 +14,11 @@ intents: [setup, help]
 
 Šafář review (the `autoreview` service and command) is a small service that
 reviews GitHub pull requests with coding agents you already run. It finds pull
-requests that ask for a review, runs one or more agents (Claude Code, Codex) as read-only reviewers in
-[pohunek](https://pohunek.dev/) sessions on your own machines,
-checks their findings, and publishes one GitHub review with inline comments.
-A policy file decides which repositories are reviewed, by which agents, and
-what the result is allowed to do.
+requests that ask for a review, runs one or more agents (Claude Code, Codex)
+as read-only reviewers in [pohunek](https://pohunek.dev/) sessions on your own
+machines, checks their findings, and publishes one GitHub review with inline
+comments. A policy file decides which repositories are reviewed, by which
+agents, and what the result is allowed to do.
 
 It does not run in GitHub Actions and does not send your code to a hosted
 review service: the agents run in worktrees on hosts you control, with the

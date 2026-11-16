@@ -74,7 +74,9 @@ attempt.
   verifier, so nothing counts twice.
 - `verifier_demoted`: those found `not_blocking` or `refuted`, and
   `verifier_demoted_percent`: in percent of `verifier_checked`, rounded as the
-  shares above, `null` (`none`) with nothing checked.
+  shares above, `null` with nothing checked. The text output prints the verifier
+  line of a reviewer only when `verifier_checked` is above 0, so it never shows
+  `none` there.
 
 A verification that did not finish checks nothing and counts nowhere. The
 reviewer is the one the reviewers' combined findings name; a merged finding
