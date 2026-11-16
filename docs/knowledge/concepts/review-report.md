@@ -86,8 +86,14 @@ whose messages name `stats`.
   `report_range_pruned`.
 - Finding outcomes are deleted after `store.outcome_retention_seconds`, so a
   range that starts before now minus that retention is refused with
-  `report_range_pruned` as well. The report never prints a number that pruning
-  made smaller.
+  `report_range_pruned` as well.
+- Both checks use the retention that is configured now. Days that an earlier
+  prune with a shorter retention already cut, or that a clock set back makes
+  look newer, are not refused and can count too low. Without `--pipeline`, the
+  review part reads the daily counts of `autoreview stats`, which miss reviews
+  pruned by an engine before that rollup existed or by an earlier release after
+  a rollback (see [`autoreview stats`](../../stats.md)); those days can count
+  too low as well.
 
 ## Not measured yet
 
