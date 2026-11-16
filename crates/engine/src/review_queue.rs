@@ -4,10 +4,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use autoreview_go_compat::go_time::{format_rfc3339_seconds, parse_rfc3339};
 use autoreview_policy::{Policy, TriggerKind};
 use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::Record;
 use serde::Serialize;
+use time::{Date, OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Credential;
@@ -19,6 +21,10 @@ use crate::integrations::{Integrations, ReviewRequest, ReviewRequestList};
 use crate::messages::{excerpt, handoff_age};
 use crate::model::{AwaitRecord, PublishedRecord};
 use crate::publish::decision_text;
+use crate::report::ReportRequest;
+
+/// UTC days from the last weekly report send to the next, and the days before today it covers.
+const WEEKLY_REPORT_DAYS: i64 = 7;
 
 /// Note that closes a digest whose list does not show every request.
 const TRUNCATED_TEXT: &str = "The list is truncated: more requests wait for you than are shown.";
@@ -74,6 +80,8 @@ pub struct QueueResult {
     pub sent: bool,
     /// Whether requests that did not fit were left out.
     pub truncated: bool,
+    /// Whether the digest ended with the weekly report.
+    pub weekly_report: bool,
 }
 
 /// One request of the queue with the engine state that explains it.
@@ -113,40 +121,103 @@ pub(crate) struct RenderedQueue {
     pub(crate) shown: usize,
     /// Whether requests that did not fit were left out.
     pub(crate) dropped: bool,
+    /// Whether both bodies end with the weekly report.
+    pub(crate) weekly: bool,
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Posts the review requests and the notes that wait, as one queue digest.
     ///
-    /// Nothing is posted when nothing waits. The post gets one attempt, bounded by the
-    /// notifier's request timeout; a failure is logged and returned. Each run has its own
-    /// transaction ID.
+    /// A due weekly report ends the digest, and is the whole digest when nothing waits; nothing
+    /// is posted when neither is there. The report is left out with a warning when it and one
+    /// entry do not fit. The post gets one attempt, bounded by the notifier's request timeout; a
+    /// failure is logged and returned. Each run has its own transaction ID. The send of the
+    /// report is recorded after every backend took the digest.
     ///
     /// # Errors
     ///
     /// Returns the error of the search, the store or the post, `review_queue_too_long` when no
-    /// entry fits, `matrix_request_invalid` without a transaction ID, and `configuration_invalid`
-    /// without a policy or with a negative limit.
+    /// entry fits, `matrix_request_invalid` without a transaction ID, `configuration_invalid`
+    /// without a policy or with a negative limit, and the error of the discovery lock.
     pub async fn review_queue(&self, cancel: &CancellationToken) -> Result<QueueResult, Error> {
         let (entries, truncated) = self.queue_snapshot(cancel).await?;
-        if entries.is_empty() {
+        let now = self.clock.wall_now().to_offset(UtcOffset::UTC);
+        let weekly = self.weekly_report(cancel, now)?;
+        if entries.is_empty() && weekly.is_none() {
             return Ok(QueueResult::default());
         }
         let rendered = render_queue(
             &entries,
             truncated,
+            weekly.as_deref(),
             self.config.matrix_max_characters,
             self.config.max_title_characters,
         );
-        if rendered.shown == 0 {
+        if weekly.is_some() && !rendered.weekly {
+            tracing::warn!(
+                error_code = REVIEW_QUEUE_TOO_LONG,
+                "weekly report dropped: it does not fit notify.max_characters"
+            );
+        }
+        if rendered.shown == 0 && !rendered.weekly {
+            if entries.is_empty() {
+                return Ok(QueueResult::default());
+            }
             return Err(Error::workflow(REVIEW_QUEUE_TOO_LONG, true, None));
         }
         let transaction = queue_transaction_id()?;
         self.send_queue(cancel, &transaction, &rendered).await?;
+        if rendered.weekly {
+            self.with_discovery(|| async {
+                live(cancel)?;
+                self.store.update_discovery(|state, _| {
+                    state.weekly_report_sent = Some(format_rfc3339_seconds(now));
+                    Ok(())
+                })
+            })
+            .await?;
+        }
         Ok(QueueResult {
             count: i64::try_from(rendered.shown).unwrap_or(i64::MAX),
             sent: true,
             truncated: rendered.dropped,
+            weekly_report: rendered.weekly,
+        })
+    }
+
+    /// Returns the text of the weekly report when the policy asks for it and it is due at `now`.
+    ///
+    /// The report covers every repository and pipeline from `WEEKLY_REPORT_DAYS` UTC days
+    /// before today to today. A failed store read or report is logged and left out, so the
+    /// queue is still sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns `configuration_invalid` without a policy, and the shutdown error after a cancel.
+    fn weekly_report(
+        &self,
+        cancel: &CancellationToken,
+        now: OffsetDateTime,
+    ) -> Result<Option<String>, Error> {
+        if !self.policy()?.weekly_report() {
+            return Ok(None);
+        }
+        let report = self.store.load_discovery().and_then(|state| {
+            let last = state.weekly_report_sent.as_deref();
+            let Some(since) = weekly_report_since(last, now) else {
+                return Ok(None);
+            };
+            let request = ReportRequest {
+                since: since.to_string(),
+                ..ReportRequest::default()
+            };
+            let document = self.review_report(cancel, &request)?;
+            Ok(Some(document.to_string()))
+        });
+        report.or_else(|err| {
+            live(cancel)?;
+            tracing::warn!(error_code = error_code(&err), "weekly report skipped");
+            Ok(None)
         })
     }
 
@@ -375,6 +446,21 @@ fn queue_transaction_id() -> Result<String, Error> {
     Ok(format!("{TRANSACTION_PREFIX}{}", hex::encode(random)))
 }
 
+/// Returns the first UTC day of the weekly report when one is due at `now`.
+///
+/// It is due without a last send, with one that does not parse, `WEEKLY_REPORT_DAYS` or more
+/// UTC days after the day of the last send, and when that day is after today, because the
+/// clock went back: one send then records the current time.
+pub(crate) fn weekly_report_since(last: Option<&str>, now: OffsetDateTime) -> Option<Date> {
+    let today = now.to_offset(UtcOffset::UTC).date();
+    let since = today.checked_sub(time::Duration::days(WEEKLY_REPORT_DAYS))?;
+    let sent = last.and_then(|text| parse_rfc3339(text).ok());
+    match sent.map(|at| at.to_offset(UtcOffset::UTC).date()) {
+        Some(day) if day > since && day <= today => None,
+        _ => Some(since),
+    }
+}
+
 /// Annotates each request with its engine state and sorts the entries.
 /// The order is priority, then repository and number.
 pub(crate) fn queue_entries(
@@ -488,44 +574,58 @@ fn status_code(record: &Record) -> &str {
     }
 }
 
-/// Builds the plain-text and HTML digests with as many entries as fit.
-/// Each body holds at most `limit` characters and never cuts an entry in half.
+/// Builds the plain-text and HTML digests with as many entries as fit, then the `weekly`
+/// report when given.
+///
+/// Each body holds at most `limit` characters and never cuts an entry or the report. The
+/// report is left out when it does not fit with at least one entry, or alone without entries.
 pub(crate) fn render_queue(
     entries: &[QueueEntry],
     truncated: bool,
+    weekly: Option<&str>,
     limit: i64,
     title_limit: i64,
 ) -> RenderedQueue {
-    let mut shown = 0_usize;
-    let mut plain = String::new();
-    let mut formatted = String::new();
-    for count in 1..=entries.len() {
-        let (candidate_plain, candidate_formatted) =
-            build_digest(entries, count, truncated, title_limit);
-        if exceeds(&candidate_plain, limit) || exceeds(&candidate_formatted, limit) {
+    let mut fitted = None;
+    // Without entries, the digest is the report alone.
+    for count in usize::from(!entries.is_empty())..=entries.len() {
+        let (plain, formatted) = build_digest(entries, count, truncated, weekly, title_limit);
+        if exceeds(&plain, limit) || exceeds(&formatted, limit) {
             break;
         }
-        shown = count;
-        plain = candidate_plain;
-        formatted = candidate_formatted;
+        fitted = Some((count, plain, formatted));
     }
-    let dropped = truncated || shown < entries.len();
+    let Some((shown, plain, formatted)) = fitted else {
+        if weekly.is_some() {
+            return render_queue(entries, truncated, None, limit, title_limit);
+        }
+        return RenderedQueue {
+            plain: String::new(),
+            formatted: String::new(),
+            shown: 0,
+            dropped: true,
+            weekly: false,
+        };
+    };
     RenderedQueue {
         plain,
         formatted,
         shown,
-        dropped,
+        dropped: truncated || shown < entries.len(),
+        weekly: weekly.is_some(),
     }
 }
 
-/// Renders the first `count` entries as the plain-text and the HTML body.
+/// Renders the first `count` entries as the plain-text and the HTML body, then `weekly`.
 ///
 /// The entries are grouped by account, in the order of the account labels, and keep their
-/// order within an account. Each account has its requests first, then its notes.
+/// order within an account. Each account has its requests first, then its notes. The report
+/// follows a blank line in the plain body and is preformatted text in the HTML body.
 fn build_digest(
     entries: &[QueueEntry],
     count: usize,
     truncated: bool,
+    weekly: Option<&str>,
     title_limit: i64,
 ) -> (String, String) {
     let mut shown: Vec<&QueueEntry> = entries[..count].iter().collect();
@@ -568,15 +668,28 @@ fn build_digest(
             escape_html(&entry.status)
         ));
     }
-    formatted.push_str("</ul>");
-    if truncated || count < entries.len() {
+    if count > 0 {
+        formatted.push_str("</ul>");
+    }
+    if count > 0 && (truncated || count < entries.len()) {
         plain.push_str(TRUNCATED_TEXT);
         plain.push('\n');
         formatted.push_str("\n<p><em>");
         formatted.push_str(&escape_html(TRUNCATED_TEXT));
         formatted.push_str("</em></p>");
     }
-    let plain = plain.trim_end_matches('\n').to_owned();
+    let mut plain = plain.trim_end_matches('\n').to_owned();
+    if let Some(report) = weekly {
+        let report = report.trim_end_matches('\n');
+        if count > 0 {
+            plain.push_str("\n\n");
+            formatted.push('\n');
+        }
+        plain.push_str(report);
+        formatted.push_str("<pre>");
+        formatted.push_str(&escape_html(report));
+        formatted.push_str("</pre>");
+    }
     (plain, formatted)
 }
 
@@ -647,10 +760,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use autoreview_policy::Level;
+    use autoreview_policy::{Level, Policy};
     use tempfile::TempDir;
     use time::OffsetDateTime;
-    use time::macros::datetime;
+    use time::macros::{date, datetime};
     use tokio_util::sync::CancellationToken;
 
     use crate::config::{Config, Credential, Credentials};
@@ -700,17 +813,8 @@ mod tests {
 
     /// The deployed test configuration, built from `crate::testing::deployed_policy_document`.
     fn queue_config() -> Config {
-        let document = crate::testing::deployed_policy_document();
-        let policy = autoreview_policy::parse(document.as_bytes(), |relative| {
-            std::fs::read(
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../testdata")
-                    .join(relative),
-            )
-        })
-        .expect("the deployed policy parses");
         let mut cfg = test_config();
-        cfg.policy = Some(policy);
+        cfg.policy = Some(deployed_policy(""));
         cfg.credentials = crate::config::Credentials::single_for_tests("example-user");
         cfg.queue_max_items = 50;
         cfg.published_retention = Duration::from_secs(1_209_600);
@@ -722,6 +826,23 @@ mod tests {
         cfg.matrix_max_characters = 12_000;
         cfg.excerpt_characters = 800;
         cfg
+    }
+
+    /// The deployed test policy with `notifications` lines `extra` added.
+    fn deployed_policy(extra: &str) -> Policy {
+        let document = crate::testing::deployed_policy_document().replacen(
+            "notifications:\n",
+            &format!("notifications:\n{extra}"),
+            1,
+        );
+        autoreview_policy::parse(document.as_bytes(), |relative| {
+            std::fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../testdata")
+                    .join(relative),
+            )
+        })
+        .expect("the deployed policy parses")
     }
 
     /// Builds an engine on a fresh store, the fake and a clock frozen at `at`.
@@ -1010,6 +1131,137 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "configuration_invalid: config: invalid notification route queue"
+        );
+    }
+
+    #[test]
+    fn weekly_report_is_due_seven_utc_days_after_the_last_send() {
+        let now = datetime!(2027-01-03 00:30 UTC);
+        let since = Some(date!(2026 - 12 - 27));
+        let cases = [
+            ("no send yet", None, since),
+            ("earlier today", Some("2027-01-03T00:10:00Z"), None),
+            ("six UTC days", Some("2026-12-28T00:00:00Z"), None),
+            (
+                "seven UTC days, under 168 hours",
+                Some("2026-12-27T23:59:59Z"),
+                since,
+            ),
+            ("thirty days", Some("2026-12-04T12:00:00Z"), since),
+            (
+                "an offset on the sixth UTC day",
+                Some("2026-12-28T01:00:00+01:00"),
+                None,
+            ),
+            (
+                "an offset on the seventh UTC day",
+                Some("2026-12-28T00:30:00+01:00"),
+                since,
+            ),
+            (
+                "later today, the clock went back",
+                Some("2027-01-03T08:00:00Z"),
+                None,
+            ),
+            (
+                "a later day, the clock went back",
+                Some("2027-01-04T00:00:00Z"),
+                since,
+            ),
+            ("unparseable", Some("last week"), since),
+        ];
+        for (name, last, want) in cases {
+            assert_eq!(super::weekly_report_since(last, now), want, "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn weekly_report_ends_the_queue_digest_once_a_week() {
+        let at = datetime!(2027-01-03 12:00 UTC);
+        let weekly_config = || {
+            let mut cfg = queue_config();
+            cfg.policy = Some(deployed_policy("  weekly_report: digest\n"));
+            cfg
+        };
+        let fake = Arc::new(FakeIntegration::new());
+        let (engine, _dir) = new_queue_engine(weekly_config(), &fake, at);
+        let cancel = CancellationToken::new();
+        let sent = |engine: &QueueEngine| {
+            let state = engine.store.load_discovery().expect("the state loads");
+            state.weekly_report_sent
+        };
+        let set_sent = |value: &str| {
+            (engine.store)
+                .update_discovery(|state, _| {
+                    state.weekly_report_sent = Some(value.to_owned());
+                    Ok(())
+                })
+                .expect("the last send is stored");
+        };
+        // The range crosses the year boundary.
+        let header = concat!(
+            "Report 2026-12-27 to 2027-01-03 (UTC days), ",
+            "repository every, pipeline every"
+        );
+        // Nothing waits: the digest is the report alone, and a second run sends nothing.
+        let first = engine.review_queue(&cancel).await.expect("the queue runs");
+        let second = engine.review_queue(&cancel).await.expect("the queue runs");
+        let queued = fake.lock().queued.clone();
+        assert!(
+            first.sent
+                && first.count == 0
+                && first.weekly_report
+                && second == super::QueueResult::default()
+                && queued.len() == 1
+                && queued[0].plain.starts_with(header)
+                && queued[0].formatted.starts_with(&format!("<pre>{header}"))
+                && sent(&engine).as_deref() == Some("2027-01-03T12:00:00Z"),
+            "first {first:?} second {second:?} queued {queued:?}"
+        );
+        // Six UTC days after the last send, the waiting request goes out without the report.
+        fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
+        set_sent("2026-12-28T00:00:00Z");
+        let early = engine.review_queue(&cancel).await.expect("the queue runs");
+        // Seven UTC days: a failed post records nothing, so the next run sends the report.
+        set_sent("2026-12-27T23:59:59Z");
+        fake.lock().queue_failure = Some("webhook_unavailable".to_owned());
+        let failed = engine.review_queue(&cancel).await;
+        fake.lock().queue_failure = None;
+        let unsent = sent(&engine);
+        let due = engine.review_queue(&cancel).await.expect("the queue runs");
+        let queued = fake.lock().queued.clone();
+        assert!(
+            !early.weekly_report
+                && !queued[1].plain.contains("Report ")
+                && failed.is_err()
+                && unsent.as_deref() == Some("2026-12-27T23:59:59Z")
+                && due.weekly_report
+                && due.count == 1
+                && queued.len() == 3
+                && queued[2].plain.contains(&format!("/pull/1\n\n{header}"))
+                && queued[2]
+                    .formatted
+                    .contains(&format!("</ul>\n<pre>{header}"))
+                && sent(&engine).as_deref() == Some("2027-01-03T12:00:00Z"),
+            "early {early:?} failed {failed:?} due {due:?} queued {queued:?}"
+        );
+        // A report that does not fit with one entry is left out and not recorded.
+        let mut cfg = weekly_config();
+        let entry_only = [&queued[1].plain, &queued[1].formatted].map(|body| body.chars().count());
+        let limit = entry_only[0].max(entry_only[1]);
+        cfg.matrix_max_characters = i64::try_from(limit).expect("the length fits");
+        let fake = Arc::new(FakeIntegration::new());
+        fake.lock().requests = vec![queue_request("example-org/example-repo", 1, "first")];
+        let (small, _small_dir) = new_queue_engine(cfg, &fake, at);
+        let result = small.review_queue(&cancel).await.expect("the queue runs");
+        let queued = fake.lock().queued.clone();
+        assert!(
+            result.sent
+                && result.count == 1
+                && !result.weekly_report
+                && !queued[0].plain.contains("Report ")
+                && sent(&small).is_none(),
+            "result {result:?} queued {queued:?}"
         );
     }
 }
