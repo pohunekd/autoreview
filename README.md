@@ -69,8 +69,9 @@ Rules:
    `request_changes`) until I ask for more, and `trusted: any` only where no
    outside author can open a pull request.
 4. With setup, run `git clone --branch <tag> --depth 1
-   https://github.com/pohunekd/autoreview`. If `AUTOREVIEW_VERSION` in its
-   `scripts/setup` is not <tag> without the `v`, stop and tell me. Then run
+   https://github.com/pohunekd/autoreview`. If the top-level
+   `AUTOREVIEW_VERSION="X.Y.Z"` line near the start of its `scripts/setup` is
+   not <tag> without the `v`, stop and tell me. Then run
    `scripts/setup --dry-run --dir <dir>` with my answers as the flags getting
    started lists. It needs a terminal, so give me the command without
    `--dry-run` to run in mine; never pipe answers into it or fake a terminal.

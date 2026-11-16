@@ -186,7 +186,7 @@ Rules for the queue:
 - At most `notify.review_queue.max_items` pull requests are listed. The message
   says when it was truncated.
 - Nothing is sent when nothing waits and no weekly report is due. The command
-  still prints an empty list.
+  still prints its result, with `"count": 0` and `"sent": false`.
 - A pull request whose state cannot be read is left out of this message, and the
   next run includes it again.
 - The message is cut between entries, never inside one, so formatted content stays
@@ -203,8 +203,9 @@ every repository and pipeline (the last 7 UTC days and today so far, see
 [review report](review-report.md)). `off` or no key sends none. It is sent:
 
 - by the first `review-queue` run on the 7th UTC day after the day of the last
-  send, or by the first run at all. With an hourly timer it comes shortly after
-  midnight UTC on the same weekday each week. When nothing waits, the message is
+  send, or by the first run at all. With the shipped queue timer (hourly from
+  08:00 to 20:00 local time) it comes with the first run of that day, on the same
+  weekday each week. When nothing waits, the message is
   the report alone. The printed result has `"weekly_report": true`.
 - only after every queue backend took the message: the time of the send is then
   stored, so a failed send is repeated by the next run. A send that the store
@@ -215,6 +216,10 @@ every repository and pipeline (the last 7 UTC days and today so far, see
   least one waiting entry, the requests are sent alone, the warning
   `weekly report dropped` with `review_queue_too_long` is logged, and the next
   run tries again. Entries are dropped before the report, like any other cut.
+
+Two `review-queue` runs at the same time, for example a manual run while the
+timer's run is sending, can both send the report; the timer never starts a run
+while its previous one is still running.
 
 A report that fails (a store error, or `report_range_pruned` when
 `store.outcome_retention_seconds` is under 8 days) is left out with the warning
