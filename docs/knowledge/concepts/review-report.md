@@ -2,7 +2,7 @@
 type: Concept
 id: concept/review-report
 title: Review report
-description: What autoreview report measures over a range of UTC days - the time from the creation of a review attempt and from the review request to its publication, the share of decisions approved without a human, waiting for a human or requesting changes, and the outcomes of the published findings per reviewer, severity and repository - how each number is computed from the store, how to read it, and what it does not measure yet.
+description: What autoreview report measures over a range of UTC days - the time from the creation of a review attempt and from the review request to its first publication, the share of decisions approved without a human, waiting for a human or requesting changes, and the outcomes of the published findings per reviewer, severity and repository - how each number is computed from the store, how to read it, and what it does not measure yet.
 source_kind: manual
 intents: [help, debug]
 ---
@@ -48,13 +48,16 @@ The report has two parts, and each counts different things:
 - **Review request to publication**
   (`request_to_publication_median_seconds`, `request_to_publication_p90_seconds`):
   the same percentiles of the seconds from the review request to the completion
-  of a published attempt: the wait of the person who asked. The request time is
-  the newest `review_requested` event of the reviewing login when discovery read
-  the pull request, so a retry or a new head under the same request counts from
-  that request. A label trigger has no request time, and neither has a review
-  stored before this field existed; such attempts are left out, not counted as
-  zero. A request time after the completion (the clocks of GitHub and the host
-  differ) is left out as well. With no attempt left, the time is `none`.
+  of its first published attempt: the wait of the person who asked. The request
+  time is the newest `review_requested` event of the reviewing login when
+  discovery read the pull request. Each request counts once, at the attempt that
+  published first for it (the earliest completion of the same repository, pull
+  request and request event); a retry that published or a new head under the
+  same request, not renewed, adds nothing. A label trigger has no request, and a
+  review stored before this field existed has no request time; such attempts
+  are left out, not counted as zero. A request whose first publication has no
+  request time, or one after the completion (the clocks of GitHub and the host
+  differ), is left out as well. With no attempt left, the time is `none`.
 
 A share is rounded half up to one decimal; with nothing decided every share is
 `null` in the JSON and `none` in the text, and so is a time without a published
@@ -103,9 +106,12 @@ whose messages name `stats`.
   pruned by an engine before that rollup existed or by an earlier release after
   a rollback (see [`autoreview stats`](../../stats.md)); those days can count
   too low as well.
-- The prune keeps the request times in the same daily rollup, per repository.
-  Reviews pruned before the request time was stored, or by an earlier release
-  after a rollback, have none there; an earlier release ignores these rows.
+- The prune keeps the request times in the same daily rollup, per repository,
+  and notes each request whose first publication it deleted, so a later attempt
+  of that request that is still kept adds no second time. Reviews pruned before
+  the request time was stored, or by an earlier release after a rollback, have
+  none there, and a later attempt of such a request can count; an earlier
+  release ignores these rows.
 
 ## Not measured yet
 

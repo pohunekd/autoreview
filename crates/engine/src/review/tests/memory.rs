@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use autoreview_go_compat::go_time::format_rfc3339_nano;
+use autoreview_go_compat::go_time::{format_rfc3339_nano, parse_rfc3339};
 use autoreview_policy::Level;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -160,7 +160,20 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
         h.started_count() == 2 && h.publications() == 2,
         "an approved head was reviewed or published again"
     );
-    // The hand-off counts once in `notes_to_author`, from its stored plan and after a prune.
+    // A new head under the same request publishes again and adds no request time; the rule
+    // keys on the request ID, and the earlier time given here would raise the p90.
+    let mut next = renewed.clone();
+    next.head_sha = sha("c");
+    next.requested_at = format_rfc3339_nano(requested_at - time::Duration::hours(2));
+    h.fake.open(next.clone(), h.rule(&pr.repository));
+    h.poll_until("the new head's hand-off", || h.publications() == 3)
+        .await;
+    let filter = ReviewFilter::ReviewKey(next.key());
+    let reviews = h.store.list_reviews(&filter, 1).expect("the reviews read");
+    let latest = reviews.first().expect("the new head's review is stored");
+    assert_eq!(latest.input.pull_request.head_sha, next.head_sha);
+    let latest = latest.created_at.clone();
+    // Each hand-off counts in `notes_to_author`, from its stored plan and after a prune.
     let today = OffsetDateTime::now_utc().date();
     let since = today
         .previous_day()
@@ -193,22 +206,29 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     };
     let kept = history();
     let kept_requests = requests();
+    // The first prune leaves the new head's review beside the rollup of its request.
+    let split = parse_rfc3339(&latest).expect("the creation time decodes");
+    let partly = h.store.prune_reviews(split).expect("prune the earlier");
+    let partly_requests = requests();
     let cutoff = OffsetDateTime::now_utc() + time::Duration::days(1);
     let pruned = h.store.prune_reviews(cutoff).expect("prune the reviews");
     let rolled_up = history();
     let rolled_up_requests = requests();
     let (median, p90) = kept_requests[0];
     assert!(
-        pruned == 2
-            && kept["totals"]["notes_to_author"] == json!(1)
-            && kept["by_repository"][0]["notes_to_author"] == json!(1)
+        partly == 2
+            && pruned == 1
+            && kept["totals"]["notes_to_author"] == json!(2)
+            && kept["by_repository"][0]["notes_to_author"] == json!(2)
             && rolled_up == kept
             && median.is_some_and(|seconds| seconds >= 3600)
             && p90 == median
             && kept_requests[1] == kept_requests[0]
+            && partly_requests == kept_requests
             && rolled_up_requests == kept_requests,
-        "pruned {pruned}: kept = {kept}, rolled up = {rolled_up}, request times kept = \
-         {kept_requests:?}, rolled up = {rolled_up_requests:?}"
+        "pruned {partly} and {pruned}: kept = {kept}, rolled up = {rolled_up}, request times \
+         kept = {kept_requests:?}, partly = {partly_requests:?}, rolled up = \
+         {rolled_up_requests:?}"
     );
     h.stop_engine().await;
 }

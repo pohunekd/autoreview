@@ -25,8 +25,8 @@ use crate::model::review::APPROVAL_KIND_APPROVE;
 use crate::model::{Decision, Outcome, ReviewOutcome};
 use crate::publish::plan::PublicationPlan;
 use crate::store::rollup::{
-    DIMENSION_DAY, DIMENSION_FAILURE, DIMENSION_REPOSITORY, DIMENSION_REQUEST, DIMENSION_REVIEWER,
-    DIMENSION_RULE, DIMENSION_STEP,
+    COUNTER_FIRST_PUBLICATION, DIMENSION_DAY, DIMENSION_FAILURE, DIMENSION_REPOSITORY,
+    DIMENSION_REQUEST, DIMENSION_REQUEST_ID, DIMENSION_REVIEWER, DIMENSION_RULE, DIMENSION_STEP,
 };
 use crate::store::{
     EndedStepRun, RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
@@ -592,6 +592,44 @@ fn request_seconds(review: &StoredReview, end: OffsetDateTime) -> Result<Option<
     Ok(elapsed_seconds(requested, end))
 }
 
+/// Returns the `repository#number#request ID` key of the review request of `review`.
+///
+/// `None` without a request ID, as for a label trigger.
+fn request_key(review: &StoredReview) -> Option<String> {
+    let pull_request = &review.input.pull_request;
+    let id = pull_request.review_request_id;
+    (id != 0).then(|| format!("{}#{id}", pull_request.key()))
+}
+
+/// Returns the workflow IDs of the first published attempt of each review request.
+///
+/// The first completed earliest; a tie goes to the smaller workflow ID. A request in `pruned`
+/// had its first publication pruned, so no attempt of `reviews` is its first.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` as `compute` does for the same rows.
+pub(crate) fn first_publications(
+    reviews: &[StoredReview],
+    pruned: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, Error> {
+    let mut firsts: BTreeMap<String, (OffsetDateTime, &str)> = BTreeMap::new();
+    for review in reviews {
+        let Some(key) = request_key(review).filter(|key| !pruned.contains(key)) else {
+            continue;
+        };
+        if review.status != REVIEW_COMPLETED
+            || !matches!(completed_ending(review)?, Ending::Published { .. })
+        {
+            continue;
+        }
+        let attempt = (completed_instant(review)?, review.workflow_id.as_str());
+        let first = firsts.entry(key).or_insert(attempt);
+        *first = (*first).min(attempt);
+    }
+    Ok(firsts.into_values().map(|(_, id)| id.to_owned()).collect())
+}
+
 /// Reads how a completed attempt ended from its result, failure, approval and outcome.
 fn ending(review: &StoredReview, seconds: Option<i64>) -> Result<Ending, Error> {
     if review.result == RESULT_FAILURE {
@@ -692,12 +730,13 @@ impl HistoryTally {
 
     /// Counts the starts and completions of `reviews` on the days of `range`, every day
     /// without one; a published attempt whose plan in `plans` handed the notes to the author
-    /// also counts them.
+    /// also counts them, and one in `firsts` its seconds from the review request.
     fn add_reviews(
         &mut self,
         reviews: &[StoredReview],
         plans: &BTreeMap<String, String>,
         range: Option<&StatsRange>,
+        firsts: &BTreeSet<String>,
     ) -> Result<(), Error> {
         let inside = |day: Date| range.is_none_or(|range| range.contains(day));
         for review in reviews {
@@ -719,6 +758,7 @@ impl HistoryTally {
                 *bucket.failures.entry(review.failure.clone()).or_default() += 1;
             }
             if let Ending::Published { .. } = ending
+                && firsts.contains(&review.workflow_id)
                 && let Some(seconds) = request_seconds(review, completed)?
             {
                 let bucket = self.days.entry(completed.date()).or_default();
@@ -894,7 +934,9 @@ fn push_tally(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, tally:
 
 /// Returns the rollup of pruned reviews: their starts, completions, notes and step runs.
 ///
-/// `runs` are the step runs of `reviews`, `plans` their stored plans by workflow ID.
+/// `runs` are the step runs of `reviews`, `plans` their stored plans by workflow ID, and
+/// `firsts` the first publications of `first_publications`; each of `reviews` among them
+/// adds its request seconds and its `request_id` count.
 ///
 /// # Errors
 ///
@@ -904,11 +946,22 @@ pub(crate) fn rollup(
     reviews: &[StoredReview],
     runs: &[EndedStepRun],
     plans: &BTreeMap<String, String>,
+    firsts: &BTreeSet<String>,
 ) -> Result<Rollup, Error> {
     let mut tally = HistoryTally::default();
-    tally.add_reviews(reviews, plans, None)?;
+    tally.add_reviews(reviews, plans, None, firsts)?;
     tally.add_runs(runs)?;
-    Ok(tally.into_rollup())
+    let mut rollup = tally.into_rollup();
+    for review in reviews {
+        if firsts.contains(&review.workflow_id)
+            && let Some(key) = request_key(review)
+        {
+            let day = completed_instant(review)?.date().to_string();
+            let counter = COUNTER_FIRST_PUBLICATION;
+            push_count(&mut rollup, &day, DIMENSION_REQUEST_ID, &key, counter, 1);
+        }
+    }
+    Ok(rollup)
 }
 
 /// Builds the document from one `Store::stats_snapshot`.
@@ -932,7 +985,8 @@ pub fn compute(
 ) -> Result<StatsDocument, Error> {
     let current = current_state(&snapshot.reviews, &snapshot.discovery.schedule)?;
     let history = match range {
-        Some(range) => Some(history(snapshot, range, pruned_before)?.0),
+        // The document has no request seconds, so no attempt counts as a first publication.
+        Some(range) => Some(history(snapshot, range, pruned_before, &BTreeSet::new())?.0),
         None => None,
     };
     Ok(StatsDocument {
@@ -1029,14 +1083,16 @@ fn current_state(
 
 /// Counts the rows, the step runs and the rollup of the snapshot inside `range`.
 ///
-/// Returns the history with the seconds from the review request to publication.
+/// Returns the history with the seconds from the review request to publication of the first
+/// publications `firsts`.
 pub(crate) fn history(
     snapshot: &StatsSnapshot,
     range: &StatsRange,
     pruned_before: OffsetDateTime,
+    firsts: &BTreeSet<String>,
 ) -> Result<(History, RequestSeconds), Error> {
     let mut tally = HistoryTally::default();
-    tally.add_reviews(&snapshot.reviews, &snapshot.plans, Some(range))?;
+    tally.add_reviews(&snapshot.reviews, &snapshot.plans, Some(range), firsts)?;
     tally.add_runs(&snapshot.steps)?;
     tally.add_rollup(&snapshot.rollup)?;
     let mut totals = Tally::default();
