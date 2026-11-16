@@ -574,6 +574,14 @@ self_test() {
         plist_facts <<<"${agent_texts[0]}" | grep -x 'path=.*' | cut -d= -f2-
     }
     check "agent PATH with XML characters" "/opt/a&b<c>'\"/bin" "$(with_sample_layout escaped)"
+    expected=$'gui/501/io.github.pohunekd.autoreview = {\n\tactive count = 1\n\tstate = running'
+    expected+=$'\n\tpid = 4242\n\tevent triggers = {\n\t\tstate = 1\n\t}\n}'
+    check "launchd state of a running job" running "$(launchd_field "$expected" state)"
+    check "launchd pid of a running job" 4242 "$(launchd_field "$expected" pid)"
+    check "launchd field that is absent" "" "$(launchd_field $'\tstate = waiting' pid)"
+    check "binary modified after the start" stale "$(started_binary_state 100 200)"
+    check "binary modified before the start" current "$(started_binary_state 200 100)"
+    check "start time unreadable" unknown "$(started_binary_state '' 100)"
     expected="setup: autoreview 0.5.0 refuses a Codex adapter from before 0.4.0;"
     expected+=$'\nreviews of these profiles fail with review_nonce_mismatch until you run, with the'
     expected+=$'\nvalues of their first install:'
@@ -956,6 +964,8 @@ detect_machine() {
     env_file=$config_home/autoreview/autoreview.env
     unit_dir=$config_home/systemd/user
     [ "$os" = Linux ] || unit_dir=$HOME/Library/LaunchAgents
+    log_dir=$state_home/autoreview/logs
+    agent_domain=gui/$(id -u)
     agents_dir=$config_home/pohunek/agents
     service_config=$config_home/pohunek/service.toml
     user_name=$(id -un)
@@ -1773,6 +1783,123 @@ step_linger() {
     echo "and starts them again only at the next login."
     approve "lingering of $user_name" "loginctl enable-linger $user_name"
     loginctl enable-linger "$user_name" || fail 10 "loginctl enable-linger failed"
+}
+
+# Sets agent_path to the recorded search path of the pohunek daemon, joined with `:`.
+# Fails when service.toml records none.
+read_agent_path() {
+    local listed
+    listed=$(daemon_search_path "$service_config") || return 1
+    [ -n "$listed" ] || return 1
+    agent_path=${listed//$'\n'/:}
+}
+
+# Prints the value of the field $2 (`state`, `pid`) of the `launchctl print` output $1,
+# or nothing when it has none. The job's own fields come before its nested sections.
+launchd_field() {
+    local line
+    while IFS= read -r line; do
+        if [[ $line =~ ^[[:space:]]*$2\ =\ (.*)$ ]]; then
+            printf '%s\n' "${BASH_REMATCH[1]}"
+            return
+        fi
+    done <<<"$1"
+}
+
+# Prints current or stale for a process started at Unix time $1 that runs a binary last
+# modified at Unix time $2, or unknown when either is not a number.
+started_binary_state() {
+    if [[ ! $1 =~ ^[0-9]+$ || ! $2 =~ ^[0-9]+$ ]]; then
+        echo unknown
+    elif (($2 > $1)); then
+        echo stale
+    else
+        echo current
+    fi
+}
+
+# Prints the service_binary_state of the agent process $1. launchd starts the binary by
+# its path, so the path alone cannot show a replaced file: a binary modified after the
+# start of the process is stale.
+agent_binary_state() {
+    local running installed state started modified
+    running=$(ps -o comm= -p "$1" 2>/dev/null) || running=""
+    installed=$(readlink -f "$autoreview_bin" 2>/dev/null) || installed=""
+    if [ -z "$installed" ]; then
+        echo unknown
+        return
+    fi
+    state=$(service_binary_state "$running" "$installed")
+    if [ "$state" = current ]; then
+        started=$(LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null) || started=""
+        started=$(LC_ALL=C date -j -f '%a %b %e %T %Y' "$started" +%s 2>/dev/null) || started=""
+        modified=$(stat -f %m -- "$installed" 2>/dev/null) || modified=""
+        state=$(started_binary_state "$started" "$modified")
+    fi
+    echo "$state"
+}
+
+# Sets agents_missing and agents_changed to the agent files that are absent or hold other
+# text, agents_running to 1 when the review agent runs and the queue agent is loaded, and
+# service_binary to the agent_binary_state of the review agent (unknown when it is not
+# running). Needs agent_path.
+detect_agents() {
+    local i file output pid
+    render_agents
+    agents_missing=() agents_changed=()
+    for i in "${!agent_names[@]}"; do
+        file=$unit_dir/${agent_names[i]}
+        if [ ! -f "$file" ]; then
+            agents_missing+=("${agent_names[i]}")
+        elif [ "$(cat "$file"; echo x)" != "${agent_texts[i]}x" ]; then
+            agents_changed+=("${agent_names[i]}")
+        fi
+    done
+    agents_running=0
+    service_binary=unknown
+    output=$(launchctl print "$agent_domain/$AGENT_LABEL" 2>/dev/null) || output=""
+    if [ "$(launchd_field "$output" state)" = running ] \
+        && launchctl print "$agent_domain/$QUEUE_LABEL" >/dev/null 2>&1; then
+        agents_running=1
+        pid=$(launchd_field "$output" pid)
+        if [[ $pid =~ ^[1-9][0-9]*$ ]]; then
+            service_binary=$(agent_binary_state "$pid")
+        fi
+    fi
+}
+
+# Writes agent file $1 with the text $2 through a temporary file and a rename.
+write_agent_file() {
+    local temporary=${1%/*}/.${1##*/}.setup
+    { printf '%s' "$2" >"$temporary" && chmod 0644 "$temporary" && mv -f "$temporary" "$1"; } \
+        || fail 10 "writing $1 failed"
+}
+
+# Writes and loads agent $1 (an index of render_agents). When the new definition does not
+# load, the text before it is written back and loaded again, or the new file is removed.
+install_agent() {
+    local label=${agent_labels[$1]} file=$unit_dir/${agent_names[$1]} previous=""
+    if [ -f "$file" ]; then
+        previous=$(cat "$file"; echo x) || fail 10 "reading $file failed"
+    fi
+    write_agent_file "$file" "${agent_texts[$1]}"
+    if launchctl print "$agent_domain/$label" >/dev/null 2>&1; then
+        launchctl bootout "$agent_domain/$label" \
+            || fail 10 "launchctl bootout $agent_domain/$label failed"
+    fi
+    launchctl enable "$agent_domain/$label" \
+        || fail 10 "launchctl enable $agent_domain/$label failed"
+    if launchctl bootstrap "$agent_domain" "$file"; then
+        return
+    fi
+    if [ -n "$previous" ]; then
+        write_agent_file "$file" "${previous%x}"
+        launchctl bootstrap "$agent_domain" "$file" \
+            || fail 10 "launchctl bootstrap failed for the new $file and for its previous text"
+        fail 10 "launchctl bootstrap failed for the new $file; its previous text is loaded again"
+    fi
+    rm -f -- "$file"
+    fail 10 "launchctl bootstrap failed for $file; the file was removed"
 }
 
 # Prints one plan line: the step $1 and its state $2.
