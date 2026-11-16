@@ -110,6 +110,12 @@ pub struct Record {
     /// `fetch_mismatches` before the failure of `handled_workflow` was handled.
     #[serde(skip_serializing_if = "is_zero")]
     pub handled_fetch_mismatches: i64,
+    /// The failed run that `autoreview retry` overrode; [`plan`] never handles it again.
+    ///
+    /// A withdrawal and a retarget keep it, so neither one stops the head again before the
+    /// retry starts.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub retried_workflow: String,
     /// Marks a dispatch that continues a review the author limit let through.
     ///
     /// A host wait keeps it, so the dispatch after the wait is not held as a new start.
@@ -142,6 +148,7 @@ impl Default for Record {
             fetch_mismatches: 0,
             handled_usage_limited: 0,
             handled_fetch_mismatches: 0,
+            retried_workflow: String::new(),
             continues: false,
             skip_notified: false,
         }
@@ -287,16 +294,19 @@ pub fn plan(
             fetch_mismatches: 0,
             handled_usage_limited: 0,
             handled_fetch_mismatches: 0,
+            retried_workflow: String::new(),
             continues: false,
             skip_notified: false,
         };
-        // A withdrawn record of this identity keeps its streak counts: neither its head nor its
-        // request changed, and a failed listing of its candidate is enough to withdraw it.
+        // A withdrawn record of this identity keeps its streak counts and the run that a retry
+        // overrode: neither its head nor its request changed, and a failed listing of its
+        // candidate is enough to withdraw it.
         if previous.identity == target_identity {
             record.usage_limited = previous.usage_limited;
             record.fetch_mismatches = previous.fetch_mismatches;
             record.handled_usage_limited = previous.handled_usage_limited;
             record.handled_fetch_mismatches = previous.handled_fetch_mismatches;
+            record.retried_workflow = previous.retried_workflow;
             withdrawn_handled = previous.handled_workflow;
         }
         record
@@ -361,8 +371,15 @@ pub fn plan(
                 notify: false,
             });
         }
-        // Each terminal result is handled once; later polls keep its retry deadline.
-        if fresh || r.workflow_id != latest_run.workflow_id || r.phase == phase::RUNNING {
+        // The run that a retry overrode is never handled again; the record only starts above
+        // it. Each other terminal result is handled once; later polls keep its retry deadline.
+        let overridden = r.phase != phase::RUNNING
+            && !r.retried_workflow.is_empty()
+            && r.retried_workflow == latest_run.workflow_id;
+        if overridden {
+            r.attempt = r.attempt.max(latest_run.attempt.wrapping_add(1));
+        } else if fresh || r.workflow_id != latest_run.workflow_id || r.phase == phase::RUNNING {
+            r.retried_workflow.clear();
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             let code = failure_code(&latest_run.failure);
@@ -551,8 +568,10 @@ pub fn plan_unreviewed(
     }
     let mut decision = plan(record, target, &visible, now, policy)?;
     // The handled failure is never this record's workflow; it only stops a second notice. The
-    // streak counts stay, so a retarget neither resets nor repeats them.
+    // streak counts and the run that a retry overrode stay, so a retarget neither resets nor
+    // repeats them.
     if let Some(kept) = kept {
+        decision.record.retried_workflow = kept.retried_workflow;
         decision.record.handled_workflow = kept.handled_workflow;
         decision.record.handled_retries = kept.handled_retries;
         decision.record.handled_usage_limited = kept.handled_usage_limited;
@@ -1563,6 +1582,38 @@ mod tests {
         plan_on_base(away.record, target, runs, &main, workflow_id, now, policy).expect("plan")
     }
 
+    /// Retries the stopped `record` by hand, with the record that `apply_force` writes for it,
+    /// and dispatches the retry to a route that finds no review host.
+    fn retried_then_host_wait(
+        record: &Record,
+        target: &Target,
+        runs: &[Run],
+        now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let forced = Record {
+            identity: record.identity.clone(),
+            phase: phase::RETRY_WAIT.to_owned(),
+            due_at: now,
+            attempt: record.attempt.wrapping_add(1),
+            workflow_id: record.workflow_id.clone(),
+            retried_workflow: record.workflow_id.clone(),
+            handled_workflow: record.handled_workflow.clone(),
+            usage_limited: record.usage_limited,
+            fetch_mismatches: record.fetch_mismatches,
+            handled_usage_limited: record.handled_usage_limited,
+            handled_fetch_mismatches: record.handled_fetch_mismatches,
+            ..Record::default()
+        };
+        let due = plan(forced, target, runs, now, policy).expect("plan");
+        assert!(due.dispatch, "the retry was not dispatched: {due:?}");
+        Decision {
+            record: wait_for_host(due.record, "pohunek_request_failed"),
+            dispatch: false,
+            notify: false,
+        }
+    }
+
     /// Publishes a successful run of `record` on `main` and retargets the head to `dev` before
     /// discovery plans the success; the run on `dev` ends with a usage limit at `now`.
     fn published_then_limited_on_dev(
@@ -1625,7 +1676,8 @@ mod tests {
     // A run that a usage limit ended waits on the usage limit delays and keeps the retry budget;
     // it notifies on the first limited run of its streak and when the delays are spent. A
     // fetch mismatch and a usage limit share one streak, so neither resets the other's count;
-    // pruned runs and a retarget away and back keep both counts (#461).
+    // pruned runs and a retarget away and back keep both counts (#461). A retry by hand of a
+    // stopped head still starts after a host wait and a withdrawal or a retarget (#466).
     #[test]
     fn usage_limit_retries_on_its_own_delays_then_stops() {
         const U: &str = REVIEWER_USAGE_LIMITED;
@@ -1634,12 +1686,13 @@ mod tests {
         const BACK: &str = "retarget away and back";
         const GONE: &str = "withdrawn and back";
         const PUBLISHED: &str = "published, then limited on another base branch";
+        const RETRIED: &str = "retried by hand, then a host wait";
         let wait = |notify: bool, minutes: i64| ("retry_wait", notify, minutes);
         let stop = ("failed", true, 0);
         // Each case: its name, the ending of each run, the phase, notice and delay after each, and
         // the retries spent at the end.
         type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool, i64)], i64);
-        let cases: [Case<'_>; 11] = [
+        let cases: [Case<'_>; 13] = [
             (
                 "stops after its own delays",
                 &[U, U, U, U],
@@ -1759,6 +1812,34 @@ mod tests {
                 &[wait(true, 15), wait(false, 30), wait(true, 15)],
                 0,
             ),
+            (
+                "a retry by hand outlasts a host wait and a withdrawal",
+                &[U, U, U, U, RETRIED, GONE, U],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(false, 60),
+                    stop,
+                    ("retry_wait", false, 0),
+                    ("waiting", false, 2),
+                    stop,
+                ],
+                0,
+            ),
+            (
+                "a retry by hand outlasts a host wait and a retarget",
+                &[U, U, U, U, RETRIED, BACK, U],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(false, 60),
+                    stop,
+                    ("retry_wait", false, 0),
+                    ("waiting", false, 2),
+                    stop,
+                ],
+                0,
+            ),
         ];
         for (name, endings, want, retries) in cases {
             let (target, mut now, policy) = fixture();
@@ -1781,6 +1862,8 @@ mod tests {
                     plan(withdrawn, &target, &runs, now, &policy).expect("plan")
                 } else if *ending == PUBLISHED {
                     published_then_limited_on_dev(record, &target, &mut runs, now, &policy)
+                } else if *ending == RETRIED {
+                    retried_then_host_wait(&record, &target, &runs, now, &policy)
                 } else {
                     dispatch_and_end(record, &target, &mut runs, ending, now, &policy)
                 };

@@ -972,6 +972,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         if completed_here > failed_here {
             return Err(Error::workflow(REVIEW_ALREADY_COMPLETED, true, None));
         }
+        // The overridden run stays overridden when a withdrawal or a retarget drops the
+        // record's workflow before the retry starts.
+        forced.retried_workflow = forced.workflow_id.clone();
         state.schedule.insert(key, forced);
         Ok(())
     }
