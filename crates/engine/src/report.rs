@@ -615,10 +615,11 @@ mod tests {
 
     use super::{
         FindingMetrics, OutcomeCounts, ReviewMetrics, ReviewerCounts, finding_metrics,
-        review_metrics,
+        pipeline_rollup, review_metrics,
     };
+    use crate::error::error_code;
     use crate::stats::{Counters, Keyed};
-    use crate::store::FindingOutcome;
+    use crate::store::{FindingOutcome, Rollup, RollupCount, RollupSample};
 
     /// A row's repository, pipeline, reviewer, severity, blocking flag and outcome.
     type Row<'a> = (&'a str, &'a str, &'a str, &'a str, bool, &'a str);
@@ -818,6 +819,160 @@ mod tests {
         ];
         for (name, counters, request_seconds, attempts, reviewers, want) in cases {
             let got = review_metrics(&counters, request_seconds, attempts, reviewers);
+            assert_eq!(got, want, "{name}");
+        }
+    }
+
+    /// One rollup count: day, dimension, key, counter and value.
+    type Count = (&'static str, &'static str, &'static str, &'static str, i64);
+    /// One rollup sample: day, dimension, key, sample and count.
+    type Sample = (&'static str, &'static str, &'static str, i64, i64);
+
+    /// Returns the rollup of `counts` and `samples`.
+    fn rollup(counts: &[Count], samples: &[Sample]) -> Rollup {
+        let text = str::to_owned;
+        Rollup {
+            counts: (counts.iter())
+                .map(|&(day, dimension, key, counter, value)| RollupCount {
+                    day: text(day),
+                    dimension: text(dimension),
+                    key: text(key),
+                    counter: text(counter),
+                    value,
+                })
+                .collect(),
+            samples: (samples.iter())
+                .map(|&(day, dimension, key, sample, count)| RollupSample {
+                    day: text(day),
+                    dimension: text(dimension),
+                    key: text(key),
+                    sample,
+                    count,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn pipeline_rollup_reads_one_pipeline_and_refuses_days_pruned_without_it() {
+        let (day, before) = ("2026-11-14", "2026-11-13");
+        // Three reviews of the repositories `o/w` and `o/g` in the pipelines `p` and `q`, and a
+        // stop; reviewers `r` and `s`.
+        let pruned: Vec<Count> = vec![
+            (day, "day", "", "started", 3),
+            (day, "day", "", "completed", 3),
+            (day, "day", "", "stopped", 2),
+            (day, "verifier", "o/w#r", "checked", 2),
+            (day, "pipeline", "o/w#p", "started", 1),
+            (day, "pipeline", "o/w#p", "completed", 1),
+            (day, "pipeline", "o/w#q", "started", 1),
+            (day, "pipeline", "o/w#q", "completed", 1),
+            (day, "pipeline", "o/g#p", "started", 1),
+            (day, "pipeline", "o/g#p", "completed", 1),
+            (day, "pipeline", "o/g#p", "published", 1),
+            (day, "pipeline_verifier", "o/w#p#r", "checked", 1),
+            (day, "pipeline_disagreement", "o/g#p", "disagreed", 1),
+            (
+                day,
+                "pipeline_disagreement_reviewer",
+                "o/g#p#s",
+                "blocked_alone",
+                1,
+            ),
+        ];
+        let samples: Vec<Sample> = vec![
+            (day, "day", "", 600, 1),
+            (day, "pipeline", "o/g#p", 600, 1),
+            (day, "pipeline_request", "o/w#p", 900, 1),
+        ];
+        let with = |extra: &[Count]| rollup(&[pruned.as_slice(), extra].concat(), &samples);
+        let read = |stored: &Rollup, pipeline: &str, repository: Option<&str>| {
+            let got = pipeline_rollup(stored, pipeline, repository);
+            got.map_err(|err| error_code(&err).to_owned())
+        };
+        let ok = |counts: &[Count], samples: &[Sample]| Ok(Some(rollup(counts, samples)));
+        let (started, completed) = (
+            (day, "day", "", "started", 1),
+            (day, "day", "", "completed", 1),
+        );
+        let p = [
+            started,
+            completed,
+            started,
+            completed,
+            (day, "day", "", "published", 1),
+            (day, "verifier", "o/w#r", "checked", 1),
+            (day, "disagreement", "o/g", "disagreed", 1),
+            (day, "disagreement_reviewer", "o/g#s", "blocked_alone", 1),
+        ];
+        let p_samples = [(day, "day", "", 600, 1), (day, "request", "o/w", 900, 1)];
+        let w = [started, completed, (day, "verifier", "o/w#r", "checked", 1)];
+        let across = [
+            (before, "day", "", "started", 1),
+            (before, "pipeline", "o/w#q", "started", 1),
+            completed,
+            (day, "pipeline", "o/w#q", "completed", 1),
+        ];
+        let cancel = [across[0], (day, "pipeline", "o/w#q", "started", 1)];
+        let broken = [(day, "pipeline_verifier", "o/w", "checked", 1)];
+        let cases = [
+            (
+                "no rollup",
+                read(&Rollup::default(), "p", None),
+                ok(&[], &[]),
+            ),
+            (
+                "pipeline p",
+                read(&with(&[]), "p", None),
+                ok(&p, &p_samples),
+            ),
+            (
+                "p of o/w",
+                read(&with(&[]), "p", Some("o/w")),
+                ok(&w, &p_samples[1..]),
+            ),
+            (
+                "pipeline q",
+                read(&with(&[]), "q", None),
+                ok(&[started, completed], &[]),
+            ),
+            (
+                "unknown pipeline",
+                read(&with(&[]), "x", None),
+                ok(&[], &[]),
+            ),
+            (
+                "stops only",
+                read(&rollup(&pruned[2..3], &[]), "p", None),
+                ok(&[], &[]),
+            ),
+            (
+                "created the day before",
+                read(&rollup(&across, &[]), "q", None),
+                { ok(&[across[0], completed], &[]) },
+            ),
+            (
+                "pruned without pipelines",
+                read(&rollup(&pruned[..2], &[]), "p", None),
+                Ok(None),
+            ),
+            (
+                "one review without",
+                read(&with(&[completed]), "p", None),
+                Ok(None),
+            ),
+            (
+                "two days cancel",
+                read(&rollup(&cancel, &[]), "q", None),
+                Ok(None),
+            ),
+            (
+                "key without pipeline",
+                read(&rollup(&broken, &[]), "p", None),
+                { Err("store_state_invalid".to_owned()) },
+            ),
+        ];
+        for (name, got, want) in cases {
             assert_eq!(got, want, "{name}");
         }
     }
