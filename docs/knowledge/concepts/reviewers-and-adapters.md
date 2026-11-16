@@ -326,7 +326,9 @@ are in [wire names](#wire-names).
 The adapter for `codex-envelope` lives in `adapters/codex/` and uses only the
 Python standard library (Python 3.11 or newer). It runs only on Linux: it needs
 `PR_SET_CHILD_SUBREAPER` to end the processes that a run leaves, and exits with
-status 64 on a host without it. It has two parts:
+status 64 on a host without it; `autoreview profiles install --agent codex`
+refuses such a host, a Mac for example, with `profile_agent_unsupported`. It
+has two parts:
 
 - `codex-adapter` is the program a profile starts. It runs under `python3 -I`.
   Before it reads the request it sets the fixed terminal title

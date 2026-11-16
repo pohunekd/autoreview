@@ -24,7 +24,7 @@ knowledge bundle so pohunek.dev can render both.
   [state and recovery](concepts/state-and-recovery.md).
 - **Guides** are use cases with a complete policy each. A new reader starts
   with [getting started](guides/getting-started.md), which runs `scripts/setup`
-  on one Linux machine, or with the [quickstart](guides/quickstart.md), which
+  on one Linux machine or one Mac, or with the [quickstart](guides/quickstart.md), which
   does the same steps by hand; both end with a first review. The
   [use case chooser](guides/index.md) then picks a scenario;
   [combining patterns](guides/combining.md) layers them in one policy, and

@@ -7,7 +7,9 @@ Policy-driven AI pull request review on top of [pohunek](https://github.com/zajc
 > **Status: 0.5.0.** autoreview 0.5.0 is the current release. It ships static
 > Linux binaries for `x86_64` and `aarch64` as release archives, each with a
 > `.sha256` file and a build provenance attestation; see [install](docs/install.md).
-> The `main` branch holds changes after 0.5.0, and the documentation describes it.
+> The `main` branch holds changes after 0.5.0, and the documentation describes it:
+> the first release after 0.5.0 adds an ad-hoc signed archive for Apple Silicon
+> Macs and `scripts/setup` on macOS (#513).
 > The [Rough plan](#rough-plan) table is the roadmap; a part that is not available
 > names its open issue.
 
@@ -54,12 +56,16 @@ use it below, never main. Read these first; they are the source of truth:
 - for pohunek on a server or another review host: https://pohunek.dev/install-prompt.txt
 
 Rules:
-1. Detect the OS, CPU and C library. autoreview runs only on Linux x86_64 or
-   aarch64; `scripts/setup` needs x86_64, or aarch64 with pohunek and its
-   runtime packages in place. For anything else, stop and tell me.
+1. Detect the OS, CPU and C library. autoreview runs on Linux x86_64 or
+   aarch64, and on macOS 14 or newer on Apple Silicon from the first release
+   with an `aarch64-apple-darwin` archive. `scripts/setup` needs Linux x86_64,
+   Linux aarch64 with pohunek and its runtime packages in place, or such a Mac
+   with bash 4 or newer from Homebrew; a Mac runs Claude reviewers only, Codex
+   needs a Linux review host. For anything else, stop and tell me.
 2. Before changing anything, ask me: one machine as my own user
-   (`scripts/setup`) or a server (install page, path b with its systemd
-   units); the configuration directory; the GitHub login autoreview acts as
+   (`scripts/setup`, the only path on a Mac) or a Linux server (install page,
+   path b with its systemd units); the configuration directory; the GitHub
+   login autoreview acts as
    and its token kind (fine-grained for one owner, or classic); the
    repositories or organisation; Claude Code, Codex or both; the review
    hosts; where notifications go (setup asks for a Matrix room).
@@ -95,7 +101,8 @@ Rules:
 8. Verify with `autoreview validate --check-credentials` and `autoreview
    candidates` as the service user with its `--config` and `--env-file`,
    `systemctl status autoreview.service autoreview-queue.timer` (`--user`
-   with setup) and `pohunek doctor --json`. Report every warning and fix only
+   with setup) or, on a Mac, `scripts/macos-check service`, and `pohunek
+   doctor --json`. Report every warning and fix only
    what I approve. End with the versions, paths, open warnings, next steps.
 ```
 
@@ -106,7 +113,7 @@ part that is not available names its open issue.
 
 - [Features](docs/features.md) - what it does and a map of every page
 - [Getting started](docs/knowledge/guides/getting-started.md): `scripts/setup`
-  sets up one Linux machine
+  sets up one Linux machine or one Mac with Apple Silicon
 - [Quickstart](docs/knowledge/guides/quickstart.md) and
   [use cases](docs/knowledge/guides/index.md), each with a complete policy in
   [examples/](examples/)
@@ -168,6 +175,9 @@ scenarios are guides without a policy of their own:
   units ([getting started](docs/knowledge/guides/getting-started.md)), and the
   installer of the install page writes the system units of a server user (from
   0.4.0 on; a container image is not available, see #40)
+- Or macOS 14 or newer on Apple Silicon, from the first release after 0.5.0
+  (#513): `scripts/setup` writes launchd agents of your user; Codex reviewers
+  need a Linux review host
 
 ## Security model
 
@@ -195,4 +205,6 @@ keeps untrusted authors behind a maintainer label.
   auto-approved.
 - Distributed as static Linux release archives from 0.1.0 on, with systemd
   units and an installer from 0.4.0 on; a container image is not available (#40).
+  An ad-hoc signed, attested Apple Silicon archive comes with the first release
+  after 0.5.0 (#513); it is not notarized.
 - MIT license.

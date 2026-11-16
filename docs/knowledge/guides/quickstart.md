@@ -35,7 +35,7 @@ which can be the same machine.
 
 ## 2. Install the binary
 
-On one Linux machine that also runs the pohunek daemon,
+On one Linux machine, or one Mac with Apple Silicon, that also runs the pohunek daemon,
 [`scripts/setup`](getting-started.md) does steps 2 to 8 of this guide and
 installs the service; continue with step 9 after it. By hand: install the
 `autoreview` binary from the release page of
