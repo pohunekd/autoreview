@@ -44,6 +44,16 @@ is refused with `review_adapter_outdated`, without a fresh session. So is a
 result line in mode `text`, with or without a refusal: its adapter ran the
 request as a plain prompt (see [wire names](#wire-names)).
 
+A finding of a `claude-structured` result may carry an optional `category`: a
+slug of lowercase letters and digits joined by single hyphens, 1 to 40
+characters, such as `missing-test`. A result without it stays valid. A string
+that is not such a slug does not refuse the review: the finding is kept without
+a category and the engine logs one `finding category refused` warning that names
+the review and the value. A `category` that is not a string is refused like any
+other field of the wrong type. A `codex-envelope` report has no `category`. The
+engine uses the category only for the [`guidance`](../../configuration.md#guidance)
+suggestions.
+
 With `codex-envelope` the engine looks for one result frame at the end of the
 output and decodes it strictly. The frame must not be larger than
 `limits.result_max_bytes`, must contain only the known fields, and must name the

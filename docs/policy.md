@@ -126,7 +126,7 @@ per owner, each with its own token, works too.
 | `ready_draft_authors` | no | Lowercase GitHub logins of coding agents whose drafts are marked ready, see [drafts](#drafts-of-coding-agents) |
 | `approval` | yes | `timeout_hours`: 1-720, how long a clean review waits for a human approval |
 | `notes_handoff` | exactly when a rule sets `on_notes` | `reminder_hours`: 1-720 |
-| `notifications` | yes | A level for every [event](#notifications); `credential_invalid`, `credential_restored` and `credential_expiring` may be left out; `weekly_report` is optional, see [below](#notifications) |
+| `notifications` | yes | A level for every [event](#notifications); `credential_invalid`, `credential_restored`, `credential_expiring` and `guidance_suggested` may be left out; `weekly_report` is optional, see [below](#notifications) |
 
 The file is at most 256 KiB, holds exactly one YAML document, and unknown keys
 are an error.
@@ -487,6 +487,7 @@ events have their own route, is configured in [config.yaml](configuration.md#not
 | `credential_invalid` | GitHub refuses a credential's token while the service runs, which suspends the credential; once per suspension |
 | `credential_restored` | GitHub accepts the token of a suspended credential again, which lifts the suspension; once per lift |
 | `credential_expiring` | A credential's token expires within `github.expiry_warning_days`; at most once a UTC day per credential while `serve` runs |
+| `guidance_suggested` | Findings of one category recur in a repository, see [`guidance`](configuration.md#guidance) |
 | `started` | A review started |
 | `retry_scheduled` | A failed review step is retried later |
 | `superseded` | A newer commit or a retarget to another base branch replaced a review, or the pull request stopped asking for one (review request or label removed, closed, back to draft) |
@@ -494,6 +495,7 @@ events have their own route, is configured in [config.yaml](configuration.md#not
 `credential_invalid`, `credential_restored` and `credential_expiring` are
 optional: a policy without them sends them at level `action`, and its digest
 stays the same. A level set for one is used and changes the policy digest.
+`guidance_suggested` is optional the same way, with the default level `digest`.
 
 `weekly_report` is not an event: `digest` ends the review queue message once a
 week with the text of `autoreview report` for the last 7 UTC days and today, see
