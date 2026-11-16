@@ -22,6 +22,7 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::Config;
 use autoreview_engine::error::BoxError;
+use autoreview_engine::integrations::HeadCheckoutHooks;
 use autoreview_engine::model::{
     HOST_STATE_UNAVAILABLE, HostCapacity, ProjectRoute, repository_valid,
 };
@@ -67,8 +68,14 @@ const COMMAND_CODE_PREFIX: &str = "command_";
 /// Capability of `host inspect` that says whether `session new` takes `--fetch-ref`.
 const FETCH_REF_CAPABILITY: &str = "session_new_fetch_ref_supported";
 
+/// Capability of `host inspect` that says whether `session new` takes `--no-repo-hooks`.
+const SKIP_REPO_HOOKS_CAPABILITY: &str = "session_new_skip_repo_hooks_supported";
+
+/// Field of `host inspect` that reports, per event, whether the host has a hook script.
+const HOST_HOOKS_FIELD: &str = "host_hooks";
+
 /// Field names of the pohunek JSON, in lower case; a key that only differs in case is refused.
-const KNOWN_KEYS: [&str; 31] = [
+const KNOWN_KEYS: [&str; 38] = [
     "ok",
     "err",
     "code",
@@ -100,6 +107,13 @@ const KNOWN_KEYS: [&str; 31] = [
     "has_more",
     "timed_out",
     FETCH_REF_CAPABILITY,
+    SKIP_REPO_HOOKS_CAPABILITY,
+    HOST_HOOKS_FIELD,
+    "post_create",
+    "session_start",
+    "session_stop",
+    "agent_state",
+    "pre_remove",
 ];
 
 /// One project of `pohunek project list --json`.
@@ -512,6 +526,85 @@ pub(crate) async fn fetch_ref_supported(
 ) -> Result<bool, Error> {
     let output = pohunek_call(config, cancel, &host_inspect_arguments(host)).await?;
     fetch_ref_from_output(&output)
+}
+
+/// The part of the `host inspect` `ok` object that a head checkout reads.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct HeadCheckoutCapabilities {
+    /// Whether `session new` takes `--no-repo-hooks`, as any JSON value; `None` when absent.
+    session_new_skip_repo_hooks_supported: Option<Value>,
+    /// The host's hook scripts per event; `None` when absent or `null`.
+    host_hooks: Option<WorktreeHooks>,
+}
+
+autoreview_go_compat::object_only_serde!(HeadCheckoutCapabilities);
+
+/// The events of `host_hooks` whose host script runs in the session's worktree.
+///
+/// `pre_create` and `post_remove` run in the project repository and are ignored. Each value
+/// is any JSON value, `None` when absent; a key named twice refuses the answer.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct WorktreeHooks {
+    /// Whether the host has a `post-create` script.
+    post_create: Option<Value>,
+    /// Whether the host has a `session-start` script.
+    session_start: Option<Value>,
+    /// Whether the host has a `session-stop` script.
+    session_stop: Option<Value>,
+    /// Whether the host has an `agent-state` script.
+    agent_state: Option<Value>,
+    /// Whether the host has a `pre-remove` script.
+    pre_remove: Option<Value>,
+}
+
+autoreview_go_compat::object_only_serde!(WorktreeHooks);
+
+impl WorktreeHooks {
+    /// Reports whether every worktree event is reported as the JSON value `false`.
+    fn none(&self) -> bool {
+        [
+            &self.post_create,
+            &self.session_start,
+            &self.session_stop,
+            &self.agent_state,
+            &self.pre_remove,
+        ]
+        .iter()
+        .all(|value| **value == Some(Value::Bool(false)))
+    }
+}
+
+/// Reads what the `host inspect` `output` says about the hooks of a head checkout.
+///
+/// Only the JSON value `true` advertises the switch, and only `false` for each event of
+/// [`WorktreeHooks`] reports no host script: an absent, `null`, text or number value does
+/// not, because an older CLI drops the keys and an older daemon omits them.
+///
+/// # Errors
+///
+/// Returns `pohunek_response_invalid` when the output holds no `ok` object, names a field
+/// twice, or holds a `host_hooks` that is not an object.
+pub(crate) fn head_checkout_hooks_from_output(output: &str) -> Result<HeadCheckoutHooks, Error> {
+    let capabilities: HeadCheckoutCapabilities = decode_ok(output).ok_or_else(response_invalid)?;
+    Ok(HeadCheckoutHooks {
+        skip_supported: capabilities.session_new_skip_repo_hooks_supported
+            == Some(Value::Bool(true)),
+        no_worktree_scripts: capabilities.host_hooks.is_some_and(|hooks| hooks.none()),
+    })
+}
+
+/// Returns what the daemon of `host` reports about the hooks of a head checkout session.
+///
+/// One `host inspect` call; a failed call is the pohunek failure of the call.
+pub(crate) async fn head_checkout_hooks(
+    config: &Config,
+    cancel: &CancellationToken,
+    host: &str,
+) -> Result<HeadCheckoutHooks, Error> {
+    let output = pohunek_call(config, cancel, &host_inspect_arguments(host)).await?;
+    head_checkout_hooks_from_output(&output)
 }
 
 /// Returns the arguments of the host-state command on `host`, limited to `timeout`.

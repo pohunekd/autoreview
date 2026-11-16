@@ -266,6 +266,15 @@ pub trait Integrations {
         host: &str,
     ) -> impl Future<Output = Result<bool, Error>> + Send;
 
+    /// Returns what one pohunek host reports about the hooks of a head checkout session.
+    ///
+    /// One `host inspect` call; a failed call is the pohunek failure of the call.
+    fn head_checkout_hooks(
+        &self,
+        cancel: &CancellationToken,
+        host: &str,
+    ) -> impl Future<Output = Result<HeadCheckoutHooks, Error>> + Send;
+
     /// Starts the reviewer session, or returns the live session with the same name.
     fn ensure_session(
         &self,

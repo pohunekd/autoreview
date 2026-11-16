@@ -10,8 +10,8 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, Credential};
 use autoreview_engine::integrations::{
-    ChangedFiles, CommentableLines, GitHubReview, GuardTexts, Integrations, PullRequestState,
-    ReadiedDraft, ReviewRequestList, SessionRequest, TokenAnswer,
+    ChangedFiles, CommentableLines, GitHubReview, GuardTexts, HeadCheckoutHooks, Integrations,
+    PullRequestState, ReadiedDraft, ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use autoreview_engine::model::{
     CandidateList, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
@@ -188,6 +188,14 @@ impl Integrations for External {
         host: &str,
     ) -> Result<bool, Error> {
         pohunek::fetch_ref_supported(&self.config, cancel, host).await
+    }
+
+    async fn head_checkout_hooks(
+        &self,
+        cancel: &CancellationToken,
+        host: &str,
+    ) -> Result<HeadCheckoutHooks, Error> {
+        pohunek::head_checkout_hooks(&self.config, cancel, host).await
     }
 
     async fn ensure_session(

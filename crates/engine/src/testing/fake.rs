@@ -25,8 +25,9 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Credential;
 use crate::error::{BoxError, Error, WORKFLOW_FAILED};
 use crate::integrations::{
-    ChangedFile, ChangedFiles, CommentableLines, GitHubReview, GuardText, GuardTexts, Integrations,
-    PullRequestState, ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest, TokenAnswer,
+    ChangedFile, ChangedFiles, CommentableLines, GitHubReview, GuardText, GuardTexts,
+    HeadCheckoutHooks, Integrations, PullRequestState, ReadiedDraft, ReviewRequest,
+    ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
@@ -144,6 +145,10 @@ pub(crate) struct FakeState {
     pub(crate) fetch_ref_hosts: BTreeSet<String>,
     /// Number of the next capability reads that fail as a transient `pohunek_request_failed`.
     pub(crate) fetch_ref_failures: usize,
+    /// The hook report of every host; `None` reports the switch and no host script.
+    pub(crate) head_checkout_hooks: Option<HeadCheckoutHooks>,
+    /// Number of the next hook reports that fail as a transient `pohunek_request_failed`.
+    pub(crate) head_checkout_hooks_failures: usize,
     /// Failures of the next session starts, in order, as error code and permanence.
     pub(crate) start_failures: VecDeque<(String, bool)>,
     /// Commit that a failed start with a head fetch mismatch reports, or empty for none.
@@ -443,6 +448,22 @@ impl Integrations for FakeIntegration {
             return ready(Err(Error::workflow("pohunek_request_failed", false, None)));
         }
         ready(Ok(state.fetch_ref_hosts.contains(host)))
+    }
+
+    fn head_checkout_hooks(
+        &self,
+        _cancel: &CancellationToken,
+        _host: &str,
+    ) -> impl Future<Output = Result<HeadCheckoutHooks, Error>> + Send {
+        let mut state = self.lock();
+        if state.head_checkout_hooks_failures > 0 {
+            state.head_checkout_hooks_failures -= 1;
+            return ready(Err(Error::workflow("pohunek_request_failed", false, None)));
+        }
+        ready(Ok(state.head_checkout_hooks.unwrap_or(HeadCheckoutHooks {
+            skip_supported: true,
+            no_worktree_scripts: true,
+        })))
     }
 
     fn ensure_session(
