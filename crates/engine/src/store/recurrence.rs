@@ -31,10 +31,6 @@ pub struct Suggestion {
 
 /// A fixed finding with a category, as the count reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "read by Store::raise_suggestions")
-)]
 pub(super) struct FixedFinding {
     /// Repository as `owner/name`.
     pub(super) repository: String,
@@ -50,10 +46,6 @@ pub(super) struct FixedFinding {
 ///
 /// A finding counts when it was fixed at or after `window_start` and after the last
 /// suggestion of its repository and category. A category is due when `threshold` findings count.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by Store::raise_suggestions")
-)]
 pub(super) fn due_suggestions(
     fixed: &[FixedFinding],
     last: &BTreeMap<(String, String), OffsetDateTime>,
