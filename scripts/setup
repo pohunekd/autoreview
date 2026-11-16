@@ -57,6 +57,11 @@ AGENT_THROTTLE_SECONDS=10
 AGENT_EXIT_TIMEOUT_SECONDS=90
 AGENT_UMASK=63
 QUEUE_HOURS=(8 9 10 11 12 13 14 15 16 17 18 19 20)
+# launchctl bootout can return, or exit with EINPROGRESS, while the job still stops, and
+# launchd kills it after ExitTimeOut. Setup waits that long and 5 s more for the job to go.
+AGENT_GONE_WAIT_SECONDS=$((AGENT_EXIT_TIMEOUT_SECONDS + 5))
+AGENT_GONE_POLL_SECONDS=0.2
+LAUNCHCTL_EINPROGRESS=36
 # The rotation limits of the newsyslog line that setup prints for the agent logs:
 # the old files kept, and the size in KiB at which a log is rotated.
 LOG_ROTATE_COUNT=5
@@ -1879,32 +1884,51 @@ write_agent_file() {
 }
 
 # Writes and loads agent $1 (an index of render_agents). The loaded job is booted out
-# before the file changes, so a failed bootout leaves the old file with the old job. When
-# writing, enabling or loading the new definition fails, the text before it is written back
-# and loaded again, or the new file is removed.
+# before the file changes, so a failed bootout leaves this agent's file and job as they
+# were, and nothing is written until launchd no longer lists the job, since bootstrap fails
+# while it still stops. When writing, enabling or loading the new definition fails, the
+# previous text is loaded; it is written back first only when the file no longer holds it,
+# since a failed write leaves the file as it was. Without a previous file, the new one is
+# removed. Each message names only this agent: an agent installed earlier in the run stays
+# installed.
 install_agent() {
-    local label=${agent_labels[$1]} file=$unit_dir/${agent_names[$1]} previous=""
+    local label=${agent_labels[$1]} file=$unit_dir/${agent_names[$1]} previous="" current
+    local again="" deadline
     if [ -f "$file" ]; then
         previous=$(cat "$file"; echo x) || fail 10 "reading $file failed"
     fi
     if launchctl print "$agent_domain/$label" >/dev/null 2>&1; then
-        launchctl bootout "$agent_domain/$label" \
-            || fail 10 "launchctl bootout $agent_domain/$label failed; nothing was changed"
+        again=" again"
+        launchctl bootout "$agent_domain/$label" || [ "$?" -eq "$LAUNCHCTL_EINPROGRESS" ] \
+            || fail 10 "launchctl bootout $agent_domain/$label failed;" \
+                "$file and its job are unchanged"
+        deadline=$((SECONDS + AGENT_GONE_WAIT_SECONDS))
+        while launchctl print "$agent_domain/$label" >/dev/null 2>&1; do
+            [ "$SECONDS" -lt "$deadline" ] \
+                || fail 10 "$agent_domain/$label is still loaded $AGENT_GONE_WAIT_SECONDS s" \
+                    "after launchctl bootout; $file is unchanged and is not loaded again" \
+                    "when the job stops; run setup again then"
+            sleep "$AGENT_GONE_POLL_SECONDS"
+        done
     fi
     if write_agent_file "$file" "${agent_texts[$1]}" \
         && launchctl enable "$agent_domain/$label" \
         && launchctl bootstrap "$agent_domain" "$file"; then
         return
     fi
-    if [ -n "$previous" ]; then
-        if write_agent_file "$file" "${previous%x}" \
-            && launchctl bootstrap "$agent_domain" "$file"; then
-            fail 10 "installing the new $file failed; its previous text is loaded again"
-        fi
-        fail 10 "installing the new $file failed, and loading its previous text failed too"
+    if [ -z "$previous" ]; then
+        rm -f -- "$file"
+        fail 10 "installing $file failed; the file was removed and its job is not loaded"
     fi
-    rm -f -- "$file"
-    fail 10 "installing $file failed; the file was removed"
+    current=$(cat "$file" 2>/dev/null; echo x)
+    if [ "$current" != "$previous" ] && ! write_agent_file "$file" "${previous%x}"; then
+        fail 10 "installing the new $file failed, and writing its previous text back" \
+            "failed; its job is not loaded"
+    fi
+    launchctl bootstrap "$agent_domain" "$file" \
+        || fail 10 "installing the new $file failed, and loading its previous text failed;" \
+            "its job is not loaded"
+    fail 10 "installing the new $file failed; its previous text is loaded$again"
 }
 
 # The macOS counterpart of step_service and step_linger: the two LaunchAgents in the login
