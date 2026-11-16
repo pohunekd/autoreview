@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Sets up autoreview on one Linux machine, or one Mac on Apple Silicon, that
 # also runs the pohunek daemon: autoreview, pohunek, the configuration, the
-# secrets file, the runtime packages, the hooks, the agent profiles and, on
-# Linux, the user service.
+# secrets file, the runtime packages, the hooks, the agent profiles and the
+# user service: systemd user units on Linux, launchd agents on macOS.
 #
 # usage: scripts/setup [--dry-run] [--dir DIR] [--login LOGIN]
 #                      [--pohunek-host HOST] [--example NAME]
@@ -1902,6 +1902,70 @@ install_agent() {
     fail 10 "launchctl bootstrap failed for $file; the file was removed"
 }
 
+# The macOS counterpart of step_service and step_linger: the two LaunchAgents in the login
+# domain of the user, next to the agent of the pohunek daemon.
+step_agents() {
+    local i name label
+    read_agent_path \
+        || fail 3 "missing a readable, non-empty [environment] search_path in $service_config;" \
+            "run pohunek service refresh-path"
+    detect_agents
+    if [ "${#agents_missing[@]}" -eq 0 ] && [ "${#agents_changed[@]}" -eq 0 ] \
+        && [ "$agents_running" -eq 1 ]; then
+        if [ "$autoreview_installed" -eq 1 ] || [ "$service_binary" = stale ]; then
+            approve "restarting $AGENT_LABEL on the installed binary $autoreview_bin" \
+                "launchctl kickstart -k $agent_domain/$AGENT_LABEL"
+            launchctl kickstart -k "$agent_domain/$AGENT_LABEL" \
+                || fail 10 "launchctl kickstart failed"
+            return
+        fi
+        if [ "$service_binary" = unknown ]; then
+            echo "$AGENT_LABEL: its running binary is unreadable; after an upgrade of" \
+                "autoreview, run launchctl kickstart -k $agent_domain/$AGENT_LABEL"
+        fi
+        in_place "launchd agents $AGENT_LABEL and $QUEUE_LABEL"
+        return
+    fi
+    echo
+    echo "The service reviews what these lines of $dir/policy.yaml select:"
+    grep -E '^[[:space:]]*(- )?(match|trigger):' "$dir/policy.yaml" | sed 's/^/  /' || true
+    if [ "${#agents_changed[@]}" -gt 0 ]; then
+        for i in "${!agent_names[@]}"; do
+            name=${agent_names[i]}
+            if is_one_of "$name" "${agents_changed[@]}"; then
+                diff -u "$unit_dir/$name" <(printf '%s' "${agent_texts[i]}") || true
+            fi
+        done
+        approve "replacing the changed agents (the diff above)" \
+            "${agents_changed[@]/#/write $unit_dir/}"
+    fi
+    local -a commands=("install -d -m 0700 $log_dir")
+    for i in "${!agent_names[@]}"; do
+        label=${agent_labels[i]}
+        commands+=("write $unit_dir/${agent_names[i]}"
+            "launchctl bootout $agent_domain/$label (when it is loaded)"
+            "launchctl enable $agent_domain/$label"
+            "launchctl bootstrap $agent_domain $unit_dir/${agent_names[i]}")
+    done
+    approve "launchd agents" "${commands[@]}"
+    [ -d "$log_dir" ] || install -d -m 0700 "$log_dir" || fail 10 "creating $log_dir failed"
+    [ -d "$unit_dir" ] || install -d -m 0755 "$unit_dir" || fail 10 "creating $unit_dir failed"
+    for i in "${!agent_names[@]}"; do
+        install_agent "$i"
+    done
+    echo "The agents run while $user_name is logged in: launchd starts them at login and stops"
+    echo "them at logout, as it does the pohunek daemon. A Mac that reviews unattended needs"
+    echo "automatic login. launchd does not rotate the logs; to rotate them, add these lines"
+    echo "to /etc/newsyslog.d/autoreview.conf as root (the review agent keeps writing to a"
+    echo "rotated log until it restarts):"
+    for name in autoreview autoreview-queue; do
+        printf '  %s %s:staff 600 %s %s * N\n' "$log_dir/$name.log" "$user_name" \
+            "$LOG_ROTATE_COUNT" "$LOG_ROTATE_KIB"
+    done
+    echo "To remove the agents: launchctl bootout $agent_domain/<label> and delete"
+    echo "$unit_dir/<label>.plist, for $AGENT_LABEL and $QUEUE_LABEL."
+}
+
 # Prints one plan line: the step $1 and its state $2.
 plan() {
     printf '  %-58s %s\n' "$1" "$2"
@@ -1961,7 +2025,21 @@ print_plan() {
         plan_profiles
     fi
     if [ "$os" = Darwin ]; then
-        plan "launchd agents of autoreview and the queue" "not written by setup yet (#513)"
+        if [ "$pohunek_state" != ok ] || ! read_agent_path 2>/dev/null; then
+            plan "launchd agents $AGENT_LABEL and the queue" "decided after pohunek"
+        else
+            detect_agents
+            if [ "${#agents_missing[@]}" -gt 0 ] || [ "${#agents_changed[@]}" -gt 0 ] \
+                || [ "$agents_running" -eq 0 ]; then
+                plan "launchd agents $AGENT_LABEL and the queue" "will run"
+            elif [ "$service_binary" = stale ] || [ "$autoreview_state" = older ]; then
+                plan "launchd agents $AGENT_LABEL and the queue" \
+                    "will run (restart on the installed binary)"
+            else
+                plan "launchd agents $AGENT_LABEL and the queue" "in place, skipped"
+            fi
+        fi
+        plan "login session of $user_name" "the agents run while $user_name is logged in"
         return
     fi
     detect_units
@@ -2061,10 +2139,7 @@ run_steps() {
     step_hooks
     step_profiles
     if [ "$os" = Darwin ]; then
-        echo "setup: the launchd agents of autoreview are not written by setup yet (#513);"
-        echo "until then run the service in a terminal:"
-        printf '  %q --config %q --env-file %q serve\n' "$autoreview_bin" "$dir/config.yaml" \
-            "$env_file"
+        step_agents
     else
         step_service
         step_linger
