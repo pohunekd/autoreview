@@ -3,7 +3,9 @@
 
 Checks, per page: relative links and their anchors, YAML code blocks, the
 status line, forbidden words and emoji. Every examples/**/*.yaml file must
-parse. Run as `python3 -I scripts/check-docs [ROOT]`; exits 1 on any finding.
+parse. The pages that pohunek.dev publishes by name must exist, and README.md
+must hold the agent install prompt that it serves, by the site's own rules. Run as
+`python3 -I scripts/check-docs [ROOT]`; exits 1 on any finding.
 
 Words that must not appear in public pages are read from
 `.check-docs-forbidden` at the repository root, one per line, `#` for comments.
@@ -26,6 +28,18 @@ EMOJI = re.compile(r"[\U0001F300-\U0001FAFF]")
 LINK = re.compile(r"\]\(([^)\s]+)\)")
 HEADING = re.compile(r"^#{1,6}\s+(.*)")
 YAML_BLOCK = re.compile(r"```yaml\n(.*?)```", re.DOTALL)
+# pohunek.dev syncs each release: these pages by name (the rest by glob), and the
+# first `text` block under this README heading as its install prompt. Its release
+# follower fails for every product when one of them is missing.
+PUBLISHED_PAGES = (
+    "docs/features.md",
+    "docs/install.md",
+    "docs/policy.md",
+    "docs/configuration.md",
+    "docs/cli.md",
+    "docs/stats.md",
+)
+INSTALL_PROMPT_HEADING = "## Install with an agent"
 
 
 def read(path):
@@ -107,8 +121,50 @@ def check_page(path, forbidden, errors):
         errors.append(f"{rel}: emoji")
 
 
+def check_published(errors):
+    for page in PUBLISHED_PAGES:
+        if not (ROOT / page).is_file():
+            errors.append(f"{page}: missing; pohunek.dev publishes it by name")
+
+    readme = ROOT / "README.md"
+    if not readme.is_file():
+        errors.append("README.md: missing; pohunek.dev serves its install prompt")
+        return
+    problem = install_prompt_problem(read(readme).splitlines())
+    if problem:
+        errors.append(f"README.md: {problem} (pohunek.dev serves it as the install prompt)")
+
+
+def install_prompt_problem(lines):
+    """Why pohunek.dev cannot extract the install prompt, or None.
+
+    The rules are those of the site's extractInstallPrompt: the first line equal to
+    the heading after trimming, then the first ```text fence before the next H2,
+    closed by the next bare fence anywhere after it, with text left after trimming.
+    """
+    starts = [i for i, line in enumerate(lines) if line.strip() == INSTALL_PROMPT_HEADING]
+    if not starts:
+        return f"no {INSTALL_PROMPT_HEADING!r} section"
+    opening = None
+    for i in range(starts[0] + 1, len(lines)):
+        if re.match(r"##\s", lines[i]):
+            break
+        if re.fullmatch(r"```text\s*", lines[i]):
+            opening = i
+            break
+    if opening is None:
+        return f"{INSTALL_PROMPT_HEADING!r} section has no ```text block"
+    closes = [i for i in range(opening + 1, len(lines)) if re.fullmatch(r"```\s*", lines[i])]
+    if not closes:
+        return f"{INSTALL_PROMPT_HEADING!r} text block is never closed"
+    if not "\n".join(lines[opening + 1:closes[0]]).strip():
+        return f"{INSTALL_PROMPT_HEADING!r} text block is empty"
+    return None
+
+
 def main():
     errors = []
+    check_published(errors)
     forbidden = forbidden_words()
     pages = sorted(p for p in (ROOT / "docs").glob("**/*.md") if "plan" not in p.parts)
     for page in pages:
