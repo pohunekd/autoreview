@@ -124,3 +124,77 @@ fn settlements(artifact: &Artifact) -> Vec<Settlement> {
     }
     settlements
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN, prior_key};
+    use crate::model::{
+        Artifact, PriorCheck, PriorFinding, PriorResult, PriorVerdict, Verification,
+    };
+    use crate::protocol::fixtures::sha;
+    use crate::store::Settlement;
+    use crate::verify::{VERDICT_REOPENED, VERDICT_UPHELD};
+
+    use super::settlements;
+
+    #[test]
+    fn prior_verdicts_settle_open_findings_as_the_publication_does() {
+        let key = prior_key(&sha("a"), "O001");
+        // One earlier finding with its final status, its new ID, and the verifier's check.
+        let artifact = |status: &str, republished: &str, check: Option<(&str, &str)>| Artifact {
+            head_sha: sha("c"),
+            prior_results: vec![PriorResult {
+                finding: PriorFinding {
+                    key: key.clone(),
+                    ..PriorFinding::default()
+                },
+                verdict: PriorVerdict {
+                    key: key.clone(),
+                    status: status.to_owned(),
+                    ..PriorVerdict::default()
+                },
+                republished: republished.to_owned(),
+                reopened: check.is_some_and(|(verdict, _)| verdict == VERDICT_REOPENED),
+            }],
+            verification: check.map(|(verdict, error_code)| Verification {
+                prior: vec![PriorCheck {
+                    key: key.clone(),
+                    verdict: verdict.to_owned(),
+                    note: String::new(),
+                }],
+                error_code: error_code.to_owned(),
+                ..Verification::default()
+            }),
+            ..Artifact::default()
+        };
+        let (upheld, reopened) = (Some((VERDICT_UPHELD, "")), Some((VERDICT_REOPENED, "")));
+        let failed = Some((VERDICT_UPHELD, "verifier_failed"));
+        // The last column is the outcome, `moved` for a new tracked key, empty for no change.
+        let cases = [
+            ("fixed", PRIOR_FIXED, "", None, "fixed"),
+            ("upheld answer", PRIOR_ANSWERED, "", upheld, "fixed"),
+            ("no verifier", PRIOR_ANSWERED, "", None, "answered"),
+            ("failed check", PRIOR_ANSWERED, "", failed, "answered"),
+            ("reopened", PRIOR_OPEN, "", reopened, ""),
+            ("reopened, published", PRIOR_OPEN, "P001", reopened, "moved"),
+            ("published again", PRIOR_OPEN, "P001", None, "moved"),
+            ("left open", PRIOR_OPEN, "", None, ""),
+        ];
+        for (name, status, republished, check, want) in cases {
+            let key = key.clone();
+            let want = match want {
+                "" => Vec::new(),
+                "moved" => {
+                    let republished = prior_key(&sha("c"), "P001");
+                    vec![Settlement::Republished { key, republished }]
+                }
+                outcome => vec![Settlement::Decided {
+                    key,
+                    outcome: outcome.to_owned(),
+                }],
+            };
+            let settled = settlements(&artifact(status, republished, check));
+            assert_eq!(settled, want, "{name}");
+        }
+    }
+}

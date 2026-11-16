@@ -169,7 +169,8 @@ cannot ask the author to answer a thread that is resolved or missing, so it
 publishes the finding again as a new finding with an id from the `P` series:
 `P001`, `P002` and so on. The body says that the finding is still open from the
 earlier review and names the head it was reported at. Republished findings count
-as blocking.
+as blocking. The [outcome](finding-outcomes.md) of the earlier finding follows
+the new id, so the review that settles the republished finding settles it.
 
 An open prior finding that still has an unresolved inline thread is not published
 again. The thread itself is the place where the author answers.
