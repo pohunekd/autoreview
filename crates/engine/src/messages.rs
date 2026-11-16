@@ -14,6 +14,7 @@ use crate::model::{
 use crate::publish::neutralize::{single_line, visible_excerpt};
 use crate::publish::plan::{PublicationPlan, blocking_count};
 use crate::publish::render::{guard_text, head_prefix, human_review_text, reviewer_labels};
+use crate::store::Suggestion;
 use crate::verify::{VERDICT_NOT_BLOCKING, VERDICT_REFUTED, demoted, escalates, verification_line};
 
 /// Title of the approval request. An approval is accepted only as a reply to a message that
@@ -49,6 +50,33 @@ fn review_header(title: &str, input: &ReviewInput) -> String {
         excerpt(&pr.title, HEADER_TITLE_CHARACTERS),
         reviewer_labels(&input.reviewers),
         input.scope.mode
+    )
+}
+
+/// The message that suggests a guidance rule for the findings of one category that recur.
+///
+/// Each finding body is one line of at most `limit` characters.
+pub(crate) fn guidance_suggested_message(suggestion: &Suggestion, limit: i64) -> String {
+    let repository = single_line(&suggestion.repository);
+    let findings: Vec<String> = (suggestion.findings)
+        .iter()
+        .map(|finding| {
+            format!(
+                "{repository}#{} {}: {}",
+                finding.number,
+                single_line(&finding.finding_key),
+                excerpt(&finding.body, limit)
+            )
+        })
+        .collect();
+    format!(
+        "Guidance rule suggested: {} findings recur in {repository}\n\nRepository: {repository}\n\
+         Category: {}\nFixed findings: {}\n{}\n\nConsider a rule for this category in the \
+         repository's agent guidance (AGENTS.md or CLAUDE.md).",
+        suggestion.category,
+        suggestion.category,
+        findings.len(),
+        findings.join("\n")
     )
 }
 

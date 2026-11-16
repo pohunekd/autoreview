@@ -10,7 +10,9 @@ use crate::error::error_code;
 use crate::integrations::Integrations;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN, prior_key};
 use crate::model::{Artifact, ReviewInput};
-use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Settlement};
+use crate::store::{
+    FindingCategory, FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Settlement,
+};
 use crate::verify::{VERDICT_UPHELD, demoted};
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
@@ -45,8 +47,48 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 error = %err,
                 "finding outcomes not recorded"
             );
+            return;
+        }
+        // Without the `guidance` section nothing is counted, so nothing is kept for it.
+        if self.config.guidance.is_none() {
+            return;
+        }
+        let categories = published_categories(artifact);
+        if categories.is_empty() {
+            return;
+        }
+        let stored =
+            (self.store).record_categories(&artifact.repository, artifact.number, &categories);
+        if let Err(err) = stored {
+            tracing::error!(
+                review_id = %input.pull_request.review_id(),
+                error_code = error_code(&err),
+                error = %err,
+                "finding categories not recorded"
+            );
         }
     }
+}
+
+/// Reports whether finding `id` of `artifact` publishes a prior finding again.
+fn republished(artifact: &Artifact, id: &str) -> bool {
+    (artifact.prior_results)
+        .iter()
+        .any(|result| !result.republished.is_empty() && result.republished == id)
+}
+
+/// Returns the category and body of each finding of `artifact` that has a category, except those
+/// that publish a prior one again.
+fn published_categories(artifact: &Artifact) -> Vec<FindingCategory> {
+    (artifact.findings)
+        .iter()
+        .filter(|finding| !finding.category.is_empty() && !republished(artifact, &finding.id))
+        .map(|finding| FindingCategory {
+            finding_key: prior_key(&artifact.head_sha, &finding.id),
+            category: finding.category.clone(),
+            body: finding.body.clone(),
+        })
+        .collect()
 }
 
 /// Returns one outcome per finding of `artifact`, except those that publish a prior one again.
@@ -58,14 +100,9 @@ fn published_outcomes(
     artifact: &Artifact,
     published_at: &str,
 ) -> Vec<FindingOutcome> {
-    let republished = |id: &str| {
-        (artifact.prior_results)
-            .iter()
-            .any(|result| !result.republished.is_empty() && result.republished == id)
-    };
     let mut outcomes = Vec::new();
     for finding in &artifact.findings {
-        if republished(&finding.id) {
+        if republished(artifact, &finding.id) {
             continue;
         }
         let key = prior_key(&artifact.head_sha, &finding.id);

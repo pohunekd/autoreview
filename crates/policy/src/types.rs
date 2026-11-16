@@ -334,6 +334,9 @@ pub enum Event {
     /// It is always sent at the action level, so no policy names it.
     #[serde(rename = "guard_suspect")]
     GuardSuspect,
+    /// Findings of one category recur in a repository, which suggests a guidance rule.
+    #[serde(rename = "guidance_suggested")]
+    GuidanceSuggested,
     /// Handoff reminder event.
     #[serde(rename = "handoff_reminder")]
     HandoffReminder,
@@ -370,6 +373,7 @@ impl Event {
             Self::CredentialRestored => "credential_restored",
             Self::FindingsOnOwnPr => "findings_on_own_pr",
             Self::GuardSuspect => "guard_suspect",
+            Self::GuidanceSuggested => "guidance_suggested",
             Self::HandoffReminder => "handoff_reminder",
             Self::RetryScheduled => "retry_scheduled",
             Self::ReviewStopped => "review_stopped",
@@ -417,6 +421,7 @@ pub const OPTIONAL_EVENTS: &[(Event, Level)] = &[
     (Event::CredentialInvalid, Level::Action),
     (Event::CredentialRestored, Level::Action),
     (Event::CredentialExpiring, Level::Action),
+    (Event::GuidanceSuggested, Level::Digest),
 ];
 
 /// Events a review workflow sends itself, so its input carries their levels. Discovery sends the

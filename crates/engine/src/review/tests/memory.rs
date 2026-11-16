@@ -12,7 +12,7 @@ use serde_json::json;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Credential, Credentials};
+use crate::config::{Credential, Credentials, GuidanceConfig};
 use crate::error::error_code;
 use crate::integrations::SessionRequest;
 use crate::messages::APPROVAL_REQUESTED_TITLE;
@@ -871,18 +871,25 @@ async fn missing_previous_review_falls_back_to_a_full_review() {
 
 // A resolved thread leaves an open prior finding nothing to answer.
 // So the review publishes it again instead of only naming it.
+// The two findings share a category, so their fix suggests a guidance rule once.
 #[tokio::test]
 async fn open_prior_finding_without_an_open_thread_is_published_again() {
-    let mut h = start_harness(|_| {}).await;
+    let mut h = start_harness(|config| {
+        config.guidance = Some(GuidanceConfig {
+            recurrence_threshold: 2,
+            window: Duration::from_secs(30 * 24 * 60 * 60),
+        });
+    })
+    .await;
     h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3, 4])].into();
     // Distinct lines keep the two reviewers' findings apart as O001 and S001.
     let opus = reviewer_output(vec![json!({
         "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
-        "line": 3, "title": "Broken", "body": "It breaks.",
+        "line": 3, "title": "Broken", "body": "It breaks.", "category": "missing-test",
     })]);
     let sonnet = reviewer_output(vec![json!({
         "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
-        "line": 4, "title": "Also broken", "body": "It breaks too.",
+        "line": 4, "title": "Also broken", "body": "It breaks too.", "category": "missing-test",
     })]);
     h.set_output(move |request: &SessionRequest| {
         if request.reviewer.id == "sonnet" {
@@ -955,6 +962,33 @@ async fn open_prior_finding_without_an_open_thread_is_published_again() {
     ];
     h.wait_for("the fixed outcomes", || outcomes(&h, &pr) == fixed)
         .await;
+    // Both fixed findings of the category make one suggestion, in the digest, naming them.
+    let suggested = |h: &Harness| {
+        let (_, notes, _, _) = h.fake.snapshot();
+        let texts: Vec<String> = (notes.iter())
+            .filter(|note| note.level == Level::Digest)
+            .filter(|note| note.message.starts_with("Guidance rule suggested"))
+            .map(|note| note.message.clone())
+            .collect();
+        texts
+    };
+    let texts = suggested(&h);
+    assert!(
+        texts.len() == 1
+            && texts[0].contains("Category: missing-test")
+            && texts[0].contains(&format!("acme/manual#{} {opus_key}: It breaks.", pr.number))
+            && texts[0].contains(&format!("{sonnet_key}: It breaks too.")),
+        "the fixed findings suggest one guidance rule: {texts:?}"
+    );
+    // The next review settles nothing new, so it suggests nothing.
+    h.set_output(reviewer_output(Vec::new()));
+    let mut again = pr.clone();
+    again.head_sha = sha("e");
+    h.fake.open(again.clone(), h.rule(&pr.repository));
+    h.poll_until("the second approval wait", || h.resolve(&again).is_ok())
+        .await;
+    approve_waiting(&h, &again, 4).await;
+    assert_eq!(suggested(&h), texts, "the suggestion is delivered once");
     h.stop_engine().await;
 }
 
