@@ -46,7 +46,8 @@ skip_gate() {
 docs_gates() {
     run_gate check-docs python3 -I scripts/check-docs
     if command -v shellcheck >/dev/null 2>&1 || [ -n "${CI:-}" ]; then
-        run_gate shellcheck shellcheck scripts/setup scripts/check-install deploy/install.sh
+        run_gate shellcheck shellcheck scripts/setup scripts/check-install deploy/install.sh \
+            scripts/macos-check
     else
         skip_gate shellcheck "shellcheck is not on PATH"
     fi
