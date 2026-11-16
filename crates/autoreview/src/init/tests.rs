@@ -7,7 +7,7 @@ use autoreview_engine::Error;
 use clap::ValueEnum;
 
 use super::{Example, InitArguments, Layout, agent_profiles, render, write};
-use crate::config_file;
+use crate::config_file::{self, RUNTIME_DIR_OPTIONAL};
 
 /// The login that the tests pass to `init`.
 const LOGIN: &str = "review-bot-2";
@@ -70,6 +70,14 @@ fn init_then_validate_loads_every_example() {
         let served = loaded.credentials.single().map(|only| only.login.as_str());
         assert_eq!(served, Some(LOGIN));
         assert_eq!(loaded.pohunek_hosts, [HOST]);
+        // Without `--pohunek-runtime-dir`, macOS leaves the Linux reference value out (#513).
+        let runtime = (!RUNTIME_DIR_OPTIONAL).then_some("/run/autoreview");
+        assert_eq!(
+            loaded.pohunek_runtime.as_deref(),
+            runtime,
+            "{}",
+            name(example)
+        );
     }
 }
 

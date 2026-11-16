@@ -204,8 +204,9 @@ pub struct Config {
     pub pohunek_bin: String,
     /// Absolute path of the pohunek state home.
     pub pohunek_state: String,
-    /// Absolute path of the pohunek runtime directory.
-    pub pohunek_runtime: String,
+    /// Absolute path of the pohunek runtime directory, which the pohunek child gets as
+    /// `XDG_RUNTIME_DIR`; `None` leaves that variable unset, so pohunek on macOS uses its default.
+    pub pohunek_runtime: Option<String>,
     /// The pohunek hosts that serve reviews, in priority order; never empty.
     pub pohunek_hosts: Vec<String>,
     /// Routing overrides keyed by repository.
@@ -388,12 +389,16 @@ impl Config {
             ("GitHub CLI", self.gh_bin.as_str()),
             ("Pohunek CLI", self.pohunek_bin.as_str()),
             ("Pohunek state home", self.pohunek_state.as_str()),
-            ("Pohunek runtime directory", self.pohunek_runtime.as_str()),
         ] {
             if !value.starts_with('/') {
                 let message = format!("{label} path must be absolute");
                 return Err(invalid(message));
             }
+        }
+        if let Some(runtime) = &self.pohunek_runtime
+            && !runtime.starts_with('/')
+        {
+            return Err(invalid("Pohunek runtime directory path must be absolute"));
         }
         if self.pohunek_hosts.is_empty() {
             return Err(invalid("pohunek hosts must not be empty"));
@@ -1172,7 +1177,7 @@ mod tests {
             gh_bin: "/usr/bin/gh".to_owned(),
             pohunek_bin: "/usr/bin/pohunek".to_owned(),
             pohunek_state: "/var/lib/pohunek".to_owned(),
-            pohunek_runtime: "/run/pohunek".to_owned(),
+            pohunek_runtime: Some("/run/pohunek".to_owned()),
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
             untrusted_route_overrides: std::collections::BTreeMap::new(),

@@ -15,7 +15,7 @@ use autoreview_policy::user_login_valid;
 use clap::{Args, ValueEnum};
 use serde::Serialize;
 
-use crate::config_file::clean_absolute;
+use crate::config_file::{RUNTIME_DIR_OPTIONAL, clean_absolute};
 use crate::{CONFIGURATION_INVALID, command_invalid, failed};
 
 /// Error code of a file or directory that is in the way of `init`.
@@ -361,6 +361,10 @@ pub(crate) fn apply_layout(mut text: String, layout: &Layout) -> Result<String, 
             }
             text = replace_once(&text, line, &format!("{key}{}\n", quoted(value)?))?;
         }
+    }
+    // The reference value is a Linux path; without the flag macOS keeps pohunek's default.
+    if RUNTIME_DIR_OPTIONAL && layout.pohunek_runtime_dir.is_none() {
+        text = replace_once(&text, RUNTIME_DIR_LINE.0, "")?;
     }
     let matrix = [
         (
