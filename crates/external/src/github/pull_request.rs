@@ -35,6 +35,9 @@ const BOT_TYPENAME: &str = "Bot";
 /// The pull request state that the engine reviews.
 const OPEN_STATE: &str = "OPEN";
 
+/// The pull request state of a merged pull request.
+const MERGED_STATE: &str = "MERGED";
+
 /// The repository that the query names, `null` when there is none.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
@@ -446,7 +449,8 @@ pub(crate) fn decode_pull_request(
 
 /// Decodes the state of a pull request that is read without a trigger (`ReadPullRequestState`).
 ///
-/// A pull request that GitHub does not return as open gives the empty state with no error.
+/// A pull request that GitHub does not return gives the empty state with no error; a closed
+/// or merged one has its head SHA.
 pub(crate) fn decode_pull_request_state(
     repository: &str,
     number: i64,
@@ -469,6 +473,7 @@ pub(crate) fn decode_pull_request_state(
         .map_or(String::new(), |a| a.login.to_ascii_lowercase());
     let state = PullRequestState {
         open: raw.state == OPEN_STATE,
+        merged: raw.state == MERGED_STATE,
         requested: requests(&raw, login),
         title: raw.title.trim().to_owned(),
         url: raw.url.clone(),

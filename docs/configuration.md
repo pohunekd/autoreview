@@ -97,6 +97,9 @@ schedule:
   search_page_limit: 20
   scheduler_max_bytes: 16777216
   state_entry_limit: 10000
+  # A pull request with open finding outcomes is read at most this often to
+  # see whether it was merged or closed.
+  outcome_check_interval_seconds: 3600
 
 limits:
   result_max_bytes: 1048576
@@ -365,6 +368,7 @@ How reviewer sessions are named, started, read and cleaned up.
 | `discovery_lock_timeout_seconds`, `discovery_lock_poll_ms` | Concurrent discovery passes take turns on a lock |
 | `poll_limit`, `search_page_limit` | GitHub search bounds; a truncated search is an error, never a silent drop |
 | `scheduler_max_bytes`, `state_entry_limit` | Size bounds of the discovery state |
+| `outcome_check_interval_seconds` | Shortest time between two reads of a pull request that left the search while it has open [finding outcomes](knowledge/concepts/finding-outcomes.md), to see whether it was merged or closed. Required |
 
 ## limits
 
