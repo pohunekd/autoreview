@@ -642,14 +642,19 @@ Before a line that would take the file past `max_file_bytes`, the file becomes
 `<file>.1`, `<file>.1` becomes `<file>.2` and so on up to
 `<file>.<kept_files>`, whose old content is replaced, and a new file is
 started. A line is never split, so a line longer than the limit fills a new file
-alone and that file passes the limit by that one line. When a rename or the
-opening of the new file fails, the line is appended to the current file, which
-may then pass the limit, and the rotation is tried again after 60 seconds.
+alone and that file passes the limit by that one line. The new file is created
+as `<file>.new` before any rename, so when that or a rename fails, the line is
+appended to the current file, which may then pass the limit, and the rotation is
+tried again after 60 seconds; only when the last rename fails, after the current
+file became `<file>.1`, lines go to `<file>.1` until that retry.
 
 With the file in use, a log line goes to the file only. stderr gets only the
 lines the file could not take, in full; one error line of the writer per 60
 seconds (`log write failed` or `log rotation failed`, with the count of such
-lines held back since the previous one); and panics. Lines logged before the
+lines held back since the previous one); and panics. A line the file takes only
+in part is cut out of the file again, so the file never holds a partial line; if
+that fails too, the next line starts on a new line and only the cut piece is
+not valid JSON. Lines logged before the
 configuration is read go to stderr. The JSON that a command prints on stdout does
 not change.
 

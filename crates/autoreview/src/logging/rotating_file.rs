@@ -18,6 +18,9 @@ pub(super) const FILE_MODE: u32 = 0o600;
 /// Time before a failed rotation is tried again, and between two error lines of the writer.
 const RETRY_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Suffix of the temporary name under which a new current file is created before the renames.
+const PENDING_SUFFIX: &str = ".new";
+
 /// Target of the error lines that the writer writes itself.
 const ERROR_TARGET: &str = "autoreview::logging";
 
@@ -37,8 +40,8 @@ pub(super) struct RotatingFile {
     file: File,
     /// Bytes in the current file.
     written: u64,
-    /// The current file is renamed away and its replacement is not open yet.
-    renamed: bool,
+    /// The current file ends in a cut line that could not be truncated away.
+    cut: bool,
     /// Instant before which a failed rotation is not tried again.
     retry_at: Option<Instant>,
     /// Instant before which an error line is only counted.
@@ -71,7 +74,7 @@ impl RotatingFile {
             kept_files,
             file,
             written,
-            renamed: false,
+            cut: false,
             retry_at: None,
             report_at: None,
             repeats: 0,
@@ -85,16 +88,43 @@ impl RotatingFile {
         if self.written > 0 && self.written.saturating_add(length) > self.max_bytes {
             self.rotate();
         }
-        if let Err(error) = self.file.write_all(line) {
-            // A partial write leaves a cut line behind, so the count follows the file.
-            self.written = self
-                .file
-                .metadata()
-                .map_or(self.written, |metadata| metadata.len());
+        // A cut line ends without a newline, so the next line starts on a new one.
+        let glued;
+        let bytes = if self.cut {
+            glued = [b"\n".as_slice(), line].concat();
+            glued.as_slice()
+        } else {
+            line
+        };
+        let before = self.written;
+        if let Err(error) = self.file.write_all(bytes) {
+            let error = self.cut_back(before, error);
             self.send(line);
             self.report("log write failed", &error);
         } else {
-            self.written = self.written.saturating_add(length);
+            self.written = before.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+            self.cut = false;
+        }
+    }
+
+    /// Truncates the file to `before` bytes after a failed write, so no cut line stays.
+    ///
+    /// When the truncation fails too, the file keeps the cut piece and the next line is
+    /// preceded by a newline. Returns the error to report.
+    fn cut_back(&mut self, before: u64, error: io::Error) -> io::Error {
+        match self.file.set_len(before) {
+            Ok(()) => {
+                self.written = before;
+                error
+            }
+            Err(truncate_error) => {
+                self.written = self
+                    .file
+                    .metadata()
+                    .map_or(before, |metadata| metadata.len());
+                self.cut = true;
+                io::Error::other(format!("{error}; the cut line stayed: {truncate_error}"))
+            }
         }
     }
 
@@ -110,6 +140,7 @@ impl RotatingFile {
             Ok(file) => {
                 self.file = file;
                 self.written = 0;
+                self.cut = false;
                 self.retry_at = None;
             }
             Err(error) => {
@@ -119,27 +150,44 @@ impl RotatingFile {
         }
     }
 
-    /// Shifts `.N-1` to `.N` down to the current file to `.1`, then opens the new current file.
+    /// Opens the new current file under a temporary name, then renames the files into place.
     ///
-    /// The oldest file is replaced by the rename. When only the open fails, the next call opens
-    /// without renaming again.
-    fn rename_and_open(&mut self) -> io::Result<File> {
-        if !self.renamed {
-            for index in (1..self.kept_files).rev() {
-                rename_if_present(&self.numbered(index), &self.numbered(index + 1))?;
-            }
-            rename_if_present(&self.path, &self.numbered(1))?;
-            self.renamed = true;
+    /// A failed open renames nothing. The temporary file is removed when a later step fails.
+    fn rename_and_open(&self) -> io::Result<File> {
+        let pending = self.suffixed(PENDING_SUFFIX);
+        let file = open_append(&pending)?;
+        let placed = file
+            .set_len(0)
+            .and_then(|()| self.shift_into_place(&pending));
+        if let Err(error) = placed {
+            // The temporary file is only a leftover now; a failure to remove it has nowhere to go.
+            let _ = std::fs::remove_file(&pending);
+            return Err(error);
         }
-        let file = open_append(&self.path)?;
-        self.renamed = false;
         Ok(file)
+    }
+
+    /// Shifts `.N-1` to `.N` down to the current file to `.1`, then renames `pending` to the
+    /// current file.
+    ///
+    /// The oldest file is replaced by the rename.
+    fn shift_into_place(&self, pending: &Path) -> io::Result<()> {
+        for index in (1..self.kept_files).rev() {
+            rename_if_present(&self.numbered(index), &self.numbered(index + 1))?;
+        }
+        rename_if_present(&self.path, &self.numbered(1))?;
+        std::fs::rename(pending, &self.path)
     }
 
     /// Returns the path of the rotated file `index`.
     fn numbered(&self, index: usize) -> PathBuf {
+        self.suffixed(&format!(".{index}"))
+    }
+
+    /// Returns the path of the current file with `suffix` appended to its name.
+    fn suffixed(&self, suffix: &str) -> PathBuf {
         let mut name = self.path.clone().into_os_string();
-        name.push(format!(".{index}"));
+        name.push(suffix);
         PathBuf::from(name)
     }
 
@@ -293,6 +341,30 @@ mod tests {
             file.write_all(line(number).as_bytes()).expect("a line");
         }
         assert_eq!(read(&path), lines(3..10), "a failed rotation drops no line");
+        assert!(
+            sink.text().contains("log rotation failed"),
+            "the failure is reported"
+        );
+
+        // A directory in the place of the temporary file makes the open fail before any rename.
+        let pending = tempfile::tempdir().expect("a temporary directory");
+        let path = pending.path().join("autoreview.log");
+        std::fs::create_dir(pending.path().join("autoreview.log.new")).expect("a directory");
+        let sink = Sink::default();
+        let mut file =
+            RotatingFile::open(path.clone(), 100, 2, Box::new(sink.clone())).expect("opens");
+        for number in 0..10 {
+            file.write_all(line(number).as_bytes()).expect("a line");
+        }
+        assert_eq!(
+            read(&path),
+            lines(0..10),
+            "the current file keeps every line"
+        );
+        assert!(
+            !pending.path().join("autoreview.log.1").exists(),
+            "a failed open renames nothing"
+        );
         assert!(
             sink.text().contains("log rotation failed"),
             "the failure is reported"
