@@ -32,8 +32,9 @@ example adds (see the [CLI reference](../docs/cli.md#autoreview-init)). It sets
 `policy_file`, the `login` of the credential and `pohunek.hosts`. Set
 `store.path`, and the homeserver, room and mentioned user of the placeholder
 `matrix` backend in `notify` (see the
-[notifiers guide](../docs/knowledge/guides/notifiers.md)). The README of each
-example shows the manual copy instead, which also needs `policy_file`, the
+[notifiers guide](../docs/knowledge/guides/notifiers.md)), or give `init`
+`--notifier none` or `--notifier webhook --webhook-format FORMAT` instead.
+The README of each example shows the manual copy instead, which also needs `policy_file`, the
 `login` and `pohunek.hosts` set by hand.
 
 ## Shared choices

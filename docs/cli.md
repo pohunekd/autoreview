@@ -39,6 +39,7 @@ with status 1, so scripts and agents can branch on the code.
 autoreview init --dir <DIR> --login <LOGIN> --pohunek-host <HOST> --example <NAME> \
   [--store-path <PATH>] [--gh-bin <PATH>] [--pohunek-bin <PATH>] \
   [--pohunek-state-home <PATH>] [--pohunek-runtime-dir <PATH>] \
+  [--notifier none|matrix|webhook] [--webhook-format json|slack|discord] \
   [--matrix-homeserver-url <URL>] [--matrix-room <ROOM>] [--matrix-mention-user <USER>]
 ```
 
@@ -63,6 +64,8 @@ the reference file; without it the reference value is written:
 | `--pohunek-bin` | `pohunek.bin` | `/usr/local/bin/pohunek` |
 | `--pohunek-state-home` | `pohunek.state_home` | `/var/lib/autoreview/.local/state` |
 | `--pohunek-runtime-dir` | `pohunek.runtime_dir` | `/run/autoreview`; on macOS no line, so pohunek's default applies |
+| `--notifier` | the one backend of `notify`, see below | `matrix` |
+| `--webhook-format` | `format` of the `webhook` backend, see below | none: required by `--notifier webhook` |
 | `--matrix-homeserver-url` | `homeserver_url` of the `matrix` backend | `https://matrix.example.org` |
 | `--matrix-room` | `room` of the `matrix` backend | `!roomid:example.org` |
 | `--matrix-mention-user` | `mention_user` of the `matrix` backend | `@you:example.org` |
@@ -70,14 +73,27 @@ the reference file; without it the reference value is written:
 A path flag must be a clean absolute path; a Matrix flag must be non-empty text
 without control characters. `init` checks neither for existence.
 
+`--notifier` names the one backend that every level and the review queue go to:
+
+| `--notifier` | Backend written |
+|---|---|
+| `matrix`, or no flag | The `matrix` backend of the reference file with the Matrix flags applied; its token is read from `AUTOREVIEW_MATRIX_TOKEN` |
+| `none` | A [`none` backend](configuration.md#backend-none) named `quiet`: each message is only logged |
+| `webhook` | A [`webhook` backend](configuration.md#backend-webhook) named `webhook` with the `format` of `--webhook-format`: `json`, `slack` (Slack and Slack-compatible services) or `discord`; its URL is read from `AUTOREVIEW_WEBHOOK_URL` |
+
+With `none` or `webhook`, a Matrix flag is refused with `configuration_invalid`
+naming the flag. `--webhook-format` is required by `--notifier webhook` and
+refused with any other notifier, also without `--notifier`, with
+`configuration_invalid` naming `--webhook-format`.
+
 It writes `config.yaml`, `policy.yaml`, `prompts/generic.md`, `prompts/verifier.md`
 and the prompts the example adds. `config.yaml` is `examples/config.yaml`, the
 complete file of the [configuration reference](configuration.md#complete-file),
 with `policy_file`, the credential `login`, `pohunek.hosts` and the given layout
 flags set; every value it sets is written as a double-quoted string. Without the
-layout flags, edit its paths and its placeholder `matrix` backend before the
-first start. [`scripts/setup`](knowledge/guides/getting-started.md) passes every
-layout flag.
+layout flags, edit its paths and, with the `matrix` notifier, its placeholder
+Matrix values before the first start.
+[`scripts/setup`](knowledge/guides/getting-started.md) passes every layout flag.
 
 `init` loads the example's policy and checks every path before it writes
 anything, and never overwrites. `--dir` and `prompts/` must be real directories
