@@ -27,8 +27,9 @@ env:
 
 jobs:
   # Reads the version and, for a tag, refuses one that is not v<workspace
-  # version>. A tag push also renders the release notes from CHANGELOG.md, so a
-  # tag without a folded changelog section fails before anything is built.
+  # version> or whose scripts/setup installs another release. A tag push also
+  # renders the release notes from CHANGELOG.md, so a tag without a folded
+  # changelog section fails before anything is built.
   meta:
     name: meta
     runs-on: ubuntu-24.04

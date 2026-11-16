@@ -5,7 +5,10 @@
 #
 # The version must be X.Y.Z. A given tag must be exactly v<version>, so a
 # release always carries the version that its binary reports. Any other tag,
-# including a malformed one, is refused with exit 1.
+# including a malformed one, is refused with exit 1. A given tag is also
+# refused when scripts/setup names another release in AUTOREVIEW_VERSION, since
+# setup on the tag would install that release. Without a tag the setup version
+# is not checked: between releases it may be ahead of the workspace version.
 
 set -eu
 
@@ -29,7 +32,25 @@ esac
 printf '%s\n' "$version" | grep -Eqx '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' \
     || fail "workspace version must be X.Y.Z: $version"
 
-if [ "$#" -eq 1 ] && [ "$1" != "v$version" ]; then
-    fail "tag $1 does not match the workspace version $version (expected v$version)"
+# Prints the release that scripts/setup installs, read from its one
+# AUTOREVIEW_VERSION="X.Y.Z" line without running the script.
+setup_version() {
+    [ -f scripts/setup ] || fail "scripts/setup is missing"
+    assignments=$(grep -c '^AUTOREVIEW_VERSION=' scripts/setup || true)
+    [ "$assignments" -eq 1 ] \
+        || fail "scripts/setup must have exactly one AUTOREVIEW_VERSION=\"X.Y.Z\" line at the start of a line, found $assignments"
+    line=$(grep '^AUTOREVIEW_VERSION=' scripts/setup)
+    printf '%s\n' "$line" | grep -Eqx 'AUTOREVIEW_VERSION="(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"' \
+        || fail "the AUTOREVIEW_VERSION line of scripts/setup must be exactly AUTOREVIEW_VERSION=\"X.Y.Z\": $line"
+    line=${line#AUTOREVIEW_VERSION=\"}
+    printf '%s\n' "${line%\"}"
+}
+
+if [ "$#" -eq 1 ]; then
+    [ "$1" = "v$version" ] \
+        || fail "tag $1 does not match the workspace version $version (expected v$version)"
+    installed=$(setup_version)
+    [ "$installed" = "$version" ] \
+        || fail "tag $1 would install autoreview $installed: AUTOREVIEW_VERSION in scripts/setup is $installed, the workspace version is $version"
 fi
 printf '%s\n' "$version"
