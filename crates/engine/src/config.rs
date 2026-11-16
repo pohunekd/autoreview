@@ -132,6 +132,17 @@ pub enum HostStateChoice {
     Eligible,
 }
 
+/// What a head checkout does on a host whose own hook scripts would run in it.
+///
+/// From `pohunek.head_checkout_host_hooks`; the checkout's own hooks never run either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostHooksChoice {
+    /// The review is refused unless the host reports no hook script for the worktree.
+    Refuse,
+    /// The review starts whatever hook scripts the host has.
+    Allow,
+}
+
 /// The order of the eligible review hosts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostOrder {
@@ -203,6 +214,8 @@ pub struct Config {
     ///
     /// Each key also has a `route_overrides` entry, which the trusted authors take.
     pub untrusted_route_overrides: BTreeMap<String, RouteOverride>,
+    /// What a head checkout does on a host whose hook scripts would run in its worktree.
+    pub head_checkout_host_hooks: HostHooksChoice,
     /// The host-state rules, or `None` when hosts are tried in configured order only.
     pub host_state: Option<HostStateRules>,
     /// The text guard settings, or `None` when the configuration has no `guards.text`.
@@ -1163,6 +1176,7 @@ mod tests {
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
             untrusted_route_overrides: std::collections::BTreeMap::new(),
+            head_checkout_host_hooks: super::HostHooksChoice::Refuse,
             host_state: None,
             text_guard: None,
             notify: NotifySettings::single_for_tests(),

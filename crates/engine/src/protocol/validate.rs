@@ -312,6 +312,7 @@ pub(crate) mod tests {
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
             untrusted_route_overrides: std::collections::BTreeMap::new(),
+            head_checkout_host_hooks: crate::config::HostHooksChoice::Refuse,
             host_state: None,
             text_guard: None,
             notify: NotifySettings::single_for_tests(),

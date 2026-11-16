@@ -231,6 +231,25 @@ pub fn failure_explanation(code: &str) -> &'static str {
              head only has an older copy of a skill that the base branch changed, rebase the \
              pull request onto the base branch and push."
         }
+        "review_host_repo_hooks_unsupported" => {
+            "A `checkout: head` review starts only with `--no-repo-hooks`, so the pull request's \
+             own pohunek hooks never run, and the review host does not advertise that switch: \
+             the pohunek CLI or the host's daemon is older than 0.43.1. No session was started. \
+             Upgrade both, then retry this PR."
+        }
+        "review_host_hooks_refused" => {
+            "The review host has its own pohunek hook script for an event that runs in the \
+             review worktree, or does not report its scripts, and \
+             `pohunek.head_checkout_host_hooks` is `refuse`, so the `checkout: head` review was \
+             not started. Check `host_hooks` in `pohunek host inspect --json` on the review host, \
+             then retry this PR."
+        }
+        "review_host_hook_required" => {
+            "The review host's pohunek `[hooks] required` lists an event that has no host \
+             script, and a `checkout: head` review skips the repository's own hooks, so pohunek \
+             refused the session. Add a host script for that event or remove it from \
+             `required`, then retry this PR."
+        }
         "github_request_failed" => {
             "A GitHub API request failed. Check GitHub availability, authentication, and rate limits."
         }

@@ -14,7 +14,9 @@ use serde_json::json;
 
 use crate::config::{Config, Credential, Credentials, RouteOverride, TextGuard};
 use crate::engine::STEP_ARTIFACT;
-use crate::integrations::{GuardText, SessionRequest};
+use crate::integrations::{
+    GuardText, HOST_HOOKS_REFUSED, HeadCheckoutHooks, REPO_HOOKS_UNSUPPORTED, SessionRequest,
+};
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::review::Decision;
 use crate::model::{GuardOutcome, PullRequest};
@@ -376,6 +378,64 @@ async fn base_checkout_session_fetches_the_head_where_the_host_supports_it() {
             && h.fake.lock().start_failures.is_empty(),
         "the retried head: failures={:?}",
         review_failures(&h, &stuck)
+    );
+    h.stop_engine().await;
+}
+
+/// A head checkout starts only with the switch that skips the checkout's own hooks, on a host
+/// that advertises it and, under `refuse`, reports no hook script for the worktree (#399). A
+/// refused host starts no session; a failed read is retried and starts once the host answers;
+/// a base checkout starts on any host without the switch.
+#[tokio::test]
+async fn head_checkout_starts_only_where_the_host_skips_the_checkouts_hooks() {
+    let mut h = start_harness(|_| {}).await;
+    h.set_output(reviewer_output(Vec::new()));
+    let answer = |skip_supported, no_worktree_scripts| HeadCheckoutHooks {
+        skip_supported,
+        no_worktree_scripts,
+    };
+    let mut refused = Vec::new();
+    for (hooks, code) in [
+        (answer(false, true), REPO_HOOKS_UNSUPPORTED),
+        (answer(true, false), HOST_HOOKS_REFUSED),
+    ] {
+        h.fake.lock().head_checkout_hooks = Some(hooks);
+        let pr = integration_pull_request("solo/widget", &sha("a"));
+        h.fake.open(pr.clone(), h.rule(&pr.repository));
+        h.poll_until("the refused head checkout", || {
+            review_failures(&h, &pr) == [code]
+        })
+        .await;
+        refused.push(pr);
+    }
+    let base = integration_pull_request("claude/base", &sha("b"));
+    h.fake.open(base.clone(), h.rule(&base.repository));
+    h.poll_until("the base checkout review", || h.publications() == 1)
+        .await;
+    {
+        let mut state = h.fake.lock();
+        state.head_checkout_hooks = None;
+        // Both start attempts of the first run find the host unavailable.
+        state.head_checkout_hooks_failures = 2;
+    }
+    let head = integration_pull_request("solo/widget", &sha("c"));
+    h.fake.open(head.clone(), h.rule(&head.repository));
+    h.poll_until("the head checkout review", || h.publications() == 2)
+        .await;
+    h.settle().await;
+    let (_, _, started, open) = h.fake.snapshot();
+    let sessions: Vec<(i64, bool)> = (started.iter())
+        .map(|request| (request.pull_request.number, request.skips_repo_hooks()))
+        .collect();
+    assert!(
+        sessions == [(base.number, false), (head.number, true)]
+            && review_failures(&h, &head) == ["pohunek_request_failed", ""]
+            && review_failures(&h, &refused[0]) == [REPO_HOOKS_UNSUPPORTED]
+            && review_failures(&h, &refused[1]) == [HOST_HOOKS_REFUSED]
+            && h.fake.lock().head_checkout_hooks_failures == 0
+            && open == 0,
+        "sessions={sessions:?} head={:?} open={open}",
+        review_failures(&h, &head)
     );
     h.stop_engine().await;
 }

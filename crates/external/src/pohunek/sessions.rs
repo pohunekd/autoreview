@@ -11,7 +11,9 @@ use std::fmt;
 
 use autoreview_engine::config::Config;
 use autoreview_engine::error::BoxError;
-use autoreview_engine::integrations::SessionRequest;
+use autoreview_engine::integrations::{
+    HOOK_REQUIRED_SKIPPED, REPO_HOOKS_UNSUPPORTED, SessionRequest,
+};
 use autoreview_engine::model::SessionIdentity;
 use autoreview_engine::{Error, error_code};
 use autoreview_go_compat::{null_default, null_entries};
@@ -133,8 +135,9 @@ pub(crate) fn session_list_arguments(host: &str) -> Vec<String> {
 /// Returns the argument list of `session new` for the reviewer session of `request`.
 ///
 /// The list holds the request timeout in milliseconds, the terminal size and the session group
-/// metadata, and with `fetch_head` the pull request head ref and the trusted head SHA. The
-/// prompt is not part of the list; it is written to the child's stdin.
+/// metadata, `--no-repo-hooks` for a head checkout, and with `fetch_head` the pull request head
+/// ref and the trusted head SHA. The prompt is not part of the list; it is written to the
+/// child's stdin.
 pub(crate) fn start_arguments(
     request: &SessionRequest,
     group: &str,
@@ -182,6 +185,9 @@ pub(crate) fn start_arguments(
         rows,
         "--input-stdin".to_owned(),
     ];
+    if request.skips_repo_hooks() {
+        arguments.push("--no-repo-hooks".to_owned());
+    }
     if request.fetch_head {
         arguments.push("--fetch-ref".to_owned());
         arguments.push(request.head_ref());
@@ -356,8 +362,9 @@ where
         Err(error) => {
             let output = error.stdout().to_owned();
             let code = failure_code(&output);
-            let (name, permanent) =
-                head_fetch_failure(&code).unwrap_or((SESSION_START_FAILED, false));
+            let (name, permanent) = repo_hooks_failure(&code)
+                .or_else(|| head_fetch_failure(&code))
+                .unwrap_or((SESSION_START_FAILED, false));
             let mut cause: BoxError = if code.is_empty() {
                 Box::new(error)
             } else {
@@ -372,6 +379,19 @@ where
             Err(Error::workflow(name, permanent, Some(cause)))
         }
         Ok(_) => Err(response_invalid()),
+    }
+}
+
+/// Returns the error code and permanence of a start refused for the checkout's hooks.
+///
+/// The CLI refuses `--no-repo-hooks` when the daemon lacks the switch, and the daemon refuses
+/// a required hook event that only the skipped checkout layer could run. Both happen before
+/// the session is created.
+fn repo_hooks_failure(code: &str) -> Option<(&'static str, bool)> {
+    match code {
+        "session_new_skip_repo_hooks_unsupported" => Some((REPO_HOOKS_UNSUPPORTED, true)),
+        "hook_required_skipped" => Some((HOOK_REQUIRED_SKIPPED, true)),
+        _ => None,
     }
 }
 
