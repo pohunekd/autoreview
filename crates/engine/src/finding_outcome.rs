@@ -102,20 +102,11 @@ fn published_outcomes(
 /// Returns what `artifact` settles about its earlier findings, in their order.
 ///
 /// `fixed` is fixed; `answered` is fixed when the verifier upheld it and `answered` otherwise.
-/// An open one published again moves to the key of its new finding, unless an earlier finding
-/// that stays open keeps that key: then it is untracked. Any other stays open.
+/// An open one published again moves to the key of its new finding; any other stays open.
 /// A new finding whose key no earlier finding of `artifact` has untracks the stored rows of
 /// that key that no review in `kept` published: they belong to another finding.
 fn settlements(kept: [&str; 2], artifact: &Artifact) -> Vec<Settlement> {
     let kept = kept.map(str::to_owned);
-    // An open earlier finding that is not published again keeps its key for the next review.
-    let held = |key: &str| {
-        (artifact.prior_results).iter().any(|result| {
-            result.finding.key == key
-                && result.verdict.status == PRIOR_OPEN
-                && result.republished.is_empty()
-        })
-    };
     let upheld = |key: &str| {
         artifact.verification.as_ref().is_some_and(|verification| {
             verification.error_code.is_empty()
@@ -136,12 +127,7 @@ fn settlements(kept: [&str; 2], artifact: &Artifact) -> Vec<Settlement> {
             settlements.push(Settlement::Decided { key, outcome });
         } else if status == PRIOR_OPEN && !result.republished.is_empty() {
             let republished = prior_key(&artifact.head_sha, &result.republished);
-            if held(&republished) {
-                let kept = kept.clone();
-                settlements.push(Settlement::Untracked { key, kept });
-            } else {
-                settlements.push(Settlement::Republished { key, republished });
-            }
+            settlements.push(Settlement::Republished { key, republished });
         }
     }
     for finding in &artifact.findings {
@@ -248,18 +234,5 @@ mod tests {
             },
         ];
         assert_eq!(settlements(["w1", "w0"], &reused), want, "a reused key");
-
-        // O001 is published again as P001 while the earlier P001 stays open with that key.
-        let mut held = artifact(PRIOR_OPEN, "P001", None);
-        let mut open = held.prior_results[0].clone();
-        open.finding.key = prior_key(&sha("c"), "P001");
-        open.republished = String::new();
-        held.prior_results.insert(0, open);
-        held.findings = vec![finding("P001")];
-        let want = vec![Settlement::Untracked {
-            key: prior_key(&sha("a"), "O001"),
-            kept: ["w1".to_owned(), "w0".to_owned()],
-        }];
-        assert_eq!(settlements(["w1", "w0"], &held), want, "a held key");
     }
 }

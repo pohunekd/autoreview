@@ -113,16 +113,16 @@ pub enum Settlement {
         outcome: String,
     },
     /// The open finding tracked as `key` was published again and is tracked as `republished`.
+    ///
+    /// When an open row that no settlement of the review picks has `republished` already, the
+    /// finding is untracked instead.
     Republished {
         /// Tracked key of the earlier finding.
         key: String,
         /// Key of the new finding that publishes it again.
         republished: String,
     },
-    /// An open row of another review stops being tracked by `key`.
-    ///
-    /// A new finding reuses the key, or the row's finding would move onto a key that another
-    /// open finding keeps.
+    /// A new finding reuses `key`, so an open row of another review stops being tracked by it.
     Untracked {
         /// The tracked key that the row loses.
         key: String,
@@ -155,12 +155,31 @@ impl Store {
             // moves a row to can be the key that another one of the same review names.
             let mut picked = Vec::new();
             for settlement in settlements {
-                let rows = open_rows(transaction, repository, number, settlement)?;
-                picked.push((rows, settlement));
+                let (Settlement::Decided { key, .. }
+                | Settlement::Republished { key, .. }
+                | Settlement::Untracked { key, .. }) = settlement;
+                picked.push((open_rows(transaction, repository, number, key)?, settlement));
             }
-            for (rows, settlement) in picked {
+            // A move onto a key that an open row no settlement here picks still has would put
+            // two findings under one key, so the moving row is untracked instead.
+            let chosen: Vec<i64> = picked.iter().flat_map(|(rows, _)| rows.clone()).collect();
+            let mut taken = Vec::new();
+            for (_, settlement) in &picked {
+                let target = match settlement {
+                    Settlement::Republished { republished, .. } => {
+                        open_rows(transaction, repository, number, republished)?
+                    }
+                    _ => Vec::new(),
+                };
+                taken.push(target.iter().any(|row| !chosen.contains(row)));
+            }
+            for ((rows, settlement), taken) in picked.into_iter().zip(taken) {
                 for row in rows {
-                    settle(transaction, row, head_sha, &now, settlement)?;
+                    if taken {
+                        untrack(transaction, row, &now)?;
+                    } else {
+                        settle(transaction, row, head_sha, &now, settlement)?;
+                    }
                 }
             }
             for outcome in published {
@@ -221,16 +240,13 @@ impl Store {
     }
 }
 
-/// Returns the IDs of the open rows of the pull request tracked as the key of `settlement`.
+/// Returns the IDs of the open rows of the pull request tracked as `key`.
 fn open_rows(
     connection: &Connection,
     repository: &str,
     number: i64,
-    settlement: &Settlement,
+    key: &str,
 ) -> Result<Vec<i64>, Error> {
-    let (Settlement::Decided { key, .. }
-    | Settlement::Republished { key, .. }
-    | Settlement::Untracked { key, .. }) = settlement;
     let mut statement = connection
         .prepare(
             "SELECT rowid FROM finding_outcomes \
@@ -243,6 +259,17 @@ fn open_rows(
         })
         .map_err(unavailable)?;
     rows.collect::<Result<Vec<i64>, _>>().map_err(unavailable)
+}
+
+/// Clears the tracked key of the row with the ID `row`, so no later settlement matches it.
+fn untrack(connection: &Connection, row: i64, now: &str) -> Result<(), Error> {
+    connection
+        .execute(
+            "UPDATE finding_outcomes SET tracked_key = '', updated_at = ?2 WHERE rowid = ?1",
+            params![row, now],
+        )
+        .map_err(unavailable)?;
+    Ok(())
 }
 
 /// Applies one settlement to the row with the ID `row`.
@@ -336,4 +363,55 @@ fn read_row(row: &Row<'_>) -> rusqlite::Result<FindingOutcome> {
         published_at: row.get(17)?,
         updated_at: row.get(18)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use time::OffsetDateTime;
+
+    use super::{FindingOutcome, OUTCOME_OPEN, Settlement};
+    use crate::store::Store;
+
+    #[test]
+    fn a_move_onto_a_key_an_open_row_keeps_untracks_the_moving_row() {
+        let dir = tempfile::TempDir::new().expect("create the store directory");
+        let path = dir.path().join("state.db");
+        let store = Store::open(&path, Box::new(OffsetDateTime::now_utc)).expect("open the store");
+        let row = |number: i64, key: &str, tracked: &str| FindingOutcome {
+            repository: "acme/repo".to_owned(),
+            number,
+            finding_key: key.to_owned(),
+            tracked_key: tracked.to_owned(),
+            outcome: OUTCOME_OPEN.to_owned(),
+            published_at: "2026-01-02T03:04:05Z".to_owned(),
+            ..FindingOutcome::default()
+        };
+        let rows = [1, 2].map(|n| [row(n, "a:O001", "a:O001"), row(n, "a:X001", "c:P001")]);
+        let moved = |key: &str, republished: &str| Settlement::Republished {
+            key: key.to_owned(),
+            republished: republished.to_owned(),
+        };
+        // In pull request 1 no settlement picks the row at c:P001 (the prior list was cut
+        // before it); in pull request 2 that row moves on, so its key is free.
+        let settled = [
+            vec![moved("a:O001", "c:P001")],
+            vec![moved("a:O001", "c:P001"), moved("c:P001", "c:P002")],
+        ];
+        for (number, (rows, settled)) in (1..).zip(rows.iter().zip(&settled)) {
+            let record = |settled: &[Settlement]| {
+                let recorded = store.record_outcomes("acme/repo", number, "c", settled, rows);
+                recorded.expect("record the outcomes");
+            };
+            record(&[]);
+            record(settled);
+        }
+        // A resumed publication of pull request 1 changes nothing.
+        let resumed = store.record_outcomes("acme/repo", 1, "c", &settled[0], &rows[0]);
+        resumed.expect("record the outcomes again");
+        let stored = store.outcomes_since("acme/repo", OffsetDateTime::UNIX_EPOCH);
+        let stored = stored.expect("read the outcomes");
+        let tracked = stored.iter().map(|row| (row.number, &*row.tracked_key));
+        let want = [(1, ""), (1, "c:P001"), (2, "c:P001"), (2, "c:P002")];
+        assert_eq!(tracked.collect::<Vec<_>>(), want);
+    }
 }

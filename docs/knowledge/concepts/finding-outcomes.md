@@ -67,10 +67,10 @@ that review is recorded, and the review completes as published. A review that
 is resumed after a restart writes its rows again; rows already stored stay,
 and rows it already settled are no longer `open`. One rare case is not a
 no-op: a review of the same head that publishes findings again under `P` IDs an
-earlier review of that head used can move one tracked key once more when it is
-resumed. A finding published again under such a key while the earlier finding
-with that key stays open loses its tracked key instead, so the two findings are
-never settled together.
+earlier review of that head used can clear one tracked key when it is resumed.
+A finding published again under a key that another open row still has, and
+that the review neither settles nor moves, loses its tracked key instead, so a
+later verdict on that key does not also settle the moved finding.
 
 ## Retention
 
