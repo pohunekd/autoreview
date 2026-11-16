@@ -136,7 +136,8 @@ run in parallel. The session is built from three parts:
 - **Worktree base.** With `checkout: base` the worktree starts at the base branch
   tip, so repository guidance such as `AGENTS.md`, `CLAUDE.md` and `docs/` comes
   from trusted content. With `checkout: head` it starts at
-  `refs/pull/<n>/head`, the pull request code itself.
+  `refs/pull/<n>/head`, the pull request code itself, and the session starts
+  with `--no-repo-hooks`, so none of the checkout's own hooks run.
 - **Branch.** `<session.branch_prefix><workflow id>-<reviewer>-run<N>` and, for
   a second or later start attempt, `-start<M>`. Every start attempt gets its own
   branch. pohunek keeps the branch of a removed session, and an existing branch

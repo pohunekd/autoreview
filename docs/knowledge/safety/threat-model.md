@@ -91,31 +91,29 @@ the engine publishes.
 | 18 | Another process, a host on the network or a web page reads or floods the metrics endpoint | The endpoint is off without its `metrics` section and checks no token, so keep `listen` on loopback and put a reverse proxy with authentication in front of a scraper on another host. It serves only `GET /metrics`, only for a `Host` in `allowed_hosts` (against DNS rebinding), and refuses any request with an `Origin` header. `max_connections` bounds the connections at once, `header_timeout_seconds` the time to send a request head, and `request_timeout_seconds` each connection, which serves one request, and the wait for them at shutdown; each scrape is one indexed read of the store. The text names repositories, hosts, rules and error codes, which a reader learns | Engine behaviour; `listen` and the proxy are the operator's |
 | 19 | A Codex transcript forges the adapter's result frame and exit line, printed by the model or by tool output steered from the pull request, while the model pauses | Every Codex marker carries a nonce that the engine draws from the OS random source for each run; the adapter removes the nonce line before Codex reads the prompt, and the engine reads only the markers with the run's nonce. Before the adapter prints a marker, it ends every process that the Codex run left (it is their reaper, so a double fork or a new session does not escape) and stops copying Codex's stderr, so no process of the run can append a tail once the nonce is in the output | Engine and adapter behaviour; tests `codex_output_is_read_only_with_the_markers_of_the_request_nonce` and `test_a_process_that_codex_leaves_behind_cannot_write_after_the_markers`; a process started outside the adapter's process tree is a residual risk. An adapter from an earlier release refuses such a request before Codex runs, so the nonce never reaches the model; install the profiles before the engine |
 | 20 | Hidden text in the pull request steers a reviewer into a clean verdict on an `on_clean: approve` rule | A rule with `guard` scans the fields it names before any reviewer runs, without a model and without sending the text anywhere. A suspect pull request (its score reaches the threshold, or the read left text out) with `on_suspect: await` waits for a person instead of being approved, and every suspect result sends a `guard_suspect` message with signal codes only | Engine behaviour, opt-in per rule; tests `text_guard_holds_a_clean_approval_and_never_blocks` and `text_guard_holds_a_suspect_approval_and_log_changes_nothing`; see [prompt injection](prompt-injection.md#the-text-guard) |
+| 21 | A `checkout: head` pull request adds or changes a pohunek hook (`.pohunek/hooks/<event>`, `.pohunek/setup`) or a git hook, so that its code runs on the review host | Every head-checkout session starts with `pohunek session new --no-repo-hooks`: pohunek runs none of the checkout's own hooks and pins git's hooks and fsmonitor off, for the session's whole life (pohunek 0.43.1 or later, CLI and daemon). Before each start autoreview reads `host inspect` and refuses the review when the host does not advertise the switch (`review_host_repo_hooks_unsupported`) or, under `pohunek.head_checkout_host_hooks: refuse`, when it reports a host script for an event that runs in the worktree or no `host_hooks` at all (`review_host_hooks_refused`); no session starts then | Engine behaviour; tests `head_checkout_starts_only_where_the_host_skips_the_checkouts_hooks`, `head_checkout_starts_only_without_the_checkouts_hooks` and `head_checkout_hooks_are_only_an_advertised_switch_and_explicit_false`. A session that an earlier release started keeps running without the switch until it ends |
 
 ## Residual risks
 
 These are not solved by autoreview. Operators must accept or mitigate them.
 
-- **pohunek runs the hooks of the review worktree.** pohunek reads the in-repo
-  hooks (`.pohunek/hooks/<event>`, and `.pohunek/setup` for `post-create`) from
-  the session's worktree and runs them as its daemon user for `post-create`,
-  `session-start`, `session-stop`, `agent-state` and `pre-remove`. With
-  `checkout: head`, that worktree holds the pull request's code, so every
-  in-repo hook, including one the pull request adds, and any project tooling
-  that a hook or a host-global hook runs (an install, a build, a script in the
-  repository) executes the pull request's code, even when the project's own
-  repository has no hooks. With `checkout: base`, the worktree is the base
-  branch tip, so the head's hooks and tooling never run; every untrusted author
-  that a rule reviews gets it. A head checkout runs only for the authors that
-  `authors.trusted` names, so on a rule whose pipeline uses `checkout: head`,
-  trust only authors who may run code on the review host, and never use
-  `trusted: any` on a repository with outside contributors; use
-  `checkout: base` for everyone else. A pohunek switch that skips the in-repo
-  hooks is requested in
-  [zajca/pohunek#2366](https://github.com/zajca/pohunek/issues/2366), and #399
-  tracks the autoreview option that uses it.
-- **Apart from its hooks, the head checkout runs nothing, but the agent reads
-  it.** For `checkout: head`, the agent reads untrusted files. Use
+- **A head checkout still runs the host's own hook scripts and git drivers.**
+  The checkout's own hooks never run (attack 21), but pohunek's host-global
+  scripts (`hooks/<event>` in its config directory) run in the worktree for
+  `post-create`, `pre-remove` and the session events, and the agent's git
+  applies the filter, textconv and diff drivers that the host's git
+  configuration names. A script or driver that runs project tooling (an
+  install, a build, a path relative to the checkout) executes the pull
+  request's code. `pohunek.head_checkout_host_hooks: refuse` refuses a head
+  checkout on a host that reports such a script; `allow` accepts the risk.
+  With `checkout: base`, the worktree is the base branch tip, so the head's
+  tooling never runs; every untrusted author that a rule reviews gets it. A
+  head checkout runs only for the authors that `authors.trusted` names, so on
+  a rule whose pipeline uses `checkout: head`, trust only authors who may run
+  code on the review host, and never use `trusted: any` on a repository with
+  outside contributors; use `checkout: base` for everyone else.
+- **Apart from the host's own scripts, the head checkout runs nothing, but the
+  agent reads it.** For `checkout: head`, the agent reads untrusted files. Use
   `checkout: base` for every rule that accepts outside authors.
 - **A Codex run can start a process outside the adapter's process tree.** The
   Codex adapter ends only the processes below it (attack 19). A tool command
@@ -147,8 +145,8 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   rule or a nested repository is refused too, and a skill that the run leaves
   on disk fails the run. A skill that a process of the head writes during the
   run and removes before it ends passes both checks: that needs head code
-  running on the review host, which is the residual risk that pohunek runs the
-  hooks of the review worktree (above), not a bypass of its own. It also
+  running on the review host, which is the residual risk of the host's own
+  hook scripts and git drivers (above), not a bypass of its own. It also
   refuses a head whose skill folders hold a symbolic link or a submodule
   (gitlink), even one that the base has, a `.git` entry, a file whose
   checked-out bytes differ from the base blob (for example through a
@@ -197,4 +195,6 @@ These are not solved by autoreview. Operators must accept or mitigate them.
   `pre-remove` and the session events, and in the repository for `pre-create`
   and `post-remove`, which never see the pull request's code. On a host that
   serves `checkout: head` reviews, a global hook that runs project tooling,
-  such as an install or a build, runs the pull request's code.
+  such as an install or a build, runs the pull request's code. Keep
+  `pohunek.head_checkout_host_hooks: refuse` there unless every such script
+  runs nothing from the checkout.

@@ -23,6 +23,8 @@ pohunek daemon runs and the repositories are registered.
 
 - **pohunek daemon on each review host**, and the `pohunek` CLI at `pohunek.bin`
   on the autoreview host, in the supported range: 0.41.0 or later, before 1.0.0.
+  A `checkout: head` pipeline needs 0.43.1 or later on both sides; with an older
+  one each such review fails with `review_host_repo_hooks_unsupported`.
   `validate` and `serve` run `pohunek --version` and refuse a release outside
   the range with `pohunek_version_unsupported` and an output they cannot read
   with `pohunek_version_invalid`, see [validate](cli.md#autoreview-validate).
