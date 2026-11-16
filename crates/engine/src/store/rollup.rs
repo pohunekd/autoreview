@@ -53,22 +53,30 @@ pub(crate) const DIMENSION_REQUEST: &str = "request";
 ///
 /// The key is `repository#number#request ID`, on the UTC day of that publication.
 pub(crate) const DIMENSION_REQUEST_ID: &str = "request_id";
+/// Dimension of the verifier's verdicts per reviewer of the checked finding.
+///
+/// The key is `repository#reviewer ID`, on the UTC day the review completed.
+pub(crate) const DIMENSION_VERIFIER: &str = "verifier";
 
 /// Counter of the pull requests whose schedule record entered `failed`.
 pub(crate) const COUNTER_STOPPED: &str = "stopped";
 /// Counter of a pruned first publication of a review request; its value is 1.
 pub(crate) const COUNTER_FIRST_PUBLICATION: &str = "first_publication";
+/// Counter of the findings that a finished verification gave a verdict.
+pub(crate) const COUNTER_CHECKED: &str = "checked";
+/// Counter of the checked findings found not blocking or refuted.
+pub(crate) const COUNTER_DEMOTED: &str = "demoted";
 
 /// One counter of one key of one dimension on one UTC day.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RollupCount {
     /// UTC day, `YYYY-MM-DD`.
     pub day: String,
-    /// What the key names: `day`, `repository`, `rule`, `reviewer`, `failure`, `step` or
-    /// `request_id`.
+    /// What the key names: `day`, `repository`, `rule`, `reviewer`, `failure`, `step`,
+    /// `request_id` or `verifier`.
     pub dimension: String,
-    /// Repository, rule `match`, reviewer ID, error code, step or review request; empty for
-    /// `day`.
+    /// Repository, rule `match`, reviewer ID, error code, step, review request or
+    /// `repository#reviewer ID`; empty for `day`.
     pub key: String,
     /// Name of the counter, as the statistics document names it.
     pub counter: String,

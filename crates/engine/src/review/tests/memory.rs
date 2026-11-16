@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use autoreview_go_compat::go_time::{format_rfc3339_nano, parse_rfc3339};
-use autoreview_policy::Level;
+use autoreview_policy::{Level, VERIFIER_REVIEWER_ID};
 use serde_json::json;
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
@@ -15,13 +15,16 @@ use tokio_util::sync::CancellationToken;
 use crate::config::{Credential, Credentials};
 use crate::integrations::SessionRequest;
 use crate::messages::APPROVAL_REQUESTED_TITLE;
-use crate::model::PullRequest;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_FIXED, PRIOR_OPEN, prior_key};
+use crate::model::{PullRequest, Verification};
 use crate::protocol::fixtures::sha;
-use crate::report::ReportRequest;
+use crate::report::{ReportRequest, VerifierCounts};
+use crate::review::input::STEP_VERIFICATION;
+use crate::stats::Keyed;
 use crate::store::{FindingOutcome, REVIEW_COMPLETED, ReviewFilter};
-use crate::testing::fake::{reviewer_output, settling_output};
+use crate::testing::fake::{reviewer_output, settling_output, verifier_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
+use crate::verify::{VERDICT_CONFIRMED, VERDICT_REFUTED, VERDICT_UPHELD};
 
 /// Returns the stored finding outcomes of `pr` as (finding key, tracked key, outcome, head).
 fn outcomes(h: &Harness, pr: &PullRequest) -> Vec<(String, String, String, String)> {
@@ -173,6 +176,61 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     let latest = reviews.first().expect("the new head's review is stored");
     assert_eq!(latest.input.pull_request.head_sha, next.head_sha);
     let latest = latest.created_at.clone();
+    // A checked pull request: the verifier refutes the finding of Opus and confirms the one of
+    // Sonnet. On the next head it answers for another head and does not finish.
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3, 7])].into();
+    let finding = |line: i64, title: &str| {
+        json!({
+            "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+            "line": line, "title": title, "body": "Breaks the build.",
+        })
+    };
+    let opus = reviewer_output(vec![finding(3, "Overflow")]);
+    let sonnet = reviewer_output(vec![finding(7, "Leak")]);
+    let output = move |request: &SessionRequest| match request.reviewer.id.as_str() {
+        VERIFIER_REVIEWER_ID => verifier_output(
+            request,
+            |claim| match claim.reviewer.as_str() {
+                "Opus" => VERDICT_REFUTED,
+                _ => VERDICT_CONFIRMED,
+            },
+            |_| VERDICT_UPHELD,
+        ),
+        "opus" => opus(request),
+        _ => sonnet(request),
+    };
+    h.set_output(output);
+    let checked = integration_pull_request("checked/widgets", &sha("d"));
+    h.fake.open(checked.clone(), h.rule(&checked.repository));
+    h.poll_until("the verified review", || h.publications() == 4)
+        .await;
+    let opus = reviewer_output(vec![finding(3, "Race")]);
+    let sonnet = reviewer_output(Vec::new());
+    let output = move |request: &SessionRequest| match request.reviewer.id.as_str() {
+        VERIFIER_REVIEWER_ID => {
+            let mut other = request.clone();
+            other.pull_request.head_sha = sha("f");
+            verifier_output(&other, |_| VERDICT_CONFIRMED, |_| VERDICT_UPHELD)
+        }
+        "opus" => opus(request),
+        _ => sonnet(request),
+    };
+    h.set_output(output);
+    let mut pushed = checked.clone();
+    pushed.head_sha = sha("e");
+    h.fake.open(pushed.clone(), h.rule(&checked.repository));
+    h.poll_until("the unverified review", || h.publications() == 5)
+        .await;
+    let filter = ReviewFilter::ReviewKey(pushed.key());
+    let reviews = h.store.list_reviews(&filter, 1).expect("the reviews read");
+    let unverified = reviews.first().expect("the next head's review is stored");
+    let stored = (h.store).load_step::<Verification>(&unverified.workflow_id, STEP_VERIFICATION);
+    let stored = stored.expect("the verification reads");
+    assert!(
+        unverified.input.pull_request.head_sha == pushed.head_sha
+            && stored.is_some_and(|verification| !verification.error_code.is_empty()),
+        "the next head's verification must be stored as not finished"
+    );
     // Each hand-off counts in `notes_to_author`, from its stored plan and after a prune.
     let today = OffsetDateTime::now_utc().date();
     let since = today
@@ -204,9 +262,33 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
             (median, reviews.request_to_publication_p90_seconds)
         })
     };
+    // The verifier's counts of every repository, of the checked one and of the other one.
+    let checks = || {
+        let (checked, other) = (checked.repository.clone(), pr.repository.clone());
+        [None, Some(checked), Some(other)].map(|repository| {
+            let request = ReportRequest {
+                since: since.clone(),
+                repository,
+                ..ReportRequest::default()
+            };
+            let report = h.engine.review_report(&CancellationToken::new(), &request);
+            report.expect("the report reads").reviews.by_reviewer
+        })
+    };
+    let verdicts = |key: &str, checked, demoted, percent| Keyed {
+        key: key.to_owned(),
+        counts: VerifierCounts {
+            verifier_checked: checked,
+            verifier_demoted: demoted,
+            verifier_demoted_percent: Some(percent),
+        },
+    };
+    let verified = vec![verdicts("opus", 1, 1, 100.0), verdicts("sonnet", 1, 0, 0.0)];
     let kept = history();
     let kept_requests = requests();
-    // The first prune leaves the new head's review beside the rollup of its request.
+    let kept_checks = checks();
+    // The first prune leaves the new head's review beside the rollup of its request, and the
+    // checked pull request's reviews as rows.
     let split = parse_rfc3339(&latest).expect("the creation time decodes");
     let partly = h.store.prune_reviews(split).expect("prune the earlier");
     let partly_requests = requests();
@@ -214,10 +296,13 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     let pruned = h.store.prune_reviews(cutoff).expect("prune the reviews");
     let rolled_up = history();
     let rolled_up_requests = requests();
+    let rolled_up_checks = checks();
     let (median, p90) = kept_requests[0];
     assert!(
         partly == 2
-            && pruned == 1
+            && pruned == 3
+            && kept_checks == [verified.clone(), verified, Vec::new()]
+            && rolled_up_checks == kept_checks
             && kept["totals"]["notes_to_author"] == json!(2)
             && kept["by_repository"][0]["notes_to_author"] == json!(2)
             && rolled_up == kept
@@ -228,7 +313,8 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
             && rolled_up_requests == kept_requests,
         "pruned {partly} and {pruned}: kept = {kept}, rolled up = {rolled_up}, request times \
          kept = {kept_requests:?}, partly = {partly_requests:?}, rolled up = \
-         {rolled_up_requests:?}"
+         {rolled_up_requests:?}, checks kept = {kept_checks:?}, rolled up = \
+         {rolled_up_checks:?}"
     );
     h.stop_engine().await;
 }

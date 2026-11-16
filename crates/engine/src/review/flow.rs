@@ -17,7 +17,7 @@ use super::input::{
 };
 use super::sessions::{Review, ReviewerSlot, StepFailure, is_shutdown};
 use crate::discovery::poll::live;
-use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
+use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_COMBINED, STEP_PUBLICATION};
 use crate::error::{BoxError, Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, SessionRequest,
@@ -326,9 +326,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             };
             results.push(result);
         }
-        let name = format!("{STEP_ARTIFACT}/combined");
         let combined = self
-            .once::<ArtifactOutcome, _>(&name, || {
+            .once::<ArtifactOutcome, _>(STEP_COMBINED, || {
                 let (engine, input, results) = (self.engine, &self.input, &results);
                 async move {
                     let reviewed_at = engine.clock.wall_now();

@@ -2,7 +2,7 @@
 type: Concept
 id: concept/review-report
 title: Review report
-description: What autoreview report measures over a range of UTC days - the time from the creation of a review attempt and from the review request to its first publication, the share of decisions approved without a human, waiting for a human or requesting changes, and the outcomes of the published findings per reviewer, severity and repository - how each number is computed from the store, how to read it, and what it does not measure yet.
+description: What autoreview report measures over a range of UTC days - the time from the creation of a review attempt and from the review request to its first publication, the share of decisions approved without a human, waiting for a human or requesting changes, the verifier demotion rate per reviewer, and the outcomes of the published findings per reviewer, severity and repository - how each number is computed from the store, how to read it, and what it does not measure yet.
 source_kind: manual
 intents: [help, debug]
 ---
@@ -10,8 +10,8 @@ intents: [help, debug]
 # Review report
 
 > **Status: after 0.3.0.** `autoreview report` comes after 0.3.0. The weekly line
-> in the review queue digest, the reviewer disagreement rate and the verifier
-> demotion rate are not available yet (#52).
+> in the review queue digest and the reviewer disagreement rate are not available
+> yet (#52).
 
 `autoreview report` gives a periodic, comparable picture of how the reviews
 perform, so a change of a prompt, a model or a policy can be judged on numbers.
@@ -63,6 +63,28 @@ A share is rounded half up to one decimal; with nothing decided every share is
 `null` in the JSON and `none` in the text, and so is a time without a published
 attempt.
 
+## Verifier demotion rate
+
+`reviews.by_reviewer` gives, per reviewer ID, how often the
+[verifier](verification.md) turned that reviewer's blocking claims into notes:
+
+- `verifier_checked`: the blocking findings that a verification gave a verdict,
+  in every attempt completed in the range, published or not, on the UTC day it
+  completed. Each attempt runs the verifier at most once; a resumed attempt
+  reuses its stored verdicts, and an attempt that adopts a hand-off runs no
+  verifier, so nothing counts twice.
+- `verifier_demoted`: those found `not_blocking` or `refuted`, and
+  `verifier_demoted_percent`: in percent of `verifier_checked`, rounded as the
+  shares above, `null` (`none`) with nothing checked.
+
+A verification that did not finish checks nothing and counts nowhere. The
+reviewer is the one the reviewers' combined findings name; a merged finding
+counts for its first reviewer, as in the finding metrics. A high rate means the
+reviewer's blocking claims often do not hold, so compare it per reviewer over
+the same range. It differs from the `demoted` column of the findings table,
+which counts the published findings of the range by the day they were
+published, and has no whole.
+
 ## Finding metrics
 
 Each part, the total and every reviewer, severity and repository, counts:
@@ -112,15 +134,15 @@ whose messages name `stats`.
   the request time was stored, or by an earlier release after a rollback, have
   none there, and a later attempt of such a request can count; an earlier
   release ignores these rows.
+- The prune keeps the verifier's counts in the same daily rollup, per
+  repository and reviewer. Reviews pruned before these counts were kept, or by
+  an earlier release after a rollback, have none there, so their days count too
+  few checked findings and the rate covers only the kept attempts.
 
 ## Not measured yet
 
 These numbers need data that the report does not read yet (#52):
 
-- **Verifier demotion rate**: the outcome records keep the findings the verifier
-  demoted, but not the blocking claims it confirmed. The verifier's own verdicts
-  are kept with the review only until it is pruned, so the report gives demoted
-  counts and no rate.
 - **Reviewer disagreement**: in the outcome records a merged finding keeps only
   its first reviewer, and a reviewer without findings has no row. Each
   reviewer's own result is kept with the review only until it is pruned.
