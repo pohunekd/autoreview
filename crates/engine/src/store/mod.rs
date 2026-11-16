@@ -25,6 +25,7 @@ pub mod discovery;
 pub mod guidance;
 pub mod outcome_checks;
 pub mod outcomes;
+pub mod recurrence;
 pub mod reviews;
 pub mod rollup;
 pub mod steps;
@@ -34,6 +35,7 @@ pub use discovery::{
 };
 pub use guidance::FindingCategory;
 pub use outcomes::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Settlement};
+pub use recurrence::{SuggestedFinding, Suggestion};
 pub use reviews::{
     RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
     REVIEW_RUNNING, ReviewFilter, SnapshotReads, StatsSnapshot, StoredReview, VerifierSteps,
