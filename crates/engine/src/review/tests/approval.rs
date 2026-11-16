@@ -90,3 +90,37 @@ async fn approval_expires_and_a_late_approval_is_rejected() {
     assert_eq!(h.publications(), 0, "an expired approval posted a review");
     h.stop_engine().await;
 }
+
+/// An approval wait whose pull request the search rejects holds up no other review (#475).
+///
+/// The pass ends the wait without a publication and queues the other reviews.
+#[tokio::test]
+async fn rejected_approval_wait_holds_up_no_other_review() {
+    let mut h = start_harness(|_| {}).await;
+    let waiting = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(waiting.clone(), h.rule(&waiting.repository));
+    h.poll_until("the approval wait", || h.resolve(&waiting).is_ok())
+        .await;
+    let workflow_id = h.resolve(&waiting).expect("the review waits").workflow_id;
+    // A retarget to a base branch that the engine cannot name drops the pull request from the
+    // search, and its direct read fails.
+    {
+        let mut fake = h.fake.lock();
+        fake.candidates.remove(&waiting.key());
+        let code = "base_branch_unsupported".to_owned();
+        fake.read_errors.insert(waiting.key(), code);
+    }
+    let other = integration_pull_request("acme/widget", &sha("b"));
+    h.fake.open(other.clone(), h.rule(&other.repository));
+    h.poll_until("the review of the other pull request", || {
+        h.publications() == 1
+    })
+    .await;
+    let approval = h.approve(&workflow_id, &waiting);
+    assert!(
+        matches!(&approval, Err(err) if err.to_string().contains("review_superseded")),
+        "the rejected wait must end, got {approval:?}"
+    );
+    assert_eq!(h.publications(), 1, "the ended wait posted a review");
+    h.stop_engine().await;
+}
