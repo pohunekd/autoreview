@@ -646,7 +646,8 @@ alone and that file passes the limit by that one line. The new file is created
 as `<file>.new` before any rename, so when that or a rename fails, the line is
 appended to the current file, which may then pass the limit, and the rotation is
 tried again after 60 seconds; only when the last rename fails, after the current
-file became `<file>.1`, lines go to `<file>.1` until that retry.
+file became `<file>.1`, lines go to `<file>.1` until the retry, which only
+renames `<file>.new` into place and moves no other file.
 
 With the file in use, a log line goes to the file only. stderr gets only the
 lines the file could not take, in full; one error line of the writer per 60

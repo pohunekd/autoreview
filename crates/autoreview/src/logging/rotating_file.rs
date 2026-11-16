@@ -42,6 +42,8 @@ pub(super) struct RotatingFile {
     written: u64,
     /// The current file ends in a cut line that could not be truncated away.
     cut: bool,
+    /// The files are shifted and only `<file>.new` still has to be renamed to `<file>`.
+    shifted: bool,
     /// Instant before which a failed rotation is not tried again.
     retry_at: Option<Instant>,
     /// Instant before which an error line is only counted.
@@ -75,6 +77,7 @@ impl RotatingFile {
             file,
             written,
             cut: false,
+            shifted: false,
             retry_at: None,
             report_at: None,
             repeats: 0,
@@ -152,31 +155,32 @@ impl RotatingFile {
 
     /// Opens the new current file under a temporary name, then renames the files into place.
     ///
-    /// A failed open renames nothing. The temporary file is removed when a later step fails.
-    fn rename_and_open(&self) -> io::Result<File> {
+    /// A failed open renames nothing. The temporary file is removed when a shift fails. When
+    /// only the final rename fails, the files stay shifted and the temporary file stays, so the
+    /// retry does only that rename.
+    fn rename_and_open(&mut self) -> io::Result<File> {
         let pending = self.suffixed(PENDING_SUFFIX);
         let file = open_append(&pending)?;
-        let placed = file
-            .set_len(0)
-            .and_then(|()| self.shift_into_place(&pending));
-        if let Err(error) = placed {
-            // The temporary file is only a leftover now; a failure to remove it has nowhere to go.
-            let _ = std::fs::remove_file(&pending);
-            return Err(error);
+        if !self.shifted {
+            let shifted = file.set_len(0).and_then(|()| self.shift_files());
+            if let Err(error) = shifted {
+                // The temporary file is a leftover now; a failed removal has nowhere to go.
+                let _ = std::fs::remove_file(&pending);
+                return Err(error);
+            }
+            self.shifted = true;
         }
+        std::fs::rename(&pending, &self.path)?;
+        self.shifted = false;
         Ok(file)
     }
 
-    /// Shifts `.N-1` to `.N` down to the current file to `.1`, then renames `pending` to the
-    /// current file.
-    ///
-    /// The oldest file is replaced by the rename.
-    fn shift_into_place(&self, pending: &Path) -> io::Result<()> {
+    /// Shifts `.N-1` to `.N` down to the current file to `.1`; the oldest file is replaced.
+    fn shift_files(&self) -> io::Result<()> {
         for index in (1..self.kept_files).rev() {
             rename_if_present(&self.numbered(index), &self.numbered(index + 1))?;
         }
-        rename_if_present(&self.path, &self.numbered(1))?;
-        std::fs::rename(pending, &self.path)
+        rename_if_present(&self.path, &self.numbered(1))
     }
 
     /// Returns the path of the rotated file `index`.
