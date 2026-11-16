@@ -79,6 +79,33 @@ jobs:
       - name: Rust gates
         run: scripts/gates rust
 
+  # Runs the same Rust gates on Apple Silicon (macos-15 is arm64). The `ci`
+  # aggregate does not need this job, so its result is a check of its own.
+  rust-macos:
+    name: rust-macos
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: short
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Runner platform
+        run: test "$(uname -sm)" = "Darwin arm64"
+      - name: Toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          rustup --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # PRs restore main's cache and never overwrite it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Rust gates
+        run: scripts/gates rust
+
   # Checks the licences and advisories of Cargo.lock against deny.toml. The
   # advisory database is fetched on every run, so a new advisory fails every
   # pull request until it is fixed or ignored in deny.toml.
@@ -153,8 +180,8 @@ jobs:
           fi
           echo "$added"
 
-  # The only required status check. A job that did not succeed fails it, so a
-  # skipped or cancelled job cannot pass the merge gate by accident.
+  # The only required status check. A job of `needs` that did not succeed fails
+  # it, so a skipped or cancelled job cannot pass the merge gate by accident.
   ci:
     name: ci
     needs: [docs, adapters, rust, deny, changelog]

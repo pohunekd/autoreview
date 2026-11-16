@@ -4,7 +4,7 @@
 
 `scripts/gates` runs each gate, in the order below, and reports its own result.
 With no argument it runs every group; CI runs the `docs`, `adapters`, `rust` and
-`deny` groups as four jobs.
+`deny` groups as four jobs on Linux, and the `rust` group a second time on macOS.
 
 Docs group:
 
@@ -143,10 +143,13 @@ text. Describe checks against the owner's own daemons in words only.
 - `rust` runs `scripts/gates rust` on the toolchain pinned in
   `rust-toolchain.toml`, with the dependency cache restored from `main` and
   saved only by runs on `main`.
+- `rust-macos` runs `scripts/gates rust` the same way on `macos-15` (Apple
+  Silicon). It is a check of its own, outside the `ci` aggregate.
 - `deny` runs `scripts/gates deny` with the `cargo-deny` release archive whose
   version and SHA-256 the workflow pins.
 - `changelog` runs `scripts/changelog check` and, on a pull request, requires a fragment unless the pull request carries `no-changelog`.
-- `ci` is the only required status check. It fails unless every job succeeded.
+- `ci` is the only required status check. It fails unless every other job but
+  `rust-macos` succeeded.
 
 When a workflow file changes, run `actionlint` at a pinned version on it and
 report the result in the PR. It is not a gate yet.
