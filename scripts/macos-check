@@ -1,0 +1,128 @@
+#!/bin/sh
+# Checks an autoreview release archive for Apple Silicon on a Mac before it is used.
+#
+# usage: scripts/macos-check archive [--no-attestation] <archive>
+#
+# <archive> is <dir>/autoreview-<version>-aarch64-apple-darwin.tar.gz, and its .sha256 file
+# must be next to it. Each check prints `ok`, `skip` or `FAIL`, and the
+# first FAIL exits 1: the platform, the .sha256 line, the build provenance attestation of the
+# release workflow for the tag v<version>, the quarantine attribute, the archive members, the
+# ad-hoc signature and identifier of the binary, its libraries and `autoreview --version`.
+# --no-attestation skips only the attestation, for the artifact of a dry run, which has none.
+# The archive is extracted into a temporary directory; nothing else is written. POSIX sh, so
+# Apple's /bin/sh runs it; it needs gh only for the attestation.
+
+set -eu
+
+REPOSITORY=pohunekd/autoreview
+WORKFLOW=pohunekd/autoreview/.github/workflows/release.yml
+IDENTIFIER=io.github.pohunekd.autoreview
+TARGET=aarch64-apple-darwin
+# The oldest macOS release that the archive is built for (MACOSX_DEPLOYMENT_TARGET).
+MACOS_MIN_MAJOR=14
+
+ok() {
+    printf 'ok    %s\n' "$*"
+}
+
+fail() {
+    printf 'FAIL  %s\n' "$*" >&2
+    exit 1
+}
+
+usage="usage: scripts/macos-check archive [--no-attestation] <archive>"
+if [ "$#" -lt 2 ] || [ "$1" != archive ]; then
+    fail "$usage"
+fi
+shift
+attestation=yes
+if [ "$1" = --no-attestation ]; then
+    attestation=no
+    shift
+fi
+[ "$#" -eq 1 ] || fail "$usage"
+archive=$1
+file=${archive##*/}
+version=${file#autoreview-}
+version=${version%-"$TARGET".tar.gz}
+if ! printf '%s\n' "$version" | grep -Eqx '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' \
+    || [ "$file" != "autoreview-$version-$TARGET.tar.gz" ]; then
+    fail "not an archive name autoreview-<X.Y.Z>-$TARGET.tar.gz: $file"
+fi
+name="autoreview-$version-$TARGET"
+if [ ! -f "$archive" ] || [ ! -f "$archive.sha256" ]; then
+    fail "missing $archive or $archive.sha256"
+fi
+
+[ "$(uname -sm)" = "Darwin arm64" ] || fail "platform: $(uname -sm), not Darwin arm64"
+macos=$(sw_vers -productVersion) || fail "sw_vers -productVersion"
+[ "${macos%%.*}" -ge "$MACOS_MIN_MAJOR" ] || fail "macOS $macos is older than $MACOS_MIN_MAJOR"
+ok "platform Darwin arm64, macOS $macos"
+
+sum=$(shasum -a 256 "$archive") || fail "shasum -a 256 $file"
+digest=${sum%% *}
+printf '%s\n' "$digest" | grep -Eqx '[0-9a-f]{64}' || fail "shasum gave no SHA-256 digest of $file"
+[ "$(cat "$archive.sha256")" = "$digest  $file" ] || fail "$file.sha256 does not match the archive"
+ok "sha256 $digest"
+
+if [ "$attestation" = yes ]; then
+    gh attestation verify "$archive" --repo "$REPOSITORY" --signer-workflow "$WORKFLOW" \
+        --source-ref "refs/tags/v$version" --deny-self-hosted-runners >/dev/null \
+        || fail "attestation of $file (signer $WORKFLOW, tag v$version)"
+    ok "attestation of $WORKFLOW for refs/tags/v$version"
+else
+    printf 'skip  attestation (--no-attestation)\n'
+fi
+
+# curl and gh set no quarantine attribute; a browser does, and Gatekeeper then blocks the
+# binary because it is not notarized.
+if xattr -p com.apple.quarantine "$archive" >/dev/null 2>&1; then
+    fail "$file has com.apple.quarantine; download it with curl -fLO or gh release download"
+fi
+ok "no quarantine attribute"
+
+listing=$(tar -tzf "$archive") || fail "tar -tzf $file"
+members=$(printf '%s\n' "$listing" | LC_ALL=C sort)
+expected=$(printf '%s\n' "$name/" "$name/LICENSE" "$name/README.md" "$name/autoreview" \
+    | LC_ALL=C sort)
+[ "$members" = "$expected" ] \
+    || fail "the archive holds other members than $name/ with LICENSE, README.md, autoreview"
+ok "members"
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/macos-check.XXXXXX") || fail "mktemp -d"
+trap 'rm -rf -- "$work"' EXIT
+tar -xzf "$archive" -C "$work" || fail "tar -xzf $file"
+binary=$work/$name/autoreview
+# The member names alone allow links; a link would make the checks below read another file.
+if [ -L "$work/$name" ] || [ ! -d "$work/$name" ] || [ -L "$binary" ] || [ ! -f "$binary" ]; then
+    fail "$name/autoreview is not a regular file in a directory"
+fi
+
+codesign --verify --strict "$binary" 2>/dev/null || fail "codesign --verify --strict"
+details=$(codesign -dv "$binary" 2>&1) || fail "codesign -dv"
+printf '%s\n' "$details" | grep -qx 'Signature=adhoc' || fail "the signature is not ad-hoc"
+printf '%s\n' "$details" | grep -qx "Identifier=$IDENTIFIER" \
+    || fail "the identifier is not $IDENTIFIER"
+ok "ad-hoc signature, identifier $IDENTIFIER"
+
+# /usr/bin/otool exists without the command line tools too, as a stub that fails and offers to
+# install them, so the tools are detected with xcode-select (xcrun could open that offer).
+if xcode-select -p >/dev/null 2>&1; then
+    linked=$(otool -L "$binary") || fail "otool -L"
+    libraries=$(printf '%s\n' "$linked" | sed 1d | awk '{print $1}')
+    printf '%s\n' "$libraries" | grep -qx /usr/lib/libSystem.B.dylib \
+        || fail "otool -L lists no /usr/lib/libSystem.B.dylib"
+    for library in $libraries; do
+        case $library in
+            /usr/lib/* | /System/Library/*) ;;
+            *) fail "links $library, which is not a system library" ;;
+        esac
+    done
+    ok "system libraries only"
+else
+    printf 'skip  libraries (the Xcode command line tools are not installed; %s)\n' \
+        "the release build checks them"
+fi
+
+[ "$("$binary" --version)" = "autoreview $version" ] || fail "--version is not autoreview $version"
+ok "autoreview --version: autoreview $version"

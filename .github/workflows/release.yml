@@ -1,7 +1,8 @@
 name: Release
 
-# A pushed tag v<version> builds the static musl archives, attests them and
-# creates a draft release; the owner reviews and publishes the draft. A manual
+# A pushed tag v<version> builds the static musl archives and the ad-hoc signed
+# Apple Silicon archive, attests them and creates a draft release; the owner
+# reviews and publishes the draft. A manual
 # run is a dry run: it builds the archives of the selected ref and uploads them
 # as workflow artifacts, and attests and publishes nothing. The workflow never
 # creates, moves or deletes a tag.
@@ -147,11 +148,153 @@ jobs:
             dist/autoreview-${{ needs.meta.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
 
+  # Apple Silicon in three jobs, so that the bytes that are released are never
+  # produced and checked on the same runner: build-darwin builds and ad-hoc
+  # signs the binary on macOS, package-darwin packs it on Linux with the same
+  # GNU tar as the musl archives and runs nothing from it, and verify-darwin
+  # checks the packed archive on a fresh macOS runner. An ad-hoc signature needs
+  # no certificate or secret; the provenance comes from the attest job.
+  build-darwin:
+    name: build aarch64-apple-darwin
+    needs: meta
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      TARGET: aarch64-apple-darwin
+      VERSION: ${{ needs.meta.outputs.version }}
+      # The oldest macOS that the binary runs on, as for the pohunek daemon.
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
+      IDENTIFIER: io.github.pohunekd.autoreview
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Runner platform
+        run: test "$(uname -sm)" = "Darwin arm64"
+      - name: Toolchain
+        run: |
+          set -euo pipefail
+          rustup toolchain install --no-self-update
+          rustup --version
+          cargo --version
+          rustup target add "$TARGET"
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET" -p autoreview --bin autoreview
+      # Only system libraries, the deployment target, and the version of the tag.
+      - name: Check the binary
+        run: |
+          set -euo pipefail
+          bin="target/$TARGET/release/autoreview"
+          libraries="$(otool -L "$bin" | sed 1d | awk '{print $1}')"
+          echo "$libraries"
+          if echo "$libraries" | grep -Ev '^(/usr/lib/|/System/Library/)'; then
+            echo "::error::$bin links a library outside /usr/lib and /System/Library"
+            exit 1
+          fi
+          build="$(vtool -show-build "$bin")"
+          echo "$build"
+          echo "$build" | grep -Eq "^ *minos ${MACOSX_DEPLOYMENT_TARGET}\$"
+          test "$("$bin" --version)" = "autoreview $VERSION"
+      - name: Ad-hoc sign
+        run: |
+          set -euo pipefail
+          bin="target/$TARGET/release/autoreview"
+          codesign --force --sign - --identifier "$IDENTIFIER" "$bin"
+          codesign --verify --strict --verbose=2 "$bin"
+          details="$(codesign -dv "$bin" 2>&1)"
+          echo "$details"
+          echo "$details" | grep -qx 'Signature=adhoc'
+          echo "$details" | grep -qx "Identifier=$IDENTIFIER"
+          test "$("$bin" --version)" = "autoreview $VERSION"
+          mkdir -p "$RUNNER_TEMP/binary"
+          cp "$bin" "$RUNNER_TEMP/binary/autoreview"
+          cd "$RUNNER_TEMP/binary"
+          shasum -a 256 autoreview > autoreview.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binary-aarch64-apple-darwin
+          path: |
+            ${{ runner.temp }}/binary/autoreview
+            ${{ runner.temp }}/binary/autoreview.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  # The binary is untrusted data here: its checksum and name are checked, and
+  # it is packed, never run.
+  package-darwin:
+    name: package aarch64-apple-darwin
+    needs: [meta, build-darwin]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      TARGET: aarch64-apple-darwin
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: binary-aarch64-apple-darwin
+          path: ${{ runner.temp }}/binary
+      - name: Check the binary artifact
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/binary"
+          test "$(ls -A | LC_ALL=C sort | tr '\n' ' ')" = "autoreview autoreview.sha256 "
+          sha256sum -c -- autoreview.sha256
+      - name: Package
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          scripts/release-archive "$VERSION" "$TARGET" "$RUNNER_TEMP/binary/autoreview" dist
+          cd dist
+          sha256sum -c -- "autoreview-$VERSION-$TARGET.tar.gz.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archive-aarch64-apple-darwin
+          path: |
+            dist/autoreview-${{ needs.meta.outputs.version }}-aarch64-apple-darwin.tar.gz
+            dist/autoreview-${{ needs.meta.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+          if-no-files-found: error
+
+  # Checks the packed archive as a user does: checksum, members, signature,
+  # identifier, libraries and version, with scripts/macos-check. The
+  # attestation does not exist yet; the attest job makes it after this job.
+  verify-darwin:
+    name: verify aarch64-apple-darwin
+    needs: [meta, package-darwin]
+    runs-on: macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: archive-aarch64-apple-darwin
+          path: ${{ runner.temp }}/archive
+      - name: Check the archive
+        run: |
+          scripts/macos-check archive --no-attestation \
+            "$RUNNER_TEMP/archive/autoreview-$VERSION-aarch64-apple-darwin.tar.gz"
+
   # The only job that can mint an OIDC token. It runs no repository code and
   # no build script; it signs exactly the files the build jobs uploaded.
   attest:
     name: attest
-    needs: build
+    needs: [build, verify-darwin]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
