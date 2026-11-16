@@ -3875,10 +3875,13 @@ pub(crate) mod tests {
                 }
                 Directory => std::fs::create_dir(&path).expect("directory created"),
                 Fifo => {
-                    let mode = rustix::fs::Mode::from_raw_mode(0o600);
-                    let fifo = rustix::fs::FileType::Fifo;
-                    rustix::fs::mknodat(rustix::fs::CWD, &path, fifo, mode, 0)
-                        .expect("FIFO created");
+                    // rustix has no mknodat or mkfifoat on Apple targets; mkfifo(1) is POSIX.
+                    let status = std::process::Command::new("mkfifo")
+                        .args(["-m", "600"])
+                        .arg(&path)
+                        .status()
+                        .expect("mkfifo started");
+                    assert!(status.success(), "mkfifo failed: {status}");
                 }
                 Missing => {}
             }
