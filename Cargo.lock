@@ -1255,7 +1255,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 [[package]]
 name = "pohunek-companion-changelog"
 version = "0.1.9"
-source = "git+https://github.com/pohunekd/pohunek-companion?rev=ac22c9f0d92d7757205a99d4fe395b19fbb99031#ac22c9f0d92d7757205a99d4fe395b19fbb99031"
+source = "git+https://github.com/pohunekd/pohunek-companion?rev=9e83077b89b0e8a0cd1c7258d17af47e49f2b203#9e83077b89b0e8a0cd1c7258d17af47e49f2b203"
 dependencies = [
  "serde",
  "thiserror",
