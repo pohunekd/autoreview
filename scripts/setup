@@ -534,6 +534,46 @@ self_test() {
     render_units
     check "umask of the review service" 1 "$(grep -cx 'UMask=0077' <<<"${unit_texts[0]}")"
     check "umask of the queue service" 1 "$(grep -cx 'UMask=0077' <<<"${unit_texts[1]}")"
+    local -a agent_labels=() agent_names=() agent_texts=()
+    local service queue sample_runtime_dir=""
+    with_sample_layout render_agents
+    service=$(plist_facts <<<"${agent_texts[0]}" || echo error)
+    queue=$(plist_facts <<<"${agent_texts[1]}" || echo error)
+    fact() {
+        grep -x "$1=.*" <<<"$2" | cut -d= -f2- || echo absent
+    }
+    check "agent file names" "$AGENT_LABEL.plist $QUEUE_LABEL.plist" "${agent_names[*]}"
+    check "agent label" "$AGENT_LABEL" "$(fact label "$service")"
+    check "agent arguments" "/h/.local/bin/autoreview --config /h/autoreview/config.yaml \
+--env-file /h/.config/autoreview/autoreview.env serve" "$(fact arguments "$service")"
+    check "agent environment without a runtime directory" \
+        "PATH XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME" "$(fact environment "$service")"
+    check "agent restarts after a failure" "{'SuccessfulExit': False}" \
+        "$(fact KeepAlive "$service")"
+    check "agent starts at load" True "$(fact RunAtLoad "$service")"
+    check "agent restart delay" 10 "$(fact ThrottleInterval "$service")"
+    check "agent stop budget" 90 "$(fact ExitTimeOut "$service")"
+    check "agent umask 0077" 63 "$(fact Umask "$service")"
+    check "agent log" "'/h/.local/state/autoreview/logs/autoreview.log'" \
+        "$(fact StandardErrorPath "$service")"
+    check "agent has no schedule" "" "$(fact hours "$service")"
+    check "queue arguments" "/h/.local/bin/autoreview --config /h/autoreview/config.yaml \
+--env-file /h/.config/autoreview/autoreview.env review-queue" "$(fact arguments "$queue")"
+    check "queue hours" "8:00 9:00 10:00 11:00 12:00 13:00 14:00 15:00 16:00 17:00 18:00 19:00 \
+20:00" "$(fact hours "$queue")"
+    check "queue is not kept alive" None "$(fact KeepAlive "$queue")"
+    check "queue umask 0077" 63 "$(fact Umask "$queue")"
+    sample_runtime_dir=/h/run
+    with_sample_layout render_agents
+    check "agent environment with a runtime directory" \
+        "PATH XDG_CONFIG_HOME XDG_DATA_HOME XDG_RUNTIME_DIR XDG_STATE_HOME" \
+        "$(plist_facts <<<"${agent_texts[0]}" | grep -x 'environment=.*' | cut -d= -f2-)"
+    escaped() {
+        local agent_path="/opt/a&b<c>'\"/bin"
+        render_agents
+        plist_facts <<<"${agent_texts[0]}" | grep -x 'path=.*' | cut -d= -f2-
+    }
+    check "agent PATH with XML characters" "/opt/a&b<c>'\"/bin" "$(with_sample_layout escaped)"
     expected="setup: autoreview 0.5.0 refuses a Codex adapter from before 0.4.0;"
     expected+=$'\nreviews of these profiles fail with review_nonce_mismatch until you run, with the'
     expected+=$'\nvalues of their first install:'
@@ -556,6 +596,25 @@ self_test() {
         return 1
     fi
     echo "self-test: $checks checks passed"
+}
+
+# Reads one plist on stdin and prints `name=value` lines of what the self-test checks.
+plist_facts() {
+    python3 -I -c '
+import plistlib
+import sys
+
+plist = plistlib.loads(sys.stdin.buffer.read())
+print("label=" + plist["Label"])
+print("arguments=" + " ".join(plist["ProgramArguments"]))
+print("environment=" + " ".join(sorted(plist["EnvironmentVariables"])))
+print("path=" + plist["EnvironmentVariables"].get("PATH", ""))
+for key in ("RunAtLoad", "KeepAlive", "ThrottleInterval", "ExitTimeOut", "Umask",
+            "StandardOutPath", "StandardErrorPath"):
+    print(key + "=" + repr(plist.get(key)))
+hours = [(entry["Hour"], entry["Minute"]) for entry in plist.get("StartCalendarInterval", [])]
+print("hours=" + " ".join("%d:%02d" % hour for hour in hours))
+'
 }
 
 # Reads the JSON document on stdin and prints what query $1 asks for:
