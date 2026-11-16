@@ -545,4 +545,8 @@ pub enum Error {
         /// The event name.
         event: &'static str,
     },
+
+    /// The weekly report level is neither `digest` nor `off`.
+    #[error("notifications: event weekly_report level must be digest or off")]
+    WeeklyReportLevel,
 }

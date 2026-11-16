@@ -126,7 +126,7 @@ per owner, each with its own token, works too.
 | `ready_draft_authors` | no | Lowercase GitHub logins of coding agents whose drafts are marked ready, see [drafts](#drafts-of-coding-agents) |
 | `approval` | yes | `timeout_hours`: 1-720, how long a clean review waits for a human approval |
 | `notes_handoff` | exactly when a rule sets `on_notes` | `reminder_hours`: 1-720 |
-| `notifications` | yes | A level for every [event](#notifications); `credential_invalid`, `credential_restored` and `credential_expiring` may be left out |
+| `notifications` | yes | A level for every [event](#notifications); `credential_invalid`, `credential_restored` and `credential_expiring` may be left out; `weekly_report` is optional, see [below](#notifications) |
 
 The file is at most 256 KiB, holds exactly one YAML document, and unknown keys
 are an error.
@@ -494,6 +494,13 @@ events have their own route, is configured in [config.yaml](configuration.md#not
 `credential_invalid`, `credential_restored` and `credential_expiring` are
 optional: a policy without them sends them at level `action`, and its digest
 stays the same. A level set for one is used and changes the policy digest.
+
+`weekly_report` is not an event: `digest` ends the review queue message once a
+week with the text of `autoreview report` for the last 7 UTC days, see
+[weekly report](knowledge/concepts/notifications.md#weekly-report). `off` or no
+key sends none. `action`, `log` or an empty value is refused with
+`notifications: event weekly_report level must be digest or off`. The key changes
+neither the policy digest nor the levels a review carries.
 
 `guard_suspect` (a rule's [guard](#guard) found a pull request suspect) is
 always sent at level `action`; a policy cannot name it.

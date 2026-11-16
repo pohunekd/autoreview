@@ -133,6 +133,8 @@ pub(crate) struct FakeState {
     pub(crate) requests: Vec<ReviewRequest>,
     /// Every queue digest that was posted.
     pub(crate) queued: Vec<QueuedDigest>,
+    /// Error code that every queue digest post fails with, transiently, posting nothing.
+    pub(crate) queue_failure: Option<String>,
     /// Error code of each failing credential's searches, keyed by credential name.
     ///
     /// Its reads fail transiently as `github_request_failed`.
@@ -762,7 +764,11 @@ impl Integrations for FakeIntegration {
         plain: &str,
         formatted: &str,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.lock().queued.push(QueuedDigest {
+        let mut state = self.lock();
+        if let Some(code) = state.queue_failure.clone() {
+            return ready(Err(Error::workflow(code, false, None)));
+        }
+        state.queued.push(QueuedDigest {
             backend: backend.to_owned(),
             transaction: transaction.to_string(),
             plain: plain.to_string(),

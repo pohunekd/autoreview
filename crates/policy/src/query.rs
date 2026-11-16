@@ -188,6 +188,14 @@ impl Policy {
         &self.notifications
     }
 
+    /// Reports whether the review queue digest carries the weekly report.
+    ///
+    /// `notifications.weekly_report: digest` sets it; `off` or no key leaves it out.
+    #[must_use]
+    pub fn weekly_report(&self) -> bool {
+        self.weekly_report
+    }
+
     /// Returns how long a review waits for the user's approval.
     #[must_use]
     pub fn approval_timeout(&self) -> Duration {
