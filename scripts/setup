@@ -46,6 +46,21 @@ MACOS_MIN_MAJOR=14
 # The folders of the home directory that macOS privacy protection (TCC) closes
 # to a launchd job without an explicit grant.
 TCC_FOLDERS=(Desktop Documents Downloads "Library/Mobile Documents")
+# The launchd labels of the review service and of the hourly queue notice on macOS;
+# each agent is ~/Library/LaunchAgents/<label>.plist.
+AGENT_LABEL="io.github.pohunekd.autoreview"
+QUEUE_LABEL="io.github.pohunekd.autoreview-queue"
+# What the agents share with the systemd units: the restart delay, the stop budget
+# (systemd's default TimeoutStopSec), the umask 0077 in decimal, and the hours of
+# the queue notice (OnCalendar=*-*-* 08..20:00:00).
+AGENT_THROTTLE_SECONDS=10
+AGENT_EXIT_TIMEOUT_SECONDS=90
+AGENT_UMASK=63
+QUEUE_HOURS=(8 9 10 11 12 13 14 15 16 17 18 19 20)
+# The rotation limits of the newsyslog line that setup prints for the agent logs:
+# the old files kept, and the size in KiB at which a log is rotated.
+LOG_ROTATE_COUNT=5
+LOG_ROTATE_KIB=10240
 # The reviewer adapters need Python 3.11 or newer.
 PYTHON_MIN_VERSION="3.11.0"
 POHUNEK_REPOSITORY="zajca/pohunek"
@@ -1462,6 +1477,103 @@ step_profiles() {
     done
 }
 
+# Prints $1 with the XML special characters escaped, for a plist <string>.
+xml_text() {
+    printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' \
+        -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"
+}
+
+# Prints the EnvironmentVariables entries of an agent: the PATH that pohunek's daemon gets,
+# the XDG homes of this run, and XDG_CACHE_HOME and XDG_RUNTIME_DIR only when they are set,
+# the rule of pohunek's own agent. Secrets never go here: the agent reads --env-file.
+agent_environment() {
+    local name value
+    for name in PATH XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME \
+        XDG_RUNTIME_DIR; do
+        case $name in
+            PATH) value=$agent_path ;;
+            XDG_CONFIG_HOME) value=$config_home ;;
+            XDG_DATA_HOME) value=$data_home ;;
+            XDG_STATE_HOME) value=$state_home ;;
+            XDG_CACHE_HOME) value=${XDG_CACHE_HOME:-} ;;
+            XDG_RUNTIME_DIR) value=$runtime_dir ;;
+        esac
+        [ -n "$value" ] || continue
+        printf '\t\t<key>%s</key>\n\t\t<string>%s</string>\n' "$name" "$(xml_text "$value")"
+    done
+}
+
+# Prints the agent plist of label $1 that runs `autoreview $2` and logs to $3: the review
+# service ($4 = service) restarts after a failure, the queue ($4 = queue) runs at QUEUE_HOURS.
+agent_plist() {
+    local label=$1 command=$2 log=$3 kind=$4 argument hour
+    printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"' \
+        '  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0">' '<dict>'
+    printf '\t<key>Label</key>\n\t<string>%s</string>\n' "$label"
+    printf '\t<key>ProgramArguments</key>\n\t<array>\n'
+    for argument in "$autoreview_bin" --config "$dir/config.yaml" --env-file "$env_file" \
+        "$command"; do
+        printf '\t\t<string>%s</string>\n' "$(xml_text "$argument")"
+    done
+    printf '\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n'
+    agent_environment
+    printf '\t</dict>\n'
+    if [ "$kind" = service ]; then
+        printf '\t<key>RunAtLoad</key>\n\t<true/>\n'
+        printf '\t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n'
+        printf '\t</dict>\n\t<key>ThrottleInterval</key>\n\t<integer>%s</integer>\n' \
+            "$AGENT_THROTTLE_SECONDS"
+    else
+        printf '\t<key>StartCalendarInterval</key>\n\t<array>\n'
+        for hour in "${QUEUE_HOURS[@]}"; do
+            printf '\t\t<dict>\n\t\t\t<key>Hour</key>\n\t\t\t<integer>%s</integer>\n' "$hour"
+            printf '\t\t\t<key>Minute</key>\n\t\t\t<integer>0</integer>\n\t\t</dict>\n'
+        done
+        printf '\t</array>\n'
+    fi
+    printf '\t<key>ExitTimeOut</key>\n\t<integer>%s</integer>\n' "$AGENT_EXIT_TIMEOUT_SECONDS"
+    printf '\t<key>Umask</key>\n\t<integer>%s</integer>\n' "$AGENT_UMASK"
+    printf '\t<key>%s</key>\n\t<string>%s</string>\n' StandardOutPath "$(xml_text "$log")" \
+        StandardErrorPath "$(xml_text "$log")"
+    printf '</dict>\n</plist>\n'
+}
+
+# Sets the agent labels, file names and texts of macOS, as render_units does for Linux.
+render_agents() {
+    agent_labels=("$AGENT_LABEL" "$QUEUE_LABEL")
+    agent_names=("$AGENT_LABEL.plist" "$QUEUE_LABEL.plist")
+    agent_texts=("$(agent_plist "$AGENT_LABEL" serve "$log_dir/autoreview.log" service)
+" "$(agent_plist "$QUEUE_LABEL" review-queue "$log_dir/autoreview-queue.log" queue)
+")
+}
+
+# Runs $@ with the fixed layout that the self-test and --render-agents render.
+with_sample_layout() {
+    local autoreview_bin=/h/.local/bin/autoreview dir=/h/autoreview
+    local env_file=/h/.config/autoreview/autoreview.env config_home=/h/.config
+    local data_home=/h/.local/share state_home=/h/.local/state XDG_CACHE_HOME=""
+    local log_dir=/h/.local/state/autoreview/logs agent_path=/opt/homebrew/bin:/usr/bin:/bin
+    local runtime_dir=${sample_runtime_dir:-}
+    "$@"
+}
+
+# Writes the two agent files of the sample layout into the directory $1, with an
+# XDG_RUNTIME_DIR and a PATH that needs escaping, for scripts/check-launchd.
+render_sample_agents() {
+    local i sample_runtime_dir=/h/run
+    local -a agent_labels=() agent_names=() agent_texts=()
+    [ -d "$1" ] || fail 1 "--render-agents needs an existing directory"
+    agent_path_sample() {
+        local agent_path="/opt/a&b<c>/bin:$agent_path"
+        render_agents
+    }
+    with_sample_layout agent_path_sample
+    for i in "${!agent_names[@]}"; do
+        printf '%s' "${agent_texts[i]}" >"$1/${agent_names[i]}" || fail 1 "writing $1 failed"
+    done
+}
+
 # Sets the unit names and their texts. The paths were checked with
 # unit_path_safe, so each line holds them as they are. UMask=0077 keeps the
 # store files that a service creates private to the user.
@@ -1781,6 +1893,10 @@ run_steps() {
 main() {
     if [ "$#" -eq 1 ] && [ "$1" = --self-test ]; then
         self_test
+        return
+    fi
+    if [ "$#" -eq 2 ] && [ "$1" = --render-agents ]; then
+        render_sample_agents "$2"
         return
     fi
     parse_arguments "$@"
