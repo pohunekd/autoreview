@@ -707,7 +707,10 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             request.start = attempt;
             request.fetch_head = self.fetches_head(&request).await;
             let integration = &*self.engine.integration;
-            let started = integration.ensure_session(&self.cancel, &request).await;
+            let started = match self.check_repo_hooks(&request).await {
+                Ok(()) => integration.ensure_session(&self.cancel, &request).await,
+                Err(err) => Err(err),
+            };
             let started = match started {
                 Ok(session) => Ok(session),
                 Err(err) => Err(self.interrupted(err)),
@@ -796,6 +799,24 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 }
                 false
             }
+        }
+    }
+
+    /// Refuses the start of `request` on a host that would run code of its checkout.
+    ///
+    /// Only a session that skips the checkout's hooks is checked, before every start attempt,
+    /// so a pohunek upgrade or downgrade applies from the next attempt on. A failed read fails
+    /// the attempt: no head checkout starts without the host's answer.
+    async fn check_repo_hooks(&self, request: &SessionRequest) -> Result<(), Error> {
+        if !request.skips_repo_hooks() {
+            return Ok(());
+        }
+        let integration = &*self.engine.integration;
+        let host = &request.route.host;
+        let hooks = integration.head_checkout_hooks(&self.cancel, host).await?;
+        match hooks.refusal(self.engine.config.head_checkout_host_hooks) {
+            Some(code) => Err(Error::workflow(code, true, None)),
+            None => Ok(()),
         }
     }
 
