@@ -27,11 +27,12 @@ that goes:
 |---|---|---|
 | systemd units of path b | `journalctl -u autoreview.service` (`autoreview-queue.service` for the queue) | the journal |
 | `scripts/setup` on Linux | `journalctl --user -u autoreview.service` | the journal |
-| `scripts/setup` on a Mac | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`) | none by launchd; see below |
+| `scripts/setup` on a Mac (from the first release after 0.5.0, #513) | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`) | none by launchd; see below |
 
-launchd does not rotate these files, and rotation needs root. `scripts/setup`
-prints two lines for `/etc/newsyslog.d/autoreview.conf`, which keep 5 old
-files and rotate a log at 10 MiB:
+launchd does not rotate these files, and rotation needs root. When
+`scripts/setup` installs the agents, it prints two lines for
+`/etc/newsyslog.d/autoreview.conf`, which keep 5 old files and rotate a log at
+10 MiB:
 
 ```text
 /Users/<you>/.local/state/autoreview/logs/autoreview.log <you>:staff 600 5 10240 * N

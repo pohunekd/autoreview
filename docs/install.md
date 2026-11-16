@@ -55,7 +55,8 @@ pohunek daemon runs and the repositories are registered.
 ## Choose an install path
 
 To run autoreview and the pohunek daemon together on one Linux machine, or one
-Mac with Apple Silicon, as your own user, run `scripts/setup` from a checkout of
+Mac with Apple Silicon (from the first release after 0.5.0, #513), as your own
+user, run `scripts/setup` from a checkout of
 the repository: it installs both from their release archives, writes the
 configuration and the user service (systemd user units on Linux, launchd agents
 on macOS), and asks before every change. See
@@ -123,16 +124,20 @@ installs it with the launchd agents; to check a download by hand, use
 `scripts/macos-check` from a checkout of the release tag:
 
 ```sh
+version=X.Y.Z  # a release after 0.5.0; 0.5.0 has no darwin archive
 archive="autoreview-$version-aarch64-apple-darwin.tar.gz"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive.sha256"
 scripts/macos-check archive "$archive"
 ```
 
-It checks the `.sha256` line (`shasum -a 256`), the attestation with the flags
-above (with a logged-in `gh`), the members, the ad-hoc code signature with the
-identifier `io.github.pohunekd.autoreview`, the system libraries and
-`autoreview --version`, and prints one `ok` line per check. The binary is ad-hoc
+It checks the platform (Darwin arm64, macOS 14 or newer), the `.sha256` line
+(`shasum -a 256`), the attestation with the flags above (with a logged-in
+`gh`), the quarantine attribute, the members, the ad-hoc code signature with
+the identifier `io.github.pohunekd.autoreview`, the system libraries and
+`autoreview --version`. It prints an `ok` line per check, or `skip` for the
+libraries when the Xcode command line tools are not installed, and stops at the
+first `FAIL` with exit code 1. The binary is ad-hoc
 signed and not notarized. A file that `curl` or `gh release download` fetched
 carries no `com.apple.quarantine` attribute, so Gatekeeper does not block it; a
 browser download carries it, and the script refuses such a file: download it
@@ -248,8 +253,9 @@ run as the user of the pohunek daemon on that host. It also writes the reviewer
 adapter that the profile starts, which needs Python 3.11 or newer as `python3`.
 The Codex adapter also needs Linux (`PR_SET_CHILD_SUBREAPER`): on another system,
 such as a Mac review host, `profiles install --agent codex` refuses with
-`profile_agent_unsupported`, and the adapter itself exits with status 64 before
-Codex starts. Claude reviewers run on both.
+`profile_agent_unsupported` (from the first release after 0.5.0, #513), and
+the adapter itself exits with status 64 before Codex starts. Claude reviewers
+run on both.
 
 Check configuration, policy and prompts before every start, as the service user
 with the secrets file of path b:

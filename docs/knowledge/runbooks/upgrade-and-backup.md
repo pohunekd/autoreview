@@ -109,13 +109,27 @@ archive. Check the state as in step 5.
 ### With scripts/setup
 
 Back up the store first, then run `scripts/setup` from a checkout of the new
-release tag with the same `--dir`: it installs the release that its
-`AUTOREVIEW_VERSION` names, runs `validate` with the secrets file before it
-touches the service, and asks to restart the service on the new binary. Then do
-step 4 for every profile. On a Mac the restart is
-`launchctl kickstart -k gui/$(id -u)/io.github.pohunekd.autoreview` (the script
-runs it after its question), and `scripts/macos-check service` checks the state:
-every line `ok`, and the service running the new binary.
+release tag with the same `--dir`. It installs the release that its
+`AUTOREVIEW_VERSION` names and runs `validate` with the secrets file before it
+touches the service. It keeps every agent profile that exists (`in place`), so
+it does not do step 4, and step 4 comes before the restart:
+
+1. When the script asks to restart the service on the new binary, or to
+   replace the service's units or agents, decline. It stops with exit code 4,
+   changes nothing of that step, and the old service keeps running.
+2. Do step 4 for every profile, with the new `~/.local/bin/autoreview`.
+3. Run the script again with the same `--dir` and accept its restart: the
+   service still runs the older binary, so it asks again. The restart is
+   `systemctl --user restart autoreview.service`; on a Mac (from the first
+   release after 0.5.0, #513)
+   `launchctl kickstart -k gui/$(id -u)/io.github.pohunekd.autoreview`, or the
+   install of the agents when their files changed.
+
+A later run that shows the service step as `in place, skipped`, with no note
+that the running binary is unreadable, confirms that the service started on
+the installed binary. On a Mac, `scripts/macos-check service` then checks the
+rest of the state: every line `ok`. Its process check compares paths only, so
+it cannot tell whether the service started before the binary was replaced.
 
 ## Store migrations
 

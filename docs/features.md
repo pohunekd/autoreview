@@ -130,7 +130,7 @@ reviewer, severity and repository over a range of days.
 | Start here | |
 |---|---|
 | [Install](install.md) | Release binary, the Apple Silicon archive, systemd units, first configuration, first review |
-| [Getting started](knowledge/guides/getting-started.md) | One Linux machine or one Mac set up by `scripts/setup` |
+| [Getting started](knowledge/guides/getting-started.md) | One Linux machine, or one Mac from the first release after 0.5.0 (#513), set up by `scripts/setup` |
 | [Quickstart](knowledge/guides/quickstart.md) | One repository, one reviewer, comments only |
 | [Use cases](knowledge/guides/index.md) | Pick a scenario and combine them |
 

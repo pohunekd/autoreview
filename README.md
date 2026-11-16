@@ -113,7 +113,8 @@ part that is not available names its open issue.
 
 - [Features](docs/features.md) - what it does and a map of every page
 - [Getting started](docs/knowledge/guides/getting-started.md): `scripts/setup`
-  sets up one Linux machine or one Mac with Apple Silicon
+  sets up one Linux machine or one Mac with Apple Silicon (from the first
+  release after 0.5.0, #513)
 - [Quickstart](docs/knowledge/guides/quickstart.md) and
   [use cases](docs/knowledge/guides/index.md), each with a complete policy in
   [examples/](examples/)

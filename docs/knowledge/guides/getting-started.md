@@ -204,9 +204,10 @@ prints it; it goes on with:
 6. **Secrets and validate.** Reads the variable names of the `*_env` keys of
    `config.yaml` and prints each as `set` or `missing` in the secrets file; it
    never reads, prints or writes a value. Then it runs
-   `autoreview validate` in a transient user unit with the secrets file (on a
-   Mac with `--env-file`), the environment the service gets, and reads the
-   agent profiles the policy needs.
+   `autoreview validate`: on Linux in a transient user unit with the secrets
+   file, the environment the service gets; on a Mac directly, in the
+   environment of the script, with `--env-file`. It reads the agent profiles
+   the policy needs from the output.
 7. **Profile questions.** For each profile that does not exist yet: the agent
    (`claude` for `claude-structured` reviewers, `codex` for `codex-envelope`
    ones, as `reviewers.<id>.protocol` in the policy says), the model, the
@@ -239,9 +240,15 @@ prints it; it goes on with:
 12. **Lingering.** Without it, systemd stops pohunek and autoreview when you log
     out and starts them only at the next login.
 
-On a Mac, steps 11 and 12 are one step, **launchd agents**. It prints the
-`match` and `trigger` lines, then installs the two agents one after the other.
-For each, it runs `launchctl bootout gui/<uid>/<label>` when the agent is
+On a Mac, steps 11 and 12 are one step, **launchd agents**. When both agent
+files hold the text of this run, the review agent runs and the queue agent is
+loaded, the step changes nothing, except after an install of autoreview or when
+the running service started before the installed binary changed: then it asks
+to restart the service and runs
+`launchctl kickstart -k gui/<uid>/io.github.pohunekd.autoreview`, and ends
+there. Otherwise it prints the `match` and `trigger` lines, then installs the
+two agents one after the other, which also starts the service on the installed
+binary. For each, it runs `launchctl bootout gui/<uid>/<label>` when the agent is
 loaded and waits until launchd no longer lists it, then writes the file and
 runs `launchctl enable` and `launchctl bootstrap gui/<uid> <file>`. A stopping
 job can take the agent's stop budget of 90 s, so the wait ends after 95 s; a
@@ -249,26 +256,32 @@ bootout that exits 36 (the job is still stopping) counts as done. An
 agent file with other text is shown as a diff and replaced only after its own
 question. Each failure stops with exit code 10 and leaves that agent as follows:
 - the previous agent file cannot be read: the script stops before it changes
-  anything;
+  that agent;
 - a failed bootout: its file and job are unchanged;
 - a job still listed after 95 s: the file is unchanged, and the job is not
   loaded again when it stops; run the script again then;
 - writing, enabling or loading the new definition failed: the previous file is
   loaded, written back first when it changed, or the new file is removed when
-  there was none.
+  there was none;
+- writing the previous file back or loading it failed too: the job is not
+  loaded; fix what the message names and run the script again.
 
-An agent installed earlier in the same run stays installed. When the running
-service does not run the installed binary, it asks to restart it and runs
-`launchctl kickstart -k gui/<uid>/io.github.pohunekd.autoreview`. It ends with the
-[newsyslog lines](../runbooks/troubleshooting.md#logs) for the logs and the
-commands that remove the agents: `launchctl bootout gui/<uid>/<label>` and
-deleting `~/Library/LaunchAgents/<label>.plist`, for both labels. Then check
-them with `scripts/macos-check service`. It reads only, and prints one `ok` line
-for each of these:
-- both agents are loaded and hold no secret;
-- the service runs the installed binary;
+An agent installed earlier in the same run stays installed. After the install,
+the step prints the [newsyslog lines](../runbooks/troubleshooting.md#logs) for
+the logs and the commands that remove the agents:
+`launchctl bootout gui/<uid>/<label>` and deleting
+`~/Library/LaunchAgents/<label>.plist`, for both labels. Then check them with
+`scripts/macos-check service`. It reads only, prints an `ok` line for each
+check and stops at the first `FAIL` with exit code 1:
+- the platform: Darwin arm64, macOS 14 or newer;
+- both agents pass `plutil -lint`, are loaded and hold no secret;
+- the review agent runs, and its process runs the binary at the agent's
+  program path (links resolved). It does not show whether that process started
+  before the file was replaced: a run of `scripts/setup` asks to restart a
+  service that started before the installed binary changed;
 - the queue has its 13 hours;
-- the secrets file is 0600 and the log private;
+- the secrets file is yours with mode 0600;
+- the log is private;
 - the pohunek socket the service dials, consistent with `pohunek.runtime_dir`;
 - one `autoreview validate` in the agent's environment.
 
@@ -280,16 +293,16 @@ A third run with the same `--dir` on the finished setup prints every step as
 | Code | Meaning | What to do |
 |---|---|---|
 | 0 | Done, nothing to change, a dry run, or the stop after the configuration was written | After that stop: edit the policy, fill the secrets file, run the script again |
-| 1 | A bad flag or an empty answer | Run again with the flag or the answer |
+| 1 | A bad flag or an empty answer; on a Mac also a `--dir` in a folder that privacy protection closes | Run again with the flag or the answer, or with a `--dir` outside those folders |
 | 2 | A platform the release archives do not cover | Install pohunek by hand; the script supports Linux `x86_64`, and macOS 14 or newer on Apple Silicon |
-| 3 | A missing tool or condition, or a path that pohunek refuses ([before you start](#before-you-start)) | Do what the message names after `;` and each listed path names (`chmod go-w <path>` for a writable one), then run again. The hooks step stops the same way, with pohunek's reason, when pohunek refuses the config home it uses for an agent. On a Mac also bash 3.2, a relative `XDG_RUNTIME_DIR`, a directory in a folder that privacy protection closes, or no Python 3.11 on the daemon's search path (`pohunek service refresh-path`) |
+| 3 | A missing tool or condition, or a path that pohunek refuses ([before you start](#before-you-start)) | Do what the message names after `;` and each listed path names (`chmod go-w <path>` for a writable one), then run again. The hooks step stops the same way, with pohunek's reason, when pohunek refuses the config home it uses for an agent. On a Mac also bash 3.2, a relative `XDG_RUNTIME_DIR`, an XDG home in a folder that privacy protection closes, or no Python 3.11 on the daemon's search path (`pohunek service refresh-path`) |
 | 4 | You declined a step, or stdin is not a terminal | Nothing of that step changed; run again in a terminal |
 | 5 | A download, its checksum or its attestation failed | Check the network and the release; never install an archive that failed |
 | 6 | A pohunek command failed | Read pohunek's message above it; `pohunek doctor` and the pohunek install guide help. When its installer lists live sessions that an upgrade would not carry over, end them (`pohunek session list` shows them) and run the script again, or download and verify the daemon archive by hand as the pohunek install guide describes and run its `packaging/install-daemon.sh --accept-runtime-loss`; the temporary copy that its message names is removed when the script exits |
 | 7 | Installing autoreview failed | Check that `~/.local/bin` is writable |
 | 8 | `autoreview init` or `profiles install` refused | Look up the code in the [CLI error codes](../../cli.md#error-codes) |
 | 9 | A secret is missing, the secrets file is not mode 0600, or `validate` failed | Fill the file with an editor, or fix the key that the code names |
-| 10 | Writing the units, `systemctl --user` or `loginctl` failed; on a Mac, the previous agent file could not be read (nothing changed), writing an agent or `launchctl` failed, or a booted-out agent was still listed after 95 s | `journalctl --user -u autoreview.service` shows the service log; on a Mac it is `~/.local/state/autoreview/logs/autoreview.log`, and `launchctl print gui/$(id -u)/io.github.pohunekd.autoreview` shows the agent. The message says what it left ([launchd agents](#the-steps)). A `launchctl bootstrap` from an SSH login without a logged-in session fails; run the script in your session |
+| 10 | Writing the units, `systemctl --user` or `loginctl` failed; on a Mac, an agent file could not be read (that agent unchanged), writing an agent, creating its directories or `launchctl` failed, a booted-out agent was still listed after 95 s, or restoring the previous agent failed (its job not loaded) | `journalctl --user -u autoreview.service` shows the service log; on a Mac it is `~/.local/state/autoreview/logs/autoreview.log`, and `launchctl print gui/$(id -u)/io.github.pohunekd.autoreview` shows the agent. The message names that agent and what it left ([launchd agents](#the-steps)); an agent installed earlier in the run stays installed. A `launchctl bootstrap` from an SSH login without a logged-in session fails; run the script in your session |
 
 ## After the setup
 
