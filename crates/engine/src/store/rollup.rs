@@ -47,6 +47,8 @@ pub(crate) const DIMENSION_REVIEWER: &str = "reviewer";
 pub(crate) const DIMENSION_FAILURE: &str = "failure";
 /// Dimension of the runs per review step.
 pub(crate) const DIMENSION_STEP: &str = "step";
+/// Dimension of the seconds from the review request to publication, per repository.
+pub(crate) const DIMENSION_REQUEST: &str = "request";
 
 /// Counter of the pull requests whose schedule record entered `failed`.
 pub(crate) const COUNTER_STOPPED: &str = "stopped";
@@ -68,7 +70,8 @@ pub struct RollupCount {
 
 /// One measured value of one key of one dimension on one UTC day, and how often it occurred.
 ///
-/// A `step` sample is a duration in milliseconds; any other is seconds to publication.
+/// A `step` sample is a duration in milliseconds, a `request` sample the seconds from the
+/// review request to publication; any other is seconds from creation to publication.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RollupSample {
     /// UTC day, `YYYY-MM-DD`.

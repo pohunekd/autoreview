@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use autoreview_go_compat::go_time::format_rfc3339_nano;
 use autoreview_policy::Level;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -17,6 +18,7 @@ use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_FIXED, PRIOR_OPEN, prior_key};
 use crate::protocol::fixtures::sha;
+use crate::report::ReportRequest;
 use crate::store::{FindingOutcome, REVIEW_COMPLETED, ReviewFilter};
 use crate::testing::fake::{reviewer_output, settling_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
@@ -116,6 +118,9 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     );
     let mut renewed = pr.clone();
     renewed.review_request_id = 99;
+    // The hand-off has no request time; the approval of the renewed request has one.
+    let requested_at = OffsetDateTime::now_utc() - time::Duration::hours(1);
+    renewed.requested_at = format_rfc3339_nano(requested_at);
     h.fake.open(renewed.clone(), h.rule(&pr.repository));
     h.poll_until("the approval request", || {
         h.fake.has_note(Level::Action, APPROVAL_REQUESTED_TITLE)
@@ -172,16 +177,38 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
         }
         history
     };
+    // The request times of the report, of every repository and of the pull request's one.
+    let requests = || {
+        [None, Some(pr.repository.clone())].map(|repository| {
+            let request = ReportRequest {
+                since: since.clone(),
+                repository,
+                ..ReportRequest::default()
+            };
+            let report = h.engine.review_report(&CancellationToken::new(), &request);
+            let reviews = report.expect("the report reads").reviews;
+            let median = reviews.request_to_publication_median_seconds;
+            (median, reviews.request_to_publication_p90_seconds)
+        })
+    };
     let kept = history();
+    let kept_requests = requests();
     let cutoff = OffsetDateTime::now_utc() + time::Duration::days(1);
     let pruned = h.store.prune_reviews(cutoff).expect("prune the reviews");
     let rolled_up = history();
+    let rolled_up_requests = requests();
+    let (median, p90) = kept_requests[0];
     assert!(
         pruned == 2
             && kept["totals"]["notes_to_author"] == json!(1)
             && kept["by_repository"][0]["notes_to_author"] == json!(1)
-            && rolled_up == kept,
-        "pruned {pruned}: kept = {kept}, rolled up = {rolled_up}"
+            && rolled_up == kept
+            && median.is_some_and(|seconds| seconds >= 3600)
+            && p90 == median
+            && kept_requests[1] == kept_requests[0]
+            && rolled_up_requests == kept_requests,
+        "pruned {pruned}: kept = {kept}, rolled up = {rolled_up}, request times kept = \
+         {kept_requests:?}, rolled up = {rolled_up_requests:?}"
     );
     h.stop_engine().await;
 }

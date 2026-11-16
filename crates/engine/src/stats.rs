@@ -25,8 +25,8 @@ use crate::model::review::APPROVAL_KIND_APPROVE;
 use crate::model::{Decision, Outcome, ReviewOutcome};
 use crate::publish::plan::PublicationPlan;
 use crate::store::rollup::{
-    DIMENSION_DAY, DIMENSION_FAILURE, DIMENSION_REPOSITORY, DIMENSION_REVIEWER, DIMENSION_RULE,
-    DIMENSION_STEP,
+    DIMENSION_DAY, DIMENSION_FAILURE, DIMENSION_REPOSITORY, DIMENSION_REQUEST, DIMENSION_REVIEWER,
+    DIMENSION_RULE, DIMENSION_STEP,
 };
 use crate::store::{
     EndedStepRun, RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
@@ -465,9 +465,9 @@ impl Tally {
 
     /// Returns the counts with the median and the 90th percentile of the seconds.
     fn finish(mut self) -> Counters {
-        self.seconds.sort_unstable();
-        self.counters.publication_median_seconds = nearest_rank(&self.seconds, MEDIAN_PERCENT);
-        self.counters.publication_p90_seconds = nearest_rank(&self.seconds, P90_PERCENT);
+        let (median, p90) = median_and_p90(self.seconds);
+        self.counters.publication_median_seconds = median;
+        self.counters.publication_p90_seconds = p90;
         self.counters
     }
 }
@@ -522,6 +522,13 @@ fn nearest_rank(values: &[i64], percent: usize) -> Option<i64> {
     values.get(rank.checked_sub(1)?).copied()
 }
 
+/// Returns the median and the 90th percentile of `values` by nearest rank; `None` for none.
+pub(crate) fn median_and_p90(mut values: Vec<i64>) -> (Option<i64>, Option<i64>) {
+    values.sort_unstable();
+    let median = nearest_rank(&values, MEDIAN_PERCENT);
+    (median, nearest_rank(&values, P90_PERCENT))
+}
+
 /// Reads a stored timestamp as an instant in UTC.
 fn stored_instant(
     review: &StoredReview,
@@ -573,6 +580,18 @@ pub(crate) fn completed_ending(review: &StoredReview) -> Result<Ending, Error> {
     ending(review, elapsed_seconds(created, completed))
 }
 
+/// Returns the whole seconds from the review request of `review` to its completion `end`.
+///
+/// `None` when the request time is unknown or later than `end` (clock skew).
+fn request_seconds(review: &StoredReview, end: OffsetDateTime) -> Result<Option<i64>, Error> {
+    let text = &review.input.pull_request.requested_at;
+    if text.is_empty() {
+        return Ok(None);
+    }
+    let requested = stored_instant(review, "requested_at", text)?;
+    Ok(elapsed_seconds(requested, end))
+}
+
 /// Reads how a completed attempt ended from its result, failure, approval and outcome.
 fn ending(review: &StoredReview, seconds: Option<i64>) -> Result<Ending, Error> {
     if review.result == RESULT_FAILURE {
@@ -621,7 +640,12 @@ struct DayTally {
     failures: BTreeMap<String, i64>,
     /// One bucket per review step.
     steps: BTreeMap<String, StepTally>,
+    /// Seconds from the review request to publication, per repository.
+    requests: RequestSeconds,
 }
+
+/// Seconds from the review request to publication of published attempts, per repository.
+pub(crate) type RequestSeconds = BTreeMap<String, Vec<i64>>;
 
 impl DayTally {
     /// Returns the breakdown map of a review `dimension`, or `None` for another dimension.
@@ -693,6 +717,13 @@ impl HistoryTally {
             if ending == Ending::Failed {
                 let bucket = self.days.entry(completed.date()).or_default();
                 *bucket.failures.entry(review.failure.clone()).or_default() += 1;
+            }
+            if let Ending::Published { .. } = ending
+                && let Some(seconds) = request_seconds(review, completed)?
+            {
+                let bucket = self.days.entry(completed.date()).or_default();
+                let repository = review.input.pull_request.repository.clone();
+                bucket.requests.entry(repository).or_default().push(seconds);
             }
             let plan = match (ending, plans.get(&review.workflow_id)) {
                 (Ending::Published { .. }, Some(text)) => serde_json::from_str(text)
@@ -767,6 +798,10 @@ impl HistoryTally {
                     let step = bucket.steps.entry(sample.key.clone()).or_default();
                     step.durations.extend(values);
                 }
+                DIMENSION_REQUEST => {
+                    let seconds = bucket.requests.entry(sample.key.clone()).or_default();
+                    seconds.extend(values);
+                }
                 dimension => {
                     if let Some(map) = bucket.breakdown(dimension) {
                         map.entry(sample.key.clone())
@@ -810,6 +845,9 @@ impl HistoryTally {
                     push_count(&mut rollup, &day, DIMENSION_STEP, step, name, value);
                 }
                 push_samples(&mut rollup, &day, DIMENSION_STEP, step, &tally.durations);
+            }
+            for (repository, seconds) in &bucket.requests {
+                push_samples(&mut rollup, &day, DIMENSION_REQUEST, repository, seconds);
             }
         }
         rollup
@@ -894,7 +932,7 @@ pub fn compute(
 ) -> Result<StatsDocument, Error> {
     let current = current_state(&snapshot.reviews, &snapshot.discovery.schedule)?;
     let history = match range {
-        Some(range) => Some(history(snapshot, range, pruned_before)?),
+        Some(range) => Some(history(snapshot, range, pruned_before)?.0),
         None => None,
     };
     Ok(StatsDocument {
@@ -990,11 +1028,13 @@ fn current_state(
 }
 
 /// Counts the rows, the step runs and the rollup of the snapshot inside `range`.
+///
+/// Returns the history with the seconds from the review request to publication.
 pub(crate) fn history(
     snapshot: &StatsSnapshot,
     range: &StatsRange,
     pruned_before: OffsetDateTime,
-) -> Result<History, Error> {
+) -> Result<(History, RequestSeconds), Error> {
     let mut tally = HistoryTally::default();
     tally.add_reviews(&snapshot.reviews, &snapshot.plans, Some(range))?;
     tally.add_runs(&snapshot.steps)?;
@@ -1006,6 +1046,7 @@ pub(crate) fn history(
     let mut reviewers: BTreeMap<String, Tally> = BTreeMap::new();
     let mut failures: BTreeMap<String, i64> = BTreeMap::new();
     let mut steps: BTreeMap<String, StepTally> = BTreeMap::new();
+    let mut requests = RequestSeconds::new();
     let mut day = range.since;
     while day <= range.until {
         let bucket = tally.days.remove(&day).unwrap_or_default();
@@ -1025,13 +1066,16 @@ pub(crate) fn history(
         for (step, counted) in bucket.steps {
             steps.entry(step).or_default().merge(counted);
         }
+        for (repository, seconds) in bucket.requests {
+            requests.entry(repository).or_default().extend(seconds);
+        }
         days.insert(day, bucket.total);
         let Some(next) = day.next_day() else {
             break;
         };
         day = next;
     }
-    Ok(History {
+    let history = History {
         since: range.since.to_string(),
         until: range.until.to_string(),
         pruned_before: format_rfc3339_seconds(pruned_before),
@@ -1042,7 +1086,8 @@ pub(crate) fn history(
         by_reviewer: keyed(reviewers, Tally::finish),
         failed_by_code: keyed(failures, |failed| FailedCount { failed }),
         steps: keyed(steps, StepTally::finish),
-    })
+    };
+    Ok((history, requests))
 }
 
 /// Turns a sorted map into breakdown entries, finishing each value with `finish`.

@@ -27,6 +27,11 @@ pub struct PullRequest {
     pub head_sha: String,
     /// Review request identifier.
     pub review_request_id: i64,
+    /// When the review was requested from the reviewing login, RFC 3339 in UTC.
+    ///
+    /// Empty when unknown: a label trigger, or a review stored before this field.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub requested_at: String,
     /// Pull request title.
     pub title: String,
     /// Pull request URL.
