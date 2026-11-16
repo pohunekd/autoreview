@@ -1,0 +1,39 @@
+#!/bin/sh
+# Lints the launchd agents that scripts/setup writes on macOS. It renders them with the
+# fixed sample layout of `scripts/setup --render-agents`, which holds every optional key
+# and a PATH with XML special characters, and checks each file with `plutil -lint` where
+# plutil exists (macOS), else with Python's plistlib.
+#
+# usage: scripts/check-launchd
+
+set -eu
+
+fail() {
+    printf 'check-launchd: %s\n' "$*" >&2
+    exit 1
+}
+
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+work=$(mktemp -d "${TMPDIR:-/tmp}/check-launchd.XXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+# setup needs bash 4 or newer; on macOS that is Homebrew's bash first on PATH.
+bash "$root/scripts/setup" --render-agents "$work" || fail "scripts/setup --render-agents failed"
+if command -v plutil >/dev/null 2>&1; then
+    checker="plutil -lint"
+else
+    checker=plistlib
+fi
+count=0
+for plist in "$work"/*.plist; do
+    [ -f "$plist" ] || fail "scripts/setup rendered no agent"
+    if [ "$checker" = plistlib ]; then
+        python3 -I -c 'import plistlib, sys
+with open(sys.argv[1], "rb") as handle:
+    plistlib.load(handle)' "$plist" || fail "plistlib refused ${plist##*/}"
+    else
+        plutil -lint -s "$plist" || fail "plutil -lint refused ${plist##*/}"
+    fi
+    count=$((count + 1))
+done
+[ "$count" -eq 2 ] || fail "expected 2 agents, scripts/setup rendered $count"
+echo "check-launchd: $count agents pass $checker"

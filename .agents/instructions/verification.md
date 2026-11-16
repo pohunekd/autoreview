@@ -5,7 +5,7 @@
 `scripts/gates` runs each gate, in the order below, and reports its own result.
 With no argument it runs every group; CI runs the `docs`, `adapters`, `rust` and
 `deny` groups as four jobs on Linux, and the `adapters` and `rust` groups a second
-time on macOS.
+time on macOS, with the setup self-test and the launchd lint.
 
 Docs group:
 
@@ -16,17 +16,22 @@ Docs group:
    install prompt (a closed, non-empty `text` block under `## Install with an
    agent`, found as the site's `extractInstallPrompt` finds it) exist.
 2. `shellcheck` (`shellcheck scripts/setup scripts/check-install
-   deploy/install.sh`): skipped with a reason when `shellcheck` is not on
-   `PATH`, except in CI (`CI` set), where it fails.
+   deploy/install.sh scripts/macos-check scripts/check-launchd`): skipped with a
+   reason when `shellcheck` is not on `PATH`, except in CI (`CI` set), where it
+   fails.
 3. `setup-self-test` (`scripts/setup --self-test`): the version comparison,
    the target choice, the running-binary check, the path trust rule, the
    timeout check, the printed `profiles install` command, the `UMask` of the
-   user units and the Codex reinstall notice of the setup script, over fixed
-   tables; it reads nothing else.
-4. `install-rerun` (`scripts/check-install rerun`): `deploy/install.sh --root`
+   user units, the launchd agents (parsed with `plistlib`) and the Codex
+   reinstall notice of the setup script, over fixed tables; it reads nothing
+   else.
+4. `launchd-lint` (`scripts/check-launchd`): the agents of
+   `scripts/setup --render-agents` pass `plutil -lint` on macOS, or Python's
+   `plistlib` elsewhere.
+5. `install-rerun` (`scripts/check-install rerun`): `deploy/install.sh --root`
    into a temporary directory twice; the first run places the expected files
    and modes, the second changes nothing.
-5. `systemd-verify` (`scripts/check-install verify`): `systemd-analyze verify`
+6. `systemd-verify` (`scripts/check-install verify`): `systemd-analyze verify`
    on the installed units must exit 0 and print nothing. Skipped like
    `shellcheck` when `systemd-analyze` is not on `PATH`.
 
@@ -39,10 +44,10 @@ Adapters group:
 
 Rust group, on the toolchain pinned in `rust-toolchain.toml`:
 
-6. `rust-fmt`: `cargo fmt --all --check`
-7. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
-8. `rust-test`: `cargo test --workspace --locked`
-9. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
+7. `rust-fmt`: `cargo fmt --all --check`
+8. `rust-clippy`: `cargo clippy --workspace --all-targets --locked -- -D warnings`
+9. `rust-test`: `cargo test --workspace --locked`
+10. `changelog`: `scripts/changelog check`, the fragment rules of [changelog.md](changelog.md).
 
 Deny group, with the policy in `deny.toml`:
 
@@ -145,6 +150,9 @@ text. Describe checks against the owner's own daemons in words only.
   `python3`, 3.11 or newer. The Codex adapter tests that need its Linux subreaper
   are skipped there, and one checks that the adapter refuses to run without it.
   It is a check of its own, outside the `ci` aggregate.
+- `setup-macos` runs `scripts/setup --self-test` and `scripts/check-launchd`
+  with Homebrew's bash on `macos-15`, so `plutil -lint` checks the agents. It is
+  a check of its own, outside the `ci` aggregate.
 - `rust` runs `scripts/gates rust` on the toolchain pinned in
   `rust-toolchain.toml`, with the dependency cache restored from `main` and
   saved only by runs on `main`.
@@ -154,7 +162,7 @@ text. Describe checks against the owner's own daemons in words only.
   version and SHA-256 the workflow pins.
 - `changelog` runs `scripts/changelog check` and, on a pull request, requires a fragment unless the pull request carries `no-changelog`.
 - `ci` is the only required status check. It fails unless every other job but
-  `adapters-macos` and `rust-macos` succeeded.
+  `adapters-macos`, `rust-macos` and `setup-macos` succeeded.
 
 When a workflow file changes, run `actionlint` at a pinned version on it and
 report the result in the PR. It is not a gate yet.

@@ -72,6 +72,28 @@ jobs:
       - name: Adapter gates
         run: scripts/gates adapters
 
+  # Runs the setup self-test and the launchd lint on Apple Silicon, where `plutil
+  # -lint` checks the agents. setup needs bash 4, Homebrew's bash on the image. The
+  # `ci` aggregate does not need this job.
+  setup-macos:
+    name: setup-macos
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Runner platform
+        run: |
+          test "$(uname -sm)" = "Darwin arm64"
+          prefix="$(brew --prefix)"
+          "$prefix/bin/bash" --version | head -n 1
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+      - name: Setup self-test and launchd lint
+        run: |
+          bash scripts/setup --self-test
+          scripts/check-launchd
+
   # Runs the Rust gates with the toolchain pinned in rust-toolchain.toml.
   rust:
     name: rust
