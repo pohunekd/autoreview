@@ -887,7 +887,7 @@ fn map_file(
     let pohunek = section(&file.pohunek, "pohunek")?;
     let pohunek_bin = text(&pohunek.bin, "pohunek.bin")?;
     let pohunek_state = text(&pohunek.state_home, "pohunek.state_home")?;
-    let pohunek_runtime = text(&pohunek.runtime_dir, "pohunek.runtime_dir")?;
+    let pohunek_runtime = Some(text(&pohunek.runtime_dir, "pohunek.runtime_dir")?);
     let pohunek_timeout = seconds(&pohunek.timeout_seconds, "pohunek.timeout_seconds")?;
     let pohunek_hosts = text_list(&pohunek.hosts, "pohunek.hosts")?;
     if pohunek_hosts.is_empty() {

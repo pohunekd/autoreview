@@ -171,22 +171,34 @@ pub(crate) fn pohunek_environment(
     config: &Config,
     parent: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Vec<(OsString, OsString)> {
-    child_environment(
+    configured_environment(
         parent,
-        &POHUNEK_INHERITED,
         &config.secret_variables,
-        [
-            (
-                OsString::from(STATE_HOME_VARIABLE),
-                OsString::from(&config.pohunek_state),
-            ),
-            (
-                OsString::from(RUNTIME_DIR_VARIABLE),
-                OsString::from(&config.pohunek_runtime),
-            ),
-            (OsString::from(PAGER_VARIABLE), OsString::from(PAGER_VALUE)),
-        ],
+        &config.pohunek_state,
+        config.pohunek_runtime.as_deref(),
     )
+}
+
+/// Returns the [`pohunek_environment`] of `parent` for the state home `state` and the runtime
+/// directory `runtime`.
+///
+/// Without `runtime` the child gets no `XDG_RUNTIME_DIR`, not even the engine's own: pohunek on
+/// macOS then reaches its daemon in its default runtime directory.
+fn configured_environment(
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+    secret_variables: &BTreeSet<String>,
+    state: &str,
+    runtime: Option<&str>,
+) -> Vec<(OsString, OsString)> {
+    let inherited: Vec<&str> = POHUNEK_INHERITED
+        .into_iter()
+        .filter(|name| runtime.is_some() || *name != RUNTIME_DIR_VARIABLE)
+        .collect();
+    let state = (OsString::from(STATE_HOME_VARIABLE), OsString::from(state));
+    let runtime = runtime.map(|path| (OsString::from(RUNTIME_DIR_VARIABLE), OsString::from(path)));
+    let pager = (OsString::from(PAGER_VARIABLE), OsString::from(PAGER_VALUE));
+    let extra = [Some(state), runtime, Some(pager)].into_iter().flatten();
+    child_environment(parent, &inherited, secret_variables, extra)
 }
 
 /// Returns the environment of a pohunek child that reaches the caller's own daemon.
@@ -1022,9 +1034,54 @@ fn is_error_code(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::ffi::OsString;
+
     use autoreview_engine::error_code;
 
-    use super::{fetch_ref_from_output, head_checkout_hooks_from_output, mismatch_commit};
+    use super::{
+        configured_environment, fetch_ref_from_output, head_checkout_hooks_from_output,
+        mismatch_commit,
+    };
+
+    /// A configured runtime directory replaces the engine's `XDG_RUNTIME_DIR`; without one the
+    /// child gets no `XDG_RUNTIME_DIR` at all, so pohunek on macOS uses its default (#513).
+    #[test]
+    fn runtime_directory_is_exported_or_left_unset() {
+        let pairs = |items: &[(&str, &str)]| -> Vec<(OsString, OsString)> {
+            let pair = |(name, value): &(&str, &str)| (OsString::from(name), OsString::from(value));
+            items.iter().map(pair).collect()
+        };
+        let parent = pairs(&[
+            ("PATH", "/usr/bin"),
+            ("XDG_RUNTIME_DIR", "/run/user/1000"),
+            ("AUTOREVIEW_GH_TOKEN", "synthetic-token"),
+        ]);
+        let state = "/var/lib/autoreview/.local/state";
+        let rows = [
+            (
+                Some("/run/autoreview"),
+                pairs(&[
+                    ("PATH", "/usr/bin"),
+                    ("XDG_STATE_HOME", state),
+                    ("XDG_RUNTIME_DIR", "/run/autoreview"),
+                    ("PAGER", "cat"),
+                ]),
+            ),
+            (
+                None,
+                pairs(&[
+                    ("PATH", "/usr/bin"),
+                    ("XDG_STATE_HOME", state),
+                    ("PAGER", "cat"),
+                ]),
+            ),
+        ];
+        for (runtime, expected) in rows {
+            let built = configured_environment(parent.clone(), &BTreeSet::new(), state, runtime);
+            assert_eq!(built, expected, "{runtime:?}");
+        }
+    }
 
     /// Only an advertised `true` is the switch, and only `false` for each worktree event is no
     /// host script; an older CLI or daemon omits both keys (#399).

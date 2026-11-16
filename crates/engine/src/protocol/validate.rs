@@ -308,7 +308,7 @@ pub(crate) mod tests {
             gh_bin: "/usr/bin/gh".to_owned(),
             pohunek_bin: "/usr/bin/pohunek".to_owned(),
             pohunek_state: "/var/lib/pohunek".to_owned(),
-            pohunek_runtime: "/run/pohunek".to_owned(),
+            pohunek_runtime: Some("/run/pohunek".to_owned()),
             pohunek_hosts: vec!["example-host".to_owned()],
             route_overrides: std::collections::BTreeMap::new(),
             untrusted_route_overrides: std::collections::BTreeMap::new(),
