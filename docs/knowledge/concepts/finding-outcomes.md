@@ -36,6 +36,11 @@ A finding that publishes an earlier one again (see
 the earlier finding, which has its row. A notes hand-off that is approved later
 publishes the same findings again, and their rows stay as they are.
 
+Each review numbers its findings from `001`, so a later review of the same head
+(a retarget, a new review request or a retry) can publish a finding whose key is
+already stored. That finding adds no row: the first row stays as it is, and the
+later finding has no row of its own.
+
 ## Outcomes
 
 | Outcome | Derived when |
