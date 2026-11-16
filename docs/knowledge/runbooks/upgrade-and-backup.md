@@ -9,8 +9,8 @@ intents: [update, help]
 
 # Upgrade and backup
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue. A container
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue. A container
 > image is not available (#40).
 
 Back up first, validate before every restart, and keep the previous binary
@@ -115,7 +115,7 @@ is newer than its own with `store_version_unsupported`. Keep the backup from
 the first section until a published review on the new version confirms that
 the service works.
 
-The release after 0.3.0 adds the statistics rollup: the tables `stats_rollup`
+Release 0.4.0 adds the statistics rollup: the tables `stats_rollup`
 and `stats_rollup_samples`, created on the first start without a new schema
 version (`PRAGMA user_version` stays `1`). An earlier release opens such a
 store and ignores the two tables, so a rollback to it needs no restore. While

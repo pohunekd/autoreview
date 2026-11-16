@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # Decisions and outcomes
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 A finished review has a list of findings. The decision turns that list into
 exactly one GitHub review event: `REQUEST_CHANGES`, `COMMENT` or `APPROVE`. Or,

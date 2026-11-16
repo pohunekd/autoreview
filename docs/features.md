@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Features
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 autoreview is a small service that reviews GitHub pull requests with coding
 agents you already run. It finds pull requests that ask for a review, runs one
@@ -90,8 +90,8 @@ repository is a list of credentials; a review keeps the account it started with.
 restart, transient failures are retried with backoff, and sessions it cannot
 clean up are reported. [State and recovery](knowledge/concepts/state-and-recovery.md)
 
-**Counts its work.** `autoreview stats` and the MCP tool `review_stats` (after
-0.3.0) report what runs now and how reviews went per UTC day, repository, rule
+**Counts its work.** `autoreview stats` and the MCP tool `review_stats` report
+what runs now and how reviews went per UTC day, repository, rule
 and reviewer, and how long each review step took and how often it was retried, as
 one versioned JSON document for a dashboard of your own.
 `autoreview serve` can serve the same numbers to Prometheus.
@@ -102,7 +102,7 @@ with its reviewer, rule, severity and outcome, such as refuted by the verifier
 or fixed in a later review, or still open when the pull request was merged or
 closed, so review quality can be measured without rating findings by hand.
 `autoreview findings list` prints them as JSON lines, and `autoreview report`
-(after 0.3.0) turns them, with the timing and the decisions of the reviews, into
+(after 0.4.0) turns them, with the timing and the decisions of the reviews, into
 shares per reviewer, severity and repository over a range of days.
 [Finding outcomes](knowledge/concepts/finding-outcomes.md),
 [review report](knowledge/concepts/review-report.md)
@@ -130,7 +130,7 @@ shares per reviewer, severity and repository over a range of days.
 | [Policy](policy.md) | `policy.yaml` |
 | [Configuration](configuration.md) | `config.yaml` and environment |
 | [CLI](cli.md) | Commands and error codes |
-| [Review statistics](stats.md) | The `stats` document for dashboards (after 0.3.0) |
+| [Review statistics](stats.md) | The `stats` document for dashboards |
 
 | Concepts | |
 |---|---|

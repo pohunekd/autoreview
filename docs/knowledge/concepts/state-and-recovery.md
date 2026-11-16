@@ -9,8 +9,8 @@ intents: [debug, help, update]
 
 # State and recovery
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 autoreview keeps all of its state in one SQLite file, `store.path` in
 [config.yaml](../../configuration.md#store). A restart does not lose a review in

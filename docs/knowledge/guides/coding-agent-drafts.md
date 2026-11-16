@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Coding-agent drafts
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 Some coding agents open their pull requests as drafts and never mark them ready.
 GitHub does not count a draft as a request for review, so an unmarked draft would

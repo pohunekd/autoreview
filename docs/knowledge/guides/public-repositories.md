@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Public repositories
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 On a public repository anyone can open a pull request, including from a fork.
 That author has no reason to be trusted, and their code must never reach the

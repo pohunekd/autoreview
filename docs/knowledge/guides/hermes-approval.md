@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Approve from chat
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 A rule with `on_clean: await` waits for a person before its clean review is
 approved on GitHub. The person approves from the CLI with `autoreview resolve`

@@ -9,8 +9,8 @@ intents: [setup, debug, help]
 
 # CLI reference
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 ```
 autoreview [--config <path>] [--env-file <path>] <command> [arguments]

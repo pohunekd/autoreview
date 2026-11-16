@@ -9,8 +9,8 @@ intents: [setup, update, debug, help]
 
 # Configuration reference
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 `config.yaml` holds the technical settings of one autoreview service: which
 GitHub account it acts as, which pohunek hosts run the reviewers, how often it

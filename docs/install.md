@@ -9,11 +9,11 @@ intents: [setup, help]
 
 # Install autoreview
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue. The release
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue. The release
 > archives are published from `v0.1.0` on; the release workflow builds and
-> attests them. The systemd units and their installer of path b come in the
-> archive after 0.3.0. A container image is not available (#40).
+> attests them. The systemd units and their installer of path b are in the
+> archives from 0.4.0 on. A container image is not available (#40).
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
 agents run as reviewers in pohunek sessions on the **review hosts**, where a
@@ -76,7 +76,7 @@ provenance attestation. The binary needs no system library.
 Download the archive and its checksum file, then check the checksum:
 
 ```sh
-version=0.3.0                        # the release to install, without the v
+version=0.4.0                        # the release to install, without the v
 target=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
 archive="autoreview-$version-$target.tar.gz"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"
@@ -128,7 +128,7 @@ TARGET_CC=musl-gcc cargo build --release --locked --target x86_64-unknown-linux-
 
 ## b. systemd units
 
-After 0.3.0, the release archive of path a also holds `deploy/install.sh` and
+From 0.4.0 on, the release archive of path a also holds `deploy/install.sh` and
 the units it installs:
 [`autoreview.service`](../deploy/systemd/autoreview.service),
 [`autoreview-queue.service`](../deploy/systemd/autoreview-queue.service) and

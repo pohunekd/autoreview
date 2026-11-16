@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Threat model
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 autoreview reads pull requests written by people it may not trust, sends them
 to coding agents, and then posts a review under a GitHub account. Its threats
