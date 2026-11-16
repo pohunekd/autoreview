@@ -27,6 +27,7 @@ use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::model::{
     ApproveRequest, ResolveRequest, RetryRequest, head_prefix_valid, repository_valid, sha_valid,
 };
+use autoreview_engine::stats::parse_day;
 use autoreview_engine::store::{ReviewFilter, Store};
 use autoreview_engine::{
     BoxError, Engine, Error, SystemClock, WORKFLOW_FAILED, error_code, go_json,
@@ -73,6 +74,9 @@ const CONFIGURATION_INVALID: &str = "configuration_invalid";
 
 /// Error code of a configuration key that the command needs and the file lacks.
 const CONFIGURATION_MISSING: &str = "configuration_missing";
+
+/// Cause of the `command_invalid` error of a `findings list --since` that is not a day.
+const SINCE_INVALID_CAUSE: &str = "--since is not an existing UTC day written as YYYY-MM-DD";
 
 /// Configuration section that `autoreview mcp` needs.
 const MCP_KEY: &str = "mcp";
@@ -159,6 +163,9 @@ enum EngineCommand {
     Review(ReviewArguments),
     /// Prints the review statistics: the current state and, with `--since`, the daily counts.
     Stats(StatsArguments),
+    /// Prints the recorded finding outcomes.
+    #[command(subcommand)]
+    Findings(FindingsCommand),
     /// Writes a consistent copy of the store to a new absolute path.
     BackupDb {
         /// Absolute path of the copy; nothing may exist there yet.
@@ -187,6 +194,24 @@ struct StatsArguments {
     /// Prints the JSON document instead of the text summary.
     #[arg(long)]
     json: bool,
+}
+
+/// The `findings` commands.
+#[derive(Debug, Subcommand)]
+enum FindingsCommand {
+    /// Prints the finding outcomes of one repository as JSON lines, oldest first.
+    List(FindingsListArguments),
+}
+
+/// The options of `findings list`.
+#[derive(Debug, Args)]
+struct FindingsListArguments {
+    /// Repository as lowercase `owner/name`.
+    #[arg(long, value_name = "OWNER/REPO")]
+    repo: String,
+    /// First UTC day, as YYYY-MM-DD: findings published at or after its midnight are printed.
+    #[arg(long, value_name = "DATE")]
+    since: String,
 }
 
 /// What `validate` prints: what the policy requires of the review hosts.
@@ -430,6 +455,9 @@ async fn run_engine(
                 print_text(&document.to_string())
             }
         }
+        EngineCommand::Findings(FindingsCommand::List(arguments)) => {
+            list_findings(&store, &arguments)
+        }
         EngineCommand::BackupDb { path } => {
             store.backup_to(&path)?;
             print_json(&BackupResult {
@@ -585,6 +613,28 @@ fn pull_request_arguments(arguments: &[String]) -> Result<(String, i64), Error> 
         Some(number) => Ok((repository, number)),
         None => Err(Error::workflow(REVIEW_IDENTITY_INVALID, true, None)),
     }
+}
+
+/// Prints the outcomes of `--repo` published since `--since`, one JSON object per line.
+///
+/// Without outcomes it prints nothing. The repository is not lowercased: discovery stores it
+/// lowercase, and the other commands refuse a name with capitals too.
+///
+/// # Errors
+///
+/// Returns `repository_not_allowed` for a repository that is not a lowercase `owner/name`,
+/// `command_invalid` for a day that is not an existing `YYYY-MM-DD`, and the store's errors.
+fn list_findings(store: &Store, arguments: &FindingsListArguments) -> Result<(), Error> {
+    if !repository_valid(&arguments.repo) {
+        return Err(Error::workflow(REPOSITORY_NOT_ALLOWED, true, None));
+    }
+    // The day error carries the code of `stats`; this command reports a usage error instead.
+    let since = parse_day(&arguments.since)
+        .map_err(|_| command_invalid(Some(SINCE_INVALID_CAUSE.into())))?;
+    for outcome in store.list_outcomes(&arguments.repo, since.midnight().assume_utc())? {
+        print_json(&outcome)?;
+    }
+    Ok(())
 }
 
 /// Refuses `--config` and `--env-file` among the raw arguments, where clap reads them as

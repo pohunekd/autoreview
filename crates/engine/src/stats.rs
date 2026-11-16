@@ -130,7 +130,11 @@ impl StatsRange {
 }
 
 /// Reads one UTC day written as `YYYY-MM-DD`, digits and hyphens only.
-fn parse_day(text: &str) -> Result<Date, Error> {
+///
+/// # Errors
+///
+/// Returns `stats_range_invalid` for other text and for a day that does not exist.
+pub fn parse_day(text: &str) -> Result<Date, Error> {
     let bytes = text.as_bytes();
     let shaped = bytes.len() == DAY_TEXT_LEN
         && bytes.iter().enumerate().all(|(index, byte)| {
