@@ -19,7 +19,8 @@ use crate::error::Error;
 use crate::integrations::Integrations;
 use crate::model::repository_valid;
 use crate::stats::{
-    Counters, Keyed, STATS_RANGE_INVALID, StatsRange, history, keyed, median_and_p90, seconds_text,
+    Counters, Keyed, STATS_RANGE_INVALID, StatsRange, first_publications, history, keyed,
+    median_and_p90, seconds_text,
 };
 use crate::store::outcome_checks::{OUTCOME_OPEN_AT_CLOSE, OUTCOME_OPEN_AT_MERGE};
 use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup};
@@ -391,6 +392,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
         live(cancel)?;
         let mut snapshot = self.store.stats_snapshot(Some((range.start, range.end)))?;
+        // Before the pipeline filter: the first publication of a request may be another's.
+        let firsts = first_publications(&snapshot.reviews, &snapshot.pruned_requests)?;
         if let Some(name) = pipeline {
             snapshot.reviews.retain(|review| {
                 let input = &review.input;
@@ -399,7 +402,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             });
             snapshot.rollup = Rollup::default();
         }
-        let (history, mut requests) = history(&snapshot, &range, review_cutoff)?;
+        let (history, mut requests) = history(&snapshot, &range, review_cutoff, &firsts)?;
         let counters = match (pipeline, repository) {
             (None, Some(name)) => (history.by_repository.into_iter())
                 .find(|entry| entry.key == name)

@@ -5,7 +5,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::Record;
@@ -49,18 +49,26 @@ pub(crate) const DIMENSION_FAILURE: &str = "failure";
 pub(crate) const DIMENSION_STEP: &str = "step";
 /// Dimension of the seconds from the review request to publication, per repository.
 pub(crate) const DIMENSION_REQUEST: &str = "request";
+/// Dimension of the review requests whose first publication was pruned.
+///
+/// The key is `repository#number#request ID`, on the UTC day of that publication.
+pub(crate) const DIMENSION_REQUEST_ID: &str = "request_id";
 
 /// Counter of the pull requests whose schedule record entered `failed`.
 pub(crate) const COUNTER_STOPPED: &str = "stopped";
+/// Counter of a pruned first publication of a review request; its value is 1.
+pub(crate) const COUNTER_FIRST_PUBLICATION: &str = "first_publication";
 
 /// One counter of one key of one dimension on one UTC day.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RollupCount {
     /// UTC day, `YYYY-MM-DD`.
     pub day: String,
-    /// What the key names: `day`, `repository`, `rule`, `reviewer`, `failure` or `step`.
+    /// What the key names: `day`, `repository`, `rule`, `reviewer`, `failure`, `step` or
+    /// `request_id`.
     pub dimension: String,
-    /// Repository, rule `match`, reviewer ID, error code or step; empty for `day`.
+    /// Repository, rule `match`, reviewer ID, error code, step or review request; empty for
+    /// `day`.
     pub key: String,
     /// Name of the counter, as the statistics document names it.
     pub counter: String,
@@ -185,6 +193,21 @@ pub(super) fn read_rollup(
         .map_err(unavailable)?;
     let samples = rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)?;
     Ok(Rollup { counts, samples })
+}
+
+/// Reads the review requests whose first publication was pruned, of every day.
+///
+/// # Errors
+///
+/// Returns `store_unavailable` when SQLite fails.
+pub(super) fn pruned_requests(connection: &Connection) -> Result<BTreeSet<String>, Error> {
+    let mut statement = connection
+        .prepare("SELECT key FROM stats_rollup WHERE dimension = ?1")
+        .map_err(unavailable)?;
+    let rows = statement
+        .query_map(params![DIMENSION_REQUEST_ID], |row| row.get(0))
+        .map_err(unavailable)?;
+    rows.collect::<Result<_, _>>().map_err(unavailable)
 }
 
 /// Returns the stops of `day`: the records of `schedule` that are `failed` and were not before.

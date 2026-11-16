@@ -2,7 +2,7 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_go_compat::go_time::{format_rfc3339_nano, parse_rfc3339};
 use autoreview_policy::AuthorClass;
@@ -14,14 +14,14 @@ use serde::de::DeserializeOwned;
 use time::OffsetDateTime;
 
 use super::discovery::DiscoveryState;
-use super::rollup::{Rollup, add_rollup, read_rollup};
+use super::rollup::{Rollup, add_rollup, pruned_requests, read_rollup};
 use super::steps::{EndedStepRun, StepRun, collect_step_runs};
 use super::{Store, encode_go_json, store_error};
 use crate::Error;
 use crate::model::pull_request::is_unset_class;
 use crate::model::{ReviewInput, ReviewOutcome};
 use crate::review::input::STEP_PLAN;
-use crate::stats::rollup;
+use crate::stats::{first_publications, rollup};
 
 /// Status of a review that is dispatched and waits to run.
 pub const REVIEW_QUEUED: &str = "queued";
@@ -118,6 +118,9 @@ pub struct StatsSnapshot {
     /// The stored plans of the reviews completed inside the range, by workflow ID, undecoded;
     /// empty without a range.
     pub plans: BTreeMap<String, String>,
+    /// The review requests whose first publication was pruned, as `repository#number#request
+    /// ID`; empty without a range.
+    pub pruned_requests: BTreeSet<String>,
 }
 
 impl StoredReview {
@@ -275,8 +278,10 @@ impl Store {
     /// Lists the reviews that the statistics count, oldest first.
     ///
     /// These are the reviews that are not completed and, with `range` (its first instant and
-    /// the first instant after it), those created or completed inside it. Without `range` the
-    /// read goes through the status index, so it does not grow with the completed reviews.
+    /// the first instant after it), those created or completed inside it and every review of a
+    /// pull request with a review completed inside it, so the first publication of a review
+    /// request is known. Without `range` the read goes through the status index, so it does
+    /// not grow with the completed reviews.
     ///
     /// # Errors
     ///
@@ -301,6 +306,8 @@ impl Store {
             "SELECT {REVIEW_COLUMNS} FROM reviews WHERE status != ?1 \
              OR ({created} >= {low} AND {created} < {high}) \
              OR (completed_at IS NOT NULL AND {completed} >= {low} AND {completed} < {high}) \
+             OR review_key IN (SELECT review_key FROM reviews WHERE completed_at IS NOT NULL \
+             AND {completed} >= {low} AND {completed} < {high}) \
              ORDER BY {created}, workflow_id"
         );
         let (start, end) = (format_rfc3339_nano(start), format_rfc3339_nano(end));
@@ -308,18 +315,18 @@ impl Store {
     }
 
     /// Reads the reviews of `stats_reviews`, the discovery state and, with `range`, the step
-    /// runs that ended inside it, the rollup of its days and the plans of the reviews
-    /// completed inside it, as one snapshot.
+    /// runs that ended inside it, the rollup of its days, the plans of the reviews completed
+    /// inside it and the pruned review requests, as one snapshot.
     ///
     /// A deferred transaction takes no write lock; in WAL mode its first read fixes the
     /// snapshot, so a write of another process between the reads is not seen, and a pruned
-    /// review is either a row or in the rollup. Without `range` the step runs, the rollup and
-    /// the plans are empty and not read.
+    /// review is either a row or in the rollup. Without `range` the step runs, the rollup, the
+    /// plans and the pruned requests are empty and not read.
     ///
     /// # Errors
     ///
-    /// The errors of `stats_reviews`, `load_discovery`, `stats_step_runs`, `read_rollup` and
-    /// `stored_plans`.
+    /// The errors of `stats_reviews`, `load_discovery`, `stats_step_runs`, `read_rollup`,
+    /// `stored_plans` and `pruned_requests`.
     pub fn stats_snapshot(
         &self,
         range: Option<(OffsetDateTime, OffsetDateTime)>,
@@ -330,7 +337,7 @@ impl Store {
             .map_err(unavailable)?;
         let reviews = Self::stats_reviews(&transaction, range)?;
         let discovery = Self::read_discovery(&transaction)?;
-        let (steps, rollup, plans) = match range {
+        let (steps, rollup, plans, pruned_requests) = match range {
             Some((start, end)) => (
                 Self::stats_step_runs(&transaction, (start, end))?,
                 read_rollup(
@@ -339,8 +346,9 @@ impl Store {
                     &end.date().to_string(),
                 )?,
                 completed_plans(&transaction, (start, end))?,
+                pruned_requests(&transaction)?,
             ),
-            None => (Vec::new(), Rollup::default(), BTreeMap::new()),
+            None => Default::default(),
         };
         transaction.commit().map_err(unavailable)?;
         Ok(StatsSnapshot {
@@ -349,6 +357,7 @@ impl Store {
             steps,
             rollup,
             plans,
+            pruned_requests,
         })
     }
 
@@ -805,8 +814,9 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// Returns `store_state_invalid` when a deleted row, its step runs or its plan does not
-    /// decode, and `store_unavailable` when SQLite fails; then nothing is deleted.
+    /// Returns `store_state_invalid` when a deleted row, its step runs, its plan or another
+    /// review of its pull request does not decode, and `store_unavailable` when SQLite fails;
+    /// then nothing is deleted.
     pub fn prune_reviews(&self, cutoff: OffsetDateTime) -> Result<i64, Error> {
         let filter = format!(
             "status = ?1 AND {} < {}",
@@ -834,7 +844,18 @@ impl Store {
                 &bound,
             )?;
             let plans = stored_plans(transaction, &filter, &bound)?;
-            add_rollup(transaction, &rollup(&reviews, &runs, &plans)?)?;
+            // The first publication of a request is decided over every review of its pull
+            // request: a later attempt can be pruned before an earlier one.
+            let related = collect_reviews(
+                transaction,
+                &format!(
+                    "SELECT {REVIEW_COLUMNS} FROM reviews WHERE review_key IN \
+                     (SELECT review_key FROM reviews WHERE {filter})"
+                ),
+                &bound,
+            )?;
+            let firsts = first_publications(&related, &pruned_requests(transaction)?)?;
+            add_rollup(transaction, &rollup(&reviews, &runs, &plans, &firsts)?)?;
             let rows = transaction
                 .execute(&format!("DELETE FROM reviews WHERE {filter}"), bound)
                 .map_err(unavailable)?;
