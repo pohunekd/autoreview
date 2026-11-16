@@ -8,6 +8,7 @@ pub(crate) mod discovery;
 pub mod discussion;
 pub(crate) mod engine;
 pub mod error;
+pub(crate) mod finding_outcome;
 pub mod integrations;
 pub(crate) mod intent;
 pub mod mcp;

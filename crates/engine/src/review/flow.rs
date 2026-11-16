@@ -673,6 +673,13 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Err(err) = self.engine.mark_published(&self.cancel, &record).await {
             return Err(self.interrupted(err));
         }
+        // A resumed publication records again; the store keeps the rows it has.
+        (self.engine).record_finding_outcomes(
+            &self.workflow_id,
+            &self.input,
+            artifact,
+            published_at.0,
+        );
         let blocking = blocking_count(&self.input, artifact);
         let event: Event = publication_event(plan, blocking);
         let message = published_message(
