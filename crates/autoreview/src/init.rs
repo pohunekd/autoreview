@@ -69,6 +69,80 @@ const MENTION_LINE: (&str, &str) = (
     "      mention_user: ",
 );
 
+/// The comment above `notify` in the template, which describes its `matrix` backend.
+const MATRIX_COMMENT: &str = concat!(
+    "# Matrix backend for every level and the review queue; none and webhook backends\n",
+    "# are in the guide below. Replace the\n",
+    "# homeserver, the room and the mentioned user with your own; the token is read\n",
+    "# from the variable named by access_token_env. See\n",
+    "# docs/knowledge/guides/notifiers.md.\n",
+);
+
+/// The `notify.backends` and `notify.routes` lines of the template, up to the queue backends.
+const MATRIX_BACKENDS: &str = concat!(
+    "  backends:\n",
+    "    - name: matrix\n",
+    "      type: matrix\n",
+    "      homeserver_url: https://matrix.example.org\n",
+    "      access_token_env: AUTOREVIEW_MATRIX_TOKEN\n",
+    "      room: \"!roomid:example.org\"\n",
+    "      mention_user: \"@you:example.org\"\n",
+    "  routes:\n",
+    "    action: [matrix]\n",
+    "    digest: [matrix]\n",
+    "    log: [matrix]\n",
+    "  review_queue:\n",
+    "    backends: [matrix]\n",
+);
+
+/// The comment above `notify` that `--notifier none` writes.
+const NONE_COMMENT: &str = concat!(
+    "# A none backend for every level and the review queue: each message is only\n",
+    "# logged as \"notification logged only\". Matrix and webhook backends are in\n",
+    "# docs/knowledge/guides/notifiers.md.\n",
+);
+
+/// The backends and routes that `--notifier none` writes, as the notifiers guide shows them.
+const NONE_BACKENDS: &str = concat!(
+    "  backends:\n",
+    "    - name: quiet\n",
+    "      type: none\n",
+    "  routes:\n",
+    "    action: [quiet]\n",
+    "    digest: [quiet]\n",
+    "    log: [quiet]\n",
+    "  review_queue:\n",
+    "    backends: [quiet]\n",
+);
+
+/// The comment above `notify` that `--notifier webhook` writes.
+const WEBHOOK_COMMENT: &str = concat!(
+    "# Webhook backend for every level and the review queue. The URL is a secret,\n",
+    "# read from the variable named by url_env; format is the body that the service\n",
+    "# accepts: json, slack or discord. See docs/knowledge/guides/notifiers.md.\n",
+);
+
+/// The `webhook` backend that `--notifier webhook` writes, up to its `format` line.
+const WEBHOOK_BACKEND: &str = concat!(
+    "  backends:\n",
+    "    - name: webhook\n",
+    "      type: webhook\n",
+    "      url_env: AUTOREVIEW_WEBHOOK_URL\n",
+);
+
+/// The text before the value of the `format` line that `--webhook-format` writes.
+const WEBHOOK_FORMAT_KEY: &str = "      format: ";
+
+/// The routes and queue backends that `--notifier webhook` writes after the backend.
+const WEBHOOK_ROUTES: &str = concat!(
+    "  routes:\n",
+    "    action: [webhook]\n",
+    "    digest: [webhook]\n",
+    "    log: [webhook]\n",
+    "  review_queue:\n",
+    "    backends: [webhook]\n",
+);
+
 /// Mode of a `--dir` that `init` creates and that holds the store: only its owner may enter.
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 
@@ -155,6 +229,39 @@ impl Example {
     }
 }
 
+/// The notifier backends that `init` writes, named as their `type`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum Notifier {
+    /// A `none` backend named `quiet`, which only logs each message.
+    None,
+    /// The `matrix` backend of the reference file.
+    Matrix,
+    /// A `webhook` backend named `webhook`, which reads its URL from `AUTOREVIEW_WEBHOOK_URL`.
+    Webhook,
+}
+
+/// The body formats of the `webhook` backend, named as its `format` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum WebhookFormat {
+    /// The event, the level and the text as one JSON object, for an own receiver.
+    Json,
+    /// The body of Slack and Slack-compatible incoming webhooks.
+    Slack,
+    /// The body of Discord channel webhooks.
+    Discord,
+}
+
+impl WebhookFormat {
+    /// Returns the `format` value of the format.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Slack => "slack",
+            Self::Discord => "discord",
+        }
+    }
+}
+
 /// The arguments of `init`; the four answers are required, the layout flags optional.
 #[derive(Debug, Args)]
 pub(crate) struct InitArguments {
@@ -170,7 +277,7 @@ pub(crate) struct InitArguments {
     /// The example whose policy and prompts are written.
     #[arg(long, value_enum, value_name = "NAME")]
     pub(crate) example: Example,
-    /// The paths and Matrix values written instead of the reference values.
+    /// The paths, the notifier and the Matrix values written instead of the reference values.
     #[command(flatten)]
     pub(crate) layout: Layout,
 }
@@ -193,6 +300,12 @@ pub(crate) struct Layout {
     /// Clean absolute `XDG_RUNTIME_DIR` of the pohunek CLI, written as `pohunek.runtime_dir`.
     #[arg(long, value_name = "PATH")]
     pub(crate) pohunek_runtime_dir: Option<String>,
+    /// The backend of every level and the review queue; without it, the reference `matrix`.
+    #[arg(long, value_enum, value_name = "NAME")]
+    pub(crate) notifier: Option<Notifier>,
+    /// Body format of the `webhook` backend; required by `--notifier webhook`, refused otherwise.
+    #[arg(long, value_enum, value_name = "FORMAT")]
+    pub(crate) webhook_format: Option<WebhookFormat>,
     /// Homeserver URL of the `matrix` backend.
     #[arg(long, value_name = "URL")]
     pub(crate) matrix_homeserver_url: Option<String>,
@@ -333,11 +446,16 @@ pub(crate) fn render_config(directory: &str, login: &str, host: &str) -> Result<
 
 /// Replaces the template line of every layout flag that is given.
 ///
+/// `--notifier none` or `webhook` replaces the `matrix` backend, its routes and the comment
+/// above `notify`; a Matrix flag then has no line to replace and is refused. `--notifier
+/// webhook` writes the `format` of `--webhook-format`.
+///
 /// # Errors
 ///
-/// Returns `configuration_invalid` naming a path flag that is not a clean absolute path, or a
-/// Matrix flag that is empty or holds a control character, and `workflow_failed` when the
-/// template lacks a line that a flag replaces.
+/// Returns `configuration_invalid` naming a path flag that is not a clean absolute path, a
+/// Matrix flag that is empty, holds a control character or comes with `--notifier none` or
+/// `webhook`, or `--webhook-format` when it is missing with `--notifier webhook` or given with
+/// another notifier, and `workflow_failed` when the template lacks a line that a flag replaces.
 pub(crate) fn apply_layout(mut text: String, layout: &Layout) -> Result<String, Error> {
     let paths = [
         ("--store-path", &layout.store_path, STORE_PATH_LINE),
@@ -366,6 +484,30 @@ pub(crate) fn apply_layout(mut text: String, layout: &Layout) -> Result<String, 
     if RUNTIME_DIR_OPTIONAL && layout.pohunek_runtime_dir.is_none() {
         text = replace_once(&text, RUNTIME_DIR_LINE.0, "")?;
     }
+    let (comment, backends) = match (layout.notifier, layout.webhook_format) {
+        (None | Some(Notifier::Matrix), None) => (MATRIX_COMMENT, MATRIX_BACKENDS.to_owned()),
+        (Some(Notifier::None), None) => (NONE_COMMENT, NONE_BACKENDS.to_owned()),
+        (Some(Notifier::Webhook), Some(format)) => {
+            let format_line = format!("{WEBHOOK_FORMAT_KEY}{}\n", format.name());
+            let backends = format!("{WEBHOOK_BACKEND}{format_line}{WEBHOOK_ROUTES}");
+            (WEBHOOK_COMMENT, backends)
+        }
+        (Some(Notifier::Webhook), None) => {
+            return Err(invalid_flag(
+                "--webhook-format",
+                "is required by the webhook notifier",
+            ));
+        }
+        (_, Some(_)) => {
+            return Err(invalid_flag(
+                "--webhook-format",
+                "needs the webhook notifier",
+            ));
+        }
+    };
+    let matrix_written = matches!(layout.notifier, None | Some(Notifier::Matrix));
+    text = replace_once(&text, MATRIX_COMMENT, comment)?;
+    text = replace_once(&text, MATRIX_BACKENDS, &backends)?;
     let matrix = [
         (
             "--matrix-homeserver-url",
@@ -381,6 +523,9 @@ pub(crate) fn apply_layout(mut text: String, layout: &Layout) -> Result<String, 
     ];
     for (flag, value, (line, key)) in matrix {
         if let Some(value) = value {
+            if !matrix_written {
+                return Err(invalid_flag(flag, "needs the matrix notifier"));
+            }
             if value.is_empty() || value.chars().any(char::is_control) {
                 return Err(invalid_flag(
                     flag,
