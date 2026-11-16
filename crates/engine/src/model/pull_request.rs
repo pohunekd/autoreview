@@ -78,6 +78,13 @@ pub struct Candidate {
     pub authors: Option<Authors>,
 }
 
+/// Read error codes of a pull request that the candidate search reports as rejected.
+pub const REJECTED_CANDIDATE_CODES: [&str; 3] = [
+    "github_response_invalid",
+    "base_branch_unsupported",
+    "review_request_event_missing",
+];
+
 /// A pull request a trigger found but whose data the engine refuses.
 ///
 /// An example is a response that fails validation.

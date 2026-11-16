@@ -80,6 +80,8 @@ pub(crate) struct FakeState {
     pub(crate) current: BTreeMap<String, PullRequest>,
     /// Pull requests that were closed, by `repository#number`.
     pub(crate) closed: BTreeSet<String>,
+    /// Permanent error code of the direct read of a pull request, by `repository#number`.
+    pub(crate) read_errors: BTreeMap<String, String>,
     /// Output of each reviewer session; `None` until a test sets it.
     pub(crate) output: Option<OutputFn>,
     /// Live sessions by session ID.
@@ -326,6 +328,8 @@ impl Integrations for FakeIntegration {
             let state = self.lock();
             if state.failing_credentials.contains_key(&credential.name) {
                 Err(transient_error())
+            } else if let Some(code) = state.read_errors.get(&key) {
+                Err(Error::workflow(code.clone(), true, None))
             } else if let Some(pr) = state.current.get(&key) {
                 // The open state is checked before the trigger, as `decode_pull_request` does.
                 if trigger.kind == TriggerKind::ReviewRequested && state.answered.contains(&key) {
