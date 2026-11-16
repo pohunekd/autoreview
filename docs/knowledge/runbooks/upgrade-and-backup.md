@@ -9,8 +9,8 @@ intents: [update, help]
 
 # Upgrade and backup
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue. A container
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue. A container
 > image is not available (#40).
 
 Back up first, validate before every restart, and keep the previous binary
@@ -120,8 +120,8 @@ it does not do step 4, and step 4 comes before the restart:
 2. Do step 4 for every profile, with the new `~/.local/bin/autoreview`.
 3. Run the script again with the same `--dir` and accept its restart: the
    service still runs the older binary, so it asks again. The restart is
-   `systemctl --user restart autoreview.service`; on a Mac (from the first
-   release after 0.5.0, #513)
+   `systemctl --user restart autoreview.service`; on a Mac (from 0.6.0 on,
+   #513)
    `launchctl kickstart -k gui/$(id -u)/io.github.pohunekd.autoreview`, or the
    install of the agents when their files changed.
 

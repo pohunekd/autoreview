@@ -9,8 +9,8 @@ intents: [setup, project, help]
 
 # Organisation rules
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 One rule covers every repository of an organisation, and more specific rules
 above it cover the repositories that need their own pipeline and prompt. This

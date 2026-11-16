@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # Notifiers
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 Every event in the policy has one of three levels: `action`, `digest` or
 `log`. The notification section of `config.yaml` says where each level goes.

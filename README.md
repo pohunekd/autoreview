@@ -4,12 +4,12 @@ Policy-driven AI pull request review on top of [pohunek](https://github.com/zajc
 Šafář review is the product name; the repository, the binary and the command are
 `autoreview`.
 
-> **Status: 0.5.0.** autoreview 0.5.0 is the current release. It ships static
+> **Status: 0.6.0.** autoreview 0.6.0 is the current release. It ships static
 > Linux binaries for `x86_64` and `aarch64` as release archives, each with a
-> `.sha256` file and a build provenance attestation; see [install](docs/install.md).
-> The `main` branch holds changes after 0.5.0, and the documentation describes it:
-> the first release after 0.5.0 adds an ad-hoc signed archive for Apple Silicon
-> Macs and `scripts/setup` on macOS (#513).
+> `.sha256` file and a build provenance attestation, and an ad-hoc signed
+> archive for Apple Silicon Macs with `scripts/setup` on macOS (#513); see
+> [install](docs/install.md). The `main` branch holds changes after 0.6.0, and
+> the documentation describes it.
 > The [Rough plan](#rough-plan) table is the roadmap; a part that is not available
 > names its open issue.
 
@@ -108,13 +108,13 @@ Rules:
 
 ## Documentation
 
-The documentation describes autoreview on `main` after the 0.5.0 release; a
+The documentation describes autoreview on `main` after the 0.6.0 release; a
 part that is not available names its open issue.
 
 - [Features](docs/features.md) - what it does and a map of every page
 - [Getting started](docs/knowledge/guides/getting-started.md): `scripts/setup`
-  sets up one Linux machine or one Mac with Apple Silicon (from the first
-  release after 0.5.0, #513)
+  sets up one Linux machine or one Mac with Apple Silicon (from 0.6.0 on,
+  #513)
 - [Quickstart](docs/knowledge/guides/quickstart.md) and
   [use cases](docs/knowledge/guides/index.md), each with a complete policy in
   [examples/](examples/)
@@ -176,8 +176,8 @@ scenarios are guides without a policy of their own:
   units ([getting started](docs/knowledge/guides/getting-started.md)), and the
   installer of the install page writes the system units of a server user (from
   0.4.0 on; a container image is not available, see #40)
-- Or macOS 14 or newer on Apple Silicon, from the first release after 0.5.0
-  (#513): `scripts/setup` writes launchd agents of your user; Codex reviewers
+- Or macOS 14 or newer on Apple Silicon, from 0.6.0 on (#513):
+  `scripts/setup` writes launchd agents of your user; Codex reviewers
   need a Linux review host
 
 ## Security model
@@ -206,6 +206,6 @@ keeps untrusted authors behind a maintainer label.
   auto-approved.
 - Distributed as static Linux release archives from 0.1.0 on, with systemd
   units and an installer from 0.4.0 on; a container image is not available (#40).
-  An ad-hoc signed, attested Apple Silicon archive comes with the first release
-  after 0.5.0 (#513); it is not notarized.
+  An ad-hoc signed, attested Apple Silicon archive comes with 0.6.0 (#513); it
+  is not notarized.
 - MIT license.

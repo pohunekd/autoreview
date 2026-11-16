@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Quickstart
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 This guide takes one repository from nothing to a review comment posted by
 autoreview. It uses one reviewer and comments only, so nothing is approved
@@ -35,8 +35,8 @@ which can be the same machine.
 
 ## 2. Install the binary
 
-On one Linux machine, or one Mac with Apple Silicon (from the first release
-after 0.5.0, #513), that also runs the pohunek daemon,
+On one Linux machine, or one Mac with Apple Silicon (from 0.6.0 on, #513), that
+also runs the pohunek daemon,
 [`scripts/setup`](getting-started.md) does steps 2 to 8 of this guide and
 installs the service; continue with step 9 after it. By hand: install the
 `autoreview` binary from the release page of

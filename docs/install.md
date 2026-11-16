@@ -9,13 +9,12 @@ intents: [setup, help]
 
 # Install autoreview
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue. The release
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue. The release
 > archives are published from `v0.1.0` on; the release workflow builds and
 > attests them. The systemd units and their installer of path b are in the
 > archives from 0.4.0 on. The Apple Silicon archive and `scripts/setup` on macOS
-> come with the first release after 0.5.0 (#513). A container image is not
-> available (#40).
+> come with 0.6.0 (#513). A container image is not available (#40).
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
 agents run as reviewers in pohunek sessions on the **review hosts**, where a
@@ -55,7 +54,7 @@ pohunek daemon runs and the repositories are registered.
 ## Choose an install path
 
 To run autoreview and the pohunek daemon together on one Linux machine, or one
-Mac with Apple Silicon (from the first release after 0.5.0, #513), as your own
+Mac with Apple Silicon (from 0.6.0 on, #513), as your own
 user, run `scripts/setup` from a checkout of
 the repository: it installs both from their release archives, writes the
 configuration and the user service (systemd user units on Linux, launchd agents
@@ -87,7 +86,7 @@ provenance attestation. The binary needs no system library.
 Download the archive and its checksum file, then check the checksum:
 
 ```sh
-version=0.5.0                        # the release to install, without the v
+version=0.6.0                        # the release to install, without the v
 target=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
 archive="autoreview-$version-$target.tar.gz"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"
@@ -116,7 +115,7 @@ autoreview --version
 
 ### Apple Silicon archive
 
-From the first release after 0.5.0 on (#513), each release also carries
+From 0.6.0 on (#513), each release also carries
 `autoreview-<version>-aarch64-apple-darwin.tar.gz` for macOS 14 or newer, with
 its `.sha256` file and the same attestation. It holds the binary, `LICENSE` and
 `README.md`, and no `deploy/`: the units of path b need systemd. `scripts/setup`
@@ -124,7 +123,7 @@ installs it with the launchd agents; to check a download by hand, use
 `scripts/macos-check` from a checkout of the release tag:
 
 ```sh
-version=X.Y.Z  # a release after 0.5.0; 0.5.0 has no darwin archive
+version=X.Y.Z  # 0.6.0 or later; the first with a darwin archive
 archive="autoreview-$version-aarch64-apple-darwin.tar.gz"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive.sha256"
@@ -253,7 +252,7 @@ run as the user of the pohunek daemon on that host. It also writes the reviewer
 adapter that the profile starts, which needs Python 3.11 or newer as `python3`.
 The Codex adapter also needs Linux (`PR_SET_CHILD_SUBREAPER`): on another system,
 such as a Mac review host, `profiles install --agent codex` refuses with
-`profile_agent_unsupported` (from the first release after 0.5.0, #513), and
+`profile_agent_unsupported` (from 0.6.0 on, #513), and
 the adapter itself exits with status 64 before Codex starts. Claude reviewers
 run on both.
 

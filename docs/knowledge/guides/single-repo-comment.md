@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Comment on one repository
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 This is the first setup to run. One repository, one reviewer, a label that
 starts a review, and only comments on the pull request. Nothing is approved and
