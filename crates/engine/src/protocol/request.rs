@@ -12,11 +12,11 @@ use crate::intent::reviewer_section;
 use crate::model::{Discussion, LinkedIssues, PullRequest, ReviewInput};
 use crate::protocol::codex::NONCE_LINE_PREFIX;
 
-/// Protocol name that the request of a claude-structured reviewer carries.
+/// Protocol name that the request of a claude-structured reviewer or verifier carries.
 ///
-/// It stays the legacy name until every installed adapter reads `autoreview-claude/v1`: an
-/// older adapter runs a request of another name as a plain prompt.
-pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "claude-otel-noninteractive/request-v1";
+/// An adapter that does not know it, one from before #24, runs the request as a plain prompt
+/// and answers in mode `text`, which the engine refuses as `review_adapter_outdated`.
+pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "autoreview-claude/v1";
 
 /// Protocol name on the trusted protocol line of a codex-envelope prompt.
 ///
