@@ -161,7 +161,7 @@ whose messages name `stats`.
   prune with a shorter retention already cut, or that a clock set back makes
   look newer, are not refused and can count too low. The review part reads the
   daily counts of `autoreview stats`, which miss reviews pruned by an engine
-  before that rollup existed or, without `--pipeline`, by such an engine after a
+  before that rollup existed or by such an engine after a
   rollback (see [`autoreview stats`](../../stats.md)); those days can count too
   low as well.
 - The prune keeps the request times in the same daily rollup, per repository,

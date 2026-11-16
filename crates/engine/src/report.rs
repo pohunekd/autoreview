@@ -424,8 +424,9 @@ impl fmt::Display for ReportDocument {
 /// that the statistics history reads, or `None` when a day lacks the counts per pipeline.
 ///
 /// The prune counts each review's `started` and `completed` under `day` and again under
-/// `pipeline`; a release before the `pipeline` dimensions wrote only the first, so a day
-/// whose two sums differ holds reviews without their pipeline. The `pipeline` counts become
+/// `pipeline`; a release with the rollup but without the `pipeline` dimensions wrote only the
+/// first, so a day whose two sums differ holds reviews without their pipeline. Reviews pruned
+/// by a release without the rollup left no counts at all and are not detected. The `pipeline` counts become
 /// counts of the day, which a pipeline's report reads; every other entry is left out.
 ///
 /// # Errors

@@ -532,8 +532,8 @@ A share is a percentage with one decimal, `null` when its whole is `0`. A
 days are refused with the codes that `report` shares with `stats`
 (`stats_range_invalid`, `stats_range_too_long`; their messages name `stats`),
 and a range that starts before the store's retention of the finding outcomes,
-or with `--pipeline` holds a day pruned without the counts per pipeline, is
-`report_range_pruned`. With `--pipeline` the review part covers pruned reviews,
+or with `--pipeline` holds a day that 0.4.0 or 0.5.0 pruned (daily counts
+without the counts per pipeline), is `report_range_pruned`. With `--pipeline` the review part covers pruned reviews,
 as with `--repo`.
 
 ## Act
@@ -701,7 +701,7 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `stats_range_invalid` | `--since` or `--until` of `stats` or `report` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
 | `stats_range_too_long` | The `stats` or `report` range covers more than 366 days |
 | `pipeline_not_configured` | `--pipeline` of `report` names a pipeline that no rule of the policy runs |
-| `report_range_pruned` | The `report` range starts before now minus `store.outcome_retention_seconds`, or, with `--pipeline`, holds a day with reviews that a release before the counts per pipeline pruned, so pruned data would be missing |
+| `report_range_pruned` | The `report` range starts before now minus `store.outcome_retention_seconds`, or, with `--pipeline`, holds a day with reviews that 0.4.0 or 0.5.0 pruned (daily counts without the counts per pipeline), so pruned data would be missing; reviews pruned by a release without the rollup count as zero |
 | `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start the review: its author started the most reviews the rule allows in the window. `retry` starts it |
 | `project_route_not_found`, `project_route_ambiguous` | The repository is registered on no review host that answered, or as two projects on the host that serves it |
 | `pohunek_request_failed`, `pohunek_request_timeout`, `pohunek_session_start_failed` | The review host did not answer or could not start a session |
