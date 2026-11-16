@@ -33,6 +33,13 @@ other name is `configuration_invalid` naming the key.
 The service finds the file through `--config <path>` or the
 `AUTOREVIEW_CONFIG` environment variable; with neither it refuses to start.
 
+A `config.yaml` written for 0.4.0 needs four more keys after 0.4.0:
+`schedule.usage_limit_retry_delays_seconds`,
+`schedule.outcome_check_interval_seconds`, `limits.max_issue_characters` and
+`store.outcome_retention_seconds`. `validate` names each missing one. A rollback
+to 0.4.0 removes them again, see
+[roll back](knowledge/runbooks/upgrade-and-backup.md#roll-back).
+
 ## Complete file
 
 The values below are those of `examples/config.yaml`.
@@ -657,6 +664,28 @@ Besides each key's own range, `validate` enforces:
 - A policy rule with [`guard`](policy.md#guard) needs `guards.text`; without it
   the load fails with
   `configuration_missing: guards.text: the policy rule for <match> sets guard`.
+
+`validate` also checks these limits. A number outside them fails with
+`configuration_invalid` and the message `configured limit is outside the safe
+range`, which names no key:
+
+- `schedule.poll_interval_seconds` is at most 3600, and
+  `schedule.worker_tick_seconds` at most `schedule.poll_interval_seconds`.
+- `schedule.max_concurrent_reviews` is at most 32, and
+  `schedule.scheduler_max_bytes` at most 64 MiB.
+- `schedule.step_retry_seconds` is at most 3600;
+  `schedule.step_retry_max_interval_seconds` lies from
+  `schedule.step_retry_initial_seconds` to `schedule.step_retry_seconds`.
+- `session.start_max_attempts` is at most 5, `session.cleanup_max_attempts` at
+  most 10 and `session.reviewer_run_max_attempts` at most 3; each of their
+  `*_retry_seconds` is at most 300.
+- `session.output_poll_seconds` is at most `session.timeout_seconds`, and
+  `session.output_chunk_bytes` at most 783240.
+- `session.terminal_cols` is from 120 to 400, `session.terminal_rows` from 100
+  to 250.
+- `cli.review_list_limit` is at most `schedule.state_entry_limit`.
+- `notify.max_characters` is at most 32000, `notify.review_queue.max_items` at
+  most 999.
 
 ## Environment variables
 

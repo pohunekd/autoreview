@@ -69,6 +69,10 @@ host whose repositories are elsewhere is skipped as `host_not_local`. Do not del
 branches with `git push --delete` or `git branch -D`: nothing checks a manual delete against
 the running reviews.
 
+A failed deletion, or a `--host` host or repository that is skipped, ends the command with
+status 1 and `branch_prune_incomplete`. The branches it did not delete stay; run it again
+once the cause is fixed.
+
 ## Related pages
 
 - [Troubleshooting](troubleshooting.md#session-start-failures)

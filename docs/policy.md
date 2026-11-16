@@ -19,7 +19,8 @@ notifier backends) live in [config.yaml](configuration.md).
 
 autoreview loads and validates the whole policy at startup and on
 `autoreview validate`. Any error stops the service with a message that names
-the key; nothing is guessed or defaulted. Every review copies the rule it was
+the key, or says that the file is not one valid YAML document; nothing is
+guessed or defaulted. Every review copies the rule it was
 dispatched with, so an edited policy applies from the next review on and never
 changes a review in flight.
 
