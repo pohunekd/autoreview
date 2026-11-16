@@ -22,8 +22,8 @@ set -euo pipefail
 # Associative arrays and mapfile need bash 4; macOS runs /bin/bash 3.2 for
 # `#!/usr/bin/env bash` unless a newer bash comes first on PATH.
 if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
-    printf 'setup: %s\n' "missing bash 4 or newer (found $BASH_VERSION); on macOS run" \
-        "brew install bash and run setup with it: \$(brew --prefix)/bin/bash $0 ..." >&2
+    printf 'setup: %s\n' "missing bash 4 or newer (found $BASH_VERSION); on macOS run\
+ brew install bash and run setup with it: \$(brew --prefix)/bin/bash $0 ..." >&2
     exit 3
 fi
 
@@ -258,9 +258,10 @@ path_trust() {
     esac
 }
 
-# Prints the macOS `stat -f '%u %Mp%Lp %HT'` line $1 as the `stat -c '%u %a %F'`
+# Prints the macOS `stat -f '%u %Mp%03Lp %HT'` line $1 as the `stat -c '%u %a %F'`
 # line of Linux that path_trust reads: the mode without leading zeros and the
-# type in lower case. Fails on a malformed line.
+# type in lower case. Fails on a malformed line. BSD stat does not pad %Lp, so the
+# format pads it to three digits: mode 1022 is `1022`, not `122`.
 bsd_stat_line() {
     local owner mode type
     read -r owner mode type <<<"$1"
@@ -271,7 +272,7 @@ bsd_stat_line() {
 # Prints the path_trust line of path $1.
 stat_line() {
     if [ "$os" = Darwin ]; then
-        bsd_stat_line "$(LC_ALL=C stat -f '%u %Mp%Lp %HT' -- "$1")"
+        bsd_stat_line "$(LC_ALL=C stat -f '%u %Mp%03Lp %HT' -- "$1")"
     else
         LC_ALL=C stat -c '%u %a %F' -- "$1"
     fi
@@ -290,7 +291,7 @@ file_owner() {
 file_mode() {
     local mode
     if [ "$os" = Darwin ]; then
-        mode=$(stat -f '%Mp%Lp' -- "$1") && printf '%o\n' "$((8#$mode))"
+        mode=$(stat -f '%Mp%03Lp' -- "$1") && printf '%o\n' "$((8#$mode))"
     else
         stat -c %a "$1"
     fi
@@ -308,6 +309,13 @@ tcc_protected() {
         esac
     done
     return 1
+}
+
+# Prints TCC_FOLDERS joined with ", ", so that "Library/Mobile Documents" reads as one.
+tcc_folders_text() {
+    local text
+    text=$(printf '%s, ' "${TCC_FOLDERS[@]}")
+    printf '%s\n' "${text%, }"
 }
 
 # Prints the command that checks a downloaded .sha256 file $1 on this platform.
@@ -389,6 +397,11 @@ self_test() {
         "$(path_trust "$(bsd_stat_line '501 0775 Directory')" 501 0 dir || echo error)"
     check "trust of a private file on macOS" trusted \
         "$(path_trust "$(bsd_stat_line '501 0600 Regular File')" 501 0 file || echo error)"
+    # `%Mp%03Lp` of mode 1022 is `1022`; unpadded `%Lp` would give `122`.
+    check "BSD stat with owner bits 0" "0 1022 directory" \
+        "$(bsd_stat_line '0 1022 Directory' || echo error)"
+    check "trust of a file only others may use on macOS" writable \
+        "$(path_trust "$(bsd_stat_line '501 0007 Regular File')" 501 0 file || echo error)"
     tcc() {
         if tcc_protected "$1" /Users/a; then echo protected; else echo open; fi
     }
@@ -400,6 +413,8 @@ self_test() {
     check "TCC a longer name" open "$(tcc /Users/a/Documentsx)"
     check "TCC the config home" open "$(tcc /Users/a/.config/autoreview)"
     check "TCC another home" open "$(tcc /Users/b/Documents)"
+    check "TCC folders in a message" "Desktop, Documents, Downloads, Library/Mobile Documents" \
+        "$(tcc_folders_text)"
     check "daemon python missing" missing "$(daemon_python_state missing || echo error)"
     check "daemon python of Homebrew" ok \
         "$(daemon_python_state '/opt/homebrew/bin/python3 3.13.1' || echo error)"
@@ -859,7 +874,7 @@ detect_machine() {
         for name in "$config_home" "$state_home" "$data_home"; do
             if tcc_protected "$name" "$HOME"; then
                 fail 3 "$name is in a folder that macOS privacy protection closes to" \
-                    "launchd jobs; keep the XDG homes out of ${TCC_FOLDERS[*]}"
+                    "launchd jobs; keep the XDG homes out of $(tcc_folders_text)"
             fi
         done
     fi
@@ -1172,32 +1187,42 @@ step_config() {
 
 # Prints the [environment] search_path of pohunek's service.toml $1, one
 # directory per line. On macOS pohunek gives its launchd daemon job this PATH,
-# and the daemon passes it to the reviewer adapters.
+# and the daemon passes it to the reviewer adapters. Anything but a non-empty
+# list of absolute paths fails with one line on stderr.
 daemon_search_path() {
     python3 -I -c '
 import sys
 import tomllib
 
-with open(sys.argv[1], "rb") as handle:
-    document = tomllib.load(handle)
-for entry in document["environment"]["search_path"]:
-    print(entry)
+try:
+    with open(sys.argv[1], "rb") as handle:
+        environment = tomllib.load(handle).get("environment")
+except (OSError, tomllib.TOMLDecodeError) as error:
+    sys.exit(f"setup: cannot read {sys.argv[1]}: {error}")
+entries = environment.get("search_path") if isinstance(environment, dict) else None
+if not (isinstance(entries, list) and entries and all(
+        isinstance(entry, str) and entry.startswith("/") and "\n" not in entry
+        for entry in entries)):
+    sys.exit(f"setup: {sys.argv[1]}: [environment] search_path is not a list of absolute paths")
+print("\n".join(entries))
 ' "$1"
 }
 
 # Prints `<path> <version>` of the python3 that `env` finds first on the PATH of
-# the pohunek daemon, or `missing`. Fails when the search path is unreadable or
-# empty, or the python3 prints no version.
+# the pohunek daemon, or `missing`. Returns 1 when the search path is unreadable,
+# and 2, after printing the path, when that python3 fails to run.
 daemon_python() {
     local listed directory version
     local -a directories
     listed=$(daemon_search_path "$service_config") || return 1
-    [ -n "$listed" ] || return 1
     mapfile -t directories <<<"$listed"
     for directory in "${directories[@]}"; do
         if [ -f "$directory/python3" ] && [ -x "$directory/python3" ]; then
-            version=$("$directory/python3" -I -c \
-                'import sys; print("%d.%d.%d" % sys.version_info[:3])') || return 1
+            if ! version=$("$directory/python3" -I -c \
+                'import sys; print("%d.%d.%d" % sys.version_info[:3])'); then
+                echo "$directory/python3"
+                return 2
+            fi
             echo "$directory/python3 $version"
             return
         fi
@@ -1221,10 +1246,14 @@ daemon_python_state() {
 # Stops unless the reviewer adapters, which start as `env -S python3 -I` under
 # the pohunek daemon, find Python 3.11 or newer on the daemon's PATH (macOS).
 step_daemon_python() {
-    local found state
-    found=$(daemon_python) \
-        || fail 3 "missing a readable, non-empty [environment] search_path in $service_config;" \
-            "run pohunek service refresh-path"
+    local found state status=0
+    found=$(daemon_python) || status=$?
+    case $status in
+        0) ;;
+        2) fail 3 "the python3 $found on the PATH of the pohunek daemon fails to run" ;;
+        *) fail 3 "missing a readable search path in $service_config;" \
+            "run pohunek service refresh-path" ;;
+    esac
     state=$(daemon_python_state "$found") \
         || fail 3 "missing an X.Y.Z version from the python3 on the PATH of the pohunek daemon"
     case $state in
@@ -1582,7 +1611,7 @@ plan() {
 
 # Prints every step with its state from the detection; changes nothing.
 print_plan() {
-    local state found
+    local state found status
     detect_autoreview
     detect_pohunek
     echo "setup plan for $user_name on $platform:"
@@ -1599,12 +1628,17 @@ print_plan() {
     plan "pohunek $POHUNEK_VERSION with its login service" "$state"
     if [ "$os" = Darwin ]; then
         state="checked after pohunek"
-        if [ "$pohunek_state" != ok ]; then
-            :
-        elif found=$(daemon_python) && state=$(daemon_python_state "$found"); then
-            [ "$found" = missing ] || state="$state ($found)"
-        else
-            state="unreadable search path; run pohunek service refresh-path"
+        if [ "$pohunek_state" = ok ]; then
+            status=0
+            found=$(daemon_python 2>/dev/null) || status=$?
+            case $status in
+                0)
+                    state=$(daemon_python_state "$found") || state="no X.Y.Z version"
+                    [ "$found" = missing ] || state="$state ($found)"
+                    ;;
+                2) state="fails to run ($found)" ;;
+                *) state="unreadable search path; run pohunek service refresh-path" ;;
+            esac
         fi
         plan "python3 $PYTHON_MIN_VERSION or newer on the PATH of the pohunek daemon" "$state"
     fi
@@ -1762,7 +1796,7 @@ main() {
         unit_path_safe "$dir" \
             || fail 1 "--dir must be an absolute path of letters, digits, '.', '_', '-' and '/'"
         if [ "$os" = Darwin ] && tcc_protected "$dir" "$HOME"; then
-            fail 1 "--dir must not be in ${TCC_FOLDERS[*]}: macOS privacy protection closes" \
+            fail 1 "--dir must not be in $(tcc_folders_text): macOS privacy protection closes" \
                 "them to the launchd job of autoreview"
         fi
     fi
