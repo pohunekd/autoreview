@@ -29,7 +29,7 @@ use crate::store::rollup::{
 };
 use crate::store::{
     FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup, RollupCount,
-    RollupSample,
+    RollupSample, SnapshotReads,
 };
 
 /// Version of the report document; a changed field gets a new version.
@@ -544,7 +544,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             return Err(Error::workflow(REPORT_RANGE_PRUNED, true, None));
         }
         live(cancel)?;
-        let mut snapshot = self.store.stats_snapshot(Some((range.start, range.end)))?;
+        let bounds = Some((range.start, range.end));
+        let mut snapshot = self.store.stats_snapshot(bounds, SnapshotReads::Report)?;
         // Before the pipeline filter: the first publication of a request may be another's.
         let firsts = first_publications(&snapshot.reviews, &snapshot.pruned_requests)?;
         if let Some(name) = pipeline {

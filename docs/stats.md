@@ -30,19 +30,16 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   reviews that are not completed, through the status index. With `--since` they read the
   whole `reviews` and `review_step_runs` tables (the cost grows with
   `store.review_retention_seconds`, which decides how many reviews the store keeps), the
-  stored publication plans, reviewer slots (`slot/<id>`) and verifier steps
-  (`verification`, `artifact/combined`) of the reviews completed in the range, the rollup
-  rows of the range's days (see [History](#history)), and the `request_id` rows of the
-  rollup of every day, one per review request whose first publication was pruned (a scan
-  of the whole `stats_rollup` table). The slots, the verifier steps and the `request_id`
-  rows serve `autoreview report`; `stats` reads them and drops what they count. All of it
-  comes from one read transaction, so all counts describe the same moment.
+  stored publication plans of the reviews completed in the range, and the rollup rows of
+  the range's days (see [History](#history)). It reads no reviewer slots, verifier steps
+  (`verification`, `artifact/combined`) or `request_id` rows, which only `autoreview
+  report` counts. All of it comes from one read transaction, so all counts describe the
+  same moment.
 - With `--since`, `stats` decodes the reviews that are not completed, those created or
   completed in the range, and every review of a pull request with a review completed in
   the range. One of them that does not decode stops it with `store_state_invalid` naming
-  the review, and so does the plan or a reviewer slot of a review published in the range,
-  or the verification of a review completed in the range and, when that verification
-  finished, its combined artifact. A `request_id` row is read as a key and never decoded.
+  the review, and so does the plan of a review published in the range. A reviewer slot, a
+  verification or a combined artifact that does not decode does not stop `stats`.
 - `autoreview serve` can serve the same numbers to Prometheus; see
   [Prometheus metrics](#prometheus-metrics).
 - `autoreview report` turns the counts of a range into shares, beside the outcomes of

@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{Credential, Credentials};
+use crate::error::error_code;
 use crate::integrations::SessionRequest;
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_FIXED, PRIOR_OPEN, prior_key};
@@ -329,6 +330,29 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     let kept_requests = requests();
     let kept_checks = checks();
     let kept_pipelines = pipelines();
+    // A verification that does not decode stops the report of the range but not the statistics,
+    // which count neither the verifier's steps nor the reviewer slots.
+    let original = (h.store).load_step::<Verification>(&unverified.workflow_id, STEP_VERIFICATION);
+    let original = original.expect("the verification reads");
+    let damaged = h
+        .store
+        .save_step(&unverified.workflow_id, STEP_VERIFICATION, "damaged");
+    damaged.expect("the verification is damaged");
+    let statistics = history();
+    let request = ReportRequest {
+        since: since.clone(),
+        ..ReportRequest::default()
+    };
+    let report = h.engine.review_report(&CancellationToken::new(), &request);
+    let stopped = report.err().map(|err| error_code(&err).to_owned());
+    let restored = h
+        .store
+        .save_step(&unverified.workflow_id, STEP_VERIFICATION, &original);
+    restored.expect("the verification is restored");
+    assert!(
+        statistics == kept && stopped.as_deref() == Some("store_state_invalid"),
+        "statistics = {statistics}, kept = {kept}, report stopped with {stopped:?}"
+    );
     // The first prune leaves the new head's review beside the rollup of its request, and the
     // checked pull request's reviews as rows.
     let split = parse_rfc3339(&latest).expect("the creation time decodes");

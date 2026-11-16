@@ -34,8 +34,8 @@ use crate::store::rollup::{
 };
 use crate::store::{
     EndedStepRun, RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
-    REVIEW_RUNNING, Rollup, RollupCount, RollupSample, StatsSnapshot, StepOutcome, StepRun,
-    StoredReview, VerifierSteps,
+    REVIEW_RUNNING, Rollup, RollupCount, RollupSample, SnapshotReads, StatsSnapshot, StepOutcome,
+    StepRun, StoredReview, VerifierSteps,
 };
 use crate::verify::{VERDICT_CONFIRMED, VERDICT_NOT_BLOCKING, VERDICT_REFUTED};
 
@@ -1281,9 +1281,10 @@ pub(crate) fn rollup(
 /// # Errors
 ///
 /// Returns `store_state_invalid` for a timestamp, an outcome or a rollup day that does not
-/// decode, for a completed row without `completed_at`, for the plan or a reviewer slot of a
-/// published row, the verification or combined artifact of a completed row or a `verifier` or
-/// `disagreement_reviewer` rollup key that does not decode, and for a schedule key without `#`.
+/// decode, for a completed row without `completed_at`, for the plan of a published row, for a
+/// reviewer slot, verification or combined artifact that the snapshot holds (the statistics
+/// read none) and does not decode, for a `verifier` or `disagreement_reviewer` rollup key that
+/// does not decode, and for a schedule key without `#`.
 pub fn compute(
     snapshot: &StatsSnapshot,
     range: Option<&StatsRange>,
@@ -1582,7 +1583,8 @@ fn milliseconds_text(milliseconds: Option<i64>) -> String {
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the statistics document of the store; `since` and `until` are UTC days.
     ///
-    /// Reads the store only. `until` is the current UTC day when absent.
+    /// Reads the store only, and only the rows the document counts. `until` is the current UTC
+    /// day when absent.
     ///
     /// # Errors
     ///
@@ -1597,7 +1599,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let range = StatsRange::parse(since, until, now.date())?;
         live(cancel)?;
         let bounds = range.map(|range| (range.start, range.end));
-        let snapshot = self.store.stats_snapshot(bounds)?;
+        let snapshot = self.store.stats_snapshot(bounds, SnapshotReads::Counted)?;
         compute(&snapshot, range.as_ref(), now, self.prune_cutoff())
     }
 }
