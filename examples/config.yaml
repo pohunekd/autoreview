@@ -95,6 +95,8 @@ store:
   # A published decision older than this does not serve as the baseline of
   # an incremental review.
   published_retention_seconds: 7776000
+  # The outcome of a published finding is kept this long after its last change.
+  outcome_retention_seconds: 31536000
 
 cli:
   review_list_limit: 50

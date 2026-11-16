@@ -22,6 +22,7 @@ use crate::{BoxError, Error};
 use serde::Serialize;
 
 pub mod discovery;
+pub mod outcomes;
 pub mod reviews;
 pub mod rollup;
 pub mod steps;
@@ -29,6 +30,7 @@ pub mod steps;
 pub use discovery::{
     DiscoveryState, STATE_AWAITING, STATE_PUBLISHED, STATE_REJECTED, STATE_SCHEDULE,
 };
+pub use outcomes::{FindingOutcome, OUTCOME_OPEN};
 pub use reviews::{
     RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
     REVIEW_RUNNING, ReviewFilter, StatsSnapshot, StoredReview,
@@ -219,8 +221,8 @@ impl Store {
 
     /// Creates the schema and stamps the version, after refusing a newer database.
     ///
-    /// Adds the step runs and rollup tables without a new version, so earlier releases still
-    /// open the file.
+    /// Adds the step runs, rollup and finding outcome tables without a new version, so earlier
+    /// releases still open the file.
     fn migrate(&self) -> Result<(), Error> {
         let connection = self.lock_connection()?;
         let version: i64 = connection
@@ -241,6 +243,9 @@ impl Store {
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .execute_batch(rollup::ROLLUP_SCHEMA)
+            .map_err(|err| store_error("store_unavailable", true, err))?;
+        connection
+            .execute_batch(outcomes::OUTCOMES_SCHEMA)
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .pragma_update(None, "user_version", STORE_SCHEMA_VERSION)

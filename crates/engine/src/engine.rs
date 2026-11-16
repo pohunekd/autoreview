@@ -260,9 +260,10 @@ where
         }
     }
 
-    /// Deletes the completed reviews last updated before the retention and logs the count.
+    /// Deletes the completed reviews and the finding outcomes last updated before their
+    /// retentions and logs each count.
     ///
-    /// A failure after `cancel` is cancelled is not logged.
+    /// Each prune fails on its own; a failure after `cancel` is cancelled is not logged.
     fn prune(&self, cancel: &CancellationToken) {
         let cutoff = self.prune_cutoff();
         match live(cancel).and_then(|()| self.store.prune_reviews(cutoff)) {
@@ -278,6 +279,26 @@ where
             Ok(removed) => {
                 if removed > 0 {
                     tracing::info!(reviews = removed, "completed reviews pruned");
+                }
+            }
+        }
+        // A retention beyond the range of `time::Duration` keeps every outcome.
+        let retention =
+            time::Duration::try_from(self.config.outcome_retention).unwrap_or(time::Duration::MAX);
+        let cutoff = self.clock.wall_now().saturating_sub(retention);
+        match live(cancel).and_then(|()| self.store.prune_outcomes(cutoff)) {
+            Err(err) => {
+                if !cancel.is_cancelled() {
+                    tracing::error!(
+                        error_code = error_code(&err),
+                        error = %err,
+                        "finding outcome pruning failed"
+                    );
+                }
+            }
+            Ok(removed) => {
+                if removed > 0 {
+                    tracing::info!(outcomes = removed, "finding outcomes pruned");
                 }
             }
         }

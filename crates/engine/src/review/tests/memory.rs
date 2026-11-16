@@ -16,8 +16,34 @@ use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_OPEN, prior_key};
 use crate::protocol::fixtures::sha;
+use crate::store::{REVIEW_COMPLETED, ReviewFilter};
 use crate::testing::fake::{reviewer_output, settling_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
+
+/// Returns the stored finding outcomes of `pr` as (finding key, tracked key, outcome, head).
+fn outcomes(h: &Harness, pr: &PullRequest) -> Vec<(String, String, String, String)> {
+    let stored = (h.store)
+        .outcomes_since(&pr.repository, OffsetDateTime::UNIX_EPOCH)
+        .expect("the outcomes read");
+    stored
+        .into_iter()
+        .filter(|row| row.number == pr.number)
+        .map(|row| {
+            let head = row.outcome_head_sha;
+            (row.finding_key, row.tracked_key, row.outcome, head)
+        })
+        .collect()
+}
+
+/// Returns the number of completed reviews of `pr`; a published review completes last.
+fn completed(h: &Harness, pr: &PullRequest) -> usize {
+    let filter = ReviewFilter::ReviewKey(pr.key());
+    let reviews = h.store.list_reviews(&filter, 50).expect("the reviews read");
+    reviews
+        .iter()
+        .filter(|review| review.status == REVIEW_COMPLETED)
+        .count()
+}
 
 /// Publishes a notes-only review of a hand-off rule and checks it reached the author.
 ///
@@ -181,6 +207,10 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
     h.fake.open(pr.clone(), h.rule(&pr.repository));
     h.poll_until("the request for changes", || h.publications() == 1)
         .await;
+    let key = prior_key(&pr.head_sha, prior_id);
+    let open = vec![(key.clone(), key.clone(), "open".to_owned(), String::new())];
+    h.wait_for("the open outcome", || outcomes(&h, &pr) == open)
+        .await;
 
     h.fake.lock().discussion.threads = vec![DiscussionThread {
         key: prior_key(&pr.head_sha, prior_id),
@@ -240,6 +270,7 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
         reads.len() == 2 && reads[1].len() == 1 && reads[1][0].head_sha == pr.head_sha,
         "the third review must still carry the findings of the first, read {reads:?}"
     );
+    assert_eq!(outcomes(&h, &pr), open, "a finding left open stays open");
     h.stop_engine().await;
 }
 
@@ -657,5 +688,17 @@ async fn open_prior_finding_without_an_open_thread_is_published_again() {
         review.comments,
         review.marker
     );
+    // The finding published again is the first one, so it gets no row of its own.
+    let opus_key = prior_key(&pr.head_sha, "O001");
+    let sonnet_key = prior_key(&pr.head_sha, "S001");
+    let open = String::from("open");
+    let rows = vec![
+        (opus_key.clone(), opus_key, open.clone(), String::new()),
+        (sonnet_key.clone(), sonnet_key, open, String::new()),
+    ];
+    h.wait_for("the second completed review", || completed(&h, &pr) == 2)
+        .await;
+    let stored = outcomes(&h, &pr);
+    assert_eq!(stored, rows, "outcomes after the second review");
     h.stop_engine().await;
 }

@@ -12,6 +12,7 @@ knowledge bundle so pohunek.dev can render both.
   [decisions](concepts/decisions.md),
   [incremental reviews](concepts/incremental-reviews.md),
   [verification](concepts/verification.md),
+  [finding outcomes](concepts/finding-outcomes.md),
   [notifications](concepts/notifications.md),
   [GitHub identity](concepts/github-identity.md) and
   [state and recovery](concepts/state-and-recovery.md).

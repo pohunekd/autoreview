@@ -310,7 +310,9 @@ removed raises `cleanup_manual`, and someone removes it by hand with
 
 Completed reviews are deleted after `store.review_retention_seconds`. Published
 decisions are kept for `store.published_retention_seconds`, because the next
-review of the same pull request uses them as its baseline. Review branches
+review of the same pull request uses them as its baseline. The
+[outcome of each published finding](finding-outcomes.md) is kept for
+`store.outcome_retention_seconds` after its last change. Review branches
 stay on the review hosts after their sessions are removed. See
 [stale sessions and branches](../runbooks/stale-sessions-and-branches.md).
 

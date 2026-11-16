@@ -32,7 +32,7 @@ pull requests. Keep the directory mode `0700`.
 
 Take a backup before every upgrade, and before any change to the store's
 retention settings (`store.review_retention_seconds`,
-`store.published_retention_seconds`).
+`store.published_retention_seconds`, `store.outcome_retention_seconds`).
 
 ## Upgrade the binary
 
@@ -122,6 +122,12 @@ store and ignores the two tables, so a rollback to it needs no restore. While
 the earlier release runs, the reviews it prunes and the pull requests it stops
 are not added to the rollup, so the statistics of their days can be too low.
 
+The release with [finding outcomes](../concepts/finding-outcomes.md) adds the
+table `finding_outcomes` the same way, without a new schema version. An
+earlier release opens such a store and ignores the table, so a rollback to it
+needs no restore. While the earlier release runs, its publications record no
+outcomes and nothing prunes the table.
+
 ## Roll back
 
 Roll back only with a backup taken before the upgrade:
@@ -135,7 +141,8 @@ Roll back only with a backup taken before the upgrade:
    version added: an earlier release refuses an unknown key, such as
    `limits.max_issue_characters` for a release before it, or
    `schedule.usage_limit_retry_delays_seconds` for a release before the
-   automatic retry of a usage-limited review. On a converted
+   automatic retry of a usage-limited review, or
+   `store.outcome_retention_seconds` for a release before finding outcomes. On a converted
    deployment, remove the matching `HERMES_PR_REVIEW_*` variable too, or run
    the old release's `scripts/env-to-config`, which refuses it as unknown.
    Do the same for the policy: restore the policy of the old version, or remove

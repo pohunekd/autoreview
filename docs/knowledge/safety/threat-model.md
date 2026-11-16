@@ -30,7 +30,7 @@ Related: [untrusted authors](untrusted-authors.md), [prompt injection](prompt-in
 | Review host | Runs reviewer agents in worktrees, with the code and the agent's credentials | Each pohunek review host |
 | Reviewer model accounts | Keys or logins of the models that review code and cost money | The runtime login on the review host, not the pohunek profile |
 | Backend secrets | The Matrix token of the notifier | Environment, named by `*_env` keys |
-| Store | Review history, discovery state, published decisions, and daily counts per repository, rule, reviewer and error code that outlive the review retention | SQLite file at `store.path` |
+| Store | Review history, discovery state, published decisions, and daily counts per repository, rule, reviewer and error code that outlive the review retention; one outcome row per published finding (repository, path, line, severity, no finding text) for `store.outcome_retention_seconds` | SQLite file at `store.path` |
 | Metrics text | Counts and the names of repositories, review hosts, rules and error codes | Served by `serve` on `metrics.listen` when the `metrics` section is set |
 | MCP bearer tokens | A `write` token can approve a waiting review and start a discovery pass; a `read` token reads review text and runs GitHub searches | Held by each MCP client; the configuration holds only their SHA-256 digests (`mcp.clients[N].token_sha256`). Rotate a token by replacing its digest and restarting `autoreview mcp` |
 
