@@ -106,8 +106,12 @@ It never creates a tag and never publishes.
    the workspace version, and a version without a section in `CHANGELOG.md`.
 5. Wait for the `Release` run. It builds one archive per target, attests the
    archives and their `.sha256` files, and creates a draft release whose body
-   is the `CHANGELOG.md` section. Check the draft (two archives, two `.sha256`
-   files, the notes), then publish it.
+   is the `CHANGELOG.md` section. Check the draft (three archives: the two musl
+   targets and `aarch64-apple-darwin`, three `.sha256` files, the notes). On a
+   Mac, fetch the darwin archive of the run, the bytes of the draft asset:
+   `gh run download <run-id> --repo pohunekd/autoreview -n archive-aarch64-apple-darwin -D <dir>`,
+   then run `scripts/macos-check archive <dir>/autoreview-X.Y.Z-aarch64-apple-darwin.tar.gz`.
+   Publish the draft when every line says `ok`.
 
 A failed or cancelled run deletes the draft it created and never touches the
 tag. A leftover draft of the tag blocks the run: delete it first.
