@@ -41,6 +41,7 @@ use time::OffsetDateTime;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
+use crate::config_file::Loaded;
 use crate::env_file::{ENV_FILE_FLAG, EnvFile};
 use crate::error_response::{
     COMMAND_INVALID, HEAD_PREFIX_INVALID, HEAD_SHA_INVALID, error_response,
@@ -365,7 +366,12 @@ async fn run(
     let environment = std::env::var_os(CONFIG_ENV);
     let path = config_file::resolve_path(config_path.as_deref(), environment.as_deref())?;
     let env_file = env_file_path.as_deref().map(EnvFile::read).transpose()?;
-    let (config, mcp, metrics) = config_file::load(&path, env_file.as_ref())?;
+    let Loaded {
+        config,
+        mcp,
+        metrics,
+        log: _log,
+    } = config_file::load(&path, env_file.as_ref())?;
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;
     match command {
