@@ -673,7 +673,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Err(err) = self.engine.mark_published(&self.cancel, &record).await {
             return Err(self.interrupted(err));
         }
-        // A resumed publication records again; the store keeps the rows it has.
+        // A resumed publication records again; the store keeps the rows it has and settles
+        // only rows that are still open.
         (self.engine).record_finding_outcomes(
             &self.workflow_id,
             &self.input,

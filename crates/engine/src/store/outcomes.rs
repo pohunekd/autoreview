@@ -45,6 +45,12 @@ pub(super) const OUTCOMES_SCHEMA: &str = concat!(
 /// Outcome of a published finding that nothing has settled yet.
 pub const OUTCOME_OPEN: &str = "open";
 
+/// Outcome of a finding that a later review settled as fixed, or as answered and upheld.
+pub const OUTCOME_FIXED: &str = "fixed";
+
+/// Outcome of a finding that a later review settled as answered without an upheld check.
+pub const OUTCOME_ANSWERED: &str = "answered";
+
 /// Columns of every outcome read, in the order the row reader expects.
 const OUTCOME_COLUMNS: &str = "repository, number, finding_key, tracked_key, workflow_id, \
      finding_id, head_sha, reviewer_id, pipeline, rule, severity, confidence, path, line, \
@@ -59,7 +65,10 @@ pub struct FindingOutcome {
     pub number: i64,
     /// Key of the finding: its head cut to 12 characters, a colon and its ID.
     pub finding_key: String,
-    /// Key that later reviews of the pull request settle the finding by; it is `finding_key`.
+    /// Key that later reviews of the pull request settle the finding by.
+    ///
+    /// It starts as `finding_key` and becomes the key of the new finding when the finding
+    /// is published again. It is empty once a finding of another review reuses the key.
     pub tracked_key: String,
     /// Workflow ID of the review that published the finding first.
     pub workflow_id: String,
@@ -83,7 +92,7 @@ pub struct FindingOutcome {
     pub line: i64,
     /// Whether the finding held the merge back when it was published.
     pub blocking: bool,
-    /// The outcome: `open`, `refuted` or `not_blocking`.
+    /// The outcome: `open`, `refuted`, `not_blocking`, `fixed` or `answered`.
     pub outcome: String,
     /// Head SHA that the outcome was decided at; empty while the outcome is `open`.
     pub outcome_head_sha: String,
@@ -93,18 +102,86 @@ pub struct FindingOutcome {
     pub updated_at: String,
 }
 
-impl Store {
-    /// Adds the rows of the published findings of one review in one transaction.
+/// What a published review decided about one earlier finding of its pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Settlement {
+    /// The open finding tracked as `key` gets `outcome` at the head of the review.
+    Decided {
+        /// Tracked key of the earlier finding.
+        key: String,
+        /// The new outcome.
+        outcome: String,
+    },
+    /// The open finding tracked as `key` was published again and is tracked as `republished`.
     ///
-    /// A finding whose key is stored already keeps its row, so a resumed or adopted
-    /// publication adds nothing.
+    /// When an open row that no settlement of the review picks has `republished` already, the
+    /// finding is untracked instead.
+    Republished {
+        /// Tracked key of the earlier finding.
+        key: String,
+        /// Key of the new finding that publishes it again.
+        republished: String,
+    },
+    /// A new finding reuses `key`, so an open row of another review stops being tracked by it.
+    Untracked {
+        /// The tracked key that the row loses.
+        key: String,
+        /// Workflow IDs whose rows stay: the publishing review and the hand-off it adopts.
+        kept: [String; 2],
+    },
+}
+
+impl Store {
+    /// Applies the settlements of one review, then adds the rows of its published findings.
+    ///
+    /// Only an `open` row changes, and a finding whose key is stored already keeps its row,
+    /// so a resumed or adopted publication adds no row and changes no decided outcome.
+    /// Everything runs in one transaction.
     ///
     /// # Errors
     ///
     /// Returns `store_unavailable` when SQLite fails; then nothing is written.
-    pub fn record_outcomes(&self, published: &[FindingOutcome]) -> Result<(), Error> {
+    pub fn record_outcomes(
+        &self,
+        repository: &str,
+        number: i64,
+        head_sha: &str,
+        settlements: &[Settlement],
+        published: &[FindingOutcome],
+    ) -> Result<(), Error> {
         let now = self.timestamp();
         self.in_tx(|transaction| {
+            // Every settlement picks its rows before any change: a key that one settlement
+            // moves a row to can be the key that another one of the same review names.
+            let mut picked = Vec::new();
+            for settlement in settlements {
+                let (Settlement::Decided { key, .. }
+                | Settlement::Republished { key, .. }
+                | Settlement::Untracked { key, .. }) = settlement;
+                picked.push((open_rows(transaction, repository, number, key)?, settlement));
+            }
+            // A move onto a key that an open row no settlement here picks still has would put
+            // two findings under one key, so the moving row is untracked instead.
+            let chosen: Vec<i64> = picked.iter().flat_map(|(rows, _)| rows.clone()).collect();
+            let mut taken = Vec::new();
+            for (_, settlement) in &picked {
+                let target = match settlement {
+                    Settlement::Republished { republished, .. } => {
+                        open_rows(transaction, repository, number, republished)?
+                    }
+                    _ => Vec::new(),
+                };
+                taken.push(target.iter().any(|row| !chosen.contains(row)));
+            }
+            for ((rows, settlement), taken) in picked.into_iter().zip(taken) {
+                for row in rows {
+                    if taken {
+                        untrack(transaction, row, &now)?;
+                    } else {
+                        settle(transaction, row, head_sha, &now, settlement)?;
+                    }
+                }
+            }
             for outcome in published {
                 insert(transaction, outcome, &now)?;
             }
@@ -161,6 +238,71 @@ impl Store {
             Ok(i64::try_from(rows).unwrap_or(i64::MAX))
         })
     }
+}
+
+/// Returns the IDs of the open rows of the pull request tracked as `key`.
+fn open_rows(
+    connection: &Connection,
+    repository: &str,
+    number: i64,
+    key: &str,
+) -> Result<Vec<i64>, Error> {
+    let mut statement = connection
+        .prepare(
+            "SELECT rowid FROM finding_outcomes \
+             WHERE repository = ?1 AND number = ?2 AND tracked_key = ?3 AND outcome = ?4",
+        )
+        .map_err(unavailable)?;
+    let rows = statement
+        .query_map(params![repository, number, key, OUTCOME_OPEN], |row| {
+            row.get(0)
+        })
+        .map_err(unavailable)?;
+    rows.collect::<Result<Vec<i64>, _>>().map_err(unavailable)
+}
+
+/// Clears the tracked key of the row with the ID `row`, so no later settlement matches it.
+fn untrack(connection: &Connection, row: i64, now: &str) -> Result<(), Error> {
+    connection
+        .execute(
+            "UPDATE finding_outcomes SET tracked_key = '', updated_at = ?2 WHERE rowid = ?1",
+            params![row, now],
+        )
+        .map_err(unavailable)?;
+    Ok(())
+}
+
+/// Applies one settlement to the row with the ID `row`.
+///
+/// An untracked row keeps its outcome; an empty tracked key matches no later settlement.
+fn settle(
+    connection: &Connection,
+    row: i64,
+    head_sha: &str,
+    now: &str,
+    settlement: &Settlement,
+) -> Result<(), Error> {
+    match settlement {
+        Settlement::Decided { outcome, .. } => connection.execute(
+            "UPDATE finding_outcomes SET outcome = ?2, outcome_head_sha = ?3, updated_at = ?4 \
+             WHERE rowid = ?1",
+            params![row, outcome, head_sha, now],
+        ),
+        Settlement::Republished { republished, .. } => connection.execute(
+            "UPDATE finding_outcomes SET tracked_key = ?2, updated_at = ?3 WHERE rowid = ?1",
+            params![row, republished, now],
+        ),
+        Settlement::Untracked {
+            kept: [publisher, origin],
+            ..
+        } => connection.execute(
+            "UPDATE finding_outcomes SET tracked_key = '', updated_at = ?4 \
+             WHERE rowid = ?1 AND workflow_id NOT IN (?2, ?3)",
+            params![row, publisher, origin, now],
+        ),
+    }
+    .map_err(unavailable)?;
+    Ok(())
 }
 
 /// Adds the row of one published finding unless its key is stored already.
@@ -221,4 +363,55 @@ fn read_row(row: &Row<'_>) -> rusqlite::Result<FindingOutcome> {
         published_at: row.get(17)?,
         updated_at: row.get(18)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use time::OffsetDateTime;
+
+    use super::{FindingOutcome, OUTCOME_OPEN, Settlement};
+    use crate::store::Store;
+
+    #[test]
+    fn a_move_onto_a_key_an_open_row_keeps_untracks_the_moving_row() {
+        let dir = tempfile::TempDir::new().expect("create the store directory");
+        let path = dir.path().join("state.db");
+        let store = Store::open(&path, Box::new(OffsetDateTime::now_utc)).expect("open the store");
+        let row = |number: i64, key: &str, tracked: &str| FindingOutcome {
+            repository: "acme/repo".to_owned(),
+            number,
+            finding_key: key.to_owned(),
+            tracked_key: tracked.to_owned(),
+            outcome: OUTCOME_OPEN.to_owned(),
+            published_at: "2026-01-02T03:04:05Z".to_owned(),
+            ..FindingOutcome::default()
+        };
+        let rows = [1, 2].map(|n| [row(n, "a:O001", "a:O001"), row(n, "a:X001", "c:P001")]);
+        let moved = |key: &str, republished: &str| Settlement::Republished {
+            key: key.to_owned(),
+            republished: republished.to_owned(),
+        };
+        // In pull request 1 no settlement picks the row at c:P001 (the prior list was cut
+        // before it); in pull request 2 that row moves on, so its key is free.
+        let settled = [
+            vec![moved("a:O001", "c:P001")],
+            vec![moved("a:O001", "c:P001"), moved("c:P001", "c:P002")],
+        ];
+        for (number, (rows, settled)) in (1..).zip(rows.iter().zip(&settled)) {
+            let record = |settled: &[Settlement]| {
+                let recorded = store.record_outcomes("acme/repo", number, "c", settled, rows);
+                recorded.expect("record the outcomes");
+            };
+            record(&[]);
+            record(settled);
+        }
+        // A resumed publication of pull request 1 changes nothing.
+        let resumed = store.record_outcomes("acme/repo", 1, "c", &settled[0], &rows[0]);
+        resumed.expect("record the outcomes again");
+        let stored = store.outcomes_since("acme/repo", OffsetDateTime::UNIX_EPOCH);
+        let stored = stored.expect("read the outcomes");
+        let tracked = stored.iter().map(|row| (row.number, &*row.tracked_key));
+        let want = [(1, ""), (1, "c:P001"), (2, "c:P001"), (2, "c:P002")];
+        assert_eq!(tracked.collect::<Vec<_>>(), want);
+    }
 }

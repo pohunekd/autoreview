@@ -2,7 +2,7 @@
 type: Concept
 id: concept/finding-outcomes
 title: Finding outcomes
-description: The record the engine keeps of every published finding, which outcome each finding gets from the verifier at publication, what happens when the record cannot be written, and how long the records stay.
+description: The record the engine keeps of every published finding, which outcome each finding gets from the verifier at publication and from later reviews, what happens when the record cannot be written, and how long the records stay.
 source_kind: manual
 intents: [help, debug]
 ---
@@ -33,13 +33,16 @@ blocking findings and notes alike. A row holds:
 
 A finding that publishes an earlier one again (see
 [incremental reviews](incremental-reviews.md)) gets no row of its own: it is
-the earlier finding, which has its row. A notes hand-off that is approved later
+the earlier finding, whose row from then on follows the key of the new
+finding, so the next review settles it. A notes hand-off that is approved later
 publishes the same findings again, and their rows stay as they are.
 
 Each review numbers its findings from `001`, so a later review of the same head
 (a retarget, a new review request or a retry) can publish a finding whose key is
 already stored. That finding adds no row: the first row stays as it is, and the
-later finding has no row of its own.
+later finding has no row of its own. Unless the later review carried the first
+finding as an earlier one, the first row loses its tracked key and stays
+`open`, so no review settles it with the verdict on the other finding.
 
 ## Outcomes
 
@@ -47,16 +50,27 @@ later finding has no row of its own.
 |---|---|
 | `open` | The finding is published and nothing has settled it |
 | `refuted`, `not_blocking` | The [verifier](verification.md) demoted the blocking finding before it was published |
+| `fixed` | A later published review settled the finding as `fixed`, or as `answered` and the verifier upheld the answer |
+| `answered` | A later published review settled the finding as `answered`, and no verifier upheld it: none ran, or it did not finish |
 
-A later review of the pull request that settles a finding, and a pull request
-that is merged or closed, do not change the outcome yet (#51).
+Only an `open` row changes, and only when the later review is published: a
+review that waits for an approval settles once the approval publishes it, and
+a wait that expires or is superseded changes nothing. A pull request that is
+merged or closed does not change the outcome yet (#51).
 
 ## When recording fails
 
-The rows are written in their own transaction after GitHub accepted the
-review. If the store fails, the engine logs `finding outcomes not recorded`
-with the `error_code`, and the review completes as published. A review that is
-resumed after a restart writes its rows again; rows already stored stay.
+The rows of a review and what it settles about earlier findings are written
+in one transaction after GitHub accepted the review. If the store fails, the
+engine logs `finding outcomes not recorded` with the `error_code`, nothing of
+that review is recorded, and the review completes as published. A review that
+is resumed after a restart writes its rows again; rows already stored stay,
+and rows it already settled are no longer `open`. One rare case is not a
+no-op: a review of the same head that publishes findings again under `P` IDs an
+earlier review of that head used can clear one tracked key when it is resumed.
+A finding published again under a key that another open row still has, and
+that the review neither settles nor moves, loses its tracked key instead, so a
+later verdict on that key does not also settle the moved finding.
 
 ## Retention
 

@@ -45,6 +45,15 @@ fn completed(h: &Harness, pr: &PullRequest) -> usize {
         .count()
 }
 
+/// Approves the clean review that waits on `pr` and waits until it is the `count`th publication.
+async fn approve_waiting(h: &Harness, pr: &PullRequest, count: usize) {
+    let workflow_id = h.resolve(pr).expect("the review waits").workflow_id;
+    h.approve(&workflow_id, pr)
+        .expect("the approval is accepted");
+    h.wait_for("the approval", || h.publications() == count)
+        .await;
+}
+
 /// Publishes a notes-only review of a hand-off rule and checks it reached the author.
 ///
 /// The notes go to the author as a comment, without pinging the user.
@@ -271,6 +280,10 @@ async fn open_prior_finding_carries_over_until_it_is_fixed() {
         "the third review must still carry the findings of the first, read {reads:?}"
     );
     assert_eq!(outcomes(&h, &pr), open, "a finding left open stays open");
+    approve_waiting(&h, &third, 3).await;
+    let fixed = vec![(key.clone(), key, "fixed".to_owned(), third.head_sha.clone())];
+    h.wait_for("the fixed outcome", || outcomes(&h, &pr) == fixed)
+        .await;
     h.stop_engine().await;
 }
 
@@ -688,17 +701,35 @@ async fn open_prior_finding_without_an_open_thread_is_published_again() {
         review.comments,
         review.marker
     );
-    // The finding published again is the first one, so it gets no row of its own.
+    // The finding published again is the first one, tracked under the key of its new finding.
     let opus_key = prior_key(&pr.head_sha, "O001");
     let sonnet_key = prior_key(&pr.head_sha, "S001");
-    let open = String::from("open");
+    let republished = prior_key(&sha("c"), "P001");
+    let row = |key: &str, tracked: &str, outcome: &str, head: &str| {
+        let (key, tracked) = (key.to_owned(), tracked.to_owned());
+        (key, tracked, outcome.to_owned(), head.to_owned())
+    };
     let rows = vec![
-        (opus_key.clone(), opus_key, open.clone(), String::new()),
-        (sonnet_key.clone(), sonnet_key, open, String::new()),
+        row(&opus_key, &republished, "open", ""),
+        row(&sonnet_key, &sonnet_key, "open", ""),
     ];
     h.wait_for("the second completed review", || completed(&h, &pr) == 2)
         .await;
     let stored = outcomes(&h, &pr);
     assert_eq!(stored, rows, "outcomes after the second review");
+
+    h.set_output(reviewer_output(Vec::new()));
+    let mut last = pr.clone();
+    last.head_sha = sha("d");
+    h.fake.open(last.clone(), h.rule(&pr.repository));
+    h.poll_until("the approval wait", || h.resolve(&last).is_ok())
+        .await;
+    approve_waiting(&h, &last, 3).await;
+    let fixed = vec![
+        row(&opus_key, &republished, "fixed", &last.head_sha),
+        row(&sonnet_key, &sonnet_key, "fixed", &last.head_sha),
+    ];
+    h.wait_for("the fixed outcomes", || outcomes(&h, &pr) == fixed)
+        .await;
     h.stop_engine().await;
 }

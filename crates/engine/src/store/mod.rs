@@ -30,7 +30,7 @@ pub mod steps;
 pub use discovery::{
     DiscoveryState, STATE_AWAITING, STATE_PUBLISHED, STATE_REJECTED, STATE_SCHEDULE,
 };
-pub use outcomes::{FindingOutcome, OUTCOME_OPEN};
+pub use outcomes::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Settlement};
 pub use reviews::{
     RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
     REVIEW_RUNNING, ReviewFilter, StatsSnapshot, StoredReview,
