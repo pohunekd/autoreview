@@ -620,10 +620,13 @@ fn pull_request_arguments(arguments: &[String]) -> Result<(String, i64), Error> 
 /// Without outcomes it prints nothing. The repository is not lowercased: discovery stores it
 /// lowercase, and the other commands refuse a name with capitals too.
 ///
+/// A reader that closes stdout early, as `head` does, ends the output without an error.
+///
 /// # Errors
 ///
 /// Returns `repository_not_allowed` for a repository that is not a lowercase `owner/name`,
-/// `command_invalid` for a day that is not an existing `YYYY-MM-DD`, and the store's errors.
+/// `command_invalid` for a day that is not an existing `YYYY-MM-DD`, the store's errors, and
+/// `workflow_failed` when a row cannot be encoded or stdout fails other than by a closed pipe.
 fn list_findings(store: &Store, arguments: &FindingsListArguments) -> Result<(), Error> {
     if !repository_valid(&arguments.repo) {
         return Err(Error::workflow(REPOSITORY_NOT_ALLOWED, true, None));
@@ -631,8 +634,15 @@ fn list_findings(store: &Store, arguments: &FindingsListArguments) -> Result<(),
     // The day error carries the code of `stats`; this command reports a usage error instead.
     let since = parse_day(&arguments.since)
         .map_err(|_| command_invalid(Some(SINCE_INVALID_CAUSE.into())))?;
+    let mut stdout = io::stdout().lock();
     for outcome in store.list_outcomes(&arguments.repo, since.midnight().assume_utc())? {
-        print_json(&outcome)?;
+        let text = go_json(&outcome).map_err(failed)?;
+        match writeln!(stdout, "{text}").and_then(|()| stdout.flush()) {
+            Ok(()) => {}
+            // The Rust runtime ignores SIGPIPE, so a closed reader surfaces as this error.
+            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => return Ok(()),
+            Err(error) => return Err(failed(error)),
+        }
     }
     Ok(())
 }

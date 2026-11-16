@@ -469,15 +469,17 @@ status 0.
 | `outcome` | `open`, `refuted`, `not_blocking`, `fixed`, `answered`, `open_at_merge` or `open_at_close` |
 | `outcome_head_sha` | The head the outcome was decided at; empty while `open` |
 | `published_at`, `updated_at` | When the finding was published and when its row last changed, RFC 3339 in UTC |
-| `ended` | `merged` or `closed` once a state read saw the pull request end, empty before; a reopened pull request keeps its earlier end until it ends again |
+| `ended` | `merged` or `closed` once a state read saw the pull request end, empty before; only a pull request with an `open` row is read, so `ended` stays empty for one whose rows were all decided before it ended; a reopened pull request keeps its earlier end until it ends again |
 | `end_head_sha` | The head the pull request ended on; empty while `ended` is empty |
 
 The fields always come in this order. A row holds no title or body of a finding.
 A `--repo` that is not a lowercase `owner/name` is `repository_not_allowed`, a
 `--since` that is not an existing `YYYY-MM-DD` day or a missing flag is
-`command_invalid`, and a store that cannot be opened is `store_unavailable`. Like
-every command that opens the store, it creates an empty one at `store.path` when
-none exists.
+`command_invalid`, and a store that cannot be opened is `store_unavailable`, or
+`store_version_unsupported` when a newer release wrote it. Like every command
+that opens the store, it creates an empty one at `store.path` when none exists.
+A reader that stops early, such as `head`, ends the output: the command prints
+no further row, logs nothing and exits with status 0.
 
 ## Act
 
@@ -678,7 +680,7 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `matrix_message_invalid`, `matrix_request_invalid`, `notify_backend_unknown`, `notify_route_invalid`, `review_queue_too_long` | A message was not sent: it is empty; the Matrix request could not be built (no transaction ID could be drawn, `notify.max_characters` is below 1, the room or transaction is a dot segment, the content did not encode, or the URL does not parse); a route names no configured backend; or the review queue has no room for one entry within `notify.max_characters` |
 | `artifact_invalid` | The merged findings of several reviewers exceed `limits.max_findings`, although each result alone is within it: raise `limits.max_findings`, restart `serve` and `retry` the pull request. Also the defect of results that do not match the reviewers; not retried automatically |
 | `embedded_asset_invalid`, `github_request_invalid`, `github_review_invalid`, `review_incomplete`, `review_input_invalid`, `review_protocol_invalid`, `review_request_invalid`, `review_trigger_invalid`, `store_state_invalid` | A stored review, a request that the engine built or a schema embedded in the binary is not usable; not retried; a defect or a damaged store to report |
-| `workflow_failed` | A failure without a more specific code: a review whose stored state misses a part it needs, an error that carries no code, or a command whose standard output is closed; a review that fails with it is not retried |
+| `workflow_failed` | A failure without a more specific code: a review whose stored state misses a part it needs, an error that carries no code, or a command whose standard output is closed (`findings list` instead stops with status 0); a review that fails with it is not retried |
 
 The [troubleshooting runbook](knowledge/runbooks/troubleshooting.md) maps codes
 to fixes.
