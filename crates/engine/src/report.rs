@@ -20,10 +20,17 @@ use crate::integrations::Integrations;
 use crate::model::repository_valid;
 use crate::stats::{
     Counters, Keyed, STATS_RANGE_INVALID, StatsRange, first_publications, history, keyed,
-    median_and_p90, seconds_text,
+    median_and_p90, seconds_text, store_invalid,
 };
 use crate::store::outcome_checks::{OUTCOME_OPEN_AT_CLOSE, OUTCOME_OPEN_AT_MERGE};
-use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup};
+use crate::store::rollup::{
+    COUNTER_COMPLETED, COUNTER_STARTED, DIMENSION_DAY, DIMENSION_PIPELINE, DIMENSION_REPOSITORY,
+    PIPELINE_DIMENSIONS,
+};
+use crate::store::{
+    FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup, RollupCount,
+    RollupSample,
+};
 
 /// Version of the report document; a changed field gets a new version.
 pub const REPORT_SCHEMA_VERSION: i64 = 2;
@@ -413,19 +420,104 @@ impl fmt::Display for ReportDocument {
     }
 }
 
+/// Returns the rollup of `pipeline`, of `repository` when one is named, under the dimensions
+/// that the statistics history reads, or `None` when a day lacks the counts per pipeline.
+///
+/// The prune counts each review's `started` and `completed` under `day` and again under
+/// `pipeline`; a release with the rollup but without the `pipeline` dimensions wrote only the
+/// first, so a day whose two sums differ holds reviews without their pipeline. Reviews pruned
+/// by a release without the rollup left no counts at all and are not detected. The `pipeline` counts become
+/// counts of the day, which a pipeline's report reads; every other entry is left out.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` for a key of a `pipeline` dimension without its pipeline.
+fn pipeline_rollup(
+    rollup: &Rollup,
+    pipeline: &str,
+    repository: Option<&str>,
+) -> Result<Option<Rollup>, Error> {
+    let mut unmatched: BTreeMap<(&str, &str), i64> = BTreeMap::new();
+    for count in &rollup.counts {
+        let sign = match count.dimension.as_str() {
+            DIMENSION_DAY => 1,
+            DIMENSION_PIPELINE => -1,
+            _ => continue,
+        };
+        let counter = count.counter.as_str();
+        if counter == COUNTER_STARTED || counter == COUNTER_COMPLETED {
+            let day = count.day.as_str();
+            *unmatched.entry((day, counter)).or_default() += sign * count.value;
+        }
+    }
+    if unmatched.values().any(|value| *value != 0) {
+        return Ok(None);
+    }
+    let mut picked = Rollup::default();
+    for count in &rollup.counts {
+        if let Some((dimension, key)) =
+            plain_entry(&count.dimension, &count.key, pipeline, repository)?
+        {
+            picked.counts.push(RollupCount {
+                dimension: dimension.to_owned(),
+                key,
+                ..count.clone()
+            });
+        }
+    }
+    for sample in &rollup.samples {
+        if let Some((dimension, key)) =
+            plain_entry(&sample.dimension, &sample.key, pipeline, repository)?
+        {
+            picked.samples.push(RollupSample {
+                dimension: dimension.to_owned(),
+                key,
+                ..sample.clone()
+            });
+        }
+    }
+    Ok(Some(picked))
+}
+
+/// Returns the dimension and key that the history reads for an entry of a `pipeline`
+/// dimension of `pipeline` and `repository`, or `None` for any other entry.
+fn plain_entry(
+    dimension: &str,
+    key: &str,
+    pipeline: &str,
+    repository: Option<&str>,
+) -> Result<Option<(&'static str, String)>, Error> {
+    let Some((plain, _)) = (PIPELINE_DIMENSIONS.iter()).find(|(_, kept)| *kept == dimension) else {
+        return Ok(None);
+    };
+    let mut parts = key.splitn(3, '#');
+    let (Some(repo), Some(name)) = (parts.next(), parts.next()) else {
+        return Err(store_invalid(format!("rollup {dimension} key {key}")));
+    };
+    if name != pipeline || repository.is_some_and(|wanted| wanted != repo) {
+        return Ok(None);
+    }
+    Ok(Some(match (*plain, parts.next()) {
+        (DIMENSION_REPOSITORY, _) => (DIMENSION_DAY, String::new()),
+        (plain, Some(reviewer)) => (plain, format!("{repo}#{reviewer}")),
+        (plain, None) => (plain, repo.to_owned()),
+    }))
+}
+
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the report of `request`, read from the store only.
     ///
     /// Without a pipeline, the review counts are those of `autoreview stats` for the range,
-    /// of the repository when one is named. A pipeline has no rollup, so its counts come from
-    /// the kept rows, and its range must start after the review retention.
+    /// of the repository when one is named. A pipeline's counts come from its kept rows and
+    /// its counts in the rollup.
     ///
     /// # Errors
     ///
     /// Returns `repository_not_allowed` for a malformed repository, `pipeline_not_configured`
     /// for a pipeline that no rule runs, the errors of `StatsRange::parse`,
-    /// `report_range_pruned` for a range that starts before the outcome retention (with a
-    /// pipeline, also before the review retention), and the errors of the store reads.
+    /// `report_range_pruned` for a range that starts before the outcome retention or, with a
+    /// pipeline, that holds a day pruned without the counts per pipeline, and the errors of
+    /// the store reads.
     pub fn review_report(
         &self,
         cancel: &CancellationToken,
@@ -447,10 +539,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let Some(range) = StatsRange::parse(Some(&request.since), until, now.date())? else {
             return Err(Error::workflow(STATS_RANGE_INVALID, true, None));
         };
-        let review_cutoff = self.prune_cutoff();
-        let pruned = range.start < self.outcome_prune_cutoff()
-            || (pipeline.is_some() && range.start < review_cutoff);
-        if pruned {
+        if range.start < self.outcome_prune_cutoff() {
             return Err(Error::workflow(REPORT_RANGE_PRUNED, true, None));
         }
         live(cancel)?;
@@ -463,10 +552,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 input.rule.pipeline.name == name
                     && repository.is_none_or(|repo| input.pull_request.repository == repo)
             });
-            snapshot.rollup = Rollup::default();
+            let Some(rollup) = pipeline_rollup(&snapshot.rollup, name, repository)? else {
+                return Err(Error::workflow(REPORT_RANGE_PRUNED, true, None));
+            };
+            snapshot.rollup = rollup;
         }
         let (history, mut requests, checks, disagreements) =
-            history(&snapshot, &range, review_cutoff, &firsts)?;
+            history(&snapshot, &range, self.prune_cutoff(), &firsts)?;
         let counters = match (pipeline, repository) {
             (None, Some(name)) => (history.by_repository.into_iter())
                 .find(|entry| entry.key == name)
@@ -524,10 +616,11 @@ mod tests {
 
     use super::{
         FindingMetrics, OutcomeCounts, ReviewMetrics, ReviewerCounts, finding_metrics,
-        review_metrics,
+        pipeline_rollup, review_metrics,
     };
+    use crate::error::error_code;
     use crate::stats::{Counters, Keyed};
-    use crate::store::FindingOutcome;
+    use crate::store::{FindingOutcome, Rollup, RollupCount, RollupSample};
 
     /// A row's repository, pipeline, reviewer, severity, blocking flag and outcome.
     type Row<'a> = (&'a str, &'a str, &'a str, &'a str, bool, &'a str);
@@ -727,6 +820,160 @@ mod tests {
         ];
         for (name, counters, request_seconds, attempts, reviewers, want) in cases {
             let got = review_metrics(&counters, request_seconds, attempts, reviewers);
+            assert_eq!(got, want, "{name}");
+        }
+    }
+
+    /// One rollup count: day, dimension, key, counter and value.
+    type Count = (&'static str, &'static str, &'static str, &'static str, i64);
+    /// One rollup sample: day, dimension, key, sample and count.
+    type Sample = (&'static str, &'static str, &'static str, i64, i64);
+
+    /// Returns the rollup of `counts` and `samples`.
+    fn rollup(counts: &[Count], samples: &[Sample]) -> Rollup {
+        let text = str::to_owned;
+        Rollup {
+            counts: (counts.iter())
+                .map(|&(day, dimension, key, counter, value)| RollupCount {
+                    day: text(day),
+                    dimension: text(dimension),
+                    key: text(key),
+                    counter: text(counter),
+                    value,
+                })
+                .collect(),
+            samples: (samples.iter())
+                .map(|&(day, dimension, key, sample, count)| RollupSample {
+                    day: text(day),
+                    dimension: text(dimension),
+                    key: text(key),
+                    sample,
+                    count,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn pipeline_rollup_reads_one_pipeline_and_refuses_days_pruned_without_it() {
+        let (day, before) = ("2026-11-14", "2026-11-13");
+        // Three reviews of the repositories `o/w` and `o/g` in the pipelines `p` and `q`, and a
+        // stop; reviewers `r` and `s`.
+        let pruned: Vec<Count> = vec![
+            (day, "day", "", "started", 3),
+            (day, "day", "", "completed", 3),
+            (day, "day", "", "stopped", 2),
+            (day, "verifier", "o/w#r", "checked", 2),
+            (day, "pipeline", "o/w#p", "started", 1),
+            (day, "pipeline", "o/w#p", "completed", 1),
+            (day, "pipeline", "o/w#q", "started", 1),
+            (day, "pipeline", "o/w#q", "completed", 1),
+            (day, "pipeline", "o/g#p", "started", 1),
+            (day, "pipeline", "o/g#p", "completed", 1),
+            (day, "pipeline", "o/g#p", "published", 1),
+            (day, "pipeline_verifier", "o/w#p#r", "checked", 1),
+            (day, "pipeline_disagreement", "o/g#p", "disagreed", 1),
+            (
+                day,
+                "pipeline_disagreement_reviewer",
+                "o/g#p#s",
+                "blocked_alone",
+                1,
+            ),
+        ];
+        let samples: Vec<Sample> = vec![
+            (day, "day", "", 600, 1),
+            (day, "pipeline", "o/g#p", 600, 1),
+            (day, "pipeline_request", "o/w#p", 900, 1),
+        ];
+        let with = |extra: &[Count]| rollup(&[pruned.as_slice(), extra].concat(), &samples);
+        let read = |stored: &Rollup, pipeline: &str, repository: Option<&str>| {
+            let got = pipeline_rollup(stored, pipeline, repository);
+            got.map_err(|err| error_code(&err).to_owned())
+        };
+        let ok = |counts: &[Count], samples: &[Sample]| Ok(Some(rollup(counts, samples)));
+        let (started, completed) = (
+            (day, "day", "", "started", 1),
+            (day, "day", "", "completed", 1),
+        );
+        let p = [
+            started,
+            completed,
+            started,
+            completed,
+            (day, "day", "", "published", 1),
+            (day, "verifier", "o/w#r", "checked", 1),
+            (day, "disagreement", "o/g", "disagreed", 1),
+            (day, "disagreement_reviewer", "o/g#s", "blocked_alone", 1),
+        ];
+        let p_samples = [(day, "day", "", 600, 1), (day, "request", "o/w", 900, 1)];
+        let w = [started, completed, (day, "verifier", "o/w#r", "checked", 1)];
+        let across = [
+            (before, "day", "", "started", 1),
+            (before, "pipeline", "o/w#q", "started", 1),
+            completed,
+            (day, "pipeline", "o/w#q", "completed", 1),
+        ];
+        let cancel = [across[0], (day, "pipeline", "o/w#q", "started", 1)];
+        let broken = [(day, "pipeline_verifier", "o/w", "checked", 1)];
+        let cases = [
+            (
+                "no rollup",
+                read(&Rollup::default(), "p", None),
+                ok(&[], &[]),
+            ),
+            (
+                "pipeline p",
+                read(&with(&[]), "p", None),
+                ok(&p, &p_samples),
+            ),
+            (
+                "p of o/w",
+                read(&with(&[]), "p", Some("o/w")),
+                ok(&w, &p_samples[1..]),
+            ),
+            (
+                "pipeline q",
+                read(&with(&[]), "q", None),
+                ok(&[started, completed], &[]),
+            ),
+            (
+                "unknown pipeline",
+                read(&with(&[]), "x", None),
+                ok(&[], &[]),
+            ),
+            (
+                "stops only",
+                read(&rollup(&pruned[2..3], &[]), "p", None),
+                ok(&[], &[]),
+            ),
+            (
+                "created the day before",
+                read(&rollup(&across, &[]), "q", None),
+                { ok(&[across[0], completed], &[]) },
+            ),
+            (
+                "pruned without pipelines",
+                read(&rollup(&pruned[..2], &[]), "p", None),
+                Ok(None),
+            ),
+            (
+                "one review without",
+                read(&with(&[completed]), "p", None),
+                Ok(None),
+            ),
+            (
+                "two days cancel",
+                read(&rollup(&cancel, &[]), "q", None),
+                Ok(None),
+            ),
+            (
+                "key without pipeline",
+                read(&rollup(&broken, &[]), "p", None),
+                { Err("store_state_invalid".to_owned()) },
+            ),
+        ];
+        for (name, got, want) in cases {
             assert_eq!(got, want, "{name}");
         }
     }

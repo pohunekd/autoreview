@@ -1,7 +1,8 @@
 //! The daily rollup: counts of pruned reviews and of stops, kept past the review retention.
 //!
 //! The tables have no foreign key to `reviews`, so pruning leaves them alone, and an engine
-//! that does not know them opens the file unchanged.
+//! that does not know them opens the file unchanged. A reader skips a dimension it does not
+//! know, so an older engine and `stats` ignore the `pipeline` dimensions.
 
 // Rust guideline compliant 2026-06-26
 
@@ -65,7 +66,42 @@ pub(crate) const DIMENSION_DISAGREEMENT: &str = "disagreement";
 ///
 /// The key is `repository#reviewer ID`, on the UTC day the review completed.
 pub(crate) const DIMENSION_DISAGREEMENT_REVIEWER: &str = "disagreement_reviewer";
+/// Dimension of the `repository` counts and samples of one pipeline.
+///
+/// The key is `repository#pipeline`. The `pipeline` dimensions count the pruned reviews once
+/// more, by pipeline; only `report --pipeline` reads them.
+pub(crate) const DIMENSION_PIPELINE: &str = "pipeline";
+/// Dimension of the `request` samples of one pipeline; the key is `repository#pipeline`.
+pub(crate) const DIMENSION_PIPELINE_REQUEST: &str = "pipeline_request";
+/// Dimension of the `verifier` counts of one pipeline.
+///
+/// The key is `repository#pipeline#reviewer ID`.
+pub(crate) const DIMENSION_PIPELINE_VERIFIER: &str = "pipeline_verifier";
+/// Dimension of the `disagreement` counts of one pipeline; the key is `repository#pipeline`.
+pub(crate) const DIMENSION_PIPELINE_DISAGREEMENT: &str = "pipeline_disagreement";
+/// Dimension of the `disagreement_reviewer` counts of one pipeline.
+///
+/// The key is `repository#pipeline#reviewer ID`.
+pub(crate) const DIMENSION_PIPELINE_DISAGREEMENT_REVIEWER: &str = "pipeline_disagreement_reviewer";
 
+/// Each dimension that `report --pipeline` reads, with its dimension per pipeline.
+///
+/// The key per pipeline is the plain key with `#pipeline` after its repository.
+pub(crate) const PIPELINE_DIMENSIONS: [(&str, &str); 5] = [
+    (DIMENSION_REPOSITORY, DIMENSION_PIPELINE),
+    (DIMENSION_REQUEST, DIMENSION_PIPELINE_REQUEST),
+    (DIMENSION_VERIFIER, DIMENSION_PIPELINE_VERIFIER),
+    (DIMENSION_DISAGREEMENT, DIMENSION_PIPELINE_DISAGREEMENT),
+    (
+        DIMENSION_DISAGREEMENT_REVIEWER,
+        DIMENSION_PIPELINE_DISAGREEMENT_REVIEWER,
+    ),
+];
+
+/// Counter of the attempts created on the day, `Counters::started`.
+pub(crate) const COUNTER_STARTED: &str = "started";
+/// Counter of the attempts completed on the day, `Counters::completed`.
+pub(crate) const COUNTER_COMPLETED: &str = "completed";
 /// Counter of the pull requests whose schedule record entered `failed`.
 pub(crate) const COUNTER_STOPPED: &str = "stopped";
 /// Counter of a pruned first publication of a review request; its value is 1.
@@ -87,10 +123,12 @@ pub struct RollupCount {
     /// UTC day, `YYYY-MM-DD`.
     pub day: String,
     /// What the key names: `day`, `repository`, `rule`, `reviewer`, `failure`, `step`,
-    /// `request_id`, `verifier`, `disagreement` or `disagreement_reviewer`.
+    /// `request_id`, `verifier`, `disagreement`, `disagreement_reviewer`, or one of the five
+    /// `pipeline` dimensions of `PIPELINE_DIMENSIONS`.
     pub dimension: String,
-    /// Repository, rule `match`, reviewer ID, error code, step, review request or
-    /// `repository#reviewer ID`; empty for `day`.
+    /// Repository, rule `match`, reviewer ID, error code, step, review request,
+    /// `repository#reviewer ID`, or one of these with `#pipeline` after the repository; empty
+    /// for `day`.
     pub key: String,
     /// Name of the counter, as the statistics document names it.
     pub counter: String,
