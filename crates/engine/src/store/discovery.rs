@@ -35,6 +35,10 @@ const HOST_OUTAGE_PREFIX: &str = "host:";
 /// Key prefix of a pull request that the last pass skipped, in the `rejected` entry.
 const SKIPPED_PREFIX: &str = "skipped:";
 
+/// Key of the last weekly report send in the `rejected` entry, which has no `owner/name#N`
+/// key with a `:` before its `/`.
+const WEEKLY_REPORT_SENT_KEY: &str = "report:weekly_report_sent";
+
 /// The discovery maps; all but `host_outages` are keyed by the `repository#number` key of a
 /// pull request.
 ///
@@ -55,6 +59,9 @@ pub struct DiscoveryState {
     /// Reason of each pull request that the last pass skipped, such as `untrusted_author`.
     /// Stored in the `rejected` entry under [`SKIPPED_PREFIX`].
     pub skipped: BTreeMap<String, String>,
+    /// When the review queue last sent the weekly report, RFC 3339 as stored.
+    /// Stored in the `rejected` entry under [`WEEKLY_REPORT_SENT_KEY`].
+    pub weekly_report_sent: Option<String>,
 }
 
 impl Store {
@@ -101,7 +108,9 @@ impl Store {
                 STATE_REJECTED => {
                     let entries: BTreeMap<String, String> = read_entry(&name, &value)?;
                     for (key, code) in entries {
-                        if let Some(host) = key.strip_prefix(HOST_OUTAGE_PREFIX) {
+                        if key == WEEKLY_REPORT_SENT_KEY {
+                            state.weekly_report_sent = Some(code);
+                        } else if let Some(host) = key.strip_prefix(HOST_OUTAGE_PREFIX) {
                             state.host_outages.insert(host.to_owned(), code);
                         } else if let Some(skipped) = key.strip_prefix(SKIPPED_PREFIX) {
                             state.skipped.insert(skipped.to_owned(), code);
@@ -144,7 +153,8 @@ impl Store {
 
     /// Writes the four entries in schedule, published, awaiting, rejected order.
     ///
-    /// The `rejected` entry holds the host outages and the skipped pull requests as well. A
+    /// The `rejected` entry holds the host outages, the skipped pull requests and the last
+    /// weekly report send as well. A
     /// schedule record that enters `failed` adds one stop to the rollup of the current UTC day,
     /// in the same transaction, so a restart never counts it again.
     ///
@@ -180,6 +190,9 @@ impl Store {
         }
         for (key, reason) in &state.skipped {
             rejected.insert(format!("{SKIPPED_PREFIX}{key}"), reason.clone());
+        }
+        if let Some(sent) = &state.weekly_report_sent {
+            rejected.insert(WEEKLY_REPORT_SENT_KEY.to_owned(), sent.clone());
         }
         write_entry(transaction, STATE_REJECTED, &rejected)?;
         Ok(())

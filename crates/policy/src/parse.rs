@@ -39,6 +39,9 @@ const UNMATCHED_SKIP: &str = "skip";
 /// Prefix of a label trigger.
 const LABEL_TRIGGER_PREFIX: &str = "label:";
 
+/// The `notifications` key of the weekly report in the review queue digest.
+const WEEKLY_REPORT: &str = "weekly_report";
+
 /// Severities a blocking finding can have, so the only ones a verifier can demote.
 const BLOCKING_SEVERITIES: &[&str] = &["critical", "high"];
 
@@ -333,7 +336,7 @@ pub fn parse(
     let pipelines = parse_pipelines(&document.pipelines, &reviewers, &read_prompt)?;
     let (rules, rule_authors) = parse_rules(&document.repositories, &pipelines)?;
     let author_limits = parse_author_limits(&document.repositories)?;
-    let notifications = parse_notifications(&document.notifications)?;
+    let (notifications, weekly_report) = parse_notifications(&document.notifications)?;
     let reminder_hours = parse_notes_handoff(document.notes_handoff.as_ref(), &rules)?;
     let mut authors = Vec::new();
     for author in &document.ready_draft_authors {
@@ -360,6 +363,7 @@ pub fn parse(
         author_limits,
         ready_draft_authors: authors,
         notifications,
+        weekly_report,
         approval_timeout: Duration::from_hours(document.approval.timeout_hours.unsigned_abs()),
         handoff_reminder: Duration::from_hours(reminder_hours.unsigned_abs()),
         digest,
@@ -1004,12 +1008,13 @@ fn parse_notes_handoff(raw: Option<&FileNotesHandoff>, rules: &[Rule]) -> Result
 /// Validates the notification level of every known event.
 ///
 /// Every required event needs a level; an optional event is kept only when it is named. No
-/// other event may appear.
+/// other event may appear. The flag is the weekly report, which is not an event of the map, so
+/// it changes neither the review inputs nor the digest.
 fn parse_notifications(
     raw: &BTreeMap<String, Option<String>>,
-) -> Result<BTreeMap<Event, Level>, Error> {
+) -> Result<(BTreeMap<Event, Level>, bool), Error> {
     let optional = OPTIONAL_EVENTS.iter().map(|(event, _)| event);
-    for key in raw.keys() {
+    for key in raw.keys().filter(|key| *key != WEEKLY_REPORT) {
         if !EVENTS
             .iter()
             .chain(optional.clone())
@@ -1041,7 +1046,12 @@ fn parse_notifications(
         };
         notifications.insert(event.clone(), level);
     }
-    Ok(notifications)
+    let weekly_report = match raw.get(WEEKLY_REPORT).map(Option::as_deref) {
+        None | Some(Some("off")) => false,
+        Some(Some("digest")) => true,
+        Some(_) => return Err(Error::WeeklyReportLevel),
+    };
+    Ok((notifications, weekly_report))
 }
 
 /// Returns the value among values whose text is raw.
@@ -1266,6 +1276,26 @@ notifications:
                 && level(&named, Event::CredentialInvalid) == Some(Level::Action)
                 && named.digest() != parsed.digest(),
             "optional events: the default levels or the named one"
+        );
+        // The weekly report (#52): absent and `off` leave it out, `digest` sets it; it is not an
+        // event of the map, so neither value changes the digest or the review inputs.
+        for (value, want) in [("digest", true), ("off", false)] {
+            let document = VALID_POLICY.replacen(
+                "  superseded: log\n",
+                &format!("  superseded: log\n  weekly_report: {value}\n"),
+                1,
+            );
+            let weekly = parse(document.as_bytes(), prompts).expect("a weekly report parses");
+            assert!(
+                weekly.weekly_report() == want
+                    && weekly.digest() == parsed.digest()
+                    && weekly.notifications() == parsed.notifications(),
+                "weekly_report: {value}"
+            );
+        }
+        assert!(
+            !parsed.weekly_report(),
+            "no key leaves the weekly report out"
         );
     }
 
@@ -1586,6 +1616,10 @@ notifications:
             ("unknown event", valid.replacen("  superseded: log\n", "  superseded: log\n  merged: log\n", 1), "unknown event"),
             ("bad level", valid.replacen("superseded: log", "superseded: telegram", 1), "level must be"),
             ("bad optional level", valid.replacen("  superseded: log\n", "  superseded: log\n  credential_expiring: loud\n", 1), "event credential_expiring level must be"),
+            ("weekly report at action", valid.replacen("  superseded: log\n", "  superseded: log\n  weekly_report: action\n", 1), "event weekly_report level must be digest or off"),
+            ("weekly report at log", valid.replacen("  superseded: log\n", "  superseded: log\n  weekly_report: log\n", 1), "event weekly_report level must be digest or off"),
+            ("null weekly report", valid.replacen("  superseded: log\n", "  superseded: log\n  weekly_report: null\n", 1), "event weekly_report level must be digest or off"),
+            ("unknown weekly report level", valid.replacen("  superseded: log\n", "  superseded: log\n  weekly_report: weekly\n", 1), "event weekly_report level must be digest or off"),
             ("approval timeout", valid.replacen("timeout_hours: 24", "timeout_hours: 0", 1), "timeout_hours"),
             ("no source", valid.replacen("project_sources: [manual]}", "project_sources: []}", 1), "project_sources"),
             ("second document", format!("{valid}---\nversion: 1\n"), "exactly one YAML document"),

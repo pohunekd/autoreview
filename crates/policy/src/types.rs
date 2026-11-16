@@ -596,6 +596,8 @@ pub struct Policy {
     pub(crate) ready_draft_authors: Vec<String>,
     /// The level of every required event and of each optional event the file names.
     pub(crate) notifications: BTreeMap<Event, Level>,
+    /// Whether the review queue digest carries the weekly report.
+    pub(crate) weekly_report: bool,
     /// How long a review waits for the user's approval.
     pub(crate) approval_timeout: Duration,
     /// How long notes handed to an author wait before the user is reminded; zero when no rule hands
