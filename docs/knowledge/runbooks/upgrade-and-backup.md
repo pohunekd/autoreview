@@ -106,6 +106,31 @@ Its line `autoreview.service restarted` is the restart of step 4's window. When
 fix the configuration and run it again. It also installs the units of the new
 archive. Check the state as in step 5.
 
+### With scripts/setup
+
+Back up the store first, then run `scripts/setup` from a checkout of the new
+release tag with the same `--dir`. It installs the release that its
+`AUTOREVIEW_VERSION` names and runs `validate` with the secrets file before it
+touches the service. It keeps every agent profile that exists (`in place`), so
+it does not do step 4, and step 4 comes before the restart:
+
+1. When the script asks to restart the service on the new binary, or to
+   replace the service's units or agents, decline. It stops with exit code 4,
+   changes nothing of that step, and the old service keeps running.
+2. Do step 4 for every profile, with the new `~/.local/bin/autoreview`.
+3. Run the script again with the same `--dir` and accept its restart: the
+   service still runs the older binary, so it asks again. The restart is
+   `systemctl --user restart autoreview.service`; on a Mac (from the first
+   release after 0.5.0, #513)
+   `launchctl kickstart -k gui/$(id -u)/io.github.pohunekd.autoreview`, or the
+   install of the agents when their files changed.
+
+A later run that shows the service step as `in place, skipped`, with no note
+that the running binary is unreadable, confirms that the service started on
+the installed binary. On a Mac, `scripts/macos-check service` then checks the
+rest of the state: every line `ok`. Its process check compares paths only, so
+it cannot tell whether the service started before the binary was replaced.
+
 ## Store migrations
 
 Every command that opens the store creates or extends its schema on the first
@@ -140,8 +165,16 @@ and nothing prunes the tables.
 
 Roll back only with a backup taken before the upgrade:
 
-1. Stop the service: `sudo systemctl stop autoreview.service`.
-2. Restore the old binary (`/usr/local/bin/autoreview.previous`).
+1. Stop the service: `sudo systemctl stop autoreview.service` (with
+   `scripts/setup`, `systemctl --user stop autoreview.service`; on a Mac,
+   `launchctl bootout gui/$(id -u)/io.github.pohunekd.autoreview`, and
+   `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.pohunekd.autoreview.plist`
+   to start it again after the steps below; the service can take 90 s to stop,
+   and the bootstrap fails while
+   `launchctl print gui/$(id -u)/io.github.pohunekd.autoreview` still finds it).
+2. Restore the old binary (`/usr/local/bin/autoreview.previous`; with
+   `scripts/setup`, install the binary of the old release archive as
+   `~/.local/bin/autoreview`).
 3. If the new version may have changed the store, restore the backup over
    `store.path` while the service is stopped. Reviews published after the backup
    are not in the restored store; check them on GitHub before you retry.

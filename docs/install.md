@@ -2,7 +2,7 @@
 type: Reference
 id: reference/install
 title: Install autoreview
-description: Prerequisites, the two install paths (release archive with checksum and attestation, systemd units with their installer), building from source, first configuration, the first review and where to go for upgrades.
+description: Prerequisites, the two install paths (release archive with checksum and attestation, systemd units with their installer), the Apple Silicon archive, building from source, first configuration, the first review and where to go for upgrades.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -13,7 +13,9 @@ intents: [setup, help]
 > 0.5.0 release. A part that is not available names its open issue. The release
 > archives are published from `v0.1.0` on; the release workflow builds and
 > attests them. The systemd units and their installer of path b are in the
-> archives from 0.4.0 on. A container image is not available (#40).
+> archives from 0.4.0 on. The Apple Silicon archive and `scripts/setup` on macOS
+> come with the first release after 0.5.0 (#513). A container image is not
+> available (#40).
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
 agents run as reviewers in pohunek sessions on the **review hosts**, where a
@@ -52,12 +54,15 @@ pohunek daemon runs and the repositories are registered.
 
 ## Choose an install path
 
-To run autoreview and the pohunek daemon together on one Linux machine as your
-own user, run `scripts/setup` from a checkout of the repository: it installs
-both from their release archives, writes the configuration and the user
-service, and asks before every change. See
+To run autoreview and the pohunek daemon together on one Linux machine, or one
+Mac with Apple Silicon (from the first release after 0.5.0, #513), as your own
+user, run `scripts/setup` from a checkout of
+the repository: it installs both from their release archives, writes the
+configuration and the user service (systemd user units on Linux, launchd agents
+on macOS), and asks before every change. See
 [getting started](knowledge/guides/getting-started.md). The paths below are for
-a dedicated server user. To learn the steps on one repository first, follow the
+a dedicated server user on Linux; on a Mac, use `scripts/setup`. To learn the
+steps on one repository first, follow the
 [quickstart](knowledge/guides/quickstart.md). To let a coding agent take these
 steps with you, paste the prompt of
 [install with an agent](../README.md#install-with-an-agent) into it.
@@ -108,6 +113,35 @@ tar -xzf "$archive"
 sudo install -m 0755 "autoreview-$version-$target/autoreview" /usr/local/bin/autoreview
 autoreview --version
 ```
+
+### Apple Silicon archive
+
+From the first release after 0.5.0 on (#513), each release also carries
+`autoreview-<version>-aarch64-apple-darwin.tar.gz` for macOS 14 or newer, with
+its `.sha256` file and the same attestation. It holds the binary, `LICENSE` and
+`README.md`, and no `deploy/`: the units of path b need systemd. `scripts/setup`
+installs it with the launchd agents; to check a download by hand, use
+`scripts/macos-check` from a checkout of the release tag:
+
+```sh
+version=X.Y.Z  # a release after 0.5.0; 0.5.0 has no darwin archive
+archive="autoreview-$version-aarch64-apple-darwin.tar.gz"
+curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"
+curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive.sha256"
+scripts/macos-check archive "$archive"
+```
+
+It checks the platform (Darwin arm64, macOS 14 or newer), the `.sha256` line
+(`shasum -a 256`), the attestation with the flags above (with a logged-in
+`gh`), the quarantine attribute, the members, the ad-hoc code signature with
+the identifier `io.github.pohunekd.autoreview`, the system libraries and
+`autoreview --version`. It prints an `ok` line per check, or `skip` for the
+libraries when the Xcode command line tools are not installed, and stops at the
+first `FAIL` with exit code 1. The binary is ad-hoc
+signed and not notarized. A file that `curl` or `gh release download` fetched
+carries no `com.apple.quarantine` attribute, so Gatekeeper does not block it; a
+browser download carries it, and the script refuses such a file: download it
+again with `curl` or `gh`.
 
 ### Build from source
 
@@ -217,8 +251,11 @@ exist on the review host. Install the same autoreview binary there and write the
 profile with [`autoreview profiles install`](cli.md#autoreview-profiles-install),
 run as the user of the pohunek daemon on that host. It also writes the reviewer
 adapter that the profile starts, which needs Python 3.11 or newer as `python3`.
-The Codex adapter also needs Linux (`PR_SET_CHILD_SUBREAPER`); on another system
-it exits with status 64 before Codex starts.
+The Codex adapter also needs Linux (`PR_SET_CHILD_SUBREAPER`): on another system,
+such as a Mac review host, `profiles install --agent codex` refuses with
+`profile_agent_unsupported` (from the first release after 0.5.0, #513), and
+the adapter itself exits with status 64 before Codex starts. Claude reviewers
+run on both.
 
 Check configuration, policy and prompts before every start, as the service user
 with the secrets file of path b:

@@ -121,14 +121,16 @@ reviewer, severity and repository over a range of days.
   runtime packages installed.
 - The GitHub CLI and one token, of your own account or a machine user, or one
   token per owner or repository. [GitHub identity](knowledge/concepts/github-identity.md)
-- Linux with systemd. A container image is not available (#40).
+- Linux with systemd, or, from the first release after 0.5.0 (#513), macOS 14
+  or newer on Apple Silicon with launchd, where reviewers run Claude Code only:
+  the Codex adapter needs Linux. A container image is not available (#40).
 
 ## Documentation map
 
 | Start here | |
 |---|---|
-| [Install](install.md) | Release binary, systemd units, first configuration, first review |
-| [Getting started](knowledge/guides/getting-started.md) | One Linux machine set up by `scripts/setup` |
+| [Install](install.md) | Release binary, the Apple Silicon archive, systemd units, first configuration, first review |
+| [Getting started](knowledge/guides/getting-started.md) | One Linux machine, or one Mac from the first release after 0.5.0 (#513), set up by `scripts/setup` |
 | [Quickstart](knowledge/guides/quickstart.md) | One repository, one reviewer, comments only |
 | [Use cases](knowledge/guides/index.md) | Pick a scenario and combine them |
 
