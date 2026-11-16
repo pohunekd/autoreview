@@ -1046,7 +1046,10 @@ fn history(
 }
 
 /// Turns a sorted map into breakdown entries, finishing each value with `finish`.
-fn keyed<K: ToString, V, T>(map: BTreeMap<K, V>, finish: impl Fn(V) -> T) -> Vec<Keyed<T>> {
+pub(crate) fn keyed<K: ToString, V, T>(
+    map: BTreeMap<K, V>,
+    finish: impl Fn(V) -> T,
+) -> Vec<Keyed<T>> {
     map.into_iter()
         .map(|(key, value)| Keyed {
             key: key.to_string(),
