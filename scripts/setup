@@ -31,6 +31,9 @@ AUTOREVIEW_VERSION="0.5.0"
 CODEX_ADAPTER_RELEASE="0.4.0"
 # pohunek's login service needs systemd 255 or newer.
 SYSTEMD_MIN_VERSION=255
+# The folders of the home directory that macOS privacy protection (TCC) closes
+# to a launchd job without an explicit grant.
+TCC_FOLDERS=(Desktop Documents Downloads "Library/Mobile Documents")
 # The reviewer adapters need Python 3.11 or newer.
 PYTHON_MIN_VERSION="3.11.0"
 POHUNEK_REPOSITORY="zajca/pohunek"
@@ -238,6 +241,67 @@ path_trust() {
     esac
 }
 
+# Prints the macOS `stat -f '%u %Mp%Lp %HT'` line $1 as the `stat -c '%u %a %F'`
+# line of Linux that path_trust reads: the mode without leading zeros and the
+# type in lower case. Fails on a malformed line.
+bsd_stat_line() {
+    local owner mode type
+    read -r owner mode type <<<"$1"
+    [[ $owner =~ ^[0-9]+$ && $mode =~ ^[0-7]+$ && -n $type ]] || return 1
+    printf '%s %o %s\n' "$owner" "$((8#$mode))" "$(tr '[:upper:]' '[:lower:]' <<<"$type")"
+}
+
+# Prints the path_trust line of path $1.
+stat_line() {
+    if [ "$os" = Darwin ]; then
+        bsd_stat_line "$(LC_ALL=C stat -f '%u %Mp%Lp %HT' -- "$1")"
+    else
+        LC_ALL=C stat -c '%u %a %F' -- "$1"
+    fi
+}
+
+# Prints the owner uid of path $1.
+file_owner() {
+    if [ "$os" = Darwin ]; then
+        stat -f %u -- "$1"
+    else
+        stat -c %u "$1"
+    fi
+}
+
+# Prints the permission bits of path $1 in octal without leading zeros.
+file_mode() {
+    local mode
+    if [ "$os" = Darwin ]; then
+        mode=$(stat -f '%Mp%Lp' -- "$1") && printf '%o\n' "$((8#$mode))"
+    else
+        stat -c %a "$1"
+    fi
+}
+
+# Reports whether path $1 is one of the TCC_FOLDERS of home $2 or inside one.
+# APFS compares names without case, so the comparison ignores case too.
+tcc_protected() {
+    local path folder
+    path=$(tr '[:upper:]' '[:lower:]' <<<"$1")
+    for folder in "${TCC_FOLDERS[@]}"; do
+        folder=$(tr '[:upper:]' '[:lower:]' <<<"$2/$folder")
+        case $path in
+            "$folder" | "$folder"/*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Prints the command that checks a downloaded .sha256 file $1 on this platform.
+checksum_command() {
+    if [ "$os" = Darwin ]; then
+        echo "shasum -a 256 --check $1"
+    else
+        echo "sha256sum --check $1"
+    fi
+}
+
 # Checks the pure functions of this script against fixed tables; reads nothing
 # else. The profile tables and the paths are local, so the functions under
 # test read them.
@@ -245,7 +309,7 @@ self_test() {
     local checks=0 failures=0 expected name
     local autoreview_bin=/h/.local/bin/autoreview pohunek_timeout=45
     local dir=/h/autoreview env_file=/h/.config/autoreview/autoreview.env
-    local AUTOREVIEW_VERSION=0.5.0 CODEX_ADAPTER_RELEASE=0.4.0
+    local AUTOREVIEW_VERSION=0.5.0 CODEX_ADAPTER_RELEASE=0.4.0 os=Linux
     local -a install_command=() unit_names=() unit_texts=()
     local -A profile_agent=([one]=claude [two]=codex) profile_model=([one]=m-1 [two]=m.2)
     local -A profile_effort=([one]=max [two]=xhigh) profile_input=([one]=1048576 [two]=2048)
@@ -291,6 +355,39 @@ self_test() {
         "$(choose_targets Linux aarch64 gnu || echo error)"
     check "armv7" error "$(choose_targets Linux armv7l gnu || echo error)"
     check "macOS" error "$(choose_targets Darwin arm64 none || echo error)"
+    check "BSD stat of a directory" "501 755 directory" \
+        "$(bsd_stat_line '501 0755 Directory' || echo error)"
+    check "BSD stat of a sticky directory" "0 1777 directory" \
+        "$(bsd_stat_line '0 1777 Directory' || echo error)"
+    check "BSD stat of a file" "501 600 regular file" \
+        "$(bsd_stat_line '501 0600 Regular File' || echo error)"
+    check "BSD stat of a link" "501 755 symbolic link" \
+        "$(bsd_stat_line '501 0755 Symbolic Link' || echo error)"
+    check "BSD stat malformed" error "$(bsd_stat_line 'x 0755 Directory' || echo error)"
+    check "trust of root's sticky directory on macOS" trusted \
+        "$(path_trust "$(bsd_stat_line '0 1777 Directory')" 501 0 ancestor || echo error)"
+    check "trust of a group-writable directory on macOS" writable \
+        "$(path_trust "$(bsd_stat_line '501 0775 Directory')" 501 0 dir || echo error)"
+    check "trust of a private file on macOS" trusted \
+        "$(path_trust "$(bsd_stat_line '501 0600 Regular File')" 501 0 file || echo error)"
+    tcc() {
+        if tcc_protected "$1" /Users/a; then echo protected; else echo open; fi
+    }
+    check "TCC Documents" protected "$(tcc /Users/a/Documents)"
+    check "TCC below Desktop" protected "$(tcc /Users/a/Desktop/autoreview)"
+    check "TCC in another case" protected "$(tcc /Users/a/downloads/x)"
+    check "TCC iCloud Drive" protected \
+        "$(tcc '/Users/a/Library/Mobile Documents/com~apple~CloudDocs')"
+    check "TCC a longer name" open "$(tcc /Users/a/Documentsx)"
+    check "TCC the config home" open "$(tcc /Users/a/.config/autoreview)"
+    check "TCC another home" open "$(tcc /Users/b/Documents)"
+    check "checksum command on Linux" "sha256sum --check a.sha256" "$(checksum_command a.sha256)"
+    check "checksum command on macOS" "shasum -a 256 --check a.sha256" \
+        "$(os=Darwin checksum_command a.sha256)"
+    check "download check line on macOS" "shasum -a 256 --check x.tar.gz.sha256" \
+        "$(os=Darwin download_commands o/r x.tar.gz 1.0.0 | tail -n 1)"
+    check "download check line on Linux" "sha256sum --check x.tar.gz.sha256" \
+        "$(download_commands o/r x.tar.gz 1.0.0 | tail -n 1)"
     check "systemd 255" 255 "$(systemd_version_of 'systemd 255 (255.4-1ubuntu8)' || echo error)"
     check "systemd 257" 257 "$(systemd_version_of 'systemd 257 (257.9-arch1-1)' || echo error)"
     check "systemd other text" error "$(systemd_version_of 'not systemd 255' || echo error)"
@@ -573,7 +670,7 @@ untrusted_lines() {
     local target=$1 role current="" part line state owner mode reason i user root
     local -a parts found=()
     user=$(id -u)
-    root=$(stat -c %u /) || fail 3 "missing the owner of /; stat failed"
+    root=$(file_owner /) || fail 3 "missing the owner of /; stat failed"
     IFS=/ read -r -a parts <<<"${target#/}"
     for part in "${parts[@]}"; do
         [ -n "$part" ] || continue
@@ -586,7 +683,7 @@ untrusted_lines() {
         current=${found[i]}
         role=ancestor
         [ "$current" != "$target" ] || role=$2
-        line=$(LC_ALL=C stat -c '%u %a %F' -- "$current") \
+        line=$(stat_line "$current") \
             || fail 3 "missing the mode of $current; stat failed"
         state=$(path_trust "$line" "$user" "$root" "$role") \
             || fail 3 "missing the mode of $current; stat printed $line"
@@ -654,6 +751,7 @@ detect_machine() {
     local system machine libc targets tool missing="" python systemd name
     system=$(uname -s)
     machine=$(uname -m)
+    os=$system
     libc=none
     if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
         libc=gnu
@@ -849,15 +947,20 @@ download_checked() {
     then
         fail 5 "$name failed its checksum: $name.sha256 does not name it"
     fi
-    (cd "$work" && sha256sum --check --quiet -- "$name.sha256") >/dev/null \
-        || fail 5 "$name failed its checksum"
+    if [ "$os" = Darwin ]; then
+        (cd "$work" && shasum -a 256 --check --status -- "$name.sha256") \
+            || fail 5 "$name failed its checksum"
+    else
+        (cd "$work" && sha256sum --check --quiet -- "$name.sha256") >/dev/null \
+            || fail 5 "$name failed its checksum"
+    fi
 }
 
 # Prints the commands of a download of asset $2 of release v$3 of repository $1.
 download_commands() {
     local base="https://github.com/$1/releases/download/v$3"
     printf '%s\n' "curl -fsSL -o $2 $base/$2" "curl -fsSL -o $2.sha256 $base/$2.sha256" \
-        "sha256sum --check $2.sha256"
+        "$(checksum_command "$2.sha256")"
 }
 
 step_autoreview() {
@@ -997,7 +1100,7 @@ step_config() {
 
 step_secrets_file() {
     if [ -f "$env_file" ]; then
-        [ "$(stat -c %a "$env_file")" = 600 ] \
+        [ "$(file_mode "$env_file")" = 600 ] \
             || fail 9 "$env_file must have mode 0600; run chmod 0600 $env_file"
         in_place "secrets file $env_file"
         return
