@@ -27,6 +27,7 @@ use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::model::{
     ApproveRequest, ResolveRequest, RetryRequest, head_prefix_valid, repository_valid, sha_valid,
 };
+use autoreview_engine::report::ReportRequest;
 use autoreview_engine::stats::parse_day;
 use autoreview_engine::store::{ReviewFilter, Store};
 use autoreview_engine::{
@@ -163,6 +164,8 @@ enum EngineCommand {
     Review(ReviewArguments),
     /// Prints the review statistics: the current state and, with `--since`, the daily counts.
     Stats(StatsArguments),
+    /// Prints the review report of a range of UTC days: timing, decisions, finding outcomes.
+    Report(ReportArguments),
     /// Prints the recorded finding outcomes.
     #[command(subcommand)]
     Findings(FindingsCommand),
@@ -192,6 +195,26 @@ struct StatsArguments {
     #[arg(long, value_name = "DATE")]
     until: Option<String>,
     /// Prints the JSON document instead of the text summary.
+    #[arg(long)]
+    json: bool,
+}
+
+/// The options of `report`.
+#[derive(Debug, Args)]
+struct ReportArguments {
+    /// First UTC day of the report, as YYYY-MM-DD.
+    #[arg(long, value_name = "DATE")]
+    since: String,
+    /// Last UTC day of the report, as YYYY-MM-DD; today (UTC) when absent.
+    #[arg(long, value_name = "DATE")]
+    until: Option<String>,
+    /// Counts only this repository, as lowercase `owner/name`.
+    #[arg(long, value_name = "OWNER/REPO")]
+    repo: Option<String>,
+    /// Counts only the reviews and findings of this policy pipeline.
+    #[arg(long, value_name = "NAME")]
+    pipeline: Option<String>,
+    /// Prints the JSON document instead of the text table.
     #[arg(long)]
     json: bool,
 }
@@ -449,6 +472,20 @@ async fn run_engine(
         EngineCommand::Stats(arguments) => {
             let (since, until) = (arguments.since.as_deref(), arguments.until.as_deref());
             let document = engine.review_stats(cancel, since, until)?;
+            if arguments.json {
+                print_json(&document)
+            } else {
+                print_text(&document.to_string())
+            }
+        }
+        EngineCommand::Report(arguments) => {
+            let request = ReportRequest {
+                since: arguments.since,
+                until: arguments.until,
+                repository: arguments.repo,
+                pipeline: arguments.pipeline,
+            };
+            let document = engine.review_report(cancel, &request)?;
             if arguments.json {
                 print_json(&document)
             } else {

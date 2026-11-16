@@ -990,7 +990,7 @@ fn current_state(
 }
 
 /// Counts the rows, the step runs and the rollup of the snapshot inside `range`.
-fn history(
+pub(crate) fn history(
     snapshot: &StatsSnapshot,
     range: &StatsRange,
     pruned_before: OffsetDateTime,
@@ -1046,7 +1046,10 @@ fn history(
 }
 
 /// Turns a sorted map into breakdown entries, finishing each value with `finish`.
-fn keyed<K: ToString, V, T>(map: BTreeMap<K, V>, finish: impl Fn(V) -> T) -> Vec<Keyed<T>> {
+pub(crate) fn keyed<K: ToString, V, T>(
+    map: BTreeMap<K, V>,
+    finish: impl Fn(V) -> T,
+) -> Vec<Keyed<T>> {
     map.into_iter()
         .map(|(key, value)| Keyed {
             key: key.to_string(),
@@ -1149,7 +1152,7 @@ fn state_line(counts: &StateCounts) -> String {
 }
 
 /// Returns seconds as text, or `none` without a published review.
-fn seconds_text(seconds: Option<i64>) -> String {
+pub(crate) fn seconds_text(seconds: Option<i64>) -> String {
     seconds.map_or_else(|| "none".to_owned(), |value| format!("{value} s"))
 }
 

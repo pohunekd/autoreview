@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches and guard scan - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, report, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches and guard scan - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -26,8 +26,8 @@ the owner or the line number.
 Every command except `init`, `profiles install` and `guard scan` reads the
 configuration from `--config` or `AUTOREVIEW_CONFIG` and validates it together
 with the policy before doing anything. Output is
-one JSON object (or array) on stdout, except the text summary of `stats` without
-`--json` and the JSON lines of `findings list`; logs are JSON lines on stderr. A failed
+one JSON object (or array) on stdout, except the text summaries of `stats` and
+`report` without `--json` and the JSON lines of `findings list`; logs are JSON lines on stderr. A failed
 command prints `{"error": "<code>", ...}` with a stable error code and exits
 with status 1, so scripts and agents can branch on the code.
 
@@ -438,6 +438,7 @@ no state.
 | `autoreview review --repository OWNER/REPO NUMBER` | Everything the engine knows about one pull request: current head, reviews with their `author_class`, published decisions, waits, hand-offs, and `skipped` with the reason when the last discovery pass skipped it |
 | `autoreview awaiting` | Reviews that wait for a human approval |
 | `autoreview stats [--since DATE [--until DATE]] [--json]` | Review statistics from the store: the current state and, with `--since`, daily counts over UTC days; see [review statistics](stats.md) |
+| `autoreview report --since DATE [--until DATE] [--repo OWNER/REPO] [--pipeline NAME] [--json]` | Review timing, decision shares and finding outcomes over UTC days; see [below](#autoreview-report) |
 | `autoreview findings list --repo OWNER/REPO --since DATE` | The recorded outcome of each published finding of one repository, one JSON object per line; see [below](#autoreview-findings-list) |
 | `autoreview review-queue` | Sends the review queue to `notify.review_queue.backends` and prints it. Run it from a timer |
 
@@ -480,6 +481,51 @@ A `--repo` that is not a lowercase `owner/name` is `repository_not_allowed`, a
 that opens the store, it creates an empty one at `store.path` when none exists.
 A reader that stops early, such as `head`, ends the output: the command prints
 no further row, logs nothing and exits with status 0.
+
+### `autoreview report`
+
+```
+autoreview report --since <YYYY-MM-DD> [--until <YYYY-MM-DD>] [--repo <owner/name>]
+  [--pipeline <name>] [--json]
+```
+
+Prints the [review report](knowledge/concepts/review-report.md) of the UTC days
+from `--since` to `--until` (today when absent), both included: the time from
+the creation of an attempt to its publication, the shares of decisions, and the outcomes of the findings published
+in the range per reviewer, severity and repository. It calls neither GitHub nor
+pohunek. Without `--json` it prints a short text table; scripts read the JSON:
+
+```
+Report 2026-11-14 to 2026-11-16 (UTC days), repository every, pipeline every
+Reviews: 6 decided, 5 published, 1 approval expired
+  approved without a human 33.3%, waited for a human 16.7%
+  changes requested 33.3%, commented 16.7%
+  attempt creation to publication: median 1200 s, p90 3000 s
+Findings                findings blocking open fixed open_at_merge fixed% demoted
+total                          9        4    1     2             1  66.7%       2
+reviewer lint-bot              5        1    0     0             0   none       2
+reviewer review-bot            4        3    1     2             1  66.7%       0
+severity major                 5        3    1     1             1  50.0%       2
+severity minor                 4        1    0     1             0 100.0%       0
+repository acme/gadgets        3        1    0     0             0   none       0
+repository acme/widgets        6        3    1     2             1  66.7%       2
+```
+
+| JSON field | Value |
+|---|---|
+| `schema_version` | `1`; a changed field gets a new version |
+| `generated_at`, `since`, `until` | When the report was made, and the range |
+| `repository`, `pipeline` | The filters, `null` when absent |
+| `reviews` | `published`, `approval_expired`, `decided` (their sum), `approved_without_human`, `approved_after_wait`, `changes_requested`, `commented`; the shares `approved_without_human_percent`, `waited_for_human_percent`, `changes_requested_percent`, `commented_percent` of `decided`; `attempt_to_publication_median_seconds`, `attempt_to_publication_p90_seconds`: from the creation of a published attempt to its completion, not from the review request (#52) |
+| `findings` | `total`, then `by_reviewer`, `by_severity` and `by_repository` (each entry with its `key`): `findings`, `blocking`, one count per outcome, and `fixed_percent` |
+
+A share is a percentage with one decimal, `null` when its whole is `0`. A
+`--repo` that is not a lowercase `owner/name` is `repository_not_allowed`, a
+`--pipeline` that no rule of the policy runs is `pipeline_not_configured`, the
+days are refused with the codes that `report` shares with `stats`
+(`stats_range_invalid`, `stats_range_too_long`; their messages name `stats`),
+and a range that starts before the store's retention of the data it needs is
+`report_range_pruned`.
 
 ## Act
 
@@ -640,8 +686,10 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
 | `host_not_local`, `git_command_failed`, `repository_hook_configured` | `prune-branches` skipped a host whose repositories are not on this machine, a git call failed (also for a repository owned by another user), or a repository configuration names a `reference-transaction` hook |
 | `branch_prune_incomplete` | `prune-branches` printed its document and exits with status 1: a deletion failed, or the `--host` host or one of its repositories was skipped |
-| `stats_range_invalid` | `--since` or `--until` of `stats` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
-| `stats_range_too_long` | The `stats` range covers more than 366 days |
+| `stats_range_invalid` | `--since` or `--until` of `stats` or `report` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
+| `stats_range_too_long` | The `stats` or `report` range covers more than 366 days |
+| `pipeline_not_configured` | `--pipeline` of `report` names a pipeline that no rule of the policy runs |
+| `report_range_pruned` | The `report` range starts before now minus `store.outcome_retention_seconds`, or, with `--pipeline`, before now minus `store.review_retention_seconds`, so pruned data would be missing |
 | `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start the review: its author started the most reviews the rule allows in the window. `retry` starts it |
 | `project_route_not_found`, `project_route_ambiguous` | The repository is registered on no review host that answered, or as two projects on the host that serves it |
 | `pohunek_request_failed`, `pohunek_request_timeout`, `pohunek_session_start_failed` | The review host did not answer or could not start a session |

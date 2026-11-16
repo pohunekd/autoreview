@@ -101,8 +101,11 @@ one versioned JSON document for a dashboard of your own.
 with its reviewer, rule, severity and outcome, such as refuted by the verifier
 or fixed in a later review, or still open when the pull request was merged or
 closed, so review quality can be measured without rating findings by hand.
-`autoreview findings list` prints them as JSON lines.
-[Finding outcomes](knowledge/concepts/finding-outcomes.md)
+`autoreview findings list` prints them as JSON lines, and `autoreview report`
+(after 0.3.0) turns them, with the timing and the decisions of the reviews, into
+shares per reviewer, severity and repository over a range of days.
+[Finding outcomes](knowledge/concepts/finding-outcomes.md),
+[review report](knowledge/concepts/review-report.md)
 
 ## Requirements
 
@@ -137,6 +140,7 @@ closed, so review quality can be measured without rating findings by hand.
 | [Incremental reviews](knowledge/concepts/incremental-reviews.md) | Re-review scope and prior findings |
 | [Verification](knowledge/concepts/verification.md) | The verifier and escalation |
 | [Finding outcomes](knowledge/concepts/finding-outcomes.md) | What became of each published finding |
+| [Review report](knowledge/concepts/review-report.md) | Timing, decision shares and finding outcomes over a range |
 | [Notifications](knowledge/concepts/notifications.md) | Events, levels, backends, review queue |
 | [GitHub identity](knowledge/concepts/github-identity.md) | Which account posts, token scopes |
 | [State and recovery](knowledge/concepts/state-and-recovery.md) | Store, retries, resume, sessions |

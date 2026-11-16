@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::author_limit::AuthorLimit;
-use crate::authors::Authors;
+use crate::authors::{Authors, Untrusted};
 use crate::parse::{cut, matches};
 use crate::types::{Event, Level, OPTIONAL_EVENTS, Policy, Rule, TriggerKind};
 
@@ -131,6 +131,23 @@ impl Policy {
             }
         }
         set.into_iter().collect()
+    }
+
+    /// Returns the names of the pipelines that a rule or its untrusted section runs, sorted.
+    #[must_use]
+    pub fn pipeline_names(&self) -> BTreeSet<&str> {
+        let mut names = BTreeSet::new();
+        for (rule, authors) in self.rules.iter().zip(&self.authors) {
+            names.insert(rule.pipeline.name.as_str());
+            if let Authors::Restricted {
+                untrusted: Untrusted::Review(review),
+                ..
+            } = authors
+            {
+                names.insert(review.pipeline.name.as_str());
+            }
+        }
+        names
     }
 
     /// Returns the distinct match patterns of review-requested rules, sorted.

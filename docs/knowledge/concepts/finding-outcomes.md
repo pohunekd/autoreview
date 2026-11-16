@@ -110,7 +110,9 @@ read saw it: the end stays empty for a pull request whose rows were all decided
 before it ended. The
 [CLI reference](../../cli.md#autoreview-findings-list) lists every field. A
 pull request that is reopened after it ended keeps its earlier end in the list
-until it ends again with an `open` row.
+until it ends again with an `open` row. `autoreview report` counts the
+outcomes per reviewer, severity and repository; see the
+[review report](review-report.md).
 
 ## Retention
 
