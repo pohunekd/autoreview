@@ -1,4 +1,0 @@
----
-kind: added
----
-`autoreview report --since DATE` prints the time from the creation of a review attempt to its publication, the shares of reviews approved without a human, waiting for one or requesting changes, the reviewer disagreement rate (published attempts where one reviewer made a blocking claim and another none, with the reviewers that blocked alone, kept through pruning), the verifier demotion rate per reviewer (blocking claims found not blocking or refuted, in percent of those checked, kept through pruning), and the outcomes of the published findings per reviewer, severity and repository, as JSON with `--json` or as a short text table. `--repo` and `--pipeline` narrow it to one repository or one policy pipeline. With `notifications.weekly_report: digest` in the policy, `autoreview review-queue` ends its message once a week with the report of the last 7 UTC days and today, also when nothing waits.
