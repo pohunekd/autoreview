@@ -140,17 +140,20 @@ The wait ends in one of three ways, and the first one that happens decides:
 | Ending | Trigger | Event | Publication |
 |---|---|---|---|
 | Approved | `autoreview approve` with the current head | `approved` after publication | `APPROVE` |
-| Superseded | A new head, or the trigger stops asking: the review request is removed, the label is removed, or the pull request is closed or turned back into a draft | `superseded` | None |
+| Superseded | A new head, or the trigger stops asking: the review request is removed, the label is removed, or the pull request is closed or turned back into a draft. Also a pull request that the search rejects as `base_branch_unsupported` or `review_request_event_missing` | `superseded` | None |
 | Expired | `approval.timeout_hours` passed | `approval_expired` | None |
 
 A renewed review request for the same head does not supersede the wait. Only a
-new head or a trigger that stopped asking ends it. A retarget to another base
-branch does not end the wait, but an approval after it publishes nothing: the
+new head, a trigger that stopped asking or a rejection by the search ends it. A
+retarget to another supported base branch does not end the wait, but an
+approval after it publishes nothing: the
 review ends as `superseded` (`base_branch_changed`) and the pull request is
-reviewed again.
+reviewed again. A pull request whose read fails otherwise keeps its wait:
+discovery logs `approval wait unreadable` with the error code, reads it again on
+the next pass and reviews the other pull requests meanwhile.
 
-When the wait ends, by a new head, a trigger that stopped asking or the
-deadline, discovery clears it, and `approve` answers
+When the wait ends, by a new head, a trigger that stopped asking, a rejection
+by the search or the deadline, discovery clears it, and `approve` answers
 `review_not_awaiting_approval`; before the clearing it answers
 `review_superseded` or `approval_expired`. Nothing is posted.
 

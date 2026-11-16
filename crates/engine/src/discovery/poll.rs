@@ -20,8 +20,8 @@ use crate::integrations::Integrations;
 use crate::messages::{go_elapsed_nanos, handoff_reminder_message};
 use crate::model::review::APPROVAL_KIND_SUPERSEDED;
 use crate::model::{
-    Candidate, Decision, PollResult, PublishResult, PublishedRecord, PullRequest, RetryRequest,
-    ReviewInput,
+    Candidate, Decision, PollResult, PublishResult, PublishedRecord, PullRequest,
+    REJECTED_CANDIDATE_CODES, RetryRequest, ReviewInput,
 };
 use crate::review::input::{RenderOutcome, STATE_FETCHED_HEAD, STEP_RENDERED};
 use crate::store::{DiscoveryState, RESULT_SUCCESS, REVIEW_COMPLETED};
@@ -669,11 +669,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// A pull request missing from search is read directly first, because search lags behind.
     /// A wait of an unsearched repository stays; one that no credential serves ends unread.
     /// The read uses the credential of the waiting review; a wait whose credential no longer
-    /// fits, or whose credential's search failed in this pass, stays unread.
+    /// fits, or whose credential's search failed in this pass, stays unread. A read error that
+    /// ends the candidate, or that [`ends_wait`], ends the wait; any other one keeps it.
     ///
     /// # Errors
     ///
-    /// Returns the read error of a pull request unless it is one that ends the candidate.
+    /// Returns the read error of a pull request only when `cancel` is cancelled.
     async fn supersede_awaiting(
         &self,
         cancel: &CancellationToken,
@@ -740,8 +741,19 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 match read {
                     Ok(pr) if record.matches(&pr) => continue,
                     Ok(_) => {}
-                    Err(err) if !skippable_candidate_error(&err) => return Err(err),
-                    Err(_) => {}
+                    Err(err) if cancel.is_cancelled() => return Err(err),
+                    Err(err) if skippable_candidate_error(&err) || ends_wait(&err) => {}
+                    // One unreadable pull request holds up no other review; the next pass reads
+                    // it again, and its deadline ends the wait at the latest.
+                    Err(err) => {
+                        tracing::warn!(
+                            repository = %record.repository,
+                            pull_request = record.number,
+                            error_code = error_code(&err),
+                            "approval wait unreadable"
+                        );
+                        continue;
+                    }
                 }
             }
             superseded.push(record.workflow_id.clone());
@@ -1063,6 +1075,15 @@ fn key_repository(key: &str) -> &str {
 /// It is simply not a candidate in this poll.
 fn skippable_candidate_error(err: &Error) -> bool {
     SKIPPABLE_CANDIDATE_CODES.contains(&error_code(err))
+}
+
+/// Reports a read error that ends an approval wait: the search rejects its pull request.
+///
+/// `github_response_invalid` keeps the wait: a response that does not decode may come from a
+/// pull request that is still a candidate.
+fn ends_wait(err: &Error) -> bool {
+    let code = error_code(err);
+    code != "github_response_invalid" && REJECTED_CANDIDATE_CODES.contains(&code)
 }
 
 /// Fails as a store call does on a cancelled context, so a cancelled pass writes nothing.

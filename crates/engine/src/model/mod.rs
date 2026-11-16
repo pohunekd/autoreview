@@ -25,7 +25,8 @@ pub use ids::{
 #[doc(inline)]
 pub use pull_request::{
     Candidate, CandidateList, ClassifiedCandidates, NotesHandoff, PriorFinding, ProjectRoute,
-    PullRequest, RejectedCandidate, ReviewInput, ReviewScope, RunLimits, SkippedCandidate,
+    PullRequest, REJECTED_CANDIDATE_CODES, RejectedCandidate, ReviewInput, ReviewScope, RunLimits,
+    SkippedCandidate,
 };
 #[doc(inline)]
 pub use review::{

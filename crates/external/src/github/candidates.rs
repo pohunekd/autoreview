@@ -14,8 +14,8 @@ use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
 use autoreview_engine::integrations::{ReadiedDraft, ReviewRequest, ReviewRequestList};
 use autoreview_engine::model::{
-    Candidate, CandidateList, PullRequest, RejectedCandidate, pull_request_url_valid,
-    repository_valid,
+    Candidate, CandidateList, PullRequest, REJECTED_CANDIDATE_CODES, RejectedCandidate,
+    pull_request_url_valid, repository_valid,
 };
 use autoreview_go_compat::{null_default, null_entries};
 use autoreview_policy::{Authors, Policy, Rule, Trigger, TriggerKind};
@@ -261,12 +261,7 @@ fn classify(
                 Ok(())
             } else {
                 let code = error_code(&error);
-                if matches!(
-                    code,
-                    "github_response_invalid"
-                        | "base_branch_unsupported"
-                        | "review_request_event_missing"
-                ) {
+                if REJECTED_CANDIDATE_CODES.contains(&code) {
                     list.rejected.push(RejectedCandidate {
                         repository: repository.to_owned(),
                         number,
