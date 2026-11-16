@@ -496,7 +496,7 @@ optional: a policy without them sends them at level `action`, and its digest
 stays the same. A level set for one is used and changes the policy digest.
 
 `weekly_report` is not an event: `digest` ends the review queue message once a
-week with the text of `autoreview report` for the last 7 UTC days, see
+week with the text of `autoreview report` for the last 7 UTC days and today, see
 [weekly report](knowledge/concepts/notifications.md#weekly-report). `off` or no
 key sends none. `action`, `log` or an empty value is refused with
 `notifications: event weekly_report level must be digest or off`. The key changes
