@@ -492,8 +492,8 @@ autoreview report --since <YYYY-MM-DD> [--until <YYYY-MM-DD>] [--repo <owner/nam
 Prints the [review report](knowledge/concepts/review-report.md) of the UTC days
 from `--since` to `--until` (today when absent), both included: the time from
 the creation of an attempt and from the review request to its first publication, the
-shares of decisions, the verifier's demotion rate per reviewer, and the outcomes of the
-findings published
+shares of decisions, the reviewer disagreement rate, the verifier's demotion rate per
+reviewer, and the outcomes of the findings published
 in the range per reviewer, severity and repository. It calls neither GitHub nor
 pohunek. Without `--json` it prints a short text table; scripts read the JSON:
 
@@ -504,8 +504,10 @@ Reviews: 6 decided, 5 published, 1 approval expired
   changes requested 33.3%, commented 16.7%
   attempt creation to publication: median 1200 s, p90 3000 s
   review request to publication: median 1500 s, p90 3300 s
+  reviewers disagreed: 1 of 4 attempts with two or more reviewers, 25.0%
   verifier on reviewer lint-bot: 3 checked, 2 demoted, 66.7%
   verifier on reviewer review-bot: 3 checked, 0 demoted, 0.0%
+  reviewer review-bot blocked alone: 1
 Findings                findings blocking open fixed open_at_merge fixed% demoted
 total                          9        4    1     2             1  66.7%       2
 reviewer lint-bot              5        1    0     0             0   none       2
@@ -521,7 +523,7 @@ repository acme/widgets        6        3    1     2             1  66.7%       
 | `schema_version` | `2`; a changed field gets a new version |
 | `generated_at`, `since`, `until` | When the report was made, and the range |
 | `repository`, `pipeline` | The filters, `null` when absent |
-| `reviews` | `published`, `approval_expired`, `decided` (their sum), `approved_without_human`, `approved_after_wait`, `changes_requested`, `commented`; the shares `approved_without_human_percent`, `waited_for_human_percent`, `changes_requested_percent`, `commented_percent` of `decided`; `attempt_to_publication_median_seconds`, `attempt_to_publication_p90_seconds`: from the creation of a published attempt to its completion; `request_to_publication_median_seconds`, `request_to_publication_p90_seconds`: from the review request to the completion of its first published attempt, one per request with a known request time (none for a label trigger); a later attempt under the same request adds nothing; `by_reviewer` (each entry with its `key`, the reviewer ID of the checked finding): `verifier_checked`, the blocking findings that a finished verification of an attempt completed in the range gave a verdict, `verifier_demoted`, those found `not_blocking` or `refuted`, and `verifier_demoted_percent` of `verifier_checked` |
+| `reviews` | `published`, `approval_expired`, `decided` (their sum), `approved_without_human`, `approved_after_wait`, `changes_requested`, `commented`; the shares `approved_without_human_percent`, `waited_for_human_percent`, `changes_requested_percent`, `commented_percent` of `decided`; `attempt_to_publication_median_seconds`, `attempt_to_publication_p90_seconds`: from the creation of a published attempt to its completion; `request_to_publication_median_seconds`, `request_to_publication_p90_seconds`: from the review request to the completion of its first published attempt, one per request with a known request time (none for a label trigger); a later attempt under the same request adds nothing; `multi_reviewer`: the published attempts with the results of two or more reviewers, `disagreed`: those where at least one reviewer made a blocking claim and at least one made none, and `disagreed_percent` of `multi_reviewer`; `by_reviewer` (each entry with its `key`, a reviewer ID): `verifier_checked`, the blocking findings of that reviewer that a finished verification of an attempt completed in the range gave a verdict, `verifier_demoted`, those found `not_blocking` or `refuted`, `verifier_demoted_percent` of `verifier_checked`, and `blocked_alone`, the disagreeing attempts in which that reviewer made a blocking claim |
 | `findings` | `total`, then `by_reviewer`, `by_severity` and `by_repository` (each entry with its `key`): `findings`, `blocking`, one count per outcome, and `fixed_percent` |
 
 A share is a percentage with one decimal, `null` when its whole is `0`. A

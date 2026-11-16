@@ -112,22 +112,30 @@ pub struct ReviewMetrics {
     pub request_to_publication_median_seconds: Option<i64>,
     /// 90th percentile of the same seconds, nearest rank.
     pub request_to_publication_p90_seconds: Option<i64>,
-    /// The verifier's verdicts per reviewer ID of the checked finding, sorted by it.
-    pub by_reviewer: Vec<Keyed<VerifierCounts>>,
+    /// Published attempts with the results of two or more reviewers.
+    pub multi_reviewer: i64,
+    /// Those where one reviewer made a blocking claim and another none.
+    pub disagreed: i64,
+    /// `disagreed` in percent of `multi_reviewer`, one decimal.
+    pub disagreed_percent: Option<f64>,
+    /// The verifier's verdicts and the disagreement per reviewer ID, sorted by it.
+    pub by_reviewer: Vec<Keyed<ReviewerCounts>>,
 }
 
-/// The verifier's verdicts on the blocking findings of one reviewer.
+/// The verifier's verdicts on one reviewer's blocking findings, and its lone blocking claims.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
-pub struct VerifierCounts {
+pub struct ReviewerCounts {
     /// Findings that a finished verification gave a verdict.
     pub verifier_checked: i64,
     /// Checked findings that the verifier found not blocking or refuted.
     pub verifier_demoted: i64,
     /// `verifier_demoted` in percent of `verifier_checked`, one decimal.
     pub verifier_demoted_percent: Option<f64>,
+    /// Disagreeing attempts in which this reviewer made a blocking claim.
+    pub blocked_alone: i64,
 }
 
-impl VerifierCounts {
+impl ReviewerCounts {
     /// Returns the counts with `verifier_demoted_percent`.
     fn finish(mut self) -> Self {
         self.verifier_demoted_percent = percent(self.verifier_demoted, self.verifier_checked);
@@ -211,11 +219,13 @@ fn percent(part: i64, whole: i64) -> Option<f64> {
 /// Returns the timing and decision metrics of one bucket of the statistics history.
 ///
 /// `request_seconds` are the seconds from the review request to publication of the bucket,
-/// and `checks` the verifier's counts per reviewer ID, whose shares this fills.
+/// `multi_reviewer` and `disagreed` its attempts with two or more reviewers and those that
+/// disagreed, and `reviewers` the counts per reviewer ID, whose shares this fills.
 pub fn review_metrics(
     counters: &Counters,
     request_seconds: Vec<i64>,
-    checks: BTreeMap<String, VerifierCounts>,
+    (multi_reviewer, disagreed): (i64, i64),
+    reviewers: BTreeMap<String, ReviewerCounts>,
 ) -> ReviewMetrics {
     let decided = counters.published + counters.approval_expired;
     let waited = counters.approved_after_wait + counters.approval_expired;
@@ -236,7 +246,10 @@ pub fn review_metrics(
         attempt_to_publication_p90_seconds: counters.publication_p90_seconds,
         request_to_publication_median_seconds: request_median,
         request_to_publication_p90_seconds: request_p90,
-        by_reviewer: keyed(checks, VerifierCounts::finish),
+        multi_reviewer,
+        disagreed,
+        disagreed_percent: percent(disagreed, multi_reviewer),
+        by_reviewer: keyed(reviewers, ReviewerCounts::finish),
     }
 }
 
@@ -348,7 +361,15 @@ impl fmt::Display for ReportDocument {
             seconds_text(reviews.request_to_publication_median_seconds),
             seconds_text(reviews.request_to_publication_p90_seconds)
         )?;
-        for entry in &reviews.by_reviewer {
+        writeln!(
+            f,
+            "  reviewers disagreed: {} of {} attempts with two or more reviewers, {}",
+            reviews.disagreed,
+            reviews.multi_reviewer,
+            percent_text(reviews.disagreed_percent)
+        )?;
+        let reviewers = &reviews.by_reviewer;
+        for entry in reviewers.iter().filter(|e| e.counts.verifier_checked > 0) {
             let counts = &entry.counts;
             writeln!(
                 f,
@@ -358,6 +379,10 @@ impl fmt::Display for ReportDocument {
                 counts.verifier_demoted,
                 percent_text(counts.verifier_demoted_percent)
             )?;
+        }
+        for entry in reviewers.iter().filter(|e| e.counts.blocked_alone > 0) {
+            let (key, alone) = (&entry.key, entry.counts.blocked_alone);
+            writeln!(f, "  reviewer {key} blocked alone: {alone}")?;
         }
         let findings = &self.findings;
         let mut rows = vec![("total".to_owned(), &findings.total)];
@@ -440,7 +465,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             });
             snapshot.rollup = Rollup::default();
         }
-        let (history, mut requests, checks) = history(&snapshot, &range, review_cutoff, &firsts)?;
+        let (history, mut requests, checks, disagreements) =
+            history(&snapshot, &range, review_cutoff, &firsts)?;
         let counters = match (pipeline, repository) {
             (None, Some(name)) => (history.by_repository.into_iter())
                 .find(|entry| entry.key == name)
@@ -453,12 +479,22 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             Some(name) => requests.remove(name).unwrap_or_default(),
             None => requests.into_values().flatten().collect(),
         };
-        let mut verifier: BTreeMap<String, VerifierCounts> = BTreeMap::new();
+        let mut reviewers: BTreeMap<String, ReviewerCounts> = BTreeMap::new();
         for ((checked_in, reviewer), counts) in checks {
             if repository.is_none_or(|name| checked_in == name) {
-                let entry = verifier.entry(reviewer).or_default();
+                let entry = reviewers.entry(reviewer).or_default();
                 entry.verifier_checked += counts.checked;
                 entry.verifier_demoted += counts.demoted;
+            }
+        }
+        let (mut multi_reviewer, mut disagreed) = (0, 0);
+        for (counted_in, counts) in disagreements {
+            if repository.is_none_or(|name| counted_in == name) {
+                multi_reviewer += counts.multi_reviewer;
+                disagreed += counts.disagreed;
+                for (reviewer, alone) in counts.blocked_alone {
+                    reviewers.entry(reviewer).or_default().blocked_alone += alone;
+                }
             }
         }
         live(cancel)?;
@@ -471,7 +507,12 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             until: range.until.to_string(),
             repository: request.repository.clone(),
             pipeline: request.pipeline.clone(),
-            reviews: review_metrics(&counters, request_seconds, verifier),
+            reviews: review_metrics(
+                &counters,
+                request_seconds,
+                (multi_reviewer, disagreed),
+                reviewers,
+            ),
             findings: finding_metrics(&outcomes, repository, pipeline),
         })
     }
@@ -482,7 +523,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{
-        FindingMetrics, OutcomeCounts, ReviewMetrics, VerifierCounts, finding_metrics,
+        FindingMetrics, OutcomeCounts, ReviewMetrics, ReviewerCounts, finding_metrics,
         review_metrics,
     };
     use crate::stats::{Counters, Keyed};
@@ -587,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn review_metrics_share_the_decided_attempts_and_checked_findings_rounded_half_up() {
+    fn review_metrics_share_the_decided_attempts_checks_and_disagreements_rounded_half_up() {
         let thirds = Counters {
             published: 5,
             approved_without_human: 2,
@@ -606,25 +647,27 @@ mod tests {
             ..Counters::default()
         };
         let nothing = Counters::default();
-        // The verifier's counts per reviewer, with the share that `review_metrics` fills.
-        let verdicts = |checked, demoted, verifier_demoted_percent| VerifierCounts {
+        // The counts per reviewer, with the share that `review_metrics` fills.
+        let verdicts = |checked, demoted, verifier_demoted_percent, blocked_alone| ReviewerCounts {
             verifier_checked: checked,
             verifier_demoted: demoted,
             verifier_demoted_percent,
+            blocked_alone,
         };
         let (lint, bot) = ("lint-bot".to_owned(), "review-bot".to_owned());
-        // A reviewer with nothing checked has no share.
+        // A reviewer with nothing checked has no share, also when it blocked alone.
         let thirds_checks = [
-            (lint.clone(), verdicts(3, 1, None)),
-            (bot.clone(), verdicts(0, 0, None)),
+            (lint.clone(), verdicts(3, 1, None, 0)),
+            (bot.clone(), verdicts(0, 0, None, 2)),
         ];
-        let sixteenths_checks = [(bot.clone(), verdicts(16, 1, None))];
+        let sixteenths_checks = [(bot.clone(), verdicts(16, 1, None, 1))];
         // Four of the five publications have a request time, given unsorted.
         let cases = [
             (
                 "one sixth is 16.7, one third 33.3",
                 thirds,
                 vec![3000, 600, 1500, 900],
+                (6, 2),
                 BTreeMap::from(thirds_checks),
                 ReviewMetrics {
                     published: 5,
@@ -642,9 +685,12 @@ mod tests {
                     attempt_to_publication_p90_seconds: Some(9000),
                     request_to_publication_median_seconds: Some(900),
                     request_to_publication_p90_seconds: Some(3000),
+                    multi_reviewer: 6,
+                    disagreed: 2,
+                    disagreed_percent: Some(33.3),
                     by_reviewer: vec![
-                        entry(&lint, verdicts(3, 1, Some(33.3))),
-                        entry(&bot, verdicts(0, 0, None)),
+                        entry(&lint, verdicts(3, 1, Some(33.3), 0)),
+                        entry(&bot, verdicts(0, 0, None, 2)),
                     ],
                 },
             ),
@@ -652,6 +698,7 @@ mod tests {
                 "6.25 rounds up to 6.3",
                 sixteenths,
                 Vec::new(),
+                (16, 1),
                 BTreeMap::from(sixteenths_checks),
                 ReviewMetrics {
                     published: 16,
@@ -662,7 +709,10 @@ mod tests {
                     waited_for_human_percent: Some(0.0),
                     changes_requested_percent: Some(93.8),
                     commented_percent: Some(0.0),
-                    by_reviewer: vec![entry(&bot, verdicts(16, 1, Some(6.3)))],
+                    multi_reviewer: 16,
+                    disagreed: 1,
+                    disagreed_percent: Some(6.3),
+                    by_reviewer: vec![entry(&bot, verdicts(16, 1, Some(6.3), 1))],
                     ..ReviewMetrics::default()
                 },
             ),
@@ -670,12 +720,13 @@ mod tests {
                 "nothing decided",
                 nothing,
                 Vec::new(),
+                (0, 0),
                 BTreeMap::new(),
                 ReviewMetrics::default(),
             ),
         ];
-        for (name, counters, request_seconds, checks, want) in cases {
-            let got = review_metrics(&counters, request_seconds, checks);
+        for (name, counters, request_seconds, attempts, reviewers, want) in cases {
+            let got = review_metrics(&counters, request_seconds, attempts, reviewers);
             assert_eq!(got, want, "{name}");
         }
     }

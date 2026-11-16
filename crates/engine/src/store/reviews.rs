@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_go_compat::go_time::{format_rfc3339_nano, parse_rfc3339};
-use autoreview_policy::AuthorClass;
+use autoreview_policy::{AuthorClass, VERIFIER_REVIEWER_ID};
 use autoreview_schedule::scheduler::Run;
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, Row, Transaction, TransactionBehavior, params};
@@ -21,7 +21,7 @@ use crate::Error;
 use crate::engine::STEP_COMBINED;
 use crate::model::pull_request::is_unset_class;
 use crate::model::{ReviewInput, ReviewOutcome};
-use crate::review::input::{STEP_PLAN, STEP_VERIFICATION};
+use crate::review::input::{SLOT_STATE_PREFIX, STEP_PLAN, STEP_VERIFICATION};
 use crate::stats::{first_publications, rollup};
 
 /// Status of a review that is dispatched and waits to run.
@@ -121,6 +121,9 @@ pub struct StatsSnapshot {
     pub plans: BTreeMap<String, String>,
     /// The verifier's steps of the reviews completed inside the range; empty without a range.
     pub verifier: VerifierSteps,
+    /// The reviewer slots of the successful reviews completed inside the range, by workflow ID
+    /// and reviewer ID, undecoded; empty without a range.
+    pub slots: BTreeMap<String, BTreeMap<String, String>>,
     /// The review requests whose first publication was pruned, as `repository#number#request
     /// ID`; empty without a range.
     pub pruned_requests: BTreeSet<String>,
@@ -327,18 +330,19 @@ impl Store {
     }
 
     /// Reads the reviews of `stats_reviews`, the discovery state and, with `range`, the step
-    /// runs that ended inside it, the rollup of its days, the plans and the verifier's steps of
-    /// the reviews completed inside it and the pruned review requests, as one snapshot.
+    /// runs that ended inside it, the rollup of its days, the plans, the verifier's steps and the
+    /// reviewer slots of the reviews completed inside it and the pruned review requests, as one
+    /// snapshot.
     ///
     /// A deferred transaction takes no write lock; in WAL mode its first read fixes the
     /// snapshot, so a write of another process between the reads is not seen, and a pruned
     /// review is either a row or in the rollup. Without `range` the step runs, the rollup, the
-    /// plans, the verifier's steps and the pruned requests are empty and not read.
+    /// plans, the verifier's steps, the slots and the pruned requests are empty and not read.
     ///
     /// # Errors
     ///
     /// The errors of `stats_reviews`, `load_discovery`, `stats_step_runs`, `read_rollup`,
-    /// `stored_steps` and `pruned_requests`.
+    /// `stored_steps`, `slot_rows` and `pruned_requests`.
     pub fn stats_snapshot(
         &self,
         range: Option<(OffsetDateTime, OffsetDateTime)>,
@@ -349,7 +353,7 @@ impl Store {
             .map_err(unavailable)?;
         let reviews = Self::stats_reviews(&transaction, range)?;
         let discovery = Self::read_discovery(&transaction)?;
-        let (steps, rollup, (plans, verifier), pruned_requests) = match range {
+        let (steps, rollup, (plans, verifier, slots), pruned_requests) = match range {
             Some((start, end)) => (
                 Self::stats_step_runs(&transaction, (start, end))?,
                 read_rollup(
@@ -370,6 +374,7 @@ impl Store {
             rollup,
             plans,
             verifier,
+            slots,
             pruned_requests,
         })
     }
@@ -528,7 +533,8 @@ fn collect_reviews(
     Ok(reviews)
 }
 
-/// Returns the stored plan and the verifier's steps of each review completed inside `range`.
+/// Returns the stored plan, the verifier's steps and the reviewer slots of each review
+/// completed inside `range`.
 ///
 /// These are the completed rows of `stats_reviews` whose completion `compute` counts.
 ///
@@ -538,7 +544,7 @@ fn collect_reviews(
 fn completed_steps(
     connection: &Connection,
     (start, end): (OffsetDateTime, OffsetDateTime),
-) -> Result<(BTreeMap<String, String>, VerifierSteps), Error> {
+) -> Result<(BTreeMap<String, String>, VerifierSteps, SlotRows), Error> {
     let completed = time_key("completed_at");
     let (low, high) = (time_key("?2"), time_key("?3"));
     let filter = format!(
@@ -548,7 +554,48 @@ fn completed_steps(
     let (start, end) = (format_rfc3339_nano(start), format_rfc3339_nano(end));
     let bound: [&dyn ToSql; 3] = [&REVIEW_COMPLETED, &start, &end];
     let plans = stored_steps(connection, &filter, &bound, STEP_PLAN)?;
-    Ok((plans, verifier_steps(connection, &filter, &bound)?))
+    let verifier = verifier_steps(connection, &filter, &bound)?;
+    Ok((plans, verifier, slot_rows(connection, &filter, &bound)?))
+}
+
+/// The reviewer slots of reviews by workflow ID and reviewer ID, undecoded.
+type SlotRows = BTreeMap<String, BTreeMap<String, String>>;
+
+/// Returns the reviewer slots of each successful review matched by `filter`.
+///
+/// Only a successful review can have published. The verifier's slot is not read: it holds no
+/// reviewer result.
+///
+/// # Errors
+///
+/// Returns `store_unavailable` when SQLite fails.
+fn slot_rows(
+    connection: &Connection,
+    filter: &str,
+    bound: &[&dyn ToSql],
+) -> Result<SlotRows, Error> {
+    let prefix = SLOT_STATE_PREFIX.len();
+    let sql = format!(
+        "SELECT workflow_id, substr(name, {}), value FROM review_state \
+         WHERE substr(name, 1, {prefix}) = '{SLOT_STATE_PREFIX}' \
+         AND name <> '{SLOT_STATE_PREFIX}{VERIFIER_REVIEWER_ID}' AND workflow_id IN \
+         (SELECT workflow_id FROM reviews WHERE ({filter}) AND result = '{RESULT_SUCCESS}')",
+        prefix + 1
+    );
+    let mut statement = connection.prepare(&sql).map_err(unavailable)?;
+    let rows = statement
+        .query_map(bound, |row| {
+            let (workflow_id, reviewer) = (row.get::<_, String>(0)?, row.get::<_, String>(1)?);
+            Ok((workflow_id, reviewer, row.get::<_, String>(2)?))
+        })
+        .map_err(unavailable)?;
+    let mut slots = SlotRows::new();
+    for row in rows {
+        let (workflow_id, reviewer, value) = row.map_err(unavailable)?;
+        let reviewers = slots.entry(workflow_id).or_default();
+        reviewers.insert(reviewer, value);
+    }
+    Ok(slots)
 }
 
 /// Returns the verification and the combined artifact of each review matched by `filter`.
@@ -854,9 +901,8 @@ impl Store {
     /// # Errors
     ///
     /// Returns `store_state_invalid` when a deleted row, its step runs, its plan, its
-    /// verifier's steps or another review of its pull request does not decode, and
-    /// `store_unavailable` when SQLite fails;
-    /// then nothing is deleted.
+    /// verifier's steps, its reviewer slots or another review of its pull request does not
+    /// decode, and `store_unavailable` when SQLite fails; then nothing is deleted.
     pub fn prune_reviews(&self, cutoff: OffsetDateTime) -> Result<i64, Error> {
         let filter = format!(
             "status = ?1 AND {} < {}",
@@ -885,6 +931,7 @@ impl Store {
             )?;
             let plans = stored_steps(transaction, &filter, &bound, STEP_PLAN)?;
             let verifier = verifier_steps(transaction, &filter, &bound)?;
+            let slots = slot_rows(transaction, &filter, &bound)?;
             // The first publication of a request is decided over every review of its pull
             // request: a later attempt can be pruned before an earlier one.
             let related = collect_reviews(
@@ -896,7 +943,7 @@ impl Store {
                 &bound,
             )?;
             let firsts = first_publications(&related, &pruned_requests(transaction)?)?;
-            let pruned = rollup(&reviews, &runs, &plans, &verifier, &firsts)?;
+            let pruned = rollup(&reviews, &runs, &plans, &verifier, &slots, &firsts)?;
             add_rollup(transaction, &pruned)?;
             let rows = transaction
                 .execute(&format!("DELETE FROM reviews WHERE {filter}"), bound)

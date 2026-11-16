@@ -13,7 +13,7 @@ use std::fmt;
 use autoreview_go_compat::go_time::{format_rfc3339_seconds, parse_rfc3339};
 use autoreview_schedule::phase;
 use autoreview_schedule::scheduler::{Record, superseded};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use time::{Date, OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
@@ -26,9 +26,10 @@ use crate::model::{Decision, Outcome, ReviewOutcome, Verification};
 use crate::publish::plan::PublicationPlan;
 use crate::review::input::ArtifactOutcome;
 use crate::store::rollup::{
-    COUNTER_CHECKED, COUNTER_DEMOTED, COUNTER_FIRST_PUBLICATION, DIMENSION_DAY, DIMENSION_FAILURE,
-    DIMENSION_REPOSITORY, DIMENSION_REQUEST, DIMENSION_REQUEST_ID, DIMENSION_REVIEWER,
-    DIMENSION_RULE, DIMENSION_STEP, DIMENSION_VERIFIER,
+    COUNTER_BLOCKED_ALONE, COUNTER_CHECKED, COUNTER_DEMOTED, COUNTER_DISAGREED,
+    COUNTER_FIRST_PUBLICATION, COUNTER_MULTI_REVIEWER, DIMENSION_DAY, DIMENSION_DISAGREEMENT,
+    DIMENSION_DISAGREEMENT_REVIEWER, DIMENSION_FAILURE, DIMENSION_REPOSITORY, DIMENSION_REQUEST,
+    DIMENSION_REQUEST_ID, DIMENSION_REVIEWER, DIMENSION_RULE, DIMENSION_STEP, DIMENSION_VERIFIER,
 };
 use crate::store::{
     EndedStepRun, RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
@@ -685,6 +686,8 @@ struct DayTally {
     requests: RequestSeconds,
     /// The verifier's verdicts, per repository and reviewer ID.
     checks: Checks,
+    /// The reviewer disagreement of published attempts, per repository.
+    disagreements: Disagreements,
 }
 
 /// Seconds from the review request to publication of published attempts, per repository.
@@ -708,6 +711,80 @@ impl CheckCounts {
         self.checked += other.checked;
         self.demoted += other.demoted;
     }
+}
+
+/// The reviewer disagreement of published attempts per repository.
+pub(crate) type Disagreements = BTreeMap<String, Disagreement>;
+
+/// The reviewer disagreement of the published attempts of one repository.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Disagreement {
+    /// Published attempts with the results of two or more reviewers.
+    pub(crate) multi_reviewer: i64,
+    /// Those where one reviewer made a blocking claim and another none.
+    pub(crate) disagreed: i64,
+    /// Per reviewer ID, the disagreeing attempts in which it made a blocking claim.
+    pub(crate) blocked_alone: BTreeMap<String, i64>,
+}
+
+impl Disagreement {
+    /// Adds the counts of `other`.
+    fn merge(&mut self, other: Self) {
+        self.multi_reviewer += other.multi_reviewer;
+        self.disagreed += other.disagreed;
+        for (reviewer, count) in other.blocked_alone {
+            *self.blocked_alone.entry(reviewer).or_default() += count;
+        }
+    }
+}
+
+/// The part of a stored reviewer slot that the disagreement reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+struct StoredSlot {
+    /// The checked result of the reviewer; a slot that never finished has none.
+    result: Option<SlotResult>,
+}
+
+/// The findings of a reviewer's checked result, as far as the disagreement reads them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+struct SlotResult {
+    /// The reviewer's findings before they are combined; a stored `null` is none.
+    #[serde(deserialize_with = "autoreview_go_compat::null_default::deserialize")]
+    findings: Vec<SlotFinding>,
+}
+
+/// Whether one finding of a reviewer's result blocks.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+struct SlotFinding {
+    /// Marks a note; an absent flag blocks.
+    non_blocking: bool,
+}
+
+/// Returns the reviewers that blocked alone in one attempt, or `None` when fewer than two
+/// of its reviewer slots in `slots` have a result.
+///
+/// A reviewer blocks with a finding that is not `non_blocking`. The attempt disagreed when
+/// some reviewers block and the others do not; then each one that blocks blocked alone.
+/// An attempt where all block or none does gives an empty list.
+fn blocked_alone(slots: &BTreeMap<String, StoredSlot>) -> Option<Vec<&str>> {
+    let blocks: Vec<(&str, bool)> = (slots.iter())
+        .filter_map(|(reviewer, slot)| {
+            let result = slot.result.as_ref()?;
+            let blocks = result.findings.iter().any(|finding| !finding.non_blocking);
+            Some((reviewer.as_str(), blocks))
+        })
+        .collect();
+    if blocks.len() < 2 {
+        return None;
+    }
+    if blocks.iter().all(|(_, blocks)| *blocks) {
+        return Some(Vec::new());
+    }
+    let alone = blocks.into_iter().filter(|(_, blocks)| *blocks);
+    Some(alone.map(|(reviewer, _)| reviewer).collect())
 }
 
 impl DayTally {
@@ -756,12 +833,14 @@ impl HistoryTally {
     /// Counts the starts and completions of `reviews` on the days of `range`, every day
     /// without one; a published attempt whose plan in `plans` handed the notes to the author
     /// also counts them, and one in `firsts` its seconds from the review request. A completed
-    /// attempt also counts the verdicts of its verification in `verifier`.
+    /// attempt also counts the verdicts of its verification in `verifier`, and a published
+    /// one the disagreement of its reviewer slots in `slots`.
     fn add_reviews(
         &mut self,
         reviews: &[StoredReview],
         plans: &BTreeMap<String, String>,
         verifier: &VerifierSteps,
+        slots: &BTreeMap<String, BTreeMap<String, String>>,
         range: Option<&StatsRange>,
         firsts: &BTreeSet<String>,
     ) -> Result<(), Error> {
@@ -802,7 +881,43 @@ impl HistoryTally {
                 self.add(review, completed.date(), notes);
             }
             self.add_checks(review, completed.date(), verifier)?;
+            if let (Ending::Published { .. }, Some(slots)) =
+                (ending, slots.get(&review.workflow_id))
+            {
+                self.add_disagreement(review, completed.date(), slots)?;
+            }
         }
+        Ok(())
+    }
+
+    /// Counts the reviewer disagreement of the published `review` on `day` from its stored
+    /// reviewer slots `slots`, by reviewer ID.
+    fn add_disagreement(
+        &mut self,
+        review: &StoredReview,
+        day: Date,
+        slots: &BTreeMap<String, String>,
+    ) -> Result<(), Error> {
+        let mut decoded = BTreeMap::new();
+        for (reviewer, text) in slots {
+            let slot: StoredSlot = serde_json::from_str(text)
+                .map_err(|err| state_invalid(review, &format!("slot {reviewer}: {err}")))?;
+            decoded.insert(reviewer.clone(), slot);
+        }
+        let Some(alone) = blocked_alone(&decoded) else {
+            return Ok(());
+        };
+        let mut counts = Disagreement {
+            multi_reviewer: 1,
+            disagreed: i64::from(!alone.is_empty()),
+            blocked_alone: BTreeMap::new(),
+        };
+        for reviewer in alone {
+            counts.blocked_alone.insert(reviewer.to_owned(), 1);
+        }
+        let repository = review.input.pull_request.repository.clone();
+        let disagreements = &mut self.days.entry(day).or_default().disagreements;
+        disagreements.entry(repository).or_default().merge(counts);
         Ok(())
     }
 
@@ -910,6 +1025,30 @@ impl HistoryTally {
                     let key = (repository.to_owned(), reviewer.to_owned());
                     bucket.checks.entry(key).or_default().merge(counts);
                 }
+                DIMENSION_DISAGREEMENT => {
+                    let counts = match count.counter.as_str() {
+                        COUNTER_MULTI_REVIEWER => Disagreement {
+                            multi_reviewer: value,
+                            ..Disagreement::default()
+                        },
+                        COUNTER_DISAGREED => Disagreement {
+                            disagreed: value,
+                            ..Disagreement::default()
+                        },
+                        _ => continue,
+                    };
+                    let disagreement = bucket.disagreements.entry(count.key.clone());
+                    disagreement.or_default().merge(counts);
+                }
+                DIMENSION_DISAGREEMENT_REVIEWER if count.counter == COUNTER_BLOCKED_ALONE => {
+                    let Some((repository, reviewer)) = count.key.split_once('#') else {
+                        let key = &count.key;
+                        return Err(store_invalid(format!("rollup disagreement key {key}")));
+                    };
+                    let disagreement = bucket.disagreements.entry(repository.to_owned());
+                    let alone = &mut disagreement.or_default().blocked_alone;
+                    *alone.entry(reviewer.to_owned()).or_default() += value;
+                }
                 dimension => {
                     if let (true, Some(map)) =
                         (Tally::knows(&count.counter), bucket.breakdown(dimension))
@@ -992,6 +1131,20 @@ impl HistoryTally {
                     push_count(&mut rollup, &day, DIMENSION_VERIFIER, &key, name, value);
                 }
             }
+            for (repository, counts) in &bucket.disagreements {
+                for (name, value) in [
+                    (COUNTER_MULTI_REVIEWER, counts.multi_reviewer),
+                    (COUNTER_DISAGREED, counts.disagreed),
+                ] {
+                    let dimension = DIMENSION_DISAGREEMENT;
+                    push_count(&mut rollup, &day, dimension, repository, name, value);
+                }
+                for (reviewer, alone) in &counts.blocked_alone {
+                    let (key, name) = (format!("{repository}#{reviewer}"), COUNTER_BLOCKED_ALONE);
+                    let dimension = DIMENSION_DISAGREEMENT_REVIEWER;
+                    push_count(&mut rollup, &day, dimension, &key, name, *alone);
+                }
+            }
         }
         rollup
     }
@@ -1035,27 +1188,29 @@ fn push_tally(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, tally:
     push_samples(rollup, day, dimension, key, &tally.seconds);
 }
 
-/// Returns the rollup of pruned reviews: their starts, completions, notes, verdicts and step
-/// runs.
+/// Returns the rollup of pruned reviews: their starts, completions, notes, verdicts,
+/// disagreement and step runs.
 ///
 /// `runs` are the step runs of `reviews`, `plans` their stored plans by workflow ID,
-/// `verifier` their verifier's steps, and `firsts` the first publications of
-/// `first_publications`; each of `reviews` among them adds its request seconds and its
-/// `request_id` count.
+/// `verifier` their verifier's steps, `slots` their reviewer slots, and `firsts` the first
+/// publications of `first_publications`; each of `reviews` among them adds its request
+/// seconds and its `request_id` count.
 ///
 /// # Errors
 ///
-/// Returns `store_state_invalid` as `compute` does for the same rows, for the plan of a
-/// published attempt and for a verification or combined artifact that does not decode.
+/// Returns `store_state_invalid` as `compute` does for the same rows, for the plan or a
+/// reviewer slot of a published attempt and for a verification or combined artifact that does
+/// not decode.
 pub(crate) fn rollup(
     reviews: &[StoredReview],
     runs: &[EndedStepRun],
     plans: &BTreeMap<String, String>,
     verifier: &VerifierSteps,
+    slots: &BTreeMap<String, BTreeMap<String, String>>,
     firsts: &BTreeSet<String>,
 ) -> Result<Rollup, Error> {
     let mut tally = HistoryTally::default();
-    tally.add_reviews(reviews, plans, verifier, None, firsts)?;
+    tally.add_reviews(reviews, plans, verifier, slots, None, firsts)?;
     tally.add_runs(runs)?;
     let mut rollup = tally.into_rollup();
     for review in reviews {
@@ -1081,9 +1236,9 @@ pub(crate) fn rollup(
 /// # Errors
 ///
 /// Returns `store_state_invalid` for a timestamp, an outcome or a rollup day that does not
-/// decode, for a completed row without `completed_at`, for the plan of a published row, the
-/// verification or combined artifact of a completed row or a `verifier` rollup key that does
-/// not decode, and for a schedule key without `#`.
+/// decode, for a completed row without `completed_at`, for the plan or a reviewer slot of a
+/// published row, the verification or combined artifact of a completed row or a `verifier` or
+/// `disagreement_reviewer` rollup key that does not decode, and for a schedule key without `#`.
 pub fn compute(
     snapshot: &StatsSnapshot,
     range: Option<&StatsRange>,
@@ -1191,16 +1346,17 @@ fn current_state(
 /// Counts the rows, the step runs and the rollup of the snapshot inside `range`.
 ///
 /// Returns the history with the seconds from the review request to publication of the first
-/// publications `firsts`, and the verifier's verdicts.
+/// publications `firsts`, the verifier's verdicts and the reviewer disagreement.
 pub(crate) fn history(
     snapshot: &StatsSnapshot,
     range: &StatsRange,
     pruned_before: OffsetDateTime,
     firsts: &BTreeSet<String>,
-) -> Result<(History, RequestSeconds, Checks), Error> {
+) -> Result<(History, RequestSeconds, Checks, Disagreements), Error> {
     let mut tally = HistoryTally::default();
-    let (plans, verifier) = (&snapshot.plans, &snapshot.verifier);
-    tally.add_reviews(&snapshot.reviews, plans, verifier, Some(range), firsts)?;
+    let (reviews, plans) = (&snapshot.reviews, &snapshot.plans);
+    let (verifier, slots) = (&snapshot.verifier, &snapshot.slots);
+    tally.add_reviews(reviews, plans, verifier, slots, Some(range), firsts)?;
     tally.add_runs(&snapshot.steps)?;
     tally.add_rollup(&snapshot.rollup)?;
     let mut totals = Tally::default();
@@ -1212,6 +1368,7 @@ pub(crate) fn history(
     let mut steps: BTreeMap<String, StepTally> = BTreeMap::new();
     let mut requests = RequestSeconds::new();
     let mut checks = Checks::new();
+    let mut disagreements = Disagreements::new();
     let mut day = range.since;
     while day <= range.until {
         let bucket = tally.days.remove(&day).unwrap_or_default();
@@ -1237,6 +1394,9 @@ pub(crate) fn history(
         for (key, counts) in bucket.checks {
             checks.entry(key).or_default().merge(counts);
         }
+        for (repository, counts) in bucket.disagreements {
+            disagreements.entry(repository).or_default().merge(counts);
+        }
         days.insert(day, bucket.total);
         let Some(next) = day.next_day() else {
             break;
@@ -1255,7 +1415,7 @@ pub(crate) fn history(
         failed_by_code: keyed(failures, |failed| FailedCount { failed }),
         steps: keyed(steps, StepTally::finish),
     };
-    Ok((history, requests, checks))
+    Ok((history, requests, checks, disagreements))
 }
 
 /// Turns a sorted map into breakdown entries, finishing each value with `finish`.
@@ -1394,5 +1554,72 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let bounds = range.map(|range| (range.start, range.end));
         let snapshot = self.store.stats_snapshot(bounds)?;
         compute(&snapshot, range.as_ref(), now, self.prune_cutoff())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use serde_json::{Value, json};
+
+    use super::{StoredSlot, blocked_alone};
+
+    /// A stored reviewer slot with a result of `findings`.
+    fn slot(findings: Value) -> Value {
+        json!({"run": 1, "result": {"reviewer_id": "x", "summary": "S", "findings": findings}})
+    }
+
+    #[test]
+    fn blocked_alone_needs_two_reviewers_and_one_without_a_blocking_claim() {
+        let blocking = || slot(json!([{"id": "C001", "severity": "high"}]));
+        let note = || slot(json!([{"id": "C002", "severity": "low", "non_blocking": true}]));
+        let unfinished = json!({"run": 2, "session": {"name": "s"}});
+        let cases = [
+            (
+                "a blocking claim against none",
+                vec![("opus", blocking()), ("sonnet", slot(json!([])))],
+                Some(vec!["opus"]),
+            ),
+            (
+                "notes only count as none",
+                vec![("opus", note()), ("sonnet", blocking())],
+                Some(vec!["sonnet"]),
+            ),
+            (
+                "both block",
+                vec![("opus", blocking()), ("sonnet", blocking())],
+                Some(Vec::new()),
+            ),
+            (
+                "neither blocks, one result stored with null findings",
+                vec![("opus", slot(Value::Null)), ("sonnet", note())],
+                Some(Vec::new()),
+            ),
+            ("one reviewer", vec![("opus", blocking())], None),
+            (
+                "a slot without a result is no reviewer",
+                vec![("opus", blocking()), ("sonnet", unfinished)],
+                None,
+            ),
+            (
+                "two block against one",
+                vec![
+                    ("haiku", slot(json!([]))),
+                    ("opus", blocking()),
+                    ("sonnet", blocking()),
+                ],
+                Some(vec!["opus", "sonnet"]),
+            ),
+        ];
+        for (name, slots, want) in cases {
+            let slots: BTreeMap<String, StoredSlot> = (slots.into_iter())
+                .map(|(id, value)| {
+                    let slot = serde_json::from_value(value).expect("the slot decodes");
+                    (id.to_owned(), slot)
+                })
+                .collect();
+            assert_eq!(blocked_alone(&slots), want, "{name}");
+        }
     }
 }
