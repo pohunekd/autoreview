@@ -125,10 +125,15 @@ These rules also apply to the layers:
   a head that alternates the two stops at the first bound it reaches. The
   schedule record of the head keeps both counts, so a restart, a pruned
   review, a retarget, a withdrawal that is listed again on the next pass and
-  `autoreview retry` neither reset them nor count a run twice. A published
-  review sets both to 0. A withdrawn record that is still not listed on the
-  next pass is dropped, and the head then starts both counts again, as it does
-  its retries.
+  `autoreview retry` neither reset them nor count a run twice. A stopped head
+  is withdrawn like a waiting one: a return on the next pass handles its
+  stopping run again without a second notice, so a head that a streak or a
+  failure that is not retried stopped stays stopped, and one that spent its
+  retries gets them again, as a waiting one does. A retry by hand still starts
+  after a withdrawal or a retarget. Both counts start again only on a new head or
+  request, on any other ending of a run (a published review sets both to 0),
+  and when a withdrawn record is still not listed on the next pass: it is
+  dropped, and the head then starts both counts and its retries again.
 - **A rule's author limit is read from the stored reviews.** A new start over a
   rule's `author_limit` waits for the window or is skipped (`author_limit_reached`).
   The count is the author's stored reviews of the window plus the starts of the

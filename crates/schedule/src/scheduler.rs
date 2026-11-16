@@ -389,6 +389,9 @@ pub fn plan(
             let repeated = r.phase != phase::RUNNING
                 && !r.handled_workflow.is_empty()
                 && r.handled_workflow == latest_run.workflow_id;
+            let rehandled = !repeated
+                && !withdrawn_handled.is_empty()
+                && withdrawn_handled == latest_run.workflow_id;
             if !superseded(&code) {
                 if repeated {
                     r.retries = r.handled_retries;
@@ -396,8 +399,7 @@ pub fn plan(
                     r.fetch_mismatches = r.handled_fetch_mismatches;
                 } else {
                     // The run that a withdrawn record handled counts once, from its snapshots.
-                    if !withdrawn_handled.is_empty() && withdrawn_handled == latest_run.workflow_id
-                    {
+                    if rehandled {
                         r.usage_limited = r.handled_usage_limited;
                         r.fetch_mismatches = r.handled_fetch_mismatches;
                     }
@@ -438,6 +440,8 @@ pub fn plan(
             } else {
                 r = after_failure(r, &code, now, policy)?;
             }
+            // Only a stopped record stops again on its own handled run; its stop was notified.
+            notify = notify && !(rehandled && r.phase == phase::FAILED);
             return Ok(Decision {
                 record: r,
                 dispatch: false,
@@ -796,6 +800,22 @@ fn after_usage_limit(mut r: Record, now: OffsetDateTime, policy: &Policy) -> Res
     Ok(r)
 }
 
+/// Withdraws the record of a pull request that no trigger listed on a pass.
+///
+/// Returns whether discovery keeps the record. A waiting, retrying or stopped record is
+/// withdrawn and kept for one more pass, so a return keeps its streak counts and a stopped head
+/// stays stopped; a withdrawn or completed record is dropped once it blocks nothing.
+pub fn withdraw(record: &mut Record) -> bool {
+    match record.phase.as_str() {
+        phase::WAITING | phase::RETRY_WAIT | phase::FAILED => {
+            record.phase = phase::WITHDRAWN.to_owned();
+            true
+        }
+        phase::WITHDRAWN | phase::COMPLETED => !record.blocking_workflows.is_empty(),
+        _ => true,
+    }
+}
+
 /// Keeps a dispatched record due while no review host can start its review.
 ///
 /// The record waits in `retry_wait` at its due time, so the next pass dispatches it again. The
@@ -963,7 +983,7 @@ mod tests {
         AUTHOR_LIMIT_REACHED, AuthorBound, Decision, HEAD_FETCH_MISMATCH, Policy,
         REVIEWER_USAGE_LIMITED, Record, Retarget, Run, Target, after_failure,
         head_mismatch_notification, limit_author, notification, plan, plan_on_base, plan_retarget,
-        reconcile_completed, retryable, wait_for_host,
+        reconcile_completed, retryable, wait_for_host, withdraw,
     };
     use crate::diagnostic::{diagnostic, failure_explanation};
     use crate::phase;
@@ -1677,7 +1697,8 @@ mod tests {
     // it notifies on the first limited run of its streak and when the delays are spent. A
     // fetch mismatch and a usage limit share one streak, so neither resets the other's count;
     // pruned runs and a retarget away and back keep both counts (#461). A retry by hand of a
-    // stopped head still starts after a host wait and a withdrawal or a retarget (#466).
+    // stopped head still starts after a host wait and a withdrawal or a retarget, and a stopped
+    // head stays stopped after a withdrawal, with no second notice (#466).
     #[test]
     fn usage_limit_retries_on_its_own_delays_then_stops() {
         const U: &str = REVIEWER_USAGE_LIMITED;
@@ -1692,7 +1713,7 @@ mod tests {
         // Each case: its name, the ending of each run, the phase, notice and delay after each, and
         // the retries spent at the end.
         type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool, i64)], i64);
-        let cases: [Case<'_>; 13] = [
+        let cases: [Case<'_>; 15] = [
             (
                 "stops after its own delays",
                 &[U, U, U, U],
@@ -1840,6 +1861,30 @@ mod tests {
                 ],
                 0,
             ),
+            (
+                "a head stopped by the usage limit stays stopped after a withdrawal",
+                &[U, U, U, U, GONE],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(false, 60),
+                    stop,
+                    ("failed", false, 0),
+                ],
+                0,
+            ),
+            (
+                "a head stopped by fetch mismatches stays stopped after a withdrawal",
+                &[M, M, M, M, GONE],
+                &[
+                    ("waiting", false, 2),
+                    ("waiting", false, 2),
+                    ("waiting", false, 2),
+                    stop,
+                    ("failed", false, 0),
+                ],
+                0,
+            ),
         ];
         for (name, endings, want, retries) in cases {
             let (target, mut now, policy) = fixture();
@@ -1854,11 +1899,9 @@ mod tests {
                 let decision = if *ending == BACK {
                     away_and_back(record, &target, &runs, now, &policy)
                 } else if *ending == GONE {
-                    // Discovery withdraws a waiting record whose candidate it did not list.
-                    let withdrawn = Record {
-                        phase: phase::WITHDRAWN.to_owned(),
-                        ..record
-                    };
+                    // Discovery withdraws a record whose candidate it did not list on one pass.
+                    let mut withdrawn = record;
+                    assert!(withdraw(&mut withdrawn), "{name}: the record was dropped");
                     plan(withdrawn, &target, &runs, now, &policy).expect("plan")
                 } else if *ending == PUBLISHED {
                     published_then_limited_on_dev(record, &target, &mut runs, now, &policy)

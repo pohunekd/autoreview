@@ -981,8 +981,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
 
     /// Keeps the discovery state bounded.
     ///
-    /// Records of pull requests that left every trigger are withdrawn, and dropped once they
-    /// ended and block nothing; those of an unsearched repository stay. Published decisions
+    /// Records of pull requests that left every trigger are withdrawn or dropped by
+    /// [`scheduler::withdraw`]; those of an unsearched repository stay. Published decisions
     /// older than the retention are dropped.
     fn prune_discovery(
         &self,
@@ -992,19 +992,9 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         now: OffsetDateTime,
     ) {
         state.schedule.retain(|key, record| {
-            if present.contains_key(key) || self.unsearched(failed, key_repository(key)) {
-                return true;
-            }
-            match record.phase.as_str() {
-                phase::WAITING | phase::RETRY_WAIT => {
-                    record.phase = phase::WITHDRAWN.to_owned();
-                    true
-                }
-                phase::WITHDRAWN | phase::COMPLETED | phase::FAILED => {
-                    !record.blocking_workflows.is_empty()
-                }
-                _ => true,
-            }
+            present.contains_key(key)
+                || self.unsearched(failed, key_repository(key))
+                || scheduler::withdraw(record)
         });
         let retention = self.config.published_retention.as_nanos();
         state.published.retain(|_, record| {
