@@ -56,31 +56,35 @@ Rules:
    aarch64; `scripts/setup` needs x86_64, or aarch64 with pohunek and its
    runtime packages in place. For anything else, stop and tell me.
 2. Before changing anything, ask me: one machine as my own user
-   (`scripts/setup`) or a server user (install page, path a or b); the GitHub
-   login autoreview acts as and its token kind (fine-grained for one owner,
-   or classic); the repositories or organisation; Claude Code, Codex or both;
-   the review hosts; where notifications go (setup asks for a Matrix room).
+   (`scripts/setup`) or a server (install page, path b with its systemd
+   units); the configuration directory; the GitHub login autoreview acts as
+   and its token kind (fine-grained for one owner, or classic); the
+   repositories or organisation; Claude Code, Codex or both; the review
+   hosts; where notifications go (setup asks for a Matrix room).
    Then show me the plan and wait for my approval.
 3. Start with comments only: the `single-repo-comment` example, or
    `public-repositories` when people outside my team open pull requests, with
-   the reviewers set to my agents. Keep `on_findings: comment` and
-   `on_clean: comment` until I ask for more, and `trusted: any` only where no
+   the reviewers set to my agents. Set `on_findings: comment` and
+   `on_clean: comment` in every rule (`public-repositories` ships
+   `request_changes`) until I ask for more, and `trusted: any` only where no
    outside author can open a pull request.
 4. With setup, run `git clone --branch <tag> --depth 1
-   https://github.com/pohunekd/autoreview` and in it `scripts/setup --dry-run
-   --dir <dir>` with my answers as the flags getting started lists. It needs a
-   terminal, so give me the command without `--dry-run` to run in mine; never
-   pipe answers into it or fake a terminal. Its first run stops after writing
-   the configuration and the empty secrets file; I run it again after rules 6
-   and 7. Stop on exit code 5.
+   https://github.com/pohunekd/autoreview`. If `AUTOREVIEW_VERSION` in its
+   `scripts/setup` is not <tag> without the `v`, stop and tell me. Then run
+   `scripts/setup --dry-run --dir <dir>` with my answers as the flags getting
+   started lists. It needs a terminal, so give me the command without
+   `--dry-run` to run in mine; never pipe answers into it or fake a terminal.
+   Its first run stops after writing the configuration and the empty secrets
+   file; I run it again after rules 6 and 7. Stop on exit code 5.
 5. On a server, check the archive of <tag> with `sha256sum --check` and
    `gh attestation verify <archive> --repo pohunekd/autoreview
    --signer-workflow pohunekd/autoreview/.github/workflows/release.yml
    --source-ref refs/tags/<tag> --deny-self-hosted-runners`. Stop on any
-   mismatch. Then follow path a or b and `autoreview init` as shown there.
+   mismatch. Then follow path b and `autoreview init` as shown there.
 6. Never read, print or store a token value; pass only the secrets file's
    path with `--env-file`. Tell me which `AUTOREVIEW_*` lines to write into it
-   with an editor: with setup `~/.config/autoreview/autoreview.env` (0600), on
+   with an editor: with setup `$XDG_CONFIG_HOME/autoreview/autoreview.env`
+   (`~/.config` when unset; 0600), on
    a server `sudoedit /etc/autoreview/autoreview.env` (owner autoreview, 0600).
 7. Show me each policy.yaml edit (match, trigger, authors) as a diff first.
    Run `pohunek project add` and `autoreview profiles install` only after I
