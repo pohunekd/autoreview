@@ -13,7 +13,7 @@ name = "changelog"
 path = "src/main.rs"
 
 [dependencies]
-pohunek-companion-changelog = { git = "https://github.com/pohunekd/pohunek-companion", rev = "9e83077b89b0e8a0cd1c7258d17af47e49f2b203" }
+pohunek-companion-changelog = { git = "https://github.com/pohunekd/pohunek-companion", rev = "4a6237bc58273f1619f0f2e0f9e1dd1b89f062c8" }
 
 [lints]
 workspace = true
