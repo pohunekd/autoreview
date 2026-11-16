@@ -4,7 +4,7 @@
 # usage: scripts/macos-check archive [--no-attestation] <archive>
 #
 # <archive> is <dir>/autoreview-<version>-aarch64-apple-darwin.tar.gz, and its .sha256 file
-# must be next to it. Each check prints `ok` or `FAIL`, and the
+# must be next to it. Each check prints `ok`, `skip` or `FAIL`, and the
 # first FAIL exits 1: the platform, the .sha256 line, the build provenance attestation of the
 # release workflow for the tag v<version>, the quarantine attribute, the archive members, the
 # ad-hoc signature and identifier of the binary, its libraries and `autoreview --version`.
@@ -45,19 +45,23 @@ archive=$1
 file=${archive##*/}
 version=${file#autoreview-}
 version=${version%-"$TARGET".tar.gz}
-printf '%s\n' "$version" | grep -Eqx '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' \
-    || fail "not an archive name autoreview-<X.Y.Z>-$TARGET.tar.gz: $file"
+if ! printf '%s\n' "$version" | grep -Eqx '(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)' \
+    || [ "$file" != "autoreview-$version-$TARGET.tar.gz" ]; then
+    fail "not an archive name autoreview-<X.Y.Z>-$TARGET.tar.gz: $file"
+fi
 name="autoreview-$version-$TARGET"
 if [ ! -f "$archive" ] || [ ! -f "$archive.sha256" ]; then
     fail "missing $archive or $archive.sha256"
 fi
 
 [ "$(uname -sm)" = "Darwin arm64" ] || fail "platform: $(uname -sm), not Darwin arm64"
-macos=$(sw_vers -productVersion)
+macos=$(sw_vers -productVersion) || fail "sw_vers -productVersion"
 [ "${macos%%.*}" -ge "$MACOS_MIN_MAJOR" ] || fail "macOS $macos is older than $MACOS_MIN_MAJOR"
 ok "platform Darwin arm64, macOS $macos"
 
-digest=$(shasum -a 256 "$archive" | cut -d' ' -f1)
+sum=$(shasum -a 256 "$archive") || fail "shasum -a 256 $file"
+digest=${sum%% *}
+printf '%s\n' "$digest" | grep -Eqx '[0-9a-f]{64}' || fail "shasum gave no SHA-256 digest of $file"
 [ "$(cat "$archive.sha256")" = "$digest  $file" ] || fail "$file.sha256 does not match the archive"
 ok "sha256 $digest"
 
@@ -77,27 +81,37 @@ if xattr -p com.apple.quarantine "$archive" >/dev/null 2>&1; then
 fi
 ok "no quarantine attribute"
 
-members=$(tar -tzf "$archive" | LC_ALL=C sort)
+listing=$(tar -tzf "$archive") || fail "tar -tzf $file"
+members=$(printf '%s\n' "$listing" | LC_ALL=C sort)
 expected=$(printf '%s\n' "$name/" "$name/LICENSE" "$name/README.md" "$name/autoreview" \
     | LC_ALL=C sort)
 [ "$members" = "$expected" ] \
     || fail "the archive holds other members than $name/ with LICENSE, README.md, autoreview"
 ok "members"
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/macos-check.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/macos-check.XXXXXX") || fail "mktemp -d"
 trap 'rm -rf -- "$work"' EXIT
-tar -xzf "$archive" -C "$work"
+tar -xzf "$archive" -C "$work" || fail "tar -xzf $file"
 binary=$work/$name/autoreview
+# The member names alone allow links; a link would make the checks below read another file.
+if [ -L "$work/$name" ] || [ ! -d "$work/$name" ] || [ -L "$binary" ] || [ ! -f "$binary" ]; then
+    fail "$name/autoreview is not a regular file in a directory"
+fi
 
 codesign --verify --strict "$binary" 2>/dev/null || fail "codesign --verify --strict"
-details=$(codesign -dv "$binary" 2>&1)
+details=$(codesign -dv "$binary" 2>&1) || fail "codesign -dv"
 printf '%s\n' "$details" | grep -qx 'Signature=adhoc' || fail "the signature is not ad-hoc"
 printf '%s\n' "$details" | grep -qx "Identifier=$IDENTIFIER" \
     || fail "the identifier is not $IDENTIFIER"
 ok "ad-hoc signature, identifier $IDENTIFIER"
 
-if command -v otool >/dev/null 2>&1; then
-    libraries=$(otool -L "$binary" | sed 1d | awk '{print $1}')
+# /usr/bin/otool exists without the command line tools too, as a stub that fails and offers to
+# install them, so the tools are detected with xcode-select (xcrun could open that offer).
+if xcode-select -p >/dev/null 2>&1; then
+    linked=$(otool -L "$binary") || fail "otool -L"
+    libraries=$(printf '%s\n' "$linked" | sed 1d | awk '{print $1}')
+    printf '%s\n' "$libraries" | grep -qx /usr/lib/libSystem.B.dylib \
+        || fail "otool -L lists no /usr/lib/libSystem.B.dylib"
     for library in $libraries; do
         case $library in
             /usr/lib/* | /System/Library/*) ;;
@@ -106,7 +120,7 @@ if command -v otool >/dev/null 2>&1; then
     done
     ok "system libraries only"
 else
-    printf 'skip  libraries (otool needs the Xcode command line tools; %s)\n' \
+    printf 'skip  libraries (the Xcode command line tools are not installed; %s)\n' \
         "the release build checks them"
 fi
 
