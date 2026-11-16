@@ -4,7 +4,7 @@
 Checks, per page: relative links and their anchors, YAML code blocks, the
 status line, forbidden words and emoji. Every examples/**/*.yaml file must
 parse. The pages that pohunek.dev publishes by name must exist, and README.md
-must hold the agent install prompt that it serves. Run as
+must hold the agent install prompt that it serves, by the site's own rules. Run as
 `python3 -I scripts/check-docs [ROOT]`; exits 1 on any finding.
 
 Words that must not appear in public pages are read from
@@ -126,17 +126,40 @@ def check_published(errors):
         if not (ROOT / page).is_file():
             errors.append(f"{page}: missing; pohunek.dev publishes it by name")
 
-    lines = read(ROOT / "README.md").splitlines()
-    if INSTALL_PROMPT_HEADING not in lines:
-        errors.append(f"README.md: no {INSTALL_PROMPT_HEADING!r} heading for pohunek.dev")
+    readme = ROOT / "README.md"
+    if not readme.is_file():
+        errors.append("README.md: missing; pohunek.dev serves its install prompt")
         return
-    section = []
-    for line in lines[lines.index(INSTALL_PROMPT_HEADING) + 1:]:
-        if line.startswith("## "):
+    problem = install_prompt_problem(read(readme).splitlines())
+    if problem:
+        errors.append(f"README.md: {problem} (pohunek.dev serves it as the install prompt)")
+
+
+def install_prompt_problem(lines):
+    """Why pohunek.dev cannot extract the install prompt, or None.
+
+    The rules are those of the site's extractInstallPrompt: the first line equal to
+    the heading after trimming, then the first ```text fence before the next H2,
+    closed by the next bare fence anywhere after it, with text left after trimming.
+    """
+    starts = [i for i, line in enumerate(lines) if line.strip() == INSTALL_PROMPT_HEADING]
+    if not starts:
+        return f"no {INSTALL_PROMPT_HEADING!r} section"
+    opening = None
+    for i in range(starts[0] + 1, len(lines)):
+        if re.match(r"##\s", lines[i]):
             break
-        section.append(line)
-    if "```text" not in section or "```" not in section[section.index("```text") + 1:]:
-        errors.append(f"README.md: no closed ```text block under {INSTALL_PROMPT_HEADING!r}")
+        if re.fullmatch(r"```text\s*", lines[i]):
+            opening = i
+            break
+    if opening is None:
+        return f"{INSTALL_PROMPT_HEADING!r} section has no ```text block"
+    closes = [i for i in range(opening + 1, len(lines)) if re.fullmatch(r"```\s*", lines[i])]
+    if not closes:
+        return f"{INSTALL_PROMPT_HEADING!r} text block is never closed"
+    if not "\n".join(lines[opening + 1:closes[0]]).strip():
+        return f"{INSTALL_PROMPT_HEADING!r} text block is empty"
+    return None
 
 
 def main():

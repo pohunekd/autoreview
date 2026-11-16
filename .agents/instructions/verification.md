@@ -12,7 +12,8 @@ Docs group:
    anchors, YAML code blocks, the status line of each page, forbidden words and
    emoji in `docs/` (never `docs/plan/`), that every `examples/**/*.yaml`
    parses, and that the pages pohunek.dev publishes by name and the README
-   install prompt (a `text` block under `## Install with an agent`) exist.
+   install prompt (a closed, non-empty `text` block under `## Install with an
+   agent`, found as the site's `extractInstallPrompt` finds it) exist.
 2. `shellcheck` (`shellcheck scripts/setup scripts/check-install
    deploy/install.sh`): skipped with a reason when `shellcheck` is not on
    `PATH`, except in CI (`CI` set), where it fails.
