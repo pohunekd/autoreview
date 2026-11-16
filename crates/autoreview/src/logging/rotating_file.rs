@@ -2,11 +2,6 @@
 
 // Rust guideline compliant 2026-06-26
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "attached by the logging wiring")
-)]
-
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -18,7 +13,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 /// Mode of a created log file: read and write for the owner only.
-const FILE_MODE: u32 = 0o600;
+pub(super) const FILE_MODE: u32 = 0o600;
 
 /// Time before a failed rotation is tried again, and between two error lines of the writer.
 const RETRY_INTERVAL: Duration = Duration::from_secs(60);
