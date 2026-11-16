@@ -1024,7 +1024,87 @@ fn is_error_code(text: &str) -> bool {
 mod tests {
     use autoreview_engine::error_code;
 
-    use super::{fetch_ref_from_output, mismatch_commit};
+    use super::{fetch_ref_from_output, head_checkout_hooks_from_output, mismatch_commit};
+
+    /// Only an advertised `true` is the switch, and only `false` for each worktree event is no
+    /// host script; an older CLI or daemon omits both keys (#399).
+    #[test]
+    fn head_checkout_hooks_are_only_an_advertised_switch_and_explicit_false() {
+        let inspect = |fields: &str| {
+            let ok = format!(r#"{{"daemon_version":"0.43.1","runtimes":[]{fields}}}"#);
+            format!(r#"{{"cli_version":"0.43.1","protocol":{{"min":5,"max":5}},"ok":{ok}}}"#)
+        };
+        let switch = r#","session_new_skip_repo_hooks_supported":true"#;
+        let hooks = |post_create: &str| {
+            format!(
+                concat!(
+                    r#","host_hooks":{{"pre_create":true,"post_create":{},"pre_remove":false,"#,
+                    r#""post_remove":true,"session_start":false,"session_stop":false,"#,
+                    r#""agent_state":false}}"#
+                ),
+                post_create
+            )
+        };
+        let both = |post_create: &str| inspect(&format!("{switch}{}", hooks(post_create)));
+        let cases = [
+            (both("false"), Ok((true, true))),
+            (both("true"), Ok((true, false))),
+            (both("null"), Ok((true, false))),
+            (both(r#""false""#), Ok((true, false))),
+            (both("0"), Ok((true, false))),
+            (inspect(switch), Ok((true, false))),
+            (
+                inspect(&format!(r#"{switch},"host_hooks":null"#)),
+                Ok((true, false)),
+            ),
+            (
+                inspect(&format!(r#"{switch},"host_hooks":{{"post_create":false}}"#)),
+                Ok((true, false)),
+            ),
+            (inspect(&hooks("false")), Ok((false, true))),
+            (
+                inspect(&format!(
+                    r#","session_new_skip_repo_hooks_supported":"true"{}"#,
+                    hooks("false")
+                )),
+                Ok((false, true)),
+            ),
+            (inspect(""), Ok((false, false))),
+            (
+                inspect(&format!(r#"{switch},"host_hooks":[false]"#)),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                inspect(&format!("{switch}{}", hooks(r#"false,"post_create":true"#))),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                inspect(&format!("{switch}{switch}{}", hooks("false"))),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                inspect(
+                    &format!("{switch}{}", hooks("false")).replace("post_create", "Post_Create"),
+                ),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                inspect(&format!(r#","Host_Hooks":{{}}{switch}"#)),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                r#"{"err":{"code":"host_unreachable"}}"#.to_owned(),
+                Err("pohunek_response_invalid"),
+            ),
+        ];
+        for (output, want) in cases {
+            let got = head_checkout_hooks_from_output(&output);
+            let got = got
+                .map(|hooks| (hooks.skip_supported, hooks.no_worktree_scripts))
+                .map_err(|error| error_code(&error).to_owned());
+            assert_eq!(got, want.map_err(str::to_owned), "{output}");
+        }
+    }
 
     /// Only an advertised `true` enables the head fetch; an older CLI or daemon omits the key
     /// (#255).
