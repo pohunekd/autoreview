@@ -106,10 +106,12 @@ impl Store {
         workflow_id: &str,
         rule: GuidanceConfig,
     ) -> Result<Vec<Suggestion>, Error> {
-        let now = (self.now)();
-        let window_start =
-            now.saturating_sub(rule.window.try_into().unwrap_or(time::Duration::MAX));
         self.in_tx(|transaction| {
+            // Read under the write lock, so the time order of suggestions and fixes is the
+            // commit order.
+            let now = (self.now)();
+            let window_start =
+                now.saturating_sub(rule.window.try_into().unwrap_or(time::Duration::MAX));
             let last = last_suggestions(transaction, repository)?;
             let fixed = fixed_findings(transaction, repository, window_start)?;
             let due = due_suggestions(&fixed, &last, rule.recurrence_threshold, window_start);

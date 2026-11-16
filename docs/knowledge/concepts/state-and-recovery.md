@@ -20,7 +20,7 @@ retries happen at which layer, and what is deleted over time.
 
 ## What the store contains
 
-The file holds six kinds of data.
+The file holds seven kinds of data.
 
 | Data | What it is for |
 |---|---|
@@ -30,10 +30,12 @@ The file holds six kinds of data.
 | Review state | The progress of each reviewer slot and of the verifier slot: the session identity, the run and start counters, the stored result, and the verification. |
 | Step runs | How each run of a review step ended, with its retries and its duration, for the [statistics](../../stats.md#steps). |
 | Finding outcomes | One row per published finding with what became of it, kept apart from the reviews, and per pull request with open outcomes the time of its last state read and how it ended; see [finding outcomes](finding-outcomes.md). |
+| Guidance data | With a `guidance` section, the category and the reviewer-written text of each published finding, and the guidance suggestions raised from them (`finding_categories`, `guidance_suggestions`). |
 
 The database holds the published text of reviews and the finding excerpts that
 refer to the repository. Protect it accordingly. Retention (below) limits how
-long it keeps completed reviews.
+long it keeps completed reviews; the finding text in the guidance data lasts as
+long as the finding outcomes.
 
 From 0.5.0 on the store is private to the user of the service. A new database
 gets mode 0600, and `autoreview init` creates its `--dir` with mode 0700 when
@@ -256,7 +258,7 @@ passes:
 |---|---|---|
 | `store.review_retention_seconds` | Completed reviews whose last update is older than this; their counts move to the daily statistics rollup, which has no retention | Their steps are no longer needed to resume anything |
 | `store.published_retention_seconds` | Published decisions older than this | A published decision is the baseline of the next incremental review. Older baselines are not used. |
-| `store.outcome_retention_seconds` | Finding outcomes whose last change is older than this, and the state reads of pull requests older than this; a failed prune logs `finding outcome pruning failed` and the next pass tries again | They outlive the reviews, to measure review quality over a longer time ([finding outcomes](finding-outcomes.md)) |
+| `store.outcome_retention_seconds` | Finding outcomes whose last change is older than this, with their categories and finding text, the guidance suggestions made before this, and the state reads of pull requests older than this; a failed prune logs `finding outcome pruning failed` and the next pass tries again | They outlive the reviews, to measure review quality over a longer time ([finding outcomes](finding-outcomes.md)) |
 
 Two consequences follow from the retention periods:
 

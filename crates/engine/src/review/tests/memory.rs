@@ -988,6 +988,9 @@ async fn open_prior_finding_without_an_open_thread_is_published_again() {
     h.poll_until("the second approval wait", || h.resolve(&again).is_ok())
         .await;
     approve_waiting(&h, &again, 4).await;
+    // A review completes after it has delivered its suggestions.
+    h.wait_for("the fourth completed review", || completed(&h, &pr) == 4)
+        .await;
     assert_eq!(suggested(&h), texts, "the suggestion is delivered once");
     h.stop_engine().await;
 }

@@ -165,8 +165,9 @@ impl Store {
         settlements: &[Settlement],
         published: &[FindingOutcome],
     ) -> Result<(), Error> {
-        let now = self.timestamp();
         self.in_tx(|transaction| {
+            // Read under the write lock, so `updated_at` follows the commit order.
+            let now = self.timestamp();
             // Every settlement picks its rows before any change: a key that one settlement
             // moves a row to can be the key that another one of the same review names.
             let mut picked = Vec::new();
