@@ -24,7 +24,7 @@ which can be the same machine.
 
 - A pohunek daemon running on the review host, with the official Codex
   runtime package installed. The reviewer in this guide uses Codex. See the
-  [pohunek project](https://github.com/zajca/pohunek) for installation.
+  [pohunek install guide](https://pohunek.dev/docs/install/) for installation.
 - The repository you want reviewed, registered as a pohunek project on that
   host with `pohunek project add`. autoreview finds the repository by its
   origin URL, so the registered checkout must point at the same remote.

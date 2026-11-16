@@ -90,6 +90,12 @@ untrusted) is resolved at the same moment and stored with the review. See
 The scope of the review (full or incremental) and its prior findings are also
 decided at dispatch. See [incremental reviews](incremental-reviews.md).
 
+A rule with `guard` scans the configured texts of the pull request for hidden
+instructions once per review, before any reviewer starts, and stores the result
+with the review; see [the text guard](../safety/prompt-injection.md#the-text-guard).
+A pipeline with `intent_check: issues` also hands the reviewers the issues that
+the pull request closes in its own repository, as untrusted data.
+
 ## 3. Project routing on pohunek hosts
 
 A review runs on a pohunek host, so the repository must be a registered pohunek

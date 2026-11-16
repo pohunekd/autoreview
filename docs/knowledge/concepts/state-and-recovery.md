@@ -35,6 +35,13 @@ The database holds the published text of reviews and the finding excerpts that
 refer to the repository. Protect it accordingly. Retention (below) limits how
 long it keeps completed reviews.
 
+After 0.4.0 the store is private to the user of the service. A new database
+gets mode 0600, and `autoreview init` creates its `--dir` with mode 0700 when
+the store lies inside it. `autoreview validate` refuses a store directory or
+file that grants the group or other users any access, with
+`configuration_invalid` naming `store.path` and the `chmod` that fixes each
+path; it changes no mode itself.
+
 ## Single writer
 
 Two engine processes must never run against one database. `autoreview serve`

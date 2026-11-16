@@ -15,7 +15,7 @@ intents: [setup, help]
 autoreview is a small service that reviews GitHub pull requests with coding
 agents you already run. It finds pull requests that ask for a review, runs one
 or more agents (Claude Code, Codex) as read-only reviewers in
-[pohunek](https://github.com/zajca/pohunek) sessions on your own machines,
+[pohunek](https://pohunek.dev/) sessions on your own machines,
 checks their findings, and publishes one GitHub review with inline comments.
 A policy file decides which repositories are reviewed, by which agents, and
 what the result is allowed to do.
@@ -74,6 +74,13 @@ serious findings. [Human approval](knowledge/guides/human-approval.md)
 Untrusted authors, and forks whose author is not listed in `logins`, are reviewed
 from the base checkout and are never approved automatically.
 [Untrusted authors](knowledge/safety/untrusted-authors.md)
+
+**Screens pull request text.** An optional text guard (after 0.4.0) scores the
+texts of a pull request (title, body, commit messages, comments, review threads,
+added lines) for hidden instructions before the reviewers start, and can log,
+wait for a person or comment on a suspect pull request. `autoreview guard scan`
+measures a lexicon and a threshold offline first.
+[Text guard](knowledge/guides/text-guard.md)
 
 **Tells the right person.** Events have three levels (act now, digest, log)
 routed to Matrix rooms or webhooks (Slack, Discord, JSON), or only to the log,
@@ -167,7 +174,7 @@ shares per reviewer, severity and repository over a range of days.
 |---|---|
 | [Troubleshooting](knowledge/runbooks/troubleshooting.md) | Error codes to fixes |
 | [Retry and recovery](knowledge/runbooks/retry-and-recovery.md) | Stopped reviews, restarts |
-| [Stale sessions and branches](knowledge/runbooks/stale-sessions-and-branches.md) | Cleanup on review hosts |
+| [Stale sessions and branches](knowledge/runbooks/stale-sessions-and-branches.md) | Cleanup on review hosts, `autoreview prune-branches` |
 | [Upgrade and backup](knowledge/runbooks/upgrade-and-backup.md) | Releases, database |
 
 | Safety | |
