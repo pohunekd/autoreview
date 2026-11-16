@@ -1,7 +1,9 @@
 #!/bin/sh
-# Checks an autoreview release archive for Apple Silicon on a Mac before it is used.
+# Checks an autoreview release archive for Apple Silicon on a Mac before it is used, or
+# the launchd agents that scripts/setup installed.
 #
 # usage: scripts/macos-check archive [--no-attestation] <archive>
+#        scripts/macos-check service
 #
 # <archive> is <dir>/autoreview-<version>-aarch64-apple-darwin.tar.gz, and its .sha256 file
 # must be next to it. Each check prints `ok`, `skip` or `FAIL`, and the
@@ -11,6 +13,13 @@
 # --no-attestation skips only the attestation, for the artifact of a dry run, which has none.
 # The archive is extracted into a temporary directory; nothing else is written. POSIX sh, so
 # Apple's /bin/sh runs it; it needs gh only for the attestation.
+#
+# `service` reads the two agents and changes nothing: both files pass plutil -lint and hold
+# no other variables than AGENT_VARIABLES (secrets only through --env-file), both are loaded
+# in the login domain, the review agent runs its binary, the queue agent has its 13 hours,
+# the secrets file is mode 0600 and the log is private. It names the pohunek daemon socket
+# that the agent dials, checks it against pohunek.runtime_dir of config.yaml, and runs
+# `autoreview validate` once in the agent's environment.
 
 set -eu
 
@@ -20,6 +29,12 @@ IDENTIFIER=io.github.pohunekd.autoreview
 TARGET=aarch64-apple-darwin
 # The oldest macOS release that the archive is built for (MACOSX_DEPLOYMENT_TARGET).
 MACOS_MIN_MAJOR=14
+# The labels of the agents of scripts/setup, and the only variables it writes into them.
+AGENT_LABEL=io.github.pohunekd.autoreview
+QUEUE_LABEL=io.github.pohunekd.autoreview-queue
+AGENT_VARIABLES="PATH XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME XDG_RUNTIME_DIR"
+# The queue agent runs at 08:00 to 20:00, one entry per hour.
+QUEUE_ENTRIES=13
 
 ok() {
     printf 'ok    %s\n' "$*"
@@ -30,7 +45,120 @@ fail() {
     exit 1
 }
 
-usage="usage: scripts/macos-check archive [--no-attestation] <archive>"
+check_platform() {
+    [ "$(uname -sm)" = "Darwin arm64" ] || fail "platform: $(uname -sm), not Darwin arm64"
+    macos=$(sw_vers -productVersion) || fail "sw_vers -productVersion"
+    [ "${macos%%.*}" -ge "$MACOS_MIN_MAJOR" ] \
+        || fail "macOS $macos is older than $MACOS_MIN_MAJOR"
+    ok "platform Darwin arm64, macOS $macos"
+}
+
+# Prints the value at key path $2 of plist $1; fails when it has none.
+plist_value() {
+    plutil -extract "$2" raw -o - "$1" 2>/dev/null
+}
+
+# Prints the EnvironmentVariables names of plist $1, one per line.
+plist_variables() {
+    variables=$(plutil -extract EnvironmentVariables xml1 -o - "$1") \
+        || fail "plutil -extract EnvironmentVariables $1"
+    printf '%s\n' "$variables" | sed -n 's|.*<key>\(.*\)</key>.*|\1|p'
+}
+
+# Prints the permission bits of path $1 in octal without leading zeros, then a space and
+# the owner uid. BSD %Lp is not padded, so %03Lp pads it: mode 1022 reads 1022, not 122.
+mode_owner() {
+    line=$(stat -f '%Mp%03Lp %u' "$1") || fail "stat $1"
+    printf '%o %s\n' "$((0${line% *}))" "${line#* }"
+}
+
+check_service() {
+    uid=$(id -u) || fail "id -u"
+    domain=gui/$uid
+    agents=$HOME/Library/LaunchAgents
+    for label in "$AGENT_LABEL" "$QUEUE_LABEL"; do
+        plist=$agents/$label.plist
+        [ -f "$plist" ] || fail "missing $plist; run scripts/setup"
+        plutil -lint -s "$plist" || fail "plutil -lint refused $plist"
+        names=$(plist_variables "$plist")
+        for key in $names; do
+            case " $AGENT_VARIABLES " in
+                *" $key "*) ;;
+                *) fail "$label sets $key; setup passes secrets only through --env-file" ;;
+            esac
+        done
+        [ "$(plist_value "$plist" ProgramArguments.3)" = --env-file ] \
+            || fail "$label does not read --env-file"
+        launchctl print "$domain/$label" >/dev/null 2>&1 \
+            || fail "$domain/$label is not loaded; run scripts/setup"
+    done
+    ok "agents $AGENT_LABEL and $QUEUE_LABEL loaded, secrets only through --env-file"
+
+    plist=$agents/$AGENT_LABEL.plist
+    names=$(plist_variables "$plist")
+    binary=$(plist_value "$plist" ProgramArguments.0) || fail "no program in $plist"
+    config=$(plist_value "$plist" ProgramArguments.2) || fail "no --config in $plist"
+    env_file=$(plist_value "$plist" ProgramArguments.4) || fail "no --env-file in $plist"
+    status=$(launchctl print "$domain/$AGENT_LABEL") || fail "launchctl print $AGENT_LABEL"
+    state=$(printf '%s\n' "$status" | sed -n 's/^[[:space:]]*state = //p' | head -n 1)
+    pid=$(printf '%s\n' "$status" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)
+    [ "$state" = running ] || fail "$AGENT_LABEL is ${state:-unknown}, not running; read its log"
+    running=$(ps -o comm= -p "$pid") || fail "ps -p $pid"
+    [ "$running" = "$binary" ] || fail "pid $pid does not run $binary"
+    ok "$AGENT_LABEL runs $binary as pid $pid"
+
+    last=$((QUEUE_ENTRIES - 1))
+    if ! plist_value "$agents/$QUEUE_LABEL.plist" "StartCalendarInterval.$last.Hour" >/dev/null \
+        || plist_value "$agents/$QUEUE_LABEL.plist" "StartCalendarInterval.$QUEUE_ENTRIES" \
+            >/dev/null; then
+        fail "$QUEUE_LABEL does not hold exactly $QUEUE_ENTRIES calendar entries"
+    fi
+    ok "$QUEUE_LABEL runs at $QUEUE_ENTRIES hours"
+
+    [ "$(mode_owner "$env_file")" = "600 $uid" ] || fail "$env_file must be yours with mode 0600"
+    ok "secrets file $env_file, mode 0600"
+    log=$(plist_value "$plist" StandardErrorPath) || fail "no log in $plist"
+    [ -f "$log" ] || fail "missing the log $log"
+    case $(mode_owner "$log") in
+        *00\ *) ;;
+        *) fail "$log is readable by other users" ;;
+    esac
+    ok "log $log, private"
+
+    runtime=$(plist_value "$plist" EnvironmentVariables.XDG_RUNTIME_DIR) || runtime=""
+    lines=$(sed -n 's/^  runtime_dir: *//p' "$config") || fail "reading $config"
+    configured=$(printf '%s\n' "$lines" | head -n 1)
+    configured=${configured#\"}
+    configured=${configured%\"}
+    [ "$configured" = "$runtime" ] \
+        || fail "pohunek.runtime_dir of $config is '$configured', the agent has '$runtime'"
+    if [ -n "$runtime" ]; then
+        socket=$runtime/pohunek/daemon.sock
+    else
+        socket=/private/tmp/pohunek-$uid/daemon.sock
+    fi
+    if [ ! -S "$socket" ] || [ "$(stat -f %u "$socket")" != "$uid" ]; then
+        fail "no pohunek daemon socket of yours at $socket"
+    fi
+    ok "pohunek daemon socket $socket"
+
+    set -- HOME="$HOME"
+    for key in $names; do
+        value=$(plist_value "$plist" "EnvironmentVariables.$key") || fail "reading $key of $plist"
+        set -- "$@" "$key=$value"
+    done
+    env -i "$@" "$binary" --config "$config" --env-file "$env_file" validate >/dev/null 2>&1 \
+        || fail "autoreview validate in the agent's environment failed; run it there to see why"
+    ok "autoreview validate in the agent's environment"
+}
+
+if [ "$#" -eq 1 ] && [ "$1" = service ]; then
+    check_platform
+    check_service
+    exit 0
+fi
+
+usage="usage: scripts/macos-check archive [--no-attestation] <archive> | service"
 if [ "$#" -lt 2 ] || [ "$1" != archive ]; then
     fail "$usage"
 fi
@@ -54,10 +182,7 @@ if [ ! -f "$archive" ] || [ ! -f "$archive.sha256" ]; then
     fail "missing $archive or $archive.sha256"
 fi
 
-[ "$(uname -sm)" = "Darwin arm64" ] || fail "platform: $(uname -sm), not Darwin arm64"
-macos=$(sw_vers -productVersion) || fail "sw_vers -productVersion"
-[ "${macos%%.*}" -ge "$MACOS_MIN_MAJOR" ] || fail "macOS $macos is older than $MACOS_MIN_MAJOR"
-ok "platform Darwin arm64, macOS $macos"
+check_platform
 
 sum=$(shasum -a 256 "$archive") || fail "shasum -a 256 $file"
 digest=${sum%% *}
