@@ -74,6 +74,9 @@ schedule:
   search_page_limit: 20
   scheduler_max_bytes: 16777216
   state_entry_limit: 10000
+  # A pull request with open finding outcomes is read at most this often to
+  # see whether it was merged or closed.
+  outcome_check_interval_seconds: 3600
 
 limits:
   result_max_bytes: 1048576

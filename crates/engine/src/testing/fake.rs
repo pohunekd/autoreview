@@ -78,8 +78,10 @@ pub(crate) struct FakeState {
     pub(crate) policy: Option<Policy>,
     /// Current state of each pull request by `repository#number`.
     pub(crate) current: BTreeMap<String, PullRequest>,
-    /// Pull requests that were closed, by `repository#number`.
+    /// Pull requests that were closed or merged, by `repository#number`.
     pub(crate) closed: BTreeSet<String>,
+    /// Pull requests that were merged, by `repository#number`.
+    pub(crate) merged: BTreeSet<String>,
     /// Permanent error code of the direct read of a pull request, by `repository#number`.
     pub(crate) read_errors: BTreeMap<String, String>,
     /// Output of each reviewer session; `None` until a test sets it.
@@ -226,6 +228,16 @@ impl FakeIntegration {
         state.closed.insert(key);
     }
 
+    /// Marks a pull request as merged at the head of `pr`.
+    pub(crate) fn merge(&self, pr: PullRequest) {
+        let mut state = self.lock();
+        let key = pr.key();
+        state.candidates.remove(&key);
+        state.closed.insert(key.clone());
+        state.merged.insert(key.clone());
+        state.current.insert(key, pr);
+    }
+
     /// Dismisses the published review at `index`, as GitHub dismisses a stale approval.
     pub(crate) fn dismiss(&self, index: usize) {
         self.lock().dismissed.insert(index);
@@ -360,9 +372,9 @@ impl Integrations for FakeIntegration {
             }
             match state.current.get(&key) {
                 None => Ok(PullRequestState::default()),
-                Some(_) if state.closed.contains(&key) => Ok(PullRequestState::default()),
                 Some(pr) => Ok(PullRequestState {
-                    open: true,
+                    open: !state.closed.contains(&key),
+                    merged: state.merged.contains(&key),
                     requested: state.candidates.contains_key(&key),
                     title: pr.title.clone(),
                     url: pr.url.clone(),

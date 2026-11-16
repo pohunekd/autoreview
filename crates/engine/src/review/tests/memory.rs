@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use autoreview_policy::Level;
 use serde_json::json;
@@ -14,7 +15,7 @@ use crate::config::{Credential, Credentials};
 use crate::integrations::SessionRequest;
 use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
-use crate::model::review::{Decision, DiscussionThread, PRIOR_OPEN, prior_key};
+use crate::model::review::{Decision, DiscussionThread, PRIOR_FIXED, PRIOR_OPEN, prior_key};
 use crate::protocol::fixtures::sha;
 use crate::store::{REVIEW_COMPLETED, ReviewFilter};
 use crate::testing::fake::{reviewer_output, settling_output};
@@ -33,6 +34,17 @@ fn outcomes(h: &Harness, pr: &PullRequest) -> Vec<(String, String, String, Strin
             (row.finding_key, row.tracked_key, row.outcome, head)
         })
         .collect()
+}
+
+/// Returns the number of state reads of `pr`.
+fn state_reads(h: &Harness, pr: &PullRequest) -> usize {
+    let prefix = format!("{} ", pr.key());
+    let state = h.fake.lock();
+    state
+        .state_reads
+        .iter()
+        .filter(|read| read.starts_with(&prefix))
+        .count()
 }
 
 /// Returns the number of completed reviews of `pr`; a published review completes last.
@@ -730,6 +742,109 @@ async fn open_prior_finding_without_an_open_thread_is_published_again() {
         row(&sonnet_key, &sonnet_key, "fixed", &last.head_sha),
     ];
     h.wait_for("the fixed outcomes", || outcomes(&h, &pr) == fixed)
+        .await;
+    h.stop_engine().await;
+}
+
+// A merge ends the findings that are still open at the merged head, a settled finding keeps
+// its outcome, and the ended pull request is not read again.
+#[tokio::test]
+async fn merge_ends_the_open_findings_and_keeps_the_settled_ones() {
+    let mut h = start_harness(|config| {
+        config.outcome_check_interval = Duration::from_millis(1);
+    })
+    .await;
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3, 4])].into();
+    h.set_output(reviewer_output(vec![
+        json!({
+            "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+            "line": 3, "title": "Broken", "body": "It breaks.",
+        }),
+        json!({
+            "severity": "high", "confidence": "high", "blocking": true, "path": "src/a.go",
+            "line": 4, "title": "Also broken", "body": "It breaks too.",
+        }),
+    ]));
+    let pr = integration_pull_request("acme/manual", &sha("a"));
+    h.fake.open(pr.clone(), h.rule(&pr.repository));
+    h.poll_until("the request for changes", || h.publications() == 1)
+        .await;
+    let fixed_key = prior_key(&pr.head_sha, "O001");
+    let open_key = prior_key(&pr.head_sha, "O002");
+    h.fake.lock().discussion.threads = vec![DiscussionThread {
+        key: open_key.clone(),
+        replies: Vec::new(),
+        ..DiscussionThread::default()
+    }];
+    h.set_output(settling_output(Vec::new(), |prior| {
+        match prior.id.as_str() {
+            "O001" => PRIOR_FIXED,
+            _ => PRIOR_OPEN,
+        }
+    }));
+    let mut next = pr.clone();
+    next.head_sha = sha("c");
+    h.fake.open(next.clone(), h.rule(&pr.repository));
+    h.poll_until("the second review", || h.publications() == 2)
+        .await;
+    let row = |key: &str, outcome: &str, head: &str| {
+        let (key, outcome, head) = (key.to_owned(), outcome.to_owned(), head.to_owned());
+        (key.clone(), key, outcome, head)
+    };
+    let fixed = row(&fixed_key, "fixed", &next.head_sha);
+    let settled = vec![fixed.clone(), row(&open_key, "open", "")];
+    h.wait_for("the settled outcomes", || outcomes(&h, &pr) == settled)
+        .await;
+
+    let mut merged = pr.clone();
+    merged.head_sha = sha("e");
+    h.fake.merge(merged.clone());
+    let ended = vec![fixed, row(&open_key, "open_at_merge", &merged.head_sha)];
+    h.poll_until("the open_at_merge outcome", || outcomes(&h, &pr) == ended)
+        .await;
+    let reads = state_reads(&h, &pr);
+    h.settle().await;
+    assert_eq!(state_reads(&h, &pr), reads, "an ended pull request");
+    h.stop_engine().await;
+}
+
+// A close ends the open notes at the closed head. A pull request that left the search is read
+// at most once per check interval, so the close is seen only after the interval.
+#[tokio::test]
+async fn close_ends_the_open_notes_after_the_check_interval() {
+    let short = Arc::new(AtomicBool::new(false));
+    let switch = Arc::clone(&short);
+    let mut h = start_harness(move |config| {
+        if switch.load(Ordering::SeqCst) {
+            config.outcome_check_interval = Duration::from_millis(1);
+        }
+    })
+    .await;
+    let pr = hand_notes_to_the_author(&h).await;
+    let key = prior_key(&pr.head_sha, "O001");
+    let row = |outcome: &str, head: &str| {
+        let (outcome, head) = (outcome.to_owned(), head.to_owned());
+        vec![(key.clone(), key.clone(), outcome, head)]
+    };
+    let open = row("open", "");
+    h.wait_for("the open note outcome", || outcomes(&h, &pr) == open)
+        .await;
+    // The pull request leaves the search while it is still open.
+    h.fake.lock().candidates.remove(&pr.key());
+    h.poll().await;
+    assert_eq!(state_reads(&h, &pr), 1, "a pull request out of the search");
+    h.fake.close(pr.clone());
+    h.settle().await;
+    let (reads, stored) = (state_reads(&h, &pr), outcomes(&h, &pr));
+    assert!(
+        reads == 1 && stored == open,
+        "no read within the interval: reads={reads} outcomes={stored:?}"
+    );
+    h.stop_engine().await;
+    short.store(true, Ordering::SeqCst);
+    h.start();
+    let closed = row("open_at_close", &pr.head_sha);
+    h.poll_until("the open_at_close outcome", || outcomes(&h, &pr) == closed)
         .await;
     h.stop_engine().await;
 }

@@ -33,11 +33,15 @@ pub struct ReadiedDraft {
     pub author: String,
 }
 
-/// The state of a pull request that the hand-off reminder and the queue read.
+/// The state of a pull request that the hand-off reminder, the queue and outcome checks read.
+///
+/// A pull request that GitHub does not return is the default state: not open, no head SHA.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PullRequestState {
     /// Whether the pull request is still open.
     pub open: bool,
+    /// Whether the pull request was merged.
+    pub merged: bool,
     /// Whether the login is requested again.
     pub requested: bool,
     /// Pull request title.

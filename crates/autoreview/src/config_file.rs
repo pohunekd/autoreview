@@ -457,6 +457,8 @@ struct ScheduleFile {
     scheduler_max_bytes: Option<Value>,
     /// Entry bound of the discovery state.
     state_entry_limit: Option<Value>,
+    /// Shortest time between two state reads for finding outcomes, in seconds.
+    outcome_check_interval_seconds: Option<Value>,
 }
 
 /// The `limits` section.
@@ -970,6 +972,10 @@ fn map_file(
         &schedule_file.state_entry_limit,
         "schedule.state_entry_limit",
     )?;
+    let outcome_check_interval = seconds(
+        &schedule_file.outcome_check_interval_seconds,
+        "schedule.outcome_check_interval_seconds",
+    )?;
     let limits = section(&file.limits, "limits")?;
     let result_max_bytes = positive(&limits.result_max_bytes, "limits.result_max_bytes")?;
     let max_findings = positive(&limits.max_findings, "limits.max_findings")?;
@@ -1076,6 +1082,7 @@ fn map_file(
         review_retention,
         published_retention,
         outcome_retention,
+        outcome_check_interval,
         session_start_attempts,
         session_cleanup_attempts,
         reviewer_run_attempts,
