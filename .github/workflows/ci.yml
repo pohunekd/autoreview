@@ -55,6 +55,23 @@ jobs:
       - name: Adapter gates
         run: scripts/gates adapters
 
+  # Runs the same adapter suites on Apple Silicon with the image's python3; the
+  # adapters need Python 3.11 or newer. The `ci` aggregate does not need this job.
+  adapters-macos:
+    name: adapters-macos
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Runner platform
+        run: |
+          test "$(uname -sm)" = "Darwin arm64"
+          python3 -I -c 'import sys; print(sys.version); sys.exit(sys.version_info < (3, 11))'
+      - name: Adapter gates
+        run: scripts/gates adapters
+
   # Runs the Rust gates with the toolchain pinned in rust-toolchain.toml.
   rust:
     name: rust

@@ -13,6 +13,7 @@ import select
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -26,6 +27,9 @@ ROOT = Path(__file__).resolve().parents[1]
 READ_ONLY_SOURCE = 'base = "claude"\nargs = ["--permission-mode", "plan"]\n'
 COMMITTER = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
 UNSIGNED = ["-c", "commit.gpgsign=false"]
+# The adapter starts as `env -S python3 -I`. The tests' interpreter comes first, so macOS does
+# not run it with Apple's older /usr/bin/python3.
+CHILD_PATH = f"{Path(sys.executable).parent}:/usr/bin:/bin"
 # The structured output that the fake Claude Code prints.
 CLAUDE_STDOUT = '{"type":"result","subtype":"success"}'
 # Each request protocol name with the result protocol name that answers it.
@@ -189,7 +193,7 @@ class BaseCheckoutTests(unittest.TestCase):
         self.root = Path(directory.name)
         (self.root / "home").mkdir()
         self.environment = {
-            "PATH": "/usr/bin:/bin",
+            "PATH": CHILD_PATH,
             "HOME": str(self.root / "home"),
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -508,7 +512,7 @@ class VersionProbeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = self.install_wrapper(root, "{fake}\n")
-            result = self.run_wrapper(root, script, ["/bin/true", "262144"])
+            result = self.run_wrapper(root, script, ["/usr/bin/true", "262144"])
 
         self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
         self.assertIn("differs", result.stderr)

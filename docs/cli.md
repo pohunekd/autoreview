@@ -232,6 +232,7 @@ when every file was kept, so a second run with the same flags prints
 |---|---|---|
 | `--config` or `--env-file` given, a flag missing, an unknown agent or effort, a Codex flag that does not fit `--agent` | `command_invalid` | none |
 | `--host`, `--name`, `--model`, `--effort` or `--agent-binary` refused; `XDG_CONFIG_HOME` or `XDG_DATA_HOME` set but empty; `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `HOME` relative, with an empty, `.` or `..` part or a trailing `/`, or neither set | `configuration_invalid` | the flag or the variable |
+| `--agent codex` on a host other than Linux: the Codex adapter needs Linux `PR_SET_CHILD_SUBREAPER`; checked before any pohunek call or write | `profile_agent_unsupported` | `--agent` |
 | A pohunek call fails or prints unexpected JSON | `pohunek_command_failed` | the pohunek command |
 | `--host` names another machine or cannot be inspected | `profile_host_not_local` | `--host` |
 | No single official, enabled and selected package serves the runtime | `runtime_package_missing` | the runtime; the message names the install command |
@@ -676,6 +677,7 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `init_write_failed` | `init` could not check, create or write a path; the `configuration` field names it |
 | `profile_host_not_local`, `runtime_package_missing` | `profiles install` was run on the wrong host, or the official runtime package is missing |
 | `profile_foreign`, `profile_write_failed` | `profiles install` found a file it did not write, or could not write the path it names |
+| `profile_agent_unsupported` | `profiles install --agent codex` ran on a host other than Linux, where the Codex adapter cannot end the processes Codex leaves; a Codex reviewer on a Linux host stays valid in the policy |
 | `guard_lexicon_invalid`, `guard_corpus_invalid` | `guard scan` could not read its lexicon file or it does not validate, or its corpus file cannot be read, has no line or has a malformed line; the log line names the cause and the line number |
 | `pohunek_command_failed` | `profiles install` could not read the answer of a pohunek command about the local daemon, or that command ran past `--pohunek-timeout-seconds`; a failed or timed-out check of a named `--host` is `profile_host_not_local` |
 | `repository_not_allowed`, `review_identity_invalid` | Malformed repository or pull request number, or an approval whose identity differs from the stored review |

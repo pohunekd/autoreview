@@ -4,7 +4,8 @@
 
 `scripts/gates` runs each gate, in the order below, and reports its own result.
 With no argument it runs every group; CI runs the `docs`, `adapters`, `rust` and
-`deny` groups as four jobs on Linux, and the `rust` group a second time on macOS.
+`deny` groups as four jobs on Linux, and the `adapters` and `rust` groups a second
+time on macOS.
 
 Docs group:
 
@@ -140,6 +141,10 @@ text. Describe checks against the owner's own daemons in words only.
 
 - `docs` runs `scripts/gates docs` with PyYAML pinned in a virtualenv.
 - `adapters` runs `scripts/gates adapters` with the runner's Python.
+- `adapters-macos` runs `scripts/gates adapters` on `macos-15` with the image's
+  `python3`, 3.11 or newer. The Codex adapter tests that need its Linux subreaper
+  are skipped there, and one checks that the adapter refuses to run without it.
+  It is a check of its own, outside the `ci` aggregate.
 - `rust` runs `scripts/gates rust` on the toolchain pinned in
   `rust-toolchain.toml`, with the dependency cache restored from `main` and
   saved only by runs on `main`.
@@ -149,7 +154,7 @@ text. Describe checks against the owner's own daemons in words only.
   version and SHA-256 the workflow pins.
 - `changelog` runs `scripts/changelog check` and, on a pull request, requires a fragment unless the pull request carries `no-changelog`.
 - `ci` is the only required status check. It fails unless every other job but
-  `rust-macos` succeeded.
+  `adapters-macos` and `rust-macos` succeeded.
 
 When a workflow file changes, run `actionlint` at a pinned version on it and
 report the result in the PR. It is not a gate yet.

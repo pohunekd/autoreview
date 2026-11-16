@@ -221,7 +221,9 @@ receive a review of the policy's repositories needs every profile the policy
 names. Run [`autoreview profiles install`](../../cli.md#autoreview-profiles-install)
 on each of those hosts, as the user of its pohunek daemon: it writes the profile
 and its adapter only for the daemon of the machine it runs on, and refuses a
-`--host` that names another machine (`profile_host_not_local`).
+`--host` that names another machine (`profile_host_not_local`). A Codex profile
+installs on Linux hosts only (`profile_agent_unsupported` elsewhere), so a
+repository whose rules name a Codex reviewer must be registered on Linux hosts.
 
 The base runtime (`claude` or `codex`) must already be the
 official pohunek runtime package on each host. See
