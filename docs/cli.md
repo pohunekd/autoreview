@@ -491,7 +491,8 @@ autoreview report --since <YYYY-MM-DD> [--until <YYYY-MM-DD>] [--repo <owner/nam
 
 Prints the [review report](knowledge/concepts/review-report.md) of the UTC days
 from `--since` to `--until` (today when absent), both included: the time from
-the creation of an attempt to its publication, the shares of decisions, and the outcomes of the findings published
+the creation of an attempt and from the review request to its publication, the
+shares of decisions, and the outcomes of the findings published
 in the range per reviewer, severity and repository. It calls neither GitHub nor
 pohunek. Without `--json` it prints a short text table; scripts read the JSON:
 
@@ -501,6 +502,7 @@ Reviews: 6 decided, 5 published, 1 approval expired
   approved without a human 33.3%, waited for a human 16.7%
   changes requested 33.3%, commented 16.7%
   attempt creation to publication: median 1200 s, p90 3000 s
+  review request to publication: median 1500 s, p90 3300 s
 Findings                findings blocking open fixed open_at_merge fixed% demoted
 total                          9        4    1     2             1  66.7%       2
 reviewer lint-bot              5        1    0     0             0   none       2
@@ -513,10 +515,10 @@ repository acme/widgets        6        3    1     2             1  66.7%       
 
 | JSON field | Value |
 |---|---|
-| `schema_version` | `1`; a changed field gets a new version |
+| `schema_version` | `2`; a changed field gets a new version |
 | `generated_at`, `since`, `until` | When the report was made, and the range |
 | `repository`, `pipeline` | The filters, `null` when absent |
-| `reviews` | `published`, `approval_expired`, `decided` (their sum), `approved_without_human`, `approved_after_wait`, `changes_requested`, `commented`; the shares `approved_without_human_percent`, `waited_for_human_percent`, `changes_requested_percent`, `commented_percent` of `decided`; `attempt_to_publication_median_seconds`, `attempt_to_publication_p90_seconds`: from the creation of a published attempt to its completion, not from the review request (#52) |
+| `reviews` | `published`, `approval_expired`, `decided` (their sum), `approved_without_human`, `approved_after_wait`, `changes_requested`, `commented`; the shares `approved_without_human_percent`, `waited_for_human_percent`, `changes_requested_percent`, `commented_percent` of `decided`; `attempt_to_publication_median_seconds`, `attempt_to_publication_p90_seconds`: from the creation of a published attempt to its completion; `request_to_publication_median_seconds`, `request_to_publication_p90_seconds`: from the review request to the completion, over the published attempts with a known request time (none for a label trigger) |
 | `findings` | `total`, then `by_reviewer`, `by_severity` and `by_repository` (each entry with its `key`): `findings`, `blocking`, one count per outcome, and `fixed_percent` |
 
 A share is a percentage with one decimal, `null` when its whole is `0`. A
