@@ -990,7 +990,7 @@ fn current_state(
 }
 
 /// Counts the rows, the step runs and the rollup of the snapshot inside `range`.
-fn history(
+pub(crate) fn history(
     snapshot: &StatsSnapshot,
     range: &StatsRange,
     pruned_before: OffsetDateTime,

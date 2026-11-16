@@ -7,17 +7,71 @@
 
 use std::collections::BTreeMap;
 
+use autoreview_go_compat::go_time::format_rfc3339_seconds;
 use serde::Serialize;
+use time::UtcOffset;
+use tokio_util::sync::CancellationToken;
 
-use crate::stats::{Counters, Keyed, keyed};
+use crate::discovery::poll::live;
+use crate::engine::{Clock, Engine};
+use crate::error::Error;
+use crate::integrations::Integrations;
+use crate::model::repository_valid;
+use crate::stats::{Counters, Keyed, STATS_RANGE_INVALID, StatsRange, history, keyed};
 use crate::store::outcome_checks::{OUTCOME_OPEN_AT_CLOSE, OUTCOME_OPEN_AT_MERGE};
-use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN};
+use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup};
+
+/// Version of the report document; a changed field gets a new version.
+pub const REPORT_SCHEMA_VERSION: i64 = 1;
+
+/// Error code of a `--pipeline` that no rule of the policy runs.
+pub const PIPELINE_NOT_CONFIGURED: &str = "pipeline_not_configured";
+
+/// Error code of a range that starts before the store's retention of the data it needs.
+pub const REPORT_RANGE_PRUNED: &str = "report_range_pruned";
+
+/// Error code of a malformed repository name.
+const REPOSITORY_NOT_ALLOWED: &str = "repository_not_allowed";
 
 /// Outcome of a blocking finding that the verifier refuted.
 const OUTCOME_REFUTED: &str = "refuted";
 
 /// Outcome of a blocking finding that the verifier found not blocking.
 const OUTCOME_NOT_BLOCKING: &str = "not_blocking";
+
+/// What `review_report` reports on: a range of UTC days and optional filters.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReportRequest {
+    /// First UTC day, `YYYY-MM-DD`.
+    pub since: String,
+    /// Last UTC day, `YYYY-MM-DD`; today (UTC) when absent.
+    pub until: Option<String>,
+    /// Repository as lowercase `owner/name`; every repository when absent.
+    pub repository: Option<String>,
+    /// Name of a policy pipeline; every pipeline when absent.
+    pub pipeline: Option<String>,
+}
+
+/// The report document that `autoreview report --json` prints.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ReportDocument {
+    /// Version of this document's fields, `REPORT_SCHEMA_VERSION`.
+    pub schema_version: i64,
+    /// When the document was computed, RFC 3339 in UTC without a fraction.
+    pub generated_at: String,
+    /// First UTC day of the range, `YYYY-MM-DD`.
+    pub since: String,
+    /// Last UTC day of the range, `YYYY-MM-DD`.
+    pub until: String,
+    /// The repository counted; `null` for every repository.
+    pub repository: Option<String>,
+    /// The pipeline counted; `null` for every pipeline.
+    pub pipeline: Option<String>,
+    /// Timing and decisions of the reviews completed in the range.
+    pub reviews: ReviewMetrics,
+    /// Outcomes of the findings published in the range.
+    pub findings: FindingMetrics,
+}
 
 /// Timing and decisions of the review attempts completed in the range.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -175,6 +229,80 @@ pub fn finding_metrics(
         by_reviewer: keyed(reviewers, OutcomeCounts::finish),
         by_severity: keyed(severities, OutcomeCounts::finish),
         by_repository: keyed(repositories, OutcomeCounts::finish),
+    }
+}
+
+impl<I: Integrations, C: Clock> Engine<I, C> {
+    /// Returns the report of `request`, read from the store only.
+    ///
+    /// Without a pipeline, the review counts are those of `autoreview stats` for the range,
+    /// of the repository when one is named. A pipeline has no rollup, so its counts come from
+    /// the kept rows, and its range must start after the review retention.
+    ///
+    /// # Errors
+    ///
+    /// Returns `repository_not_allowed` for a malformed repository, `pipeline_not_configured`
+    /// for a pipeline that no rule runs, the errors of `StatsRange::parse`,
+    /// `report_range_pruned` for a range that starts before the outcome retention (with a
+    /// pipeline, also before the review retention), and the errors of the store reads.
+    pub fn review_report(
+        &self,
+        cancel: &CancellationToken,
+        request: &ReportRequest,
+    ) -> Result<ReportDocument, Error> {
+        let repository = request.repository.as_deref();
+        if repository.is_some_and(|name| !repository_valid(name)) {
+            return Err(Error::workflow(REPOSITORY_NOT_ALLOWED, true, None));
+        }
+        let pipeline = request.pipeline.as_deref();
+        if let Some(name) = pipeline {
+            let policy = self.config.policy.as_ref();
+            if !policy.is_some_and(|policy| policy.pipeline_names().contains(name)) {
+                return Err(Error::workflow(PIPELINE_NOT_CONFIGURED, true, None));
+            }
+        }
+        let now = self.clock.wall_now().to_offset(UtcOffset::UTC);
+        let until = request.until.as_deref();
+        let Some(range) = StatsRange::parse(Some(&request.since), until, now.date())? else {
+            return Err(Error::workflow(STATS_RANGE_INVALID, true, None));
+        };
+        let review_cutoff = self.prune_cutoff();
+        let pruned = range.start < self.outcome_prune_cutoff()
+            || (pipeline.is_some() && range.start < review_cutoff);
+        if pruned {
+            return Err(Error::workflow(REPORT_RANGE_PRUNED, true, None));
+        }
+        live(cancel)?;
+        let mut snapshot = self.store.stats_snapshot(Some((range.start, range.end)))?;
+        if let Some(name) = pipeline {
+            snapshot.reviews.retain(|review| {
+                let input = &review.input;
+                input.rule.pipeline.name == name
+                    && repository.is_none_or(|repo| input.pull_request.repository == repo)
+            });
+            snapshot.rollup = Rollup::default();
+        }
+        let history = history(&snapshot, &range, review_cutoff)?;
+        let counters = match (pipeline, repository) {
+            (None, Some(name)) => (history.by_repository.into_iter())
+                .find(|entry| entry.key == name)
+                .map(|entry| entry.counts)
+                .unwrap_or_default(),
+            _ => history.totals,
+        };
+        live(cancel)?;
+        // A second read: a publication between the two reads shows in one part only.
+        let outcomes = self.store.outcomes_between(range.start, range.end)?;
+        Ok(ReportDocument {
+            schema_version: REPORT_SCHEMA_VERSION,
+            generated_at: format_rfc3339_seconds(now),
+            since: range.since.to_string(),
+            until: range.until.to_string(),
+            repository: request.repository.clone(),
+            pipeline: request.pipeline.clone(),
+            reviews: review_metrics(&counters),
+            findings: finding_metrics(&outcomes, repository, pipeline),
+        })
     }
 }
 

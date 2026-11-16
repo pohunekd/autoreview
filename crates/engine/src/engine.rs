@@ -118,6 +118,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         self.clock.wall_now().saturating_sub(retention)
     }
 
+    /// Returns the instant before which `prune` deletes finding outcomes last updated.
+    pub(crate) fn outcome_prune_cutoff(&self) -> OffsetDateTime {
+        // A retention beyond the range of `time::Duration` keeps every outcome.
+        let retention =
+            time::Duration::try_from(self.config.outcome_retention).unwrap_or(time::Duration::MAX);
+        self.clock.wall_now().saturating_sub(retention)
+    }
+
     /// Returns the retry policy of the workflow steps, read from the configuration.
     pub(crate) fn step_policy(&self) -> StepRetryPolicy {
         StepRetryPolicy {
@@ -282,10 +290,7 @@ where
                 }
             }
         }
-        // A retention beyond the range of `time::Duration` keeps every outcome.
-        let retention =
-            time::Duration::try_from(self.config.outcome_retention).unwrap_or(time::Duration::MAX);
-        let cutoff = self.clock.wall_now().saturating_sub(retention);
+        let cutoff = self.outcome_prune_cutoff();
         match live(cancel).and_then(|()| self.store.prune_outcomes(cutoff)) {
             Err(err) => {
                 if !cancel.is_cancelled() {

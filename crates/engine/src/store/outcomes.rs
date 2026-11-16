@@ -259,6 +259,35 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
     }
 
+    /// Returns the outcomes of every repository published at or after `start` and before
+    /// `end`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_unavailable` when SQLite fails.
+    pub fn outcomes_between(
+        &self,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<Vec<FindingOutcome>, Error> {
+        let (start, end) = (format_rfc3339_nano(start), format_rfc3339_nano(end));
+        let connection = self.lock_connection()?;
+        let published = time_key("published_at");
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {OUTCOME_COLUMNS} FROM finding_outcomes \
+                 WHERE {published} >= {} AND {published} < {} \
+                 ORDER BY {published}, repository, number, finding_key",
+                time_key("?1"),
+                time_key("?2"),
+            ))
+            .map_err(unavailable)?;
+        let rows = statement
+            .query_map(params![start, end], read_row)
+            .map_err(unavailable)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
+    }
+
     /// Deletes the outcomes last written before `cutoff` and returns how many it deleted.
     ///
     /// The state reads of their pull requests last made before `cutoff` go in the same
