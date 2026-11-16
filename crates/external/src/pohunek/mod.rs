@@ -14,8 +14,10 @@ pub(crate) mod sessions;
 
 pub(crate) mod version;
 
-use std::collections::BTreeSet;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
+use std::fmt;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
@@ -26,8 +28,8 @@ use autoreview_engine::integrations::HeadCheckoutHooks;
 use autoreview_engine::model::{
     HOST_STATE_UNAVAILABLE, HostCapacity, ProjectRoute, repository_valid,
 };
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::de::{self, DeserializeOwned, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -74,8 +76,20 @@ const SKIP_REPO_HOOKS_CAPABILITY: &str = "session_new_skip_repo_hooks_supported"
 /// Field of `host inspect` that reports, per event, whether the host has a hook script.
 const HOST_HOOKS_FIELD: &str = "host_hooks";
 
+/// Events of `host_hooks` whose host script runs in the project repository, not the worktree.
+const REPOSITORY_HOOK_EVENTS: [&str; 2] = ["pre_create", "post_remove"];
+
+/// Events of `host_hooks` that pohunek 0.43.1 runs in the session's worktree.
+const WORKTREE_HOOK_EVENTS: [&str; 5] = [
+    "post_create",
+    "session_start",
+    "session_stop",
+    "agent_state",
+    "pre_remove",
+];
+
 /// Field names of the pohunek JSON, in lower case; a key that only differs in case is refused.
-const KNOWN_KEYS: [&str; 38] = [
+const KNOWN_KEYS: [&str; 40] = [
     "ok",
     "err",
     "code",
@@ -114,6 +128,8 @@ const KNOWN_KEYS: [&str; 38] = [
     "session_stop",
     "agent_state",
     "pre_remove",
+    "pre_create",
+    "post_remove",
 ];
 
 /// One project of `pohunek project list --json`.
@@ -547,63 +563,87 @@ struct HeadCheckoutCapabilities {
     /// Whether `session new` takes `--no-repo-hooks`, as any JSON value; `None` when absent.
     session_new_skip_repo_hooks_supported: Option<Value>,
     /// The host's hook scripts per event; `None` when absent or `null`.
-    host_hooks: Option<WorktreeHooks>,
+    host_hooks: Option<HostHookReport>,
 }
 
 autoreview_go_compat::object_only_serde!(HeadCheckoutCapabilities);
 
-/// The events of `host_hooks` whose host script runs in the session's worktree.
+/// The `host_hooks` object: every event it names, with its JSON value.
 ///
-/// `pre_create` and `post_remove` run in the project repository and are ignored. Each value
-/// is any JSON value, `None` when absent; a key named twice refuses the answer.
-#[derive(Debug, Default, Deserialize, Serialize)]
-#[serde(default, remote = "Self")]
-struct WorktreeHooks {
-    /// Whether the host has a `post-create` script.
-    post_create: Option<Value>,
-    /// Whether the host has a `session-start` script.
-    session_start: Option<Value>,
-    /// Whether the host has a `session-stop` script.
-    session_stop: Option<Value>,
-    /// Whether the host has an `agent-state` script.
-    agent_state: Option<Value>,
-    /// Whether the host has a `pre-remove` script.
-    pre_remove: Option<Value>,
+/// Every key is kept, so an event that a later pohunek adds is read too. A key named twice
+/// refuses the answer, also one that pohunek 0.43.1 does not know.
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
+struct HostHookReport(BTreeMap<String, Value>);
+
+impl<'de> Deserialize<'de> for HostHookReport {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_map(HostHookVisitor)
+    }
 }
 
-autoreview_go_compat::object_only_serde!(WorktreeHooks);
+/// Reads a `host_hooks` object and refuses a key named twice.
+struct HostHookVisitor;
 
-impl WorktreeHooks {
-    /// Reports whether every worktree event is reported as the JSON value `false`.
-    fn none(&self) -> bool {
-        [
-            &self.post_create,
-            &self.session_start,
-            &self.session_stop,
-            &self.agent_state,
-            &self.pre_remove,
-        ]
-        .iter()
-        .all(|value| **value == Some(Value::Bool(false)))
+impl<'de> Visitor<'de> for HostHookVisitor {
+    type Value = HostHookReport;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON object of host hook events")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<HostHookReport, A::Error> {
+        let mut events = BTreeMap::new();
+        while let Some((event, value)) = map.next_entry::<String, Value>()? {
+            match events.entry(event) {
+                Entry::Occupied(_) => {
+                    return Err(de::Error::custom("a host hook event named twice"));
+                }
+                Entry::Vacant(slot) => {
+                    slot.insert(value);
+                }
+            }
+        }
+        Ok(HostHookReport(events))
+    }
+}
+
+impl HostHookReport {
+    /// Reports whether no host script would run in the session's worktree.
+    ///
+    /// Each of [`WORKTREE_HOOK_EVENTS`] must be named, and every key other than the exact
+    /// names of [`REPOSITORY_HOOK_EVENTS`] must be the JSON value `false`.
+    fn none_in_worktree(&self) -> bool {
+        let named = WORKTREE_HOOK_EVENTS
+            .iter()
+            .all(|event| self.0.contains_key(*event));
+        let quiet = self.0.iter().all(|(event, value)| {
+            REPOSITORY_HOOK_EVENTS.contains(&event.as_str()) || *value == Value::Bool(false)
+        });
+        named && quiet
     }
 }
 
 /// Reads what the `host inspect` `output` says about the hooks of a head checkout.
 ///
-/// Only the JSON value `true` advertises the switch, and only `false` for each event of
-/// [`WorktreeHooks`] reports no host script: an absent, `null`, text or number value does
-/// not, because an older CLI drops the keys and an older daemon omits them.
+/// Only the JSON value `true` advertises the switch. Only `false` for each of
+/// [`WORKTREE_HOOK_EVENTS`] and for every other event except [`REPOSITORY_HOOK_EVENTS`]
+/// reports no host script: an absent, `null`, text or number value does not, because an older
+/// CLI drops the keys and an older daemon omits them, and an event unknown here may run in the
+/// worktree.
 ///
 /// # Errors
 ///
 /// Returns `pohunek_response_invalid` when the output holds no `ok` object, names a field
-/// twice, or holds a `host_hooks` that is not an object.
+/// or an event twice, or holds a `host_hooks` that is not an object.
 pub(crate) fn head_checkout_hooks_from_output(output: &str) -> Result<HeadCheckoutHooks, Error> {
     let capabilities: HeadCheckoutCapabilities = decode_ok(output).ok_or_else(response_invalid)?;
     Ok(HeadCheckoutHooks {
         skip_supported: capabilities.session_new_skip_repo_hooks_supported
             == Some(Value::Bool(true)),
-        no_worktree_scripts: capabilities.host_hooks.is_some_and(|hooks| hooks.none()),
+        no_worktree_scripts: capabilities
+            .host_hooks
+            .is_some_and(|hooks| hooks.none_in_worktree()),
     })
 }
 
@@ -1084,7 +1124,8 @@ mod tests {
     }
 
     /// Only an advertised `true` is the switch, and only `false` for each worktree event is no
-    /// host script; an older CLI or daemon omits both keys (#399).
+    /// host script; an older CLI or daemon omits both keys (#399). An event unknown here must
+    /// be `false` too, unless it is `pre_create` or `post_remove` (#500).
     #[test]
     fn head_checkout_hooks_are_only_an_advertised_switch_and_explicit_false() {
         let inspect = |fields: &str| {
@@ -1109,7 +1150,23 @@ mod tests {
             (both("null"), Ok((true, false))),
             (both(r#""false""#), Ok((true, false))),
             (both("0"), Ok((true, false))),
+            (both(r#"false,"worktree_ready":true"#), Ok((true, false))),
+            (both(r#"false,"worktree_ready":false"#), Ok((true, true))),
+            (both(r#"false,"worktree_ready":null"#), Ok((true, false))),
+            (both(r#"false,"worktree_ready":"false""#), Ok((true, false))),
+            (
+                both(r#"false,"worktree_ready":true,"worktree_ready":false"#),
+                Err("pohunek_response_invalid"),
+            ),
+            (
+                both(r#"false,"Pre_Create":false"#),
+                Err("pohunek_response_invalid"),
+            ),
             (inspect(switch), Ok((true, false))),
+            (
+                inspect(&format!(r#"{switch},"host_hooks":{{}}"#)),
+                Ok((true, false)),
+            ),
             (
                 inspect(&format!(r#"{switch},"host_hooks":null"#)),
                 Ok((true, false)),

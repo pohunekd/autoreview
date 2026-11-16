@@ -385,7 +385,7 @@ async fn base_checkout_session_fetches_the_head_where_the_host_supports_it() {
 /// A head checkout starts only with the switch that skips the checkout's own hooks, on a host
 /// that advertises it and, under `refuse`, reports no hook script for the worktree (#399). A
 /// refused host starts no session; a failed read is retried and starts once the host answers;
-/// a base checkout starts on any host without the switch.
+/// a base checkout starts without the switch, also on a host that fails both checks.
 #[tokio::test]
 async fn head_checkout_starts_only_where_the_host_skips_the_checkouts_hooks() {
     let mut h = start_harness(|_| {}).await;
@@ -408,6 +408,7 @@ async fn head_checkout_starts_only_where_the_host_skips_the_checkouts_hooks() {
         .await;
         refused.push(pr);
     }
+    h.fake.lock().head_checkout_hooks = Some(answer(false, false));
     let base = integration_pull_request("claude/base", &sha("b"));
     h.fake.open(base.clone(), h.rule(&base.repository));
     h.poll_until("the base checkout review", || h.publications() == 1)
