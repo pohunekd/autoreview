@@ -106,7 +106,8 @@ It never creates a tag and never publishes.
 4. Tag the merge commit on `main` and push the tag:
    `git tag -a vX.Y.Z -m "autoreview X.Y.Z" <merge-commit>`, then
    `git push origin vX.Y.Z`. The workflow refuses a tag that is not `v` plus
-   the workspace version, and a version without a section in `CHANGELOG.md`.
+   the workspace version, a tree whose `scripts/setup` has another
+   `AUTOREVIEW_VERSION`, and a version without a section in `CHANGELOG.md`.
 5. Wait for the `Release` run. It builds one archive per target, attests the
    archives and their `.sha256` files, and creates a draft release whose body
    is the `CHANGELOG.md` section. Check the draft (three archives: the two musl
