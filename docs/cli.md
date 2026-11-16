@@ -62,7 +62,7 @@ the reference file; without it the reference value is written:
 | `--gh-bin` | `github.gh_bin` | `/usr/bin/gh` |
 | `--pohunek-bin` | `pohunek.bin` | `/usr/local/bin/pohunek` |
 | `--pohunek-state-home` | `pohunek.state_home` | `/var/lib/autoreview/.local/state` |
-| `--pohunek-runtime-dir` | `pohunek.runtime_dir` | `/run/autoreview` |
+| `--pohunek-runtime-dir` | `pohunek.runtime_dir` | `/run/autoreview`; on macOS no line, so pohunek's default applies |
 | `--matrix-homeserver-url` | `homeserver_url` of the `matrix` backend | `https://matrix.example.org` |
 | `--matrix-room` | `room` of the `matrix` backend | `!roomid:example.org` |
 | `--matrix-mention-user` | `mention_user` of the `matrix` backend | `@you:example.org` |

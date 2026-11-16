@@ -17,9 +17,10 @@ GitHub account it acts as, which pohunek hosts run the reviewers, how often it
 polls, its limits, where it keeps state and where notifications go. What gets
 reviewed and how is in [policy.yaml](policy.md).
 
-**Every key is required**, except `publish.marker` and the optional sections
-`pohunek.host_state`, `mcp`, `metrics` and `guards`. autoreview has no built-in
-defaults: a missing key stops the service at startup with an error that names it.
+**Every key is required**, except `publish.marker`, `pohunek.runtime_dir` on macOS
+and the optional sections `pohunek.host_state`, `mcp`, `metrics` and `guards`.
+autoreview has no built-in defaults: a missing key stops the service at startup
+with an error that names it.
 [`examples/config.yaml`](../examples/config.yaml) holds every key with a
 recommended value and a comment. It loads once `policy_file` names a valid policy
 and the variables of its `*_env` keys are set; its `notify` block routes
@@ -261,7 +262,7 @@ token needs and when to use a machine user.
 |---|---|
 | `bin` | Absolute path of the `pohunek` CLI; `validate` and `serve` refuse a release outside the [supported range](install.md#prerequisites) |
 | `state_home` | `XDG_STATE_HOME` for the CLI |
-| `runtime_dir` | `XDG_RUNTIME_DIR` for the CLI |
+| `runtime_dir` | `XDG_RUNTIME_DIR` for the CLI. Required on Linux. On macOS it may be left out or given no value (`runtime_dir:` or `~`): the CLI then gets no `XDG_RUNTIME_DIR` and reaches the daemon in pohunek's macOS default, `/private/tmp/pohunek-<uid>`. An empty or whitespace string is refused |
 | `timeout_seconds` | Timeout of one pohunek call, including a session start with its base fetch |
 | `hosts` | pohunek host names that may run reviewers, in priority order; one or more |
 | `route_overrides` | Map `owner/repo: {host, project_id}` that pins a repository to one host and project; an entry's optional `untrusted: {host, project_id}` pins its untrusted authors' pull requests instead |

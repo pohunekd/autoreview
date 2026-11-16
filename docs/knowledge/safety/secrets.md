@@ -47,7 +47,8 @@ with `AUTOREVIEW_` or that an `*_env` key names:
   `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_RUNTIME_DIR` and
   `POHUNEK_REMOTE_PORT`. autoreview sets `PAGER=cat`; the engine's calls also get
   `XDG_STATE_HOME` and `XDG_RUNTIME_DIR` from `pohunek.state_home` and
-  `pohunek.runtime_dir`.
+  `pohunek.runtime_dir`. On macOS without `pohunek.runtime_dir`, those calls get
+  no `XDG_RUNTIME_DIR` at all.
 
 No other variable reaches a child: not a token of another tool in a shared
 environment file, not `GITHUB_TOKEN`, `GH_HOST` or `GH_DEBUG`, and not the pohunek
