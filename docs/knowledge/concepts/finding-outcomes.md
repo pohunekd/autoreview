@@ -83,7 +83,9 @@ that review is recorded, and the review completes as published. A review that
 is resumed after a restart writes its rows again; rows already stored stay,
 and rows it already settled are no longer `open`. One rare case is not a
 no-op: a review of the same head that publishes findings again under `P` IDs an
-earlier review of that head used can clear one tracked key when it is resumed.
+earlier review of that head used can move or clear tracked keys along that
+chain of `P` keys when it is resumed, so a later verdict can settle the wrong
+row. Outcomes never feed a review decision, so this affects only the record.
 A finding published again under a key that another open row still has, and
 that the review neither settles nor moves, loses its tracked key instead, so a
 later verdict on that key does not also settle the moved finding. If the store
