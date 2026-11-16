@@ -185,6 +185,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         result.superseded = i64::try_from(supersede.len()).unwrap_or(i64::MAX);
         self.remind_handoffs(cancel, &mut state, &present, failed, now, &mut notices)
             .await?;
+        self.check_outcomes(cancel, &present, failed, now).await?;
         if let Some(force) = force {
             // The search that would find it failed, so the pull request is unknown, not gone.
             if let Ok(credential) = self.config.credentials.serving(&force.repository)
