@@ -5,10 +5,12 @@
 
 // Rust guideline compliant 2026-06-26
 
-use rusqlite::{Connection, params};
+use autoreview_go_compat::go_time::format_rfc3339_nano;
+use rusqlite::{Connection, Row, params};
+use time::OffsetDateTime;
 
 use super::Store;
-use super::reviews::unavailable;
+use super::reviews::{time_key, unavailable};
 use crate::Error;
 
 /// The DDL of the outcomes, run after `ROLLUP_SCHEMA`; a store that predates it gains it.
@@ -109,6 +111,56 @@ impl Store {
             Ok(())
         })
     }
+
+    /// Returns the outcomes of `repository` published at or after `since`, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_unavailable` when SQLite fails.
+    pub fn outcomes_since(
+        &self,
+        repository: &str,
+        since: OffsetDateTime,
+    ) -> Result<Vec<FindingOutcome>, Error> {
+        let since = format_rfc3339_nano(since);
+        let connection = self.lock_connection()?;
+        let mut statement = connection
+            .prepare(&format!(
+                "SELECT {OUTCOME_COLUMNS} FROM finding_outcomes \
+                 WHERE repository = ?1 AND {} >= {} \
+                 ORDER BY {}, number, finding_key",
+                time_key("published_at"),
+                time_key("?2"),
+                time_key("published_at"),
+            ))
+            .map_err(unavailable)?;
+        let rows = statement
+            .query_map(params![repository, since], read_row)
+            .map_err(unavailable)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
+    }
+
+    /// Deletes the outcomes last written before `cutoff` and returns how many it deleted.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_unavailable` when SQLite fails; then nothing is deleted.
+    pub fn prune_outcomes(&self, cutoff: OffsetDateTime) -> Result<i64, Error> {
+        let cutoff = format_rfc3339_nano(cutoff);
+        self.in_tx(|transaction| {
+            let rows = transaction
+                .execute(
+                    &format!(
+                        "DELETE FROM finding_outcomes WHERE {} < {}",
+                        time_key("updated_at"),
+                        time_key("?1")
+                    ),
+                    [cutoff],
+                )
+                .map_err(unavailable)?;
+            Ok(i64::try_from(rows).unwrap_or(i64::MAX))
+        })
+    }
 }
 
 /// Adds the row of one published finding unless its key is stored already.
@@ -144,4 +196,29 @@ fn insert(connection: &Connection, outcome: &FindingOutcome, now: &str) -> Resul
         )
         .map_err(unavailable)?;
     Ok(())
+}
+
+/// Reads one row in the column order of `OUTCOME_COLUMNS`.
+fn read_row(row: &Row<'_>) -> rusqlite::Result<FindingOutcome> {
+    Ok(FindingOutcome {
+        repository: row.get(0)?,
+        number: row.get(1)?,
+        finding_key: row.get(2)?,
+        tracked_key: row.get(3)?,
+        workflow_id: row.get(4)?,
+        finding_id: row.get(5)?,
+        head_sha: row.get(6)?,
+        reviewer_id: row.get(7)?,
+        pipeline: row.get(8)?,
+        rule: row.get(9)?,
+        severity: row.get(10)?,
+        confidence: row.get(11)?,
+        path: row.get(12)?,
+        line: row.get(13)?,
+        blocking: row.get(14)?,
+        outcome: row.get(15)?,
+        outcome_head_sha: row.get(16)?,
+        published_at: row.get(17)?,
+        updated_at: row.get(18)?,
+    })
 }
