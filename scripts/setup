@@ -400,6 +400,16 @@ self_test() {
     check "TCC a longer name" open "$(tcc /Users/a/Documentsx)"
     check "TCC the config home" open "$(tcc /Users/a/.config/autoreview)"
     check "TCC another home" open "$(tcc /Users/b/Documents)"
+    check "daemon python missing" missing "$(daemon_python_state missing || echo error)"
+    check "daemon python of Homebrew" ok \
+        "$(daemon_python_state '/opt/homebrew/bin/python3 3.13.1' || echo error)"
+    check "daemon python 3.11.0" ok "$(daemon_python_state '/x/python3 3.11.0' || echo error)"
+    check "daemon python of Apple" old \
+        "$(daemon_python_state '/usr/bin/python3 3.9.6' || echo error)"
+    check "daemon python in a path with a space" ok \
+        "$(daemon_python_state '/Users/a/App Support/bin/python3 3.12.0' || echo error)"
+    check "daemon python without a version" error \
+        "$(daemon_python_state '/x/python3 junk' || echo error)"
     check "checksum command on Linux" "sha256sum --check a.sha256" "$(checksum_command a.sha256)"
     check "checksum command on macOS" "shasum -a 256 --check a.sha256" \
         "$(os=Darwin checksum_command a.sha256)"
@@ -1160,6 +1170,77 @@ step_config() {
     created_config=1
 }
 
+# Prints the [environment] search_path of pohunek's service.toml $1, one
+# directory per line. On macOS pohunek gives its launchd daemon job this PATH,
+# and the daemon passes it to the reviewer adapters.
+daemon_search_path() {
+    python3 -I -c '
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as handle:
+    document = tomllib.load(handle)
+for entry in document["environment"]["search_path"]:
+    print(entry)
+' "$1"
+}
+
+# Prints `<path> <version>` of the python3 that `env` finds first on the PATH of
+# the pohunek daemon, or `missing`. Fails when the search path is unreadable or
+# empty, or the python3 prints no version.
+daemon_python() {
+    local listed directory version
+    local -a directories
+    listed=$(daemon_search_path "$service_config") || return 1
+    [ -n "$listed" ] || return 1
+    mapfile -t directories <<<"$listed"
+    for directory in "${directories[@]}"; do
+        if [ -f "$directory/python3" ] && [ -x "$directory/python3" ]; then
+            version=$("$directory/python3" -I -c \
+                'import sys; print("%d.%d.%d" % sys.version_info[:3])') || return 1
+            echo "$directory/python3 $version"
+            return
+        fi
+    done
+    echo missing
+}
+
+# Prints ok, old or missing for the daemon_python answer $1; fails on a malformed one.
+daemon_python_state() {
+    if [ "$1" = missing ]; then
+        echo missing
+        return
+    fi
+    case $(version_compare "${1##* }" "$PYTHON_MIN_VERSION") in
+        0 | 1) echo ok ;;
+        -1) echo old ;;
+        *) return 1 ;;
+    esac
+}
+
+# Stops unless the reviewer adapters, which start as `env -S python3 -I` under
+# the pohunek daemon, find Python 3.11 or newer on the daemon's PATH (macOS).
+step_daemon_python() {
+    local found state
+    found=$(daemon_python) \
+        || fail 3 "missing a readable, non-empty [environment] search_path in $service_config;" \
+            "run pohunek service refresh-path"
+    state=$(daemon_python_state "$found") \
+        || fail 3 "missing an X.Y.Z version from the python3 on the PATH of the pohunek daemon"
+    case $state in
+        ok) in_place "python3 of the pohunek daemon, ${found% *} ${found##* }" ;;
+        missing)
+            fail 3 "missing python3 on the PATH of the pohunek daemon; install Python" \
+                "$PYTHON_MIN_VERSION or newer, then run pohunek service refresh-path"
+            ;;
+        old)
+            fail 3 "the pohunek daemon finds ${found% *} (${found##* }) first; the adapters" \
+                "need Python $PYTHON_MIN_VERSION or newer: install it, then run" \
+                "pohunek service refresh-path"
+            ;;
+    esac
+}
+
 step_secrets_file() {
     if [ -f "$env_file" ]; then
         [ "$(file_mode "$env_file")" = 600 ] \
@@ -1501,7 +1582,7 @@ plan() {
 
 # Prints every step with its state from the detection; changes nothing.
 print_plan() {
-    local state
+    local state found
     detect_autoreview
     detect_pohunek
     echo "setup plan for $user_name on $platform:"
@@ -1516,6 +1597,17 @@ print_plan() {
         state="will run ($pohunek_state)"
     fi
     plan "pohunek $POHUNEK_VERSION with its login service" "$state"
+    if [ "$os" = Darwin ]; then
+        state="checked after pohunek"
+        if [ "$pohunek_state" != ok ]; then
+            :
+        elif found=$(daemon_python) && state=$(daemon_python_state "$found"); then
+            [ "$found" = missing ] || state="$state ($found)"
+        else
+            state="unreadable search path; run pohunek service refresh-path"
+        fi
+        plan "python3 $PYTHON_MIN_VERSION or newer on the PATH of the pohunek daemon" "$state"
+    fi
     if [ -z "$dir" ]; then
         plan "configuration and the later steps" "needs --dir"
         return
@@ -1620,6 +1712,7 @@ run_steps() {
     declare -gA profile_input=() profile_result=() profile_retention=()
     step_autoreview
     step_pohunek
+    [ "$os" = Linux ] || step_daemon_python
     step_config
     step_secrets_file
     if [ "$created_config" -eq 1 ]; then
