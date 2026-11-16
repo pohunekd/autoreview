@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::Credential;
+use crate::config::{Credential, HostHooksChoice};
 use crate::error::Error;
 use crate::model::{
     CandidateList, Decision, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
@@ -428,6 +428,46 @@ pub trait Integrations {
     ) -> impl Future<Output = Result<(), Error>> + Send;
 }
 
+/// Error code of a head checkout on a host that cannot skip the checkout's own hooks.
+pub const REPO_HOOKS_UNSUPPORTED: &str = "review_host_repo_hooks_unsupported";
+
+/// Error code of a head checkout on a host whose own hook scripts would run in its worktree.
+pub const HOST_HOOKS_REFUSED: &str = "review_host_hooks_refused";
+
+/// Error code of a head checkout on a host that requires a hook only the checkout has.
+pub const HOOK_REQUIRED_SKIPPED: &str = "review_host_hook_required";
+
+/// What a pohunek host reports about the hooks of a head checkout session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeadCheckoutHooks {
+    /// Whether the daemon runs a session without the checkout's own hooks.
+    ///
+    /// Only an advertised `session_new_skip_repo_hooks_supported` of `true` is support.
+    pub skip_supported: bool,
+    /// Whether `host_hooks` reports no host script for an event that runs in the worktree.
+    ///
+    /// `false` when a script exists and when the host does not report it.
+    pub no_worktree_scripts: bool,
+}
+
+impl HeadCheckoutHooks {
+    /// Returns the error code that refuses a head checkout on the host, or `None`.
+    ///
+    /// A host that cannot skip the checkout's hooks is always refused. `choice` decides about
+    /// the host's own scripts; `Refuse` also refuses a host that does not report them.
+    #[must_use]
+    pub fn refusal(self, choice: HostHooksChoice) -> Option<&'static str> {
+        if !self.skip_supported {
+            return Some(REPO_HOOKS_UNSUPPORTED);
+        }
+        match choice {
+            HostHooksChoice::Allow => None,
+            HostHooksChoice::Refuse if self.no_worktree_scripts => None,
+            HostHooksChoice::Refuse => Some(HOST_HOOKS_REFUSED),
+        }
+    }
+}
+
 /// One reviewer session of one workflow attempt.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
@@ -502,6 +542,14 @@ impl SessionRequest {
         format!("refs/pull/{}/head", self.pull_request.number)
     }
 
+    /// Reports whether the session starts without the checkout's own hooks.
+    ///
+    /// A head checkout holds the pull request's code, so its hooks never run.
+    #[must_use]
+    pub fn skips_repo_hooks(&self) -> bool {
+        self.checkout == Checkout::Head
+    }
+
     fn token(&self) -> String {
         let mut token = format!("{}-{}-run{}", self.workflow_id, self.reviewer.id, self.run);
         if self.start > 1 {
@@ -513,4 +561,33 @@ impl SessionRequest {
 
 fn is_zero(value: &i64) -> bool {
     *value == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HOST_HOOKS_REFUSED, HeadCheckoutHooks, REPO_HOOKS_UNSUPPORTED};
+    use crate::config::HostHooksChoice::{Allow, Refuse};
+
+    /// A head checkout starts only where pohunek skips the checkout's hooks, and under `refuse`
+    /// only where the host reports no script of its own for the worktree (#399).
+    #[test]
+    fn head_checkout_starts_only_without_the_checkouts_hooks() {
+        let cases = [
+            (false, false, Refuse, Some(REPO_HOOKS_UNSUPPORTED)),
+            (false, true, Refuse, Some(REPO_HOOKS_UNSUPPORTED)),
+            (false, false, Allow, Some(REPO_HOOKS_UNSUPPORTED)),
+            (false, true, Allow, Some(REPO_HOOKS_UNSUPPORTED)),
+            (true, false, Refuse, Some(HOST_HOOKS_REFUSED)),
+            (true, true, Refuse, None),
+            (true, false, Allow, None),
+            (true, true, Allow, None),
+        ];
+        for (skip_supported, no_worktree_scripts, choice, want) in cases {
+            let hooks = HeadCheckoutHooks {
+                skip_supported,
+                no_worktree_scripts,
+            };
+            assert_eq!(hooks.refusal(choice), want, "{hooks:?} {choice:?}");
+        }
+    }
 }
