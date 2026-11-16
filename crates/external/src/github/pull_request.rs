@@ -14,6 +14,7 @@ use autoreview_engine::model::{
 use autoreview_go_compat::{go_time, null_default, null_entries};
 use autoreview_policy::{Trigger, TriggerKind, login_valid};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use super::{GitHub, graphql_pull_request, response_invalid};
@@ -363,8 +364,8 @@ fn author_valid(author: &str) -> bool {
 
 /// Decodes and checks a pull request against the trigger of its rule (`decodePullRequest`).
 ///
-/// The result has `review_request_id` 0 for a `review-requested` trigger; the caller reads the
-/// request id after this check.
+/// The result has `review_request_id` 0 and no `requested_at` for a `review-requested`
+/// trigger; the caller reads the request event after this check.
 pub(crate) fn decode_pull_request(
     raw: &GitHubPullRequest,
     host: &str,
@@ -399,6 +400,7 @@ pub(crate) fn decode_pull_request(
         number: raw.number,
         head_sha: raw.head_sha.clone(),
         review_request_id: 0,
+        requested_at: String::new(),
         title: title.clone(),
         url: raw.url.clone(),
         author: author.clone(),
@@ -537,22 +539,23 @@ pub(crate) fn decode_review_request_page(
     })
 }
 
-/// Returns the id of the newest review request, or `None` when there is none.
+/// Returns the newest review request, or `None` when there is none.
 ///
 /// The newest event has the latest time, and the larger id on a tie. An event at or before
 /// the zero time is never taken.
-pub(crate) fn newest_review_request(events: &[ReviewRequestEvent]) -> Option<i64> {
+pub(crate) fn newest_review_request(events: &[ReviewRequestEvent]) -> Option<ReviewRequestEvent> {
     let mut latest_at = GO_ZERO_TIME_NANOS;
-    let mut latest_id = 0;
+    let mut latest: Option<ReviewRequestEvent> = None;
     for event in events {
+        let latest_id = latest.map_or(0, |newest| newest.id);
         if event.created_at_nanos > latest_at
             || (event.created_at_nanos == latest_at && event.id > latest_id)
         {
             latest_at = event.created_at_nanos;
-            latest_id = event.id;
+            latest = Some(*event);
         }
     }
-    (latest_id != 0).then_some(latest_id)
+    latest.filter(|newest| newest.id != 0)
 }
 
 impl GitHub {
@@ -573,9 +576,12 @@ impl GitHub {
             return Err(response_invalid(None));
         }
         if trigger.kind == TriggerKind::ReviewRequested {
-            pull_request.review_request_id = self
-                .latest_review_request_id(cancel, credential, repository, number)
-                .await?;
+            let request =
+                (self.latest_review_request(cancel, credential, repository, number)).await?;
+            let requested_at = OffsetDateTime::from_unix_timestamp_nanos(request.created_at_nanos)
+                .map_err(|error| response_invalid(Some(Box::new(error))))?;
+            pull_request.review_request_id = request.id;
+            pull_request.requested_at = go_time::format_rfc3339_nano(requested_at);
         }
         Ok(pull_request)
     }
@@ -606,17 +612,17 @@ impl GitHub {
         decode_pull_request_response(&output)
     }
 
-    /// Returns the id of the newest review request of the login (`latestReviewRequestID`).
+    /// Returns the newest review request event of the login (`latestReviewRequestID`).
     ///
     /// The events API is read page by page up to the configured page limit; a full last page
     /// at the limit fails with `github_search_limit_exceeded`.
-    async fn latest_review_request_id(
+    async fn latest_review_request(
         &self,
         cancel: &CancellationToken,
         credential: &Credential,
         repository: &str,
         number: i64,
-    ) -> Result<i64, Error> {
+    ) -> Result<ReviewRequestEvent, Error> {
         let login = &credential.login;
         let mut events = Vec::new();
         for page in 1..=self.search_page_limit {
