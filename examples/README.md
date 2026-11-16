@@ -5,8 +5,8 @@ it shows, and any prompt files it needs beyond the two default prompts in
 [`prompts/`](../prompts/). [config.yaml](config.yaml) is the complete
 configuration shared by all examples.
 
-> **Status: after 0.3.0.** These examples are written for autoreview on `main`
-> after the 0.3.0 release; each one loads with `autoreview validate`.
+> **Status: after 0.4.0.** These examples are written for autoreview on `main`
+> after the 0.4.0 release; each one loads with `autoreview validate`.
 
 | Example | Shows | Repositories | Outcome |
 |---|---|---|---|

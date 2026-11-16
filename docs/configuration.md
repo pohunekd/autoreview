@@ -9,18 +9,20 @@ intents: [setup, update, debug, help]
 
 # Configuration reference
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 `config.yaml` holds the technical settings of one autoreview service: which
 GitHub account it acts as, which pohunek hosts run the reviewers, how often it
 polls, its limits, where it keeps state and where notifications go. What gets
 reviewed and how is in [policy.yaml](policy.md).
 
-**Every key is required.** autoreview has no built-in defaults: a missing key
-stops the service at startup with an error that names it.
+**Every key is required**, except `publish.marker` and the optional sections
+`pohunek.host_state`, `mcp`, `metrics` and `guards`. autoreview has no built-in
+defaults: a missing key stops the service at startup with an error that names it.
 [`examples/config.yaml`](../examples/config.yaml) holds every key with a
-recommended value and a comment, and it loads as it is; its `notify` block routes
+recommended value and a comment. It loads once `policy_file` names a valid policy
+and the variables of its `*_env` keys are set; its `notify` block routes
 every level and the review queue to one `matrix` backend with placeholder values.
 CI loads it with every example policy. Secrets are never in
 the file; keys ending in `_env` name the environment variable that holds them, or the
@@ -30,6 +32,13 @@ other name is `configuration_invalid` naming the key.
 
 The service finds the file through `--config <path>` or the
 `AUTOREVIEW_CONFIG` environment variable; with neither it refuses to start.
+
+A `config.yaml` written for 0.4.0 needs four more keys after 0.4.0:
+`schedule.usage_limit_retry_delays_seconds`,
+`schedule.outcome_check_interval_seconds`, `limits.max_issue_characters` and
+`store.outcome_retention_seconds`. `validate` names each missing one. A rollback
+to 0.4.0 removes them again, see
+[roll back](knowledge/runbooks/upgrade-and-backup.md#roll-back).
 
 ## Complete file
 
@@ -646,15 +655,37 @@ Besides each key's own range, `validate` enforces:
   `limits.max_summary_characters`; `limits.excerpt_characters` is at most a
   quarter of `notify.max_characters`.
 - `publish.github_body_max_bytes` is at most 65536.
-- `publish.signature` is one line that starts with `publish.ai_signed_pattern`,
-  leading symbols such as an emoji ignored on both, and cannot mention anyone,
-  embed HTML or imitate the review marker. `publish.ai_signed_pattern` needs text
-  after its leading symbols.
+- `publish.signature` is one line of at most 200 bytes that starts with
+  `publish.ai_signed_pattern`, leading symbols such as an emoji ignored on both,
+  and cannot mention anyone, embed HTML or imitate the review marker.
+  `publish.ai_signed_pattern` needs text after its leading symbols.
 - `publish.marker` is `autoreview` or `hermes-pr-review`; `marker:` without a
   value is refused as missing.
 - A policy rule with [`guard`](policy.md#guard) needs `guards.text`; without it
   the load fails with
   `configuration_missing: guards.text: the policy rule for <match> sets guard`.
+
+`validate` also checks these limits. A number outside them fails with
+`configuration_invalid` and the message `configured limit is outside the safe
+range`, which names no key:
+
+- `schedule.poll_interval_seconds` is at most 3600, and
+  `schedule.worker_tick_seconds` at most `schedule.poll_interval_seconds`.
+- `schedule.max_concurrent_reviews` is at most 32, and
+  `schedule.scheduler_max_bytes` at most 64 MiB.
+- `schedule.step_retry_seconds` is at most 3600;
+  `schedule.step_retry_max_interval_seconds` lies from
+  `schedule.step_retry_initial_seconds` to `schedule.step_retry_seconds`.
+- `session.start_max_attempts` is at most 5, `session.cleanup_max_attempts` at
+  most 10 and `session.reviewer_run_max_attempts` at most 3; each of their
+  `*_retry_seconds` is at most 300.
+- `session.output_poll_seconds` is at most `session.timeout_seconds`, and
+  `session.output_chunk_bytes` at most 783240.
+- `session.terminal_cols` is from 120 to 400, `session.terminal_rows` from 100
+  to 250.
+- `cli.review_list_limit` is at most `schedule.state_entry_limit`.
+- `notify.max_characters` is at most 32000, `notify.review_queue.max_items` at
+  most 999.
 
 ## Environment variables
 

@@ -2,10 +2,10 @@
 
 Policy-driven AI pull request review on top of [pohunek](https://github.com/zajca/pohunek) sessions.
 
-> **Status: 0.3.0.** autoreview 0.3.0 is the current release. It ships static
+> **Status: 0.4.0.** autoreview 0.4.0 is the current release. It ships static
 > Linux binaries for `x86_64` and `aarch64` as release archives, each with a
 > `.sha256` file and a build provenance attestation; see [install](docs/install.md).
-> The `main` branch holds changes after 0.3.0, and the documentation describes it.
+> The `main` branch holds changes after 0.4.0, and the documentation describes it.
 > The [Rough plan](#rough-plan) table is the roadmap; a part that is not available
 > names its open issue.
 
@@ -36,7 +36,7 @@ one GitHub review with inline comments.
 
 ## Documentation
 
-The documentation describes autoreview on `main` after the 0.3.0 release; a
+The documentation describes autoreview on `main` after the 0.4.0 release; a
 part that is not available names its open issue.
 
 - [Features](docs/features.md) - what it does and a map of every page
@@ -62,7 +62,7 @@ The engine needs three parts to be useful: the engine itself (Rust), the
 reviewer adapters that turn a pohunek agent session into one structured,
 read-only review run, and an installer that creates the pohunek agent profiles
 (`autoreview profiles install`) and the service units with their installer
-(`deploy/install.sh`, after 0.3.0).
+(`deploy/install.sh`, from 0.4.0 on).
 
 ## Rough plan
 
@@ -101,8 +101,8 @@ scenarios are guides without a policy of their own:
 - Claude Code and/or Codex CLI on the review hosts
 - Linux on `x86_64` or `aarch64`; on one machine `scripts/setup` writes user
   units ([getting started](docs/knowledge/guides/getting-started.md)), and the
-  installer of the install page writes the system units of a server user (after
-  0.3.0; a container image is not available, see #40)
+  installer of the install page writes the system units of a server user (from
+  0.4.0 on; a container image is not available, see #40)
 
 ## Security model
 
@@ -129,5 +129,5 @@ keeps untrusted authors behind a maintainer label.
 - Untrusted authors are a policy class of their own and are never
   auto-approved.
 - Distributed as static Linux release archives from 0.1.0 on, with systemd
-  units and an installer after 0.3.0; a container image is not available (#40).
+  units and an installer from 0.4.0 on; a container image is not available (#40).
 - MIT license.

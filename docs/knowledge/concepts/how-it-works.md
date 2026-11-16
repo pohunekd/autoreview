@@ -9,8 +9,8 @@ intents: [help, setup, debug]
 
 # How a review works
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 This page follows one pull request from the moment it asks for a review to the
 moment its reviewer sessions are removed. Each step names the reference key
@@ -89,6 +89,12 @@ untrusted) is resolved at the same moment and stored with the review. See
 
 The scope of the review (full or incremental) and its prior findings are also
 decided at dispatch. See [incremental reviews](incremental-reviews.md).
+
+A rule with `guard` scans the configured texts of the pull request for hidden
+instructions once per review, before any reviewer starts, and stores the result
+with the review; see [the text guard](../safety/prompt-injection.md#the-text-guard).
+A pipeline with `intent_check: issues` also hands the reviewers the issues that
+the pull request closes in its own repository, as untrusted data.
 
 ## 3. Project routing on pohunek hosts
 

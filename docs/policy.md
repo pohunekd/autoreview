@@ -9,8 +9,8 @@ intents: [setup, project, help]
 
 # Policy reference
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 The policy decides **what** is reviewed, **by whom**, and **what happens with
 the result**. It lives in its own file, `policy.yaml`, next to the prompt files
@@ -19,7 +19,8 @@ notifier backends) live in [config.yaml](configuration.md).
 
 autoreview loads and validates the whole policy at startup and on
 `autoreview validate`. Any error stops the service with a message that names
-the key; nothing is guessed or defaulted. Every review copies the rule it was
+the key, or says that the file is not one valid YAML document; nothing is
+guessed or defaulted. Every review copies the rule it was
 dispatched with, so an edited policy applies from the next review on and never
 changes a review in flight.
 
@@ -153,7 +154,7 @@ A pipeline says how a pull request is reviewed.
 | `incremental_reviewers` | 1-4 reviewer ids from `reviewers`; they run when only the new commits are reviewed |
 | `prompt` | Relative path of the review prompt, inside the policy directory, non-empty UTF-8, at most 64 KiB |
 | `checkout` | `base`: the worktree starts at the base branch tip, so repository guidance is read from trusted content; the reviewer reads the change through git (`git diff <base>...<head>`, `git show <head>:<path>`) without checking the head out. With pohunek 0.43.0 or later (the CLI and the review host's daemon) the session start fetches `refs/pull/<n>/head` at the trusted head without checking it out; with an older pohunek only the base branch is fetched, so the head commit must already be in the repository. Without the head the Claude and Codex adapters stop the review with `review_head_unavailable` and nothing is published. `head`: the worktree starts at `refs/pull/<n>/head`, so pohunek runs the hooks of the pull request head (`.pohunek/`), and with them any code they run (see the [threat model](knowledge/safety/threat-model.md#residual-risks)) |
-| `project_sources` | Which pohunek projects may serve the repository: `manual` (registered with `pohunek project add`), `auto` (discovered), or both |
+| `project_sources` | Which pohunek projects may serve the repository: `manual` (registered with `pohunek project add`), `auto` (discovered), or both. autoreview checks only the form of a name (lowercase letters, digits, `_` and `-`, at most 32 characters) and passes it to pohunek unchanged |
 | `verifier` | Optional, see below |
 | `intent_check` | Optional. `issues`: the reviewers compare the change with the issues the pull request closes, see [intent check](#intent-check). `off`, or no key: no comparison. `intent_check: null` is an error |
 

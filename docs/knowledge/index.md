@@ -1,10 +1,15 @@
+---
+title: autoreview knowledge
+description: The concept, guide, runbook and safety pages of autoreview, and where a new reader starts.
+---
+
 # autoreview knowledge
 
 Hand-written documentation for autoreview, in the same layout as the pohunek
 knowledge bundle so pohunek.dev can render both.
 
-> **Status: after 0.3.0.** These pages describe autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** These pages describe autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 - **Concepts** explain how a review works:
   [how it works](concepts/how-it-works.md),
@@ -17,9 +22,11 @@ knowledge bundle so pohunek.dev can render both.
   [notifications](concepts/notifications.md),
   [GitHub identity](concepts/github-identity.md) and
   [state and recovery](concepts/state-and-recovery.md).
-- **Guides** are use cases with a complete policy each. Start with
-  [getting started](guides/getting-started.md), the
-  [quickstart](guides/quickstart.md) and the [use case chooser](guides/index.md);
+- **Guides** are use cases with a complete policy each. A new reader starts
+  with [getting started](guides/getting-started.md), which runs `scripts/setup`
+  on one Linux machine, or with the [quickstart](guides/quickstart.md), which
+  does the same steps by hand; both end with a first review. The
+  [use case chooser](guides/index.md) then picks a scenario;
   [combining patterns](guides/combining.md) layers them in one policy, and
   [enable the text guard](guides/text-guard.md) measures the prompt-injection
   guard before a rule relies on it.

@@ -9,8 +9,8 @@ intents: [debug, help]
 
 # Stale sessions and branches
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 Every reviewer run happens in a pohunek session on a review host, and each
 session works on its own review branch. Two upstream behaviours make these
@@ -68,6 +68,10 @@ restores it. pohunek has no command that deletes a branch on another machine, so
 host whose repositories are elsewhere is skipped as `host_not_local`. Do not delete review
 branches with `git push --delete` or `git branch -D`: nothing checks a manual delete against
 the running reviews.
+
+A failed deletion, or a `--host` host or repository that is skipped, ends the command with
+status 1 and `branch_prune_incomplete`. The branches it did not delete stay; run it again
+once the cause is fixed.
 
 ## Related pages
 

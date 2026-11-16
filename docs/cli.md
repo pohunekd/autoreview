@@ -9,8 +9,8 @@ intents: [setup, debug, help]
 
 # CLI reference
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 ```
 autoreview [--config <path>] [--env-file <path>] <command> [arguments]
@@ -504,7 +504,7 @@ Reviews: 6 decided, 5 published, 1 approval expired
   changes requested 33.3%, commented 16.7%
   attempt creation to publication: median 1200 s, p90 3000 s
   review request to publication: median 1500 s, p90 3300 s
-  verifier on reviewer lint-bot: 4 checked, 1 demoted, 25.0%
+  verifier on reviewer lint-bot: 3 checked, 2 demoted, 66.7%
   verifier on reviewer review-bot: 3 checked, 0 demoted, 0.0%
 Findings                findings blocking open fixed open_at_merge fixed% demoted
 total                          9        4    1     2             1  66.7%       2
@@ -683,11 +683,14 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `review_already_running`, `review_retry_not_dispatched` | A retry is not needed or not possible right now |
 | `review_already_completed` | `retry` found a completed review of this head (it succeeded or went on to wait for an approval) against the current base branch and no later failed review of it, or one whose base branch is no longer known; nothing to do when that review is current, approve it if it still waits, or push a new commit for a fresh review |
 | `engine_already_running` | Another `serve` uses the same database |
+| `workflow_state_unknown` | A review is recorded as running, but the store holds no run of it; the scheduler does not start it again |
 | `discovery_busy` | Another discovery pass held the lock past `schedule.discovery_lock_timeout_seconds` |
 | `pull_request_not_open`, `pull_request_draft`, `review_label_removed`, `review_request_not_active` | The pull request no longer asks for a review: closed, back in draft, label removed or review request withdrawn |
-| `pohunek_base_fetch_failed`, `pohunek_base_fetch_timeout`, `pohunek_base_fetch_dns_failed`, `pohunek_base_fetch_authentication_failed` | The review host could not fetch the base branch from GitHub |
+| `pohunek_base_fetch_failed`, `pohunek_base_fetch_timeout`, `pohunek_base_fetch_dns_failed`, `pohunek_base_fetch_authentication_failed`, `pohunek_base_fetch_permission_denied`, `pohunek_base_fetch_ref_missing`, `pohunek_base_fetch_ref_locked`, `pohunek_base_fetch_disk_full` | The review host could not fetch the base branch from GitHub |
 | `state_entry_limit_exceeded` | The discovery state hit `schedule.state_entry_limit` |
+| `store_path_invalid` | `store.path` is not absolute or has no directory |
 | `store_unavailable` | The SQLite store could not be opened or written |
+| `store_version_unsupported` | A newer release wrote the store; this release does not open it |
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
 | `host_not_local`, `git_command_failed`, `repository_hook_configured` | `prune-branches` skipped a host whose repositories are not on this machine, a git call failed (also for a repository owned by another user), or a repository configuration names a `reference-transaction` hook |
 | `branch_prune_incomplete` | `prune-branches` printed its document and exits with status 1: a deletion failed, or the `--host` host or one of its repositories was skipped |

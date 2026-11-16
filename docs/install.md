@@ -9,11 +9,11 @@ intents: [setup, help]
 
 # Install autoreview
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue. The release
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue. The release
 > archives are published from `v0.1.0` on; the release workflow builds and
-> attests them. The systemd units and their installer of path b come in the
-> archive after 0.3.0. A container image is not available (#40).
+> attests them. The systemd units and their installer of path b are in the
+> archives from 0.4.0 on. A container image is not available (#40).
 
 autoreview runs as one service with the GitHub CLI and the `pohunek` CLI. The
 agents run as reviewers in pohunek sessions on the **review hosts**, where a
@@ -55,15 +55,17 @@ own user, run `scripts/setup` from a checkout of the repository: it installs
 both from their release archives, writes the configuration and the user
 service, and asks before every change. See
 [getting started](knowledge/guides/getting-started.md). The paths below are for
-a dedicated server user.
+a dedicated server user. To learn the steps on one repository first, follow the
+[quickstart](knowledge/guides/quickstart.md).
 
 | Path | Use it when | You get |
 |---|---|---|
 | a. Release binary (default) | You run the service yourself under a dedicated server user | `autoreview` in `/usr/local/bin` |
 | b. systemd units | You want the service and the hourly queue as units under a dedicated server user | `deploy/install.sh`, which installs `autoreview.service`, `autoreview-queue.service`, `autoreview-queue.timer` |
 
-Paths a and b need the `autoreview` system user that path b creates. A
-container image is not available (#40).
+Paths a and b need the `autoreview` system user. The installer of path b
+creates it; with path a only, create it yourself. A container image is not
+available (#40).
 
 ## a. Release binary
 
@@ -76,7 +78,7 @@ provenance attestation. The binary needs no system library.
 Download the archive and its checksum file, then check the checksum:
 
 ```sh
-version=0.3.0                        # the release to install, without the v
+version=0.4.0                        # the release to install, without the v
 target=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
 archive="autoreview-$version-$target.tar.gz"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"
@@ -128,7 +130,7 @@ TARGET_CC=musl-gcc cargo build --release --locked --target x86_64-unknown-linux-
 
 ## b. systemd units
 
-After 0.3.0, the release archive of path a also holds `deploy/install.sh` and
+From 0.4.0 on, the release archive of path a also holds `deploy/install.sh` and
 the units it installs:
 [`autoreview.service`](../deploy/systemd/autoreview.service),
 [`autoreview-queue.service`](../deploy/systemd/autoreview-queue.service) and
@@ -169,7 +171,7 @@ The secrets file holds the variable of the credential's `token_env` and the
 backend secrets as `NAME=value` lines. Write the values with an editor, never
 on a command line, for example with `sudoedit /etc/autoreview/autoreview.env`.
 See [secrets](knowledge/safety/secrets.md). The units pass the file with
-`--env-file`, so it must be owned by `autoreview` with mode `0600`; the
+`--env-file`, so it must be owned by `autoreview` with mode `0600` or `0400`; the
 installer checks the owner and the mode, prints the command that fixes them,
 and never reads the values.
 
@@ -226,8 +228,11 @@ The output is one JSON object; error messages are listed in [policy validation e
 
 ## First review
 
-Start the service, then check what discovery picks up and run one pass. A review
-starts after `schedule.debounce_seconds`.
+With path b, the installer has started `autoreview.service` once the
+configuration exists. With path a, start `autoreview serve` as the `autoreview`
+user with the same `--config` and `--env-file` as below. Then check what
+discovery picks up and run one pass. A review starts after
+`schedule.debounce_seconds`.
 
 ```sh
 run() { sudo -u autoreview autoreview --config /etc/autoreview/config.yaml \

@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Getting started
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release and `scripts/setup`. The script installs the autoreview release
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release and `scripts/setup`. The script installs the autoreview release
 > named by `AUTOREVIEW_VERSION` in the script, which must know the `init` layout
 > flags and `profiles install --pohunek-timeout-seconds` (0.4.0 or later). A
 > part that is not available names its open issue.
@@ -35,7 +35,10 @@ reviews, and it reports what needs attention to Matrix. The details are in
 
 `scripts/setup` sets up one Linux machine on which autoreview and the pohunek
 daemon run together, as your own user, without `sudo`. Several machines are
-described in [several review hosts](multihost.md#deployment-layout).
+described in [several review hosts](multihost.md#deployment-layout). To set up
+each step by hand, or on a system without systemd user units, follow the
+[quickstart](quickstart.md); for a dedicated server user, see
+[install](../../install.md).
 
 | What | Where |
 |---|---|

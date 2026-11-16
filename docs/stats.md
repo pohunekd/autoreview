@@ -9,8 +9,8 @@ intents: [debug, help]
 
 # Review statistics
 
-> **Status: after 0.3.0.** `autoreview stats`, the MCP tool `review_stats` and the
-> Prometheus endpoint of `autoreview serve` come after 0.3.0.
+> **Status: after 0.4.0.** `autoreview stats`, the MCP tool `review_stats` and the
+> Prometheus endpoint of `autoreview serve` are part of the 0.4.0 release.
 
 autoreview ships no dashboard. It prints the numbers a dashboard needs as one JSON document,
 so any tool that reads JSON can draw them:

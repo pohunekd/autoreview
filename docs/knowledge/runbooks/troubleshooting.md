@@ -9,8 +9,8 @@ intents: [debug, help]
 
 # Troubleshooting
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 Start with two commands. `autoreview candidates` shows what the next discovery
 pass would consider, per rule and trigger. `autoreview review --repository
@@ -47,6 +47,7 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 | `author_limit_reached` | The rule's `author_limit` with `over: skip` did not start a review: its author started the most reviews the rule allows in the window | Wait for the window, or `retry` the pull request; see [author limit](../../policy.md#author-limit) |
 | `pohunek_head_fetch_mismatch` | At each of the latest starts that a usage limit did not end, the fetched `refs/pull/<n>/head` was at another commit than the pull request head | [Head commit unavailable](#head-commit-unavailable) |
 | `github_search_limit_exceeded` | Discovery search returned more than `schedule.poll_limit` | [Search limit](#github_search_limit_exceeded) |
+| `base_branch_unsupported` | The base branch name is longer than 255 bytes, or has a character other than ASCII letters, digits, `.`, `_`, `/` and `-`, or `..`; `candidates` lists the pull request as rejected | Retarget the pull request to a base branch with a supported name; see [prompt injection](../safety/prompt-injection.md) |
 | `github_request_failed`, `github_request_rejected` | GitHub did not answer or failed the request, or rejected it as invalid (HTTP 422); HTTP 401 is `credential_invalid` | Check the token's permissions and the `github` section |
 | `credential_login_mismatch` | The token belongs to another account than the `login` of the credential | [Token of another account](#token-of-another-account) |
 | `credential_invalid` | GitHub refuses the token: revoked, expired or never valid; at start, while running, or in a review's GitHub step | [Token refused while running](#token-refused-while-running) |

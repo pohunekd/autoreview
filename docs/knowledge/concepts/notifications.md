@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # Notifications
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 autoreview tells people about reviews that need them, and it records the rest.
 Each **event** has a **level**. Each level goes to one or more **backends**. The
@@ -259,8 +259,7 @@ rest of the engine.
 5. **Secrets come from the environment or the `--env-file`.** A backend that needs
    a token names the variable in an `*_env` key, as the Matrix backend does.
 
-Phase 6 of the project plan lists further backends as later decisions, each made
-when a concrete need arrives.
+A further backend is added when a concrete need arrives.
 
 ## Related pages
 

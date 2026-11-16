@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Quickstart
 
-> **Status: after 0.3.0.** This page describes autoreview on `main` after the
-> 0.3.0 release. A part that is not available names its open issue.
+> **Status: after 0.4.0.** This page describes autoreview on `main` after the
+> 0.4.0 release. A part that is not available names its open issue.
 
 This guide takes one repository from nothing to a review comment posted by
 autoreview. It uses one reviewer and comments only, so nothing is approved
@@ -24,7 +24,7 @@ which can be the same machine.
 
 - A pohunek daemon running on the review host, with the official Codex
   runtime package installed. The reviewer in this guide uses Codex. See the
-  [pohunek project](https://github.com/zajca/pohunek) for installation.
+  [pohunek install guide](https://pohunek.dev/docs/install/) for installation.
 - The repository you want reviewed, registered as a pohunek project on that
   host with `pohunek project add`. autoreview finds the repository by its
   origin URL, so the registered checkout must point at the same remote.
@@ -83,8 +83,9 @@ example is `label:ai:review`, so a review starts when a pull request carries
 the `ai:review` label. Create that label in the repository if it does not
 exist yet.
 
-Every notification level and the review queue need a `matrix` backend; a
-route to a `none` backend is refused at load. The example routes them to one
+Every notification level and the review queue need a backend; a `none`
+backend only logs the messages, see [no notifier](notifiers.md#no-notifier).
+The example routes them to one
 `matrix` backend with placeholder values: set its `homeserver_url`, `room` and
 `mention_user` with the [notifiers guide](notifiers.md), and export its token
 as `AUTOREVIEW_MATRIX_TOKEN` in the same way as the GitHub token in step 7.
@@ -232,9 +233,9 @@ answered. See [incremental reviews](../concepts/incremental-reviews.md).
 
 Once one review works, run autoreview as a long-running service so it reviews
 without manual polls. [`scripts/setup`](getting-started.md) writes and
-starts user units on one machine. On a server, install the systemd units of install path b with
-its installer, as described in
-[install](../../install.md), and let `autoreview serve` run until you stop it.
+starts user units on one machine. On a server, install the systemd units with
+the installer described in
+[install](../../install.md#b-systemd-units), and let `autoreview serve` run until you stop it.
 Reviews that are running at shutdown resume after the next start.
 
 Before you leave this setup running, read the
