@@ -34,6 +34,9 @@ until the credential is replaced.
 - Body: one paragraph of one to three sentences, present tense, written for the
   user: what changes for them. Markdown inline syntax only; no headings, no
   blank lines inside the paragraph.
+- The body carries no issue link: `fold` appends `([#N](...))` from the file
+  name, and `check` refuses a body with a link to its own issue or any trailing
+  `([#N](...))` suffix.
 - Keep the file UTF-8 with LF line endings.
 
 ## Commands
