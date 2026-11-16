@@ -12,9 +12,9 @@ intents: [setup, help]
 > **Status: after 0.4.0.** This page describes autoreview on `main` after the
 > 0.4.0 release. A part that is not available names its open issue.
 
-autoreview is a small service that reviews GitHub pull requests with coding
-agents you already run. It finds pull requests that ask for a review, runs one
-or more agents (Claude Code, Codex) as read-only reviewers in
+Šafář review (the `autoreview` service and command) is a small service that
+reviews GitHub pull requests with coding agents you already run. It finds pull
+requests that ask for a review, runs one or more agents (Claude Code, Codex) as read-only reviewers in
 [pohunek](https://pohunek.dev/) sessions on your own machines,
 checks their findings, and publishes one GitHub review with inline comments.
 A policy file decides which repositories are reviewed, by which agents, and

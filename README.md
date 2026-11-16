@@ -1,11 +1,13 @@
-# autoreview
+# Šafář review
 
 Policy-driven AI pull request review on top of [pohunek](https://github.com/zajca/pohunek) sessions.
+Šafář review is the product name; the repository, the binary and the command are
+`autoreview`.
 
-> **Status: 0.4.0.** autoreview 0.4.0 is the current release. It ships static
+> **Status: 0.5.0.** autoreview 0.5.0 is the current release. It ships static
 > Linux binaries for `x86_64` and `aarch64` as release archives, each with a
 > `.sha256` file and a build provenance attestation; see [install](docs/install.md).
-> The `main` branch holds changes after 0.4.0, and the documentation describes it.
+> The `main` branch holds changes after 0.5.0, and the documentation describes it.
 > The [Rough plan](#rough-plan) table is the roadmap; a part that is not available
 > names its open issue.
 
