@@ -9,7 +9,7 @@ intents: [help, debug]
 
 # Review report
 
-> **Status: after 0.3.0.** `autoreview report` comes after 0.3.0. The weekly line
+> **Status: after 0.4.0.** `autoreview report` comes after 0.4.0. The weekly line
 > in the review queue digest and the reviewer disagreement rate are not available
 > yet (#52).
 

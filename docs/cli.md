@@ -504,7 +504,7 @@ Reviews: 6 decided, 5 published, 1 approval expired
   changes requested 33.3%, commented 16.7%
   attempt creation to publication: median 1200 s, p90 3000 s
   review request to publication: median 1500 s, p90 3300 s
-  verifier on reviewer lint-bot: 4 checked, 1 demoted, 25.0%
+  verifier on reviewer lint-bot: 3 checked, 2 demoted, 66.7%
   verifier on reviewer review-bot: 3 checked, 0 demoted, 0.0%
 Findings                findings blocking open fixed open_at_merge fixed% demoted
 total                          9        4    1     2             1  66.7%       2
