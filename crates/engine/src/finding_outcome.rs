@@ -1,4 +1,4 @@
-//! The outcome of each published finding, derived from the review that publishes it.
+//! The outcome of each published finding, derived from the reviews that publish and settle it.
 
 // Rust guideline compliant 2026-06-26
 
@@ -8,13 +8,13 @@ use time::OffsetDateTime;
 use crate::engine::{Clock, Engine};
 use crate::error::error_code;
 use crate::integrations::Integrations;
-use crate::model::review::prior_key;
+use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN, prior_key};
 use crate::model::{Artifact, ReviewInput};
-use crate::store::{FindingOutcome, OUTCOME_OPEN};
-use crate::verify::demoted;
+use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Settlement};
+use crate::verify::{VERDICT_UPHELD, demoted};
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
-    /// Records one outcome for each finding that `artifact` publishes.
+    /// Records the findings that `artifact` publishes and what it settles about earlier ones.
     ///
     /// A store failure is logged and never fails the review: outcomes only record a review.
     pub(crate) fn record_finding_outcomes(
@@ -26,7 +26,14 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     ) {
         let published_at = format_rfc3339_nano(published_at);
         let published = published_outcomes(workflow_id, input, artifact, &published_at);
-        if let Err(err) = self.store.record_outcomes(&published) {
+        let recorded = self.store.record_outcomes(
+            &artifact.repository,
+            artifact.number,
+            &artifact.head_sha,
+            &settlements(artifact),
+            &published,
+        );
+        if let Err(err) = recorded {
             tracing::error!(
                 review_id = %input.pull_request.review_id(),
                 error_code = error_code(&err),
@@ -85,4 +92,35 @@ fn published_outcomes(
         });
     }
     outcomes
+}
+
+/// Returns what `artifact` settles about its earlier findings, in their order.
+///
+/// `fixed` is fixed; `answered` is fixed when the verifier upheld it and `answered` otherwise.
+/// An open one published again moves to the key of its new finding; any other stays open.
+fn settlements(artifact: &Artifact) -> Vec<Settlement> {
+    let upheld = |key: &str| {
+        artifact.verification.as_ref().is_some_and(|verification| {
+            verification.error_code.is_empty()
+                && (verification.prior)
+                    .iter()
+                    .any(|check| check.key == key && check.verdict == VERDICT_UPHELD)
+        })
+    };
+    let mut settlements = Vec::new();
+    for result in &artifact.prior_results {
+        let key = result.finding.key.clone();
+        let status = result.verdict.status.as_str();
+        if status == PRIOR_FIXED || (status == PRIOR_ANSWERED && upheld(&key)) {
+            let outcome = OUTCOME_FIXED.to_owned();
+            settlements.push(Settlement::Decided { key, outcome });
+        } else if status == PRIOR_ANSWERED {
+            let outcome = OUTCOME_ANSWERED.to_owned();
+            settlements.push(Settlement::Decided { key, outcome });
+        } else if status == PRIOR_OPEN && !result.republished.is_empty() {
+            let republished = prior_key(&artifact.head_sha, &result.republished);
+            settlements.push(Settlement::Republished { key, republished });
+        }
+    }
+    settlements
 }
