@@ -31,6 +31,7 @@ awaiting | review-queue | backup-db PATH | \
 prune-branches --git-binary PATH [--host HOST] [--older-than-days DAYS] [--yes]; \
 autoreview init --dir DIR --login LOGIN --pohunek-host HOST --example NAME [--store-path PATH] \
 [--gh-bin PATH] [--pohunek-bin PATH] [--pohunek-state-home PATH] [--pohunek-runtime-dir PATH] \
+[--notifier none|matrix|webhook] [--webhook-format json|slack|discord] \
 [--matrix-homeserver-url URL] [--matrix-room ROOM] [--matrix-mention-user USER]; \
 autoreview profiles install --host HOST --agent claude|codex --name NAME --model MODEL \
 --effort EFFORT --agent-binary PATH --maximum-input-bytes BYTES [--maximum-result-bytes BYTES \

@@ -80,6 +80,8 @@ notify:
 Nothing is sent. Each message is logged as `notification logged only` with its
 event and level, and `autoreview review-queue` prints the queue. See
 [configuration](../../configuration.md#backend-none).
+[`autoreview init --notifier none`](../../cli.md#autoreview-init) writes this
+block.
 
 ## Matrix, one room per level
 
@@ -186,6 +188,8 @@ Mattermost, `discord` for a Discord channel webhook, and `json` for your own
 receiver. A webhook never pings anyone; route `action` to Matrix when a person
 must be mentioned. See [configuration](../../configuration.md#backend-webhook)
 for the bodies and the error codes.
+[`autoreview init --notifier webhook --webhook-format slack`](../../cli.md#autoreview-init)
+writes such a backend named `webhook` with the given format.
 
 ## Several backends for one level
 

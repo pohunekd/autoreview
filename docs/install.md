@@ -243,7 +243,9 @@ of the credential and `pohunek.hosts` set. Its paths are the ones of path b.
 Set the homeserver, room and mentioned user of its placeholder `matrix` backend
 in `notify` (see [notifiers](knowledge/guides/notifiers.md)), or pass them and
 the other paths with the optional
-[layout flags of `init`](cli.md#autoreview-init).
+[layout flags of `init`](cli.md#autoreview-init); `--notifier none`, or
+`--notifier webhook` with `--webhook-format`, writes a backend without Matrix
+instead.
 
 The agent profile named as `reviewers.<id>.agent_profile` in `policy.yaml` must
 exist on the review host. Install the same autoreview binary there and write the

@@ -90,6 +90,9 @@ The example routes them to one
 `matrix` backend with placeholder values: set its `homeserver_url`, `room` and
 `mention_user` with the [notifiers guide](notifiers.md), and export its token
 as `AUTOREVIEW_MATRIX_TOKEN` in the same way as the GitHub token in step 7.
+To start without Matrix, add `--notifier none` to the `init` command of step 4,
+or `--notifier webhook --webhook-format json` (`slack` or `discord` for those
+services) and export the webhook URL as `AUTOREVIEW_WEBHOOK_URL`.
 
 ## 6. Install the agent profile
 
