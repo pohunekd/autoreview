@@ -203,8 +203,9 @@ every repository and pipeline (the last 7 UTC days and today so far, see
 [review report](review-report.md)). `off` or no key sends none. It is sent:
 
 - by the first `review-queue` run on the 7th UTC day after the day of the last
-  send, or by the first run at all. With an hourly timer it comes shortly after
-  midnight UTC on the same weekday each week. When nothing waits, the message is
+  send, or by the first run at all. With the shipped queue timer (hourly from
+  08:00 to 20:00 local time) it comes with the first run of that day, on the same
+  weekday each week. When nothing waits, the message is
   the report alone. The printed result has `"weekly_report": true`.
 - only after every queue backend took the message: the time of the send is then
   stored, so a failed send is repeated by the next run. A send that the store
