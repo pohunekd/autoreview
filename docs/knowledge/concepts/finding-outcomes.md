@@ -79,8 +79,9 @@ read keeps failing does not hold back the others of its credential.
 An end is final for the rows that were `open` when it was read: if a closed
 pull request is reopened, those rows keep `open_at_close`, and the store keeps
 the earlier end. Rows that reviews publish after the reopen are new `open`
-rows; the next end closes them and replaces the stored end. Without such a
-row, the pull request is not read again and keeps its earlier end.
+rows. If one is still `open` when the pull request ends again, that end
+closes it and replaces the stored end. Otherwise the pull request is not read
+again and keeps its earlier end.
 
 ## When recording fails
 
