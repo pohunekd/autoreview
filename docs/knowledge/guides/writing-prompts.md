@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Writing prompts
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 A pipeline names one review prompt, and the verifier names one more. The
 prompt tells the reviewer how to review; autoreview decides what to review

@@ -9,14 +9,12 @@ intents: [setup, help]
 
 # Getting started
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release and `scripts/setup`. The script installs the autoreview release
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release and `scripts/setup`. The script installs the autoreview release
 > named by `AUTOREVIEW_VERSION` in the script, which must know the `init` layout
 > flags and `profiles install --pohunek-timeout-seconds` (0.4.0 or later). A
 > part that is not available names its open issue. On a Mac the script needs a
-> release with an `aarch64-apple-darwin` archive, the first after 0.5.0 (#513);
-> until then it keeps an autoreview built from `main` that you installed as
-> `~/.local/bin/autoreview`.
+> release with an `aarch64-apple-darwin` archive, 0.6.0 or later (#513).
 
 ## What autoreview does
 

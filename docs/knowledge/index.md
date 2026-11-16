@@ -8,8 +8,8 @@ description: The concept, guide, runbook and safety pages of autoreview, and whe
 Hand-written documentation for autoreview, in the same layout as the pohunek
 knowledge bundle so pohunek.dev can render both.
 
-> **Status: after 0.5.0.** These pages describe autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** These pages describe autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 - **Concepts** explain how a review works:
   [how it works](concepts/how-it-works.md),
@@ -24,7 +24,7 @@ knowledge bundle so pohunek.dev can render both.
   [state and recovery](concepts/state-and-recovery.md).
 - **Guides** are use cases with a complete policy each. A new reader starts
   with [getting started](guides/getting-started.md), which runs `scripts/setup`
-  on one Linux machine or one Mac (from the first release after 0.5.0, #513),
+  on one Linux machine or one Mac (from 0.6.0 on, #513),
   or with the [quickstart](guides/quickstart.md), which
   does the same steps by hand; both end with a first review. The
   [use case chooser](guides/index.md) then picks a scenario;

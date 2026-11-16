@@ -9,8 +9,8 @@ intents: [setup, update, debug, help]
 
 # Configuration reference
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 `config.yaml` holds the technical settings of one autoreview service: which
 GitHub account it acts as, which pohunek hosts run the reviewers, how often it
@@ -262,7 +262,7 @@ token needs and when to use a machine user.
 |---|---|
 | `bin` | Absolute path of the `pohunek` CLI; `validate` and `serve` refuse a release outside the [supported range](install.md#prerequisites) |
 | `state_home` | `XDG_STATE_HOME` for the CLI |
-| `runtime_dir` | `XDG_RUNTIME_DIR` for the CLI. Required on Linux. On macOS (from the first release after 0.5.0, #513) it may be left out or given no value (`runtime_dir:` or `~`): the CLI then gets no `XDG_RUNTIME_DIR` and dials pohunek's macOS default, `/private/tmp/pohunek-<uid>`. That is the daemon's socket only when `pohunek service install` ran without `XDG_RUNTIME_DIR`: pohunek gives its launchd daemon the `XDG_RUNTIME_DIR` of the install when it is set, and then this key must name that value, as `scripts/setup` writes it. An empty or whitespace string is refused |
+| `runtime_dir` | `XDG_RUNTIME_DIR` for the CLI. Required on Linux. On macOS (from 0.6.0 on, #513) it may be left out or given no value (`runtime_dir:` or `~`): the CLI then gets no `XDG_RUNTIME_DIR` and dials pohunek's macOS default, `/private/tmp/pohunek-<uid>`. That is the daemon's socket only when `pohunek service install` ran without `XDG_RUNTIME_DIR`: pohunek gives its launchd daemon the `XDG_RUNTIME_DIR` of the install when it is set, and then this key must name that value, as `scripts/setup` writes it. An empty or whitespace string is refused |
 | `timeout_seconds` | Timeout of one pohunek call, including a session start with its base fetch |
 | `hosts` | pohunek host names that may run reviewers, in priority order; one or more |
 | `route_overrides` | Map `owner/repo: {host, project_id}` that pins a repository to one host and project; an entry's optional `untrusted: {host, project_id}` pins its untrusted authors' pull requests instead |

@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Untrusted authors
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 Every repository rule must say who it trusts. The `authors` block splits pull
 request authors into two classes. A trusted author gets the rule's normal

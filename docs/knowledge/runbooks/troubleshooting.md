@@ -9,8 +9,8 @@ intents: [debug, help]
 
 # Troubleshooting
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 Start with two commands. `autoreview candidates` shows what the next discovery
 pass would consider, per rule and trigger. `autoreview review --repository
@@ -27,7 +27,7 @@ that goes:
 |---|---|---|
 | systemd units of path b | `journalctl -u autoreview.service` (`autoreview-queue.service` for the queue) | the journal |
 | `scripts/setup` on Linux | `journalctl --user -u autoreview.service` | the journal |
-| `scripts/setup` on a Mac (from the first release after 0.5.0, #513) | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`) | none by launchd; see below |
+| `scripts/setup` on a Mac (from 0.6.0 on, #513) | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`) | none by launchd; see below |
 
 launchd does not rotate these files, and rotation needs root. When
 `scripts/setup` installs the agents, it prints two lines for

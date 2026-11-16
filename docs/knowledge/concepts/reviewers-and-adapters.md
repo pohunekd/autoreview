@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Reviewers and adapters
 
-> **Status: after 0.5.0.** This page describes autoreview on `main` after the
-> 0.5.0 release. A part that is not available names its open issue.
+> **Status: after 0.6.0.** This page describes autoreview on `main` after the
+> 0.6.0 release. A part that is not available names its open issue.
 
 A **reviewer** is one coding agent run in its own pohunek session. The agent
 reads the pull request in a worktree, writes findings, and returns them in a
@@ -326,7 +326,7 @@ are in [wire names](#wire-names).
 The adapter for `codex-envelope` lives in `adapters/codex/` and uses only the
 Python standard library (Python 3.11 or newer). It runs only on Linux: it needs
 `PR_SET_CHILD_SUBREAPER` to end the processes that a run leaves, and exits with
-status 64 on a host without it; from the first release after 0.5.0 (#513),
+status 64 on a host without it; from 0.6.0 on (#513),
 `autoreview profiles install --agent codex` refuses such a host, a Mac for
 example, with `profile_agent_unsupported`. It has two parts:
 
