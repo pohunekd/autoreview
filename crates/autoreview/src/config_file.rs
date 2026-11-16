@@ -16,9 +16,9 @@ use std::time::Duration;
 
 use autoreview_engine::Error;
 use autoreview_engine::config::{
-    BackendKind, Config, Credential, Credentials, HostHooksChoice, HostOrder, HostStateChoice,
-    HostStateRules, MatrixBackend, NotifyBackend, NotifySettings, RouteOverride, TextGuard,
-    WebhookBackend, WebhookFormat, signature_text,
+    BackendKind, Config, Credential, Credentials, GuidanceConfig, HostHooksChoice, HostOrder,
+    HostStateChoice, HostStateRules, MatrixBackend, NotifyBackend, NotifySettings, RouteOverride,
+    TextGuard, WebhookBackend, WebhookFormat, signature_text,
 };
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
@@ -91,6 +91,11 @@ const DAEMON_COMMAND_TIMEOUT_MAX_SECONDS: u64 = 60;
 /// pohunek 0.41.0 waits `min(limit, 60 s) + 1 s`: `DEDICATED_WAIT_TRANSPORT_HEADROOM`
 /// (`crates/client/src/transport.rs:94`), added in `dedicated_request_timeout` (`:1725`).
 const CLI_REPLY_HEADROOM_SECONDS: u64 = 1;
+
+/// Range of `guidance.recurrence_threshold`.
+const GUIDANCE_THRESHOLD_RANGE: RangeInclusive<i64> = 2..=100;
+/// Range of `guidance.window_days`: one day to one year.
+const GUIDANCE_WINDOW_DAYS_RANGE: RangeInclusive<i64> = 1..=365;
 
 /// Key of the text guard section, which a policy rule with a guard needs.
 const GUARDS_TEXT_KEY: &str = "guards.text";
@@ -234,6 +239,20 @@ pub(crate) struct FileConfig {
     /// section without keys, so `log.directory` is reported missing.
     #[serde(default, deserialize_with = "present_section")]
     log: Option<LogFile>,
+    /// The `guidance` section; without it nothing is counted. A null section reads as a section
+    /// without keys, so `guidance.recurrence_threshold` is reported missing.
+    #[serde(default, deserialize_with = "present_section")]
+    guidance: Option<GuidanceFile>,
+}
+
+/// The `guidance` section.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuidanceFile {
+    /// Fixed findings of one category that raise a suggestion.
+    recurrence_threshold: Option<Value>,
+    /// Days back from now in which a fixed finding counts.
+    window_days: Option<Value>,
 }
 
 /// The `log` section.
@@ -775,6 +794,35 @@ fn ranged(value: &Option<Value>, key: &str, range: RangeInclusive<i64>) -> Resul
     Ok(number)
 }
 
+/// Reads the `guidance` section; `None` when the configuration has no `guidance` key.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for an absent key of the section
+/// (`guidance.recurrence_threshold` for a null section) and `configuration_invalid` for a value
+/// that is not an integer in its range.
+pub(crate) fn guidance_section(file: &FileConfig) -> Result<Option<GuidanceConfig>, Error> {
+    let Some(guidance) = &file.guidance else {
+        return Ok(None);
+    };
+    let threshold_key = "guidance.recurrence_threshold";
+    let threshold = ranged(
+        &guidance.recurrence_threshold,
+        threshold_key,
+        GUIDANCE_THRESHOLD_RANGE,
+    )?;
+    let days_key = "guidance.window_days";
+    let days = ranged(&guidance.window_days, days_key, GUIDANCE_WINDOW_DAYS_RANGE)?;
+    Ok(Some(GuidanceConfig {
+        recurrence_threshold: usize::try_from(threshold)
+            .map_err(|_| invalid(threshold_key, "is out of range"))?,
+        window: Duration::from_secs(
+            u64::try_from(days).map_err(|_| invalid(days_key, "is out of range"))?
+                * SECONDS_PER_DAY,
+        ),
+    }))
+}
+
 /// Reads the `mcp` section; `None` when the configuration has none.
 ///
 /// # Errors
@@ -1176,6 +1224,7 @@ fn map_file(
             Some(Box::from(cause)),
         ));
     }
+    let guidance = guidance_section(file)?;
     let config = Config {
         policy: Some(policy),
         schedule,
@@ -1191,6 +1240,7 @@ fn map_file(
         head_checkout_host_hooks,
         host_state,
         text_guard,
+        guidance,
         notify,
         secret_variables: secret_variables.take(),
         queue_max_items,
@@ -3693,6 +3743,67 @@ pub(crate) mod tests {
         assert!(
             parse_file(&unknown).is_err(),
             "the section refuses a key it does not know"
+        );
+    }
+
+    #[test]
+    fn guidance_section_is_optional_and_every_key_is_required() {
+        let section = "guidance:\n  recurrence_threshold: 3\n  window_days: 30\n";
+        let full = format!("{EXAMPLE}{section}");
+        let config = parse(&full, secret, example_policy).expect("the file loads");
+        let want = GuidanceConfig {
+            recurrence_threshold: 3,
+            window: Duration::from_secs(30 * SECONDS_PER_DAY),
+        };
+        assert_eq!(config.guidance, Some(want));
+        let example = parse(EXAMPLE, secret, example_policy).expect("the example loads");
+        assert_eq!(example.guidance, None, "the example counts nothing");
+        let missing_threshold = "configuration_missing: guidance.recurrence_threshold";
+        let range = "configuration_invalid: guidance.recurrence_threshold: must be from 2 to 100";
+        let integer = "configuration_invalid: guidance.recurrence_threshold: must be an integer";
+        let window = "configuration_invalid: guidance.window_days: must be from 1 to 365";
+        let whole = "configuration_invalid: guidance.window_days: must be an integer";
+        let cases = [
+            (section, "guidance:\n", missing_threshold),
+            ("  recurrence_threshold: 3\n", "", missing_threshold),
+            (
+                "  window_days: 30\n",
+                "",
+                "configuration_missing: guidance.window_days",
+            ),
+            ("threshold: 3", "threshold: 1", range),
+            ("threshold: 3", "threshold: 101", range),
+            ("threshold: 3", "threshold: \"3\"", integer),
+            ("window_days: 30", "window_days: 0", window),
+            ("window_days: 30", "window_days: 366", window),
+            ("window_days: 30", "window_days: 1.5", whole),
+        ];
+        for (old, new, expected) in cases {
+            let text = format!("{EXAMPLE}{}", section.replacen(old, new, 1));
+            let result = guidance_section(&parse_file(&text).expect("valid YAML"));
+            assert_eq!(
+                result.expect_err("the section is refused").to_string(),
+                expected,
+                "{old:?} -> {new:?}"
+            );
+        }
+        for (old, new) in [
+            ("threshold: 3", "threshold: 2"),
+            ("threshold: 3", "threshold: 100"),
+            ("window_days: 30", "window_days: 1"),
+            ("window_days: 30", "window_days: 365"),
+        ] {
+            let text = format!("{EXAMPLE}{}", section.replacen(old, new, 1));
+            let result = guidance_section(&parse_file(&text).expect("valid YAML"));
+            assert!(
+                result.is_ok_and(|g| g.is_some()),
+                "{new:?} is inside the range"
+            );
+        }
+        let unknown = format!("{full}  level: debug\n");
+        assert!(
+            parse_file(&unknown).is_err(),
+            "the section refuses an unknown key"
         );
     }
 
