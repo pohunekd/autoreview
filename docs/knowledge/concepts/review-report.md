@@ -147,20 +147,23 @@ whose messages name `stats`.
 - `--repo` counts one repository. The review part then comes from the
   repository's own counts of `autoreview stats`, which cover pruned reviews too.
 - `--pipeline` counts the reviews and findings of one pipeline of the policy.
-  Pruned reviews are kept only as daily counts without their pipeline, so with
-  `--pipeline` the range must start after now minus
-  `store.review_retention_seconds`; an earlier start is refused with
-  `report_range_pruned`.
+  The prune keeps the review counts, times, verifier's counts and reviewer
+  disagreement of each pipeline in the same daily rollup, per repository and
+  pipeline, so a pipeline's report covers pruned reviews as `--repo` does. Each
+  pruned review counts once for its day and once for its pipeline. A day where
+  the two differ holds reviews that a release before these counts pruned, for
+  example after a rollback; a range with such a day is refused with
+  `report_range_pruned`, because their pipeline is not known.
 - Finding outcomes are deleted after `store.outcome_retention_seconds`, so a
   range that starts before now minus that retention is refused with
   `report_range_pruned` as well.
-- Both checks use the retention that is configured now. Days that an earlier
+- That check uses the retention that is configured now. Days that an earlier
   prune with a shorter retention already cut, or that a clock set back makes
-  look newer, are not refused and can count too low. Without `--pipeline`, the
-  review part reads the daily counts of `autoreview stats`, which miss reviews
-  pruned by an engine before that rollup existed or by an earlier release after
-  a rollback (see [`autoreview stats`](../../stats.md)); those days can count
-  too low as well.
+  look newer, are not refused and can count too low. The review part reads the
+  daily counts of `autoreview stats`, which miss reviews pruned by an engine
+  before that rollup existed or, without `--pipeline`, by such an engine after a
+  rollback (see [`autoreview stats`](../../stats.md)); those days can count too
+  low as well.
 - The prune keeps the request times in the same daily rollup, per repository,
   and notes each request whose first publication it deleted, so a later attempt
   of that request that is still kept adds no second time. Reviews pruned before

@@ -121,6 +121,10 @@ version (`PRAGMA user_version` stays `1`). An earlier release opens such a
 store and ignores the two tables, so a rollback to it needs no restore. While
 the earlier release runs, the reviews it prunes and the pull requests it stops
 are not added to the rollup, so the statistics of their days can be too low.
+The counts per pipeline that `autoreview report --pipeline` reads are rows of
+the same rollup, which an earlier release ignores. The reviews that a release
+before them prunes have none, so `report --pipeline` refuses a range with their
+days with `report_range_pruned`.
 
 The release with [finding outcomes](../concepts/finding-outcomes.md) adds the
 tables `finding_outcomes` and `finding_outcome_pull_requests` (the state reads
