@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Reviewers and adapters
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 A **reviewer** is one coding agent run in its own pohunek session. The agent
 reads the pull request in a worktree, writes findings, and returns them in a

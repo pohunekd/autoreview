@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Use cases
 
-> **Status: after 0.4.0.** These pages describe autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** These pages describe autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 Every scenario below is a policy file plus a config file. Start from the
 closest scenario, copy its example, and change the repository names. The

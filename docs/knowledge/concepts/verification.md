@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # Verification
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 A reviewer can be wrong. The verifier is a second, separate agent run that checks
 the claims of the reviewers before anything is published. It is optional and it

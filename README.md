@@ -101,7 +101,7 @@ Rules:
 
 ## Documentation
 
-The documentation describes autoreview on `main` after the 0.4.0 release; a
+The documentation describes autoreview on `main` after the 0.5.0 release; a
 part that is not available names its open issue.
 
 - [Features](docs/features.md) - what it does and a map of every page

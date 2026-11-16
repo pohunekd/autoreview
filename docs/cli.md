@@ -9,8 +9,8 @@ intents: [setup, debug, help]
 
 # CLI reference
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 ```
 autoreview [--config <path>] [--env-file <path>] <command> [arguments]
@@ -533,8 +533,8 @@ days are refused with the codes that `report` shares with `stats`
 (`stats_range_invalid`, `stats_range_too_long`; their messages name `stats`),
 and a range that starts before the store's retention of the finding outcomes,
 or with `--pipeline` holds a day that 0.4.0 or 0.5.0 pruned (daily counts
-without the counts per pipeline), is `report_range_pruned`. With `--pipeline` the review part covers pruned reviews,
-as with `--repo`.
+without the counts per pipeline), is `report_range_pruned`. With `--pipeline`
+the review part covers pruned reviews, as with `--repo`.
 
 ## Act
 

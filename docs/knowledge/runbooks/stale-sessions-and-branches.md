@@ -9,8 +9,8 @@ intents: [debug, help]
 
 # Stale sessions and branches
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 Every reviewer run happens in a pohunek session on a review host, and each
 session works on its own review branch. Two upstream behaviours make these

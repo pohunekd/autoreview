@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Human approval
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 The reviewers do the reading; a person makes the decision. Two Claude reviewers
 review the core repository, a verifier re-checks blocking findings, and a clean

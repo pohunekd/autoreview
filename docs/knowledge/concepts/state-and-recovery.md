@@ -9,8 +9,8 @@ intents: [debug, help, update]
 
 # State and recovery
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 autoreview keeps all of its state in one SQLite file, `store.path` in
 [config.yaml](../../configuration.md#store). A restart does not lose a review in
@@ -35,7 +35,7 @@ The database holds the published text of reviews and the finding excerpts that
 refer to the repository. Protect it accordingly. Retention (below) limits how
 long it keeps completed reviews.
 
-After 0.4.0 the store is private to the user of the service. A new database
+From 0.5.0 on the store is private to the user of the service. A new database
 gets mode 0600, and `autoreview init` creates its `--dir` with mode 0700 when
 the store lies inside it. `autoreview validate` refuses a store directory or
 file that grants the group or other users any access, with
@@ -272,14 +272,29 @@ Two consequences follow from the retention periods:
   credential reads it (see
   [GitHub identity](github-identity.md#what-a-credential-is)).
 
-Before it removes a completed review, the prune reads its row, its step runs and,
-for a published review, its plan, and adds their counts to the statistics
-rollup in the same transaction. A review that does not decode stops the prune:
-nothing is removed, every discovery pass logs `review pruning failed` with
-`error_code` `store_state_invalid`, and the store keeps growing until that
+Before it removes a completed review, the prune reads its row, its step runs,
+for a published review its plan and its reviewer slots (`slot/<id>`), and for a
+review with a verification its `verification` step and, when the verification
+finished, its `artifact/combined` artifact. It adds their counts to the
+statistics rollup in the same transaction. To count the time from a review
+request once, it also reads every other review of each pull request it prunes
+from, kept or not, and the `request_id` rows of the rollup of every day, one
+per review request whose first publication was pruned. A review, step run, plan,
+slot, verification or combined artifact among them that does not decode stops
+the prune: nothing is removed, every discovery pass logs `review pruning failed`
+with `error_code` `store_state_invalid`, and the store keeps growing until that
 review is repaired or removed. The `error` field of the log line names the
 review's workflow ID. Such a review is a defect or a damaged store to report
-(see the [CLI error codes](../../cli.md#error-codes)).
+(see the [CLI error codes](../../cli.md#error-codes)). The same rows stop
+`autoreview stats --since` and `autoreview report` when their range reaches the
+review (see [`autoreview stats`](../../stats.md)). A `request_id` row is read
+as a key and never decoded.
+
+The two reads for the request time scan whole tables: `reviews` has no index on
+the pull request of a review, and the `request_id` rows lie in `stats_rollup`
+under keys that start with the day. Their cost grows with
+`store.review_retention_seconds` and with the review requests whose first
+publication was pruned. A discovery pass with nothing to prune reads neither.
 
 The engine also refuses to grow the discovery state without limit. The state
 holds at most `schedule.state_entry_limit` pull request entries and review

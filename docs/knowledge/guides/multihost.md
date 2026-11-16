@@ -9,8 +9,8 @@ intents: [setup, project, debug]
 
 # Several review hosts
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 One autoreview service can run its reviewers on several pohunek hosts. Each
 review starts a pohunek session on one host, so the host that runs a review

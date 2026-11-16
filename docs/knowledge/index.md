@@ -8,8 +8,8 @@ description: The concept, guide, runbook and safety pages of autoreview, and whe
 Hand-written documentation for autoreview, in the same layout as the pohunek
 knowledge bundle so pohunek.dev can render both.
 
-> **Status: after 0.4.0.** These pages describe autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** These pages describe autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 - **Concepts** explain how a review works:
   [how it works](concepts/how-it-works.md),
