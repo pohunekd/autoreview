@@ -9,8 +9,8 @@ use autoreview_go_compat::go_time::format_rfc3339_nano;
 use rusqlite::{Connection, Row, params};
 use time::OffsetDateTime;
 
-use super::Store;
 use super::reviews::{time_key, unavailable};
+use super::{Store, outcome_checks};
 use crate::Error;
 
 /// The DDL of the outcomes, run after `ROLLUP_SCHEMA`; a store that predates it gains it.
@@ -92,7 +92,8 @@ pub struct FindingOutcome {
     pub line: i64,
     /// Whether the finding held the merge back when it was published.
     pub blocking: bool,
-    /// The outcome: `open`, `refuted`, `not_blocking`, `fixed` or `answered`.
+    /// The outcome: `open`, `refuted`, `not_blocking`, `fixed`, `answered`, `open_at_merge`
+    /// or `open_at_close`.
     pub outcome: String,
     /// Head SHA that the outcome was decided at; empty while the outcome is `open`.
     pub outcome_head_sha: String,
@@ -219,6 +220,9 @@ impl Store {
 
     /// Deletes the outcomes last written before `cutoff` and returns how many it deleted.
     ///
+    /// The state reads of their pull requests last made before `cutoff` go in the same
+    /// transaction.
+    ///
     /// # Errors
     ///
     /// Returns `store_unavailable` when SQLite fails; then nothing is deleted.
@@ -232,9 +236,10 @@ impl Store {
                         time_key("updated_at"),
                         time_key("?1")
                     ),
-                    [cutoff],
+                    [&cutoff],
                 )
                 .map_err(unavailable)?;
+            outcome_checks::prune(transaction, &cutoff)?;
             Ok(i64::try_from(rows).unwrap_or(i64::MAX))
         })
     }

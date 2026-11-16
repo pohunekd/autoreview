@@ -22,6 +22,7 @@ use crate::{BoxError, Error};
 use serde::Serialize;
 
 pub mod discovery;
+pub mod outcome_checks;
 pub mod outcomes;
 pub mod reviews;
 pub mod rollup;
@@ -246,6 +247,9 @@ impl Store {
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .execute_batch(outcomes::OUTCOMES_SCHEMA)
+            .map_err(|err| store_error("store_unavailable", true, err))?;
+        connection
+            .execute_batch(outcome_checks::OUTCOME_CHECKS_SCHEMA)
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .pragma_update(None, "user_version", STORE_SCHEMA_VERSION)
