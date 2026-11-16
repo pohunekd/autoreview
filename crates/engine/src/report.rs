@@ -20,10 +20,17 @@ use crate::integrations::Integrations;
 use crate::model::repository_valid;
 use crate::stats::{
     Counters, Keyed, STATS_RANGE_INVALID, StatsRange, first_publications, history, keyed,
-    median_and_p90, seconds_text,
+    median_and_p90, seconds_text, store_invalid,
 };
 use crate::store::outcome_checks::{OUTCOME_OPEN_AT_CLOSE, OUTCOME_OPEN_AT_MERGE};
-use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup};
+use crate::store::rollup::{
+    COUNTER_COMPLETED, COUNTER_STARTED, DIMENSION_DAY, DIMENSION_PIPELINE, DIMENSION_REPOSITORY,
+    PIPELINE_DIMENSIONS,
+};
+use crate::store::{
+    FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup, RollupCount,
+    RollupSample,
+};
 
 /// Version of the report document; a changed field gets a new version.
 pub const REPORT_SCHEMA_VERSION: i64 = 2;
@@ -413,19 +420,103 @@ impl fmt::Display for ReportDocument {
     }
 }
 
+/// Returns the rollup of `pipeline`, of `repository` when one is named, under the dimensions
+/// that the statistics history reads, or `None` when a day lacks the counts per pipeline.
+///
+/// The prune counts each review's `started` and `completed` under `day` and again under
+/// `pipeline`; a release before the `pipeline` dimensions wrote only the first, so a day
+/// whose two sums differ holds reviews without their pipeline. The `pipeline` counts become
+/// counts of the day, which a pipeline's report reads; every other entry is left out.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` for a key of a `pipeline` dimension without its pipeline.
+fn pipeline_rollup(
+    rollup: &Rollup,
+    pipeline: &str,
+    repository: Option<&str>,
+) -> Result<Option<Rollup>, Error> {
+    let mut unmatched: BTreeMap<(&str, &str), i64> = BTreeMap::new();
+    for count in &rollup.counts {
+        let sign = match count.dimension.as_str() {
+            DIMENSION_DAY => 1,
+            DIMENSION_PIPELINE => -1,
+            _ => continue,
+        };
+        let counter = count.counter.as_str();
+        if counter == COUNTER_STARTED || counter == COUNTER_COMPLETED {
+            let day = count.day.as_str();
+            *unmatched.entry((day, counter)).or_default() += sign * count.value;
+        }
+    }
+    if unmatched.values().any(|value| *value != 0) {
+        return Ok(None);
+    }
+    let mut picked = Rollup::default();
+    for count in &rollup.counts {
+        if let Some((dimension, key)) =
+            plain_entry(&count.dimension, &count.key, pipeline, repository)?
+        {
+            picked.counts.push(RollupCount {
+                dimension: dimension.to_owned(),
+                key,
+                ..count.clone()
+            });
+        }
+    }
+    for sample in &rollup.samples {
+        if let Some((dimension, key)) =
+            plain_entry(&sample.dimension, &sample.key, pipeline, repository)?
+        {
+            picked.samples.push(RollupSample {
+                dimension: dimension.to_owned(),
+                key,
+                ..sample.clone()
+            });
+        }
+    }
+    Ok(Some(picked))
+}
+
+/// Returns the dimension and key that the history reads for an entry of a `pipeline`
+/// dimension of `pipeline` and `repository`, or `None` for any other entry.
+fn plain_entry(
+    dimension: &str,
+    key: &str,
+    pipeline: &str,
+    repository: Option<&str>,
+) -> Result<Option<(&'static str, String)>, Error> {
+    let Some((plain, _)) = (PIPELINE_DIMENSIONS.iter()).find(|(_, kept)| *kept == dimension) else {
+        return Ok(None);
+    };
+    let mut parts = key.splitn(3, '#');
+    let (Some(repo), Some(name)) = (parts.next(), parts.next()) else {
+        return Err(store_invalid(format!("rollup {dimension} key {key}")));
+    };
+    if name != pipeline || repository.is_some_and(|wanted| wanted != repo) {
+        return Ok(None);
+    }
+    Ok(Some(match (*plain, parts.next()) {
+        (DIMENSION_REPOSITORY, _) => (DIMENSION_DAY, String::new()),
+        (plain, Some(reviewer)) => (plain, format!("{repo}#{reviewer}")),
+        (plain, None) => (plain, repo.to_owned()),
+    }))
+}
+
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the report of `request`, read from the store only.
     ///
     /// Without a pipeline, the review counts are those of `autoreview stats` for the range,
-    /// of the repository when one is named. A pipeline has no rollup, so its counts come from
-    /// the kept rows, and its range must start after the review retention.
+    /// of the repository when one is named. A pipeline's counts come from its kept rows and
+    /// its counts in the rollup.
     ///
     /// # Errors
     ///
     /// Returns `repository_not_allowed` for a malformed repository, `pipeline_not_configured`
     /// for a pipeline that no rule runs, the errors of `StatsRange::parse`,
-    /// `report_range_pruned` for a range that starts before the outcome retention (with a
-    /// pipeline, also before the review retention), and the errors of the store reads.
+    /// `report_range_pruned` for a range that starts before the outcome retention or, with a
+    /// pipeline, that holds a day pruned without the counts per pipeline, and the errors of
+    /// the store reads.
     pub fn review_report(
         &self,
         cancel: &CancellationToken,
@@ -447,10 +538,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         let Some(range) = StatsRange::parse(Some(&request.since), until, now.date())? else {
             return Err(Error::workflow(STATS_RANGE_INVALID, true, None));
         };
-        let review_cutoff = self.prune_cutoff();
-        let pruned = range.start < self.outcome_prune_cutoff()
-            || (pipeline.is_some() && range.start < review_cutoff);
-        if pruned {
+        if range.start < self.outcome_prune_cutoff() {
             return Err(Error::workflow(REPORT_RANGE_PRUNED, true, None));
         }
         live(cancel)?;
@@ -463,10 +551,13 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                 input.rule.pipeline.name == name
                     && repository.is_none_or(|repo| input.pull_request.repository == repo)
             });
-            snapshot.rollup = Rollup::default();
+            let Some(rollup) = pipeline_rollup(&snapshot.rollup, name, repository)? else {
+                return Err(Error::workflow(REPORT_RANGE_PRUNED, true, None));
+            };
+            snapshot.rollup = rollup;
         }
         let (history, mut requests, checks, disagreements) =
-            history(&snapshot, &range, review_cutoff, &firsts)?;
+            history(&snapshot, &range, self.prune_cutoff(), &firsts)?;
         let counters = match (pipeline, repository) {
             (None, Some(name)) => (history.by_repository.into_iter())
                 .find(|entry| entry.key == name)

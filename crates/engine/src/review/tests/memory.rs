@@ -299,20 +299,49 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
         ((2, 1), Some(50.0), verified),
         ((1, 0), Some(0.0), Vec::new()),
     ];
+    // The review part of a report of a repository and of a pipeline, each every one when
+    // absent.
+    let review_part = |repository: Option<&str>, pipeline: Option<&str>| {
+        let request = ReportRequest {
+            since: since.clone(),
+            repository: repository.map(str::to_owned),
+            pipeline: pipeline.map(str::to_owned),
+            ..ReportRequest::default()
+        };
+        let report = h.engine.review_report(&CancellationToken::new(), &request);
+        report.expect("the report reads").reviews
+    };
+    // Each pipeline runs on one repository here, so its counts are that repository's.
+    let (notes, verified) = (pr.repository.as_str(), checked.repository.as_str());
+    let pipelines = || {
+        [
+            review_part(None, Some("manual")),
+            review_part(None, Some("checked")),
+            review_part(Some(verified), Some("checked")),
+        ]
+    };
+    let wanted_pipelines = [
+        review_part(Some(notes), None),
+        review_part(Some(verified), None),
+        review_part(Some(verified), None),
+    ];
     let kept = history();
     let kept_requests = requests();
     let kept_checks = checks();
+    let kept_pipelines = pipelines();
     // The first prune leaves the new head's review beside the rollup of its request, and the
     // checked pull request's reviews as rows.
     let split = parse_rfc3339(&latest).expect("the creation time decodes");
     let partly = h.store.prune_reviews(split).expect("prune the earlier");
     let partly_requests = requests();
     let partly_checks = checks();
+    let partly_pipelines = pipelines();
     let cutoff = OffsetDateTime::now_utc() + time::Duration::days(1);
     let pruned = h.store.prune_reviews(cutoff).expect("prune the reviews");
     let rolled_up = history();
     let rolled_up_requests = requests();
     let rolled_up_checks = checks();
+    let rolled_up_pipelines = pipelines();
     let (median, p90) = kept_requests[0];
     assert!(
         partly == 2
@@ -332,6 +361,15 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
          kept = {kept_requests:?}, partly = {partly_requests:?}, rolled up = \
          {rolled_up_requests:?}, checks kept = {kept_checks:?}, partly = {partly_checks:?}, \
          rolled up = {rolled_up_checks:?}"
+    );
+    assert!(
+        kept_pipelines == wanted_pipelines
+            && kept_pipelines[0].published == 3
+            && kept_pipelines[1].multi_reviewer == 2
+            && partly_pipelines == kept_pipelines
+            && rolled_up_pipelines == kept_pipelines,
+        "pipelines kept = {kept_pipelines:?}, wanted = {wanted_pipelines:?}, partly = \
+         {partly_pipelines:?}, rolled up = {rolled_up_pipelines:?}"
     );
     h.stop_engine().await;
 }

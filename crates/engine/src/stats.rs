@@ -551,7 +551,7 @@ fn state_invalid(review: &StoredReview, reason: &str) -> Error {
 }
 
 /// Returns the `store_state_invalid` error with its cause.
-fn store_invalid(cause: String) -> Error {
+pub(crate) fn store_invalid(cause: String) -> Error {
     Error::workflow("store_state_invalid", true, Some(cause.into()))
 }
 

@@ -98,6 +98,10 @@ pub(crate) const PIPELINE_DIMENSIONS: [(&str, &str); 5] = [
     ),
 ];
 
+/// Counter of the attempts created on the day, `Counters::started`.
+pub(crate) const COUNTER_STARTED: &str = "started";
+/// Counter of the attempts completed on the day, `Counters::completed`.
+pub(crate) const COUNTER_COMPLETED: &str = "completed";
 /// Counter of the pull requests whose schedule record entered `failed`.
 pub(crate) const COUNTER_STOPPED: &str = "stopped";
 /// Counter of a pruned first publication of a review request; its value is 1.
