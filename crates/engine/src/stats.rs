@@ -30,6 +30,7 @@ use crate::store::rollup::{
     COUNTER_FIRST_PUBLICATION, COUNTER_MULTI_REVIEWER, DIMENSION_DAY, DIMENSION_DISAGREEMENT,
     DIMENSION_DISAGREEMENT_REVIEWER, DIMENSION_FAILURE, DIMENSION_REPOSITORY, DIMENSION_REQUEST,
     DIMENSION_REQUEST_ID, DIMENSION_REVIEWER, DIMENSION_RULE, DIMENSION_STEP, DIMENSION_VERIFIER,
+    PIPELINE_DIMENSIONS,
 };
 use crate::store::{
     EndedStepRun, RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
@@ -835,9 +836,9 @@ impl HistoryTally {
     /// also counts them, and one in `firsts` its seconds from the review request. A completed
     /// attempt also counts the verdicts of its verification in `verifier`, and a published
     /// one the disagreement of its reviewer slots in `slots`.
-    fn add_reviews(
+    fn add_reviews<'r>(
         &mut self,
-        reviews: &[StoredReview],
+        reviews: impl IntoIterator<Item = &'r StoredReview>,
         plans: &BTreeMap<String, String>,
         verifier: &VerifierSteps,
         slots: &BTreeMap<String, BTreeMap<String, String>>,
@@ -1188,13 +1189,25 @@ fn push_tally(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, tally:
     push_samples(rollup, day, dimension, key, &tally.seconds);
 }
 
+/// Returns the dimension and key per pipeline of an entry of `pipeline`, or `None` for a
+/// dimension that `report --pipeline` does not read.
+fn pipeline_entry(dimension: &str, key: &str, pipeline: &str) -> Option<(&'static str, String)> {
+    let (_, per_pipeline) = (PIPELINE_DIMENSIONS.iter()).find(|(plain, _)| *plain == dimension)?;
+    let key = match key.split_once('#') {
+        Some((repository, reviewer)) => format!("{repository}#{pipeline}#{reviewer}"),
+        None => format!("{key}#{pipeline}"),
+    };
+    Some((per_pipeline, key))
+}
+
 /// Returns the rollup of pruned reviews: their starts, completions, notes, verdicts,
-/// disagreement and step runs.
+/// disagreement and step runs, and per pipeline the counts that `report --pipeline` reads.
 ///
 /// `runs` are the step runs of `reviews`, `plans` their stored plans by workflow ID,
 /// `verifier` their verifier's steps, `slots` their reviewer slots, and `firsts` the first
 /// publications of `first_publications`; each of `reviews` among them adds its request
-/// seconds and its `request_id` count.
+/// seconds and its `request_id` count. The reviews of each pipeline are counted again alone,
+/// and the entries of `PIPELINE_DIMENSIONS` are kept under their dimension per pipeline.
 ///
 /// # Errors
 ///
@@ -1213,6 +1226,38 @@ pub(crate) fn rollup(
     tally.add_reviews(reviews, plans, verifier, slots, None, firsts)?;
     tally.add_runs(runs)?;
     let mut rollup = tally.into_rollup();
+    let mut pipelines: BTreeMap<&str, Vec<&StoredReview>> = BTreeMap::new();
+    for review in reviews {
+        let pipeline = review.input.rule.pipeline.name.as_str();
+        pipelines.entry(pipeline).or_default().push(review);
+    }
+    for (pipeline, reviews) in pipelines {
+        let mut tally = HistoryTally::default();
+        tally.add_reviews(reviews, plans, verifier, slots, None, firsts)?;
+        let counted = tally.into_rollup();
+        for count in counted.counts {
+            let entry = pipeline_entry(&count.dimension, &count.key, pipeline);
+            if let Some((dimension, key)) = entry {
+                let dimension = dimension.to_owned();
+                rollup.counts.push(RollupCount {
+                    dimension,
+                    key,
+                    ..count
+                });
+            }
+        }
+        for sample in counted.samples {
+            let entry = pipeline_entry(&sample.dimension, &sample.key, pipeline);
+            if let Some((dimension, key)) = entry {
+                let dimension = dimension.to_owned();
+                rollup.samples.push(RollupSample {
+                    dimension,
+                    key,
+                    ..sample
+                });
+            }
+        }
+    }
     for review in reviews {
         if firsts.contains(&review.workflow_id)
             && let Some(key) = request_key(review)
