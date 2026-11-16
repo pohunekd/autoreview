@@ -64,12 +64,15 @@ retention settings (`store.review_retention_seconds`,
    again for every profile, with the flags it was written with (an upgrade from
    0.3.0 or earlier adds `--pohunek-timeout-seconds`): `updated` means
    the new binary carries a newer adapter. Write a profile the policy now needs
-   the same way. Do it for every Claude profile in the same window as the
-   restart: the engine refuses the result of an older Claude adapter with
-   `review_adapter_outdated`, and the newer Claude adapter refuses the
-   `checkout: base` reviews of an engine whose requests carry no trusted
-   checkout lines. Run `autoreview retry` for a pull request whose review
-   stopped in that window. Install every Codex profile before the restart:
+   the same way. Install every Claude profile right before the restart: the
+   engine sends its Claude requests as `autoreview-claude/v1`, which a Claude
+   adapter of 0.3.0 or earlier runs as a plain prompt, and stops each such
+   review with `review_adapter_outdated`; the engine also refuses the result of
+   an older Claude adapter that names no checked checkout. The newer Claude
+   adapter refuses the `checkout: base` reviews of an engine whose requests
+   carry no trusted checkout lines, so keep the window short. Run
+   `autoreview retry` for a pull request whose review stopped in that window.
+   Install every Codex profile before the restart:
    the engine binds each Codex run to a nonce that only the adapter of this
    release writes back, and fails the runs of an older one with
    `review_nonce_mismatch`.
