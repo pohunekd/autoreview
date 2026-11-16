@@ -56,7 +56,9 @@ both from their release archives, writes the configuration and the user
 service, and asks before every change. See
 [getting started](knowledge/guides/getting-started.md). The paths below are for
 a dedicated server user. To learn the steps on one repository first, follow the
-[quickstart](knowledge/guides/quickstart.md).
+[quickstart](knowledge/guides/quickstart.md). To let a coding agent take these
+steps with you, paste the prompt of
+[install with an agent](../README.md#install-with-an-agent) into it.
 
 | Path | Use it when | You get |
 |---|---|---|

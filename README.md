@@ -34,6 +34,64 @@ one GitHub review with inline comments.
   rooms, webhooks (Slack, Discord, JSON) or only the log, single events
   optionally to their own route, plus the review queue.
 
+## Install with an agent
+
+Paste this prompt into a coding agent on the machine that runs autoreview; it
+follows the install pages and asks before every change.
+
+```text
+Install autoreview (https://github.com/pohunekd/autoreview) on this machine.
+
+First take the latest release tag <tag> (`gh release view --repo
+pohunekd/autoreview --json tagName --jq .tagName`, or the releases page) and
+use it below, never main. Read these first; they are the source of truth:
+- https://raw.githubusercontent.com/pohunekd/autoreview/<tag>/docs/install.md
+- https://raw.githubusercontent.com/pohunekd/autoreview/<tag>/docs/knowledge/guides/getting-started.md
+- https://raw.githubusercontent.com/pohunekd/autoreview/<tag>/docs/knowledge/safety/secrets.md
+- https://raw.githubusercontent.com/pohunekd/autoreview/<tag>/docs/knowledge/safety/untrusted-authors.md
+- for pohunek on a server or another review host: https://pohunek.dev/install-prompt.txt
+
+Rules:
+1. Detect the OS, CPU and C library. autoreview runs only on Linux x86_64 or
+   aarch64; `scripts/setup` needs x86_64, or aarch64 with pohunek and its
+   runtime packages in place. For anything else, stop and tell me.
+2. Before changing anything, ask me: one machine as my own user
+   (`scripts/setup`) or a server user (install page, path a or b); the GitHub
+   login autoreview acts as and its token kind (fine-grained for one owner,
+   or classic); the repositories or organisation; Claude Code, Codex or both;
+   the review hosts; where notifications go (setup asks for a Matrix room).
+   Then show me the plan and wait for my approval.
+3. Start with comments only: the `single-repo-comment` example, or
+   `public-repositories` when people outside my team open pull requests, with
+   the reviewers set to my agents. Keep `on_findings: comment` and
+   `on_clean: comment` until I ask for more, and `trusted: any` only where no
+   outside author can open a pull request.
+4. With setup, run `git clone --branch <tag> --depth 1
+   https://github.com/pohunekd/autoreview` and in it `scripts/setup --dry-run
+   --dir <dir>` with my answers as the flags getting started lists. It needs a
+   terminal, so give me the command without `--dry-run` to run in mine; never
+   pipe answers into it or fake a terminal. Its first run stops after writing
+   the configuration and the empty secrets file; I run it again after rules 6
+   and 7. Stop on exit code 5.
+5. On a server, check the archive of <tag> with `sha256sum --check` and
+   `gh attestation verify <archive> --repo pohunekd/autoreview
+   --signer-workflow pohunekd/autoreview/.github/workflows/release.yml
+   --source-ref refs/tags/<tag> --deny-self-hosted-runners`. Stop on any
+   mismatch. Then follow path a or b and `autoreview init` as shown there.
+6. Never read, print or store a token value; pass only the secrets file's
+   path with `--env-file`. Tell me which `AUTOREVIEW_*` lines to write into it
+   with an editor: with setup `~/.config/autoreview/autoreview.env` (0600), on
+   a server `sudoedit /etc/autoreview/autoreview.env` (owner autoreview, 0600).
+7. Show me each policy.yaml edit (match, trigger, authors) as a diff first.
+   Run `pohunek project add` and `autoreview profiles install` only after I
+   approve. Never pass --accept-runtime-loss or --replace.
+8. Verify with `autoreview validate --check-credentials` and `autoreview
+   candidates` as the service user with its `--config` and `--env-file`,
+   `systemctl status autoreview.service autoreview-queue.timer` (`--user`
+   with setup) and `pohunek doctor --json`. Report every warning and fix only
+   what I approve. End with the versions, paths, open warnings, next steps.
+```
+
 ## Documentation
 
 The documentation describes autoreview on `main` after the 0.4.0 release; a
