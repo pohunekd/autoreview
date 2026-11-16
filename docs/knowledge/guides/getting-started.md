@@ -2,7 +2,7 @@
 type: Guide
 id: guide/getting-started
 title: Getting started
-description: Set up autoreview on one Linux machine with scripts/setup - what autoreview does, what the script installs and where, each step and question, the second run after the policy edit, and what to do on each exit code.
+description: Set up autoreview on one Linux machine or one Mac with Apple Silicon with scripts/setup - what autoreview does, what the script installs and where, each step and question, the second run after the policy edit, and what to do on each exit code.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -13,7 +13,10 @@ intents: [setup, help]
 > 0.5.0 release and `scripts/setup`. The script installs the autoreview release
 > named by `AUTOREVIEW_VERSION` in the script, which must know the `init` layout
 > flags and `profiles install --pohunek-timeout-seconds` (0.4.0 or later). A
-> part that is not available names its open issue.
+> part that is not available names its open issue. On a Mac the script needs a
+> release with an `aarch64-apple-darwin` archive, the first after 0.5.0 (#513);
+> until then it keeps an autoreview built from `main` that you installed as
+> `~/.local/bin/autoreview`.
 
 ## What autoreview does
 
@@ -33,9 +36,10 @@ reviews, and it reports what needs attention to Matrix. The details are in
 
 ## What the script sets up
 
-`scripts/setup` sets up one Linux machine on which autoreview and the pohunek
-daemon run together, as your own user, without `sudo`. Several machines are
-described in [several review hosts](multihost.md#deployment-layout). To set up
+`scripts/setup` sets up one Linux machine, or one Mac with Apple Silicon, on
+which autoreview and the pohunek daemon run together, as your own user, without
+`sudo`. The table is for Linux; [on a Mac](#on-a-mac) the service parts differ.
+Several machines are described in [several review hosts](multihost.md#deployment-layout). To set up
 each step by hand, or on a system without systemd user units, follow the
 [quickstart](quickstart.md); for a dedicated server user, see
 [install](../../install.md).
@@ -54,6 +58,23 @@ each step by hand, or on a system without systemd user units, follow the
 
 It does not install the agents themselves, `gh`, Python or system packages, and
 it never overwrites a configuration or an agent profile that it did not write.
+
+### On a Mac
+
+| What | Where |
+|---|---|
+| pohunek and its login agent | `~/.local/bin/pohunek`, `~/Library/LaunchAgents/io.github.zajca.pohunek.<ns>.daemon.plist` |
+| The review service and the hourly queue (08:00 to 20:00), as launchd agents of your login session | `~/Library/LaunchAgents/io.github.pohunekd.autoreview.plist` and `io.github.pohunekd.autoreview-queue.plist` |
+| Their logs | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`), directory mode 0700 |
+
+The rest is as in the table above, without the units and without lingering. The
+agents pass the secrets file with `--env-file` and carry no secret: only `PATH`
+(the search path that pohunek recorded for its daemon), the XDG homes and, when
+it is set, `XDG_RUNTIME_DIR`. They restart after a failure, as the units do, and
+they run while you are logged in: launchd starts them at login and stops them at
+logout, as it does the pohunek daemon, so a Mac that reviews unattended needs
+automatic login. launchd does not rotate the logs; see
+[logs](../runbooks/troubleshooting.md#logs).
 
 ## Before you start
 
@@ -96,6 +117,35 @@ it never overwrites a configuration or an agent profile that it did not write.
   private directory of pohunek itself (such as its state directory) whose mode
   is wider than pohunek requires; pohunek's error names the path.
 
+On a Mac, the Linux items about systemd, `sha256sum`, `loginctl` and
+`systemd-run` do not apply; instead:
+
+- macOS 14 or newer on Apple Silicon (`arm64`).
+- bash 4 or newer: macOS runs its own bash 3.2 as `bash`, and the script stops
+  with exit code 3 on it. Install it with `brew install bash` and run the script
+  with it: `"$(brew --prefix)/bin/bash" scripts/setup ...`.
+- `shasum`, `curl`, `tar`, `install`, `diff`, `stat` and `readlink` (macOS ships
+  them), Python 3.11 or newer as `python3` and `gh` logged in, for example from
+  Homebrew.
+- Python 3.11 or newer also on the `PATH` of the pohunek daemon: launchd gives
+  it the search path that `pohunek service install` recorded, not the `PATH` of
+  your shell, and the reviewer adapters start with the first `python3` there.
+  After a new Python, run `pohunek service refresh-path`.
+- `XDG_RUNTIME_DIR` unset, or set to the absolute path it had when pohunek's
+  service was installed: pohunek gives its daemon that value, and the script
+  passes it on to the configuration and the agents. Unset, pohunek uses its
+  macOS default `/private/tmp/pohunek-<uid>`.
+- The configuration directory and the XDG homes outside `~/Desktop`,
+  `~/Documents`, `~/Downloads` and iCloud Drive: macOS privacy protection
+  closes them to launchd jobs, so the script refuses them.
+- Claude Code as the agent: the Codex adapter needs Linux, and
+  `autoreview profiles install --agent codex` refuses on a Mac with
+  `profile_agent_unsupported`, so the script stops with exit code 8 at a Codex
+  profile. Codex reviewers run on a Linux review host
+  ([several review hosts](multihost.md)).
+- A terminal in your logged-in session (not a plain SSH login): launchd loads
+  the agents into the login session.
+
 ## Run the script
 
 From a checkout of the repository, in a terminal:
@@ -119,8 +169,8 @@ step that is in place is skipped without a question.
 
 ## The steps
 
-1. **Detection.** The platform, the tools, systemd, `gh auth status`, the
-   paths, and the paths that pohunek refuses
+1. **Detection.** The platform, the tools, systemd (on Linux), `gh auth
+   status`, the paths, and the paths that pohunek refuses
    ([before you start](#before-you-start)). It only reads.
 2. **autoreview.** Downloads the archive of `AUTOREVIEW_VERSION` and its
    `.sha256`, checks the checksum and the attestation of the release workflow
@@ -129,15 +179,17 @@ step that is in place is skipped without a question.
 3. **pohunek.** When pohunek is missing or older than `POHUNEK_MIN_VERSION`,
    downloads and verifies the daemon archive of `POHUNEK_VERSION` and runs its
    `packaging/install-daemon.sh`, which installs or upgrades the login service.
-   A newer pohunek is kept.
+   A newer pohunek is kept. On a Mac it then checks that the daemon's recorded
+   search path holds Python 3.11 or newer.
 4. **Configuration.** When `<dir>/config.yaml` does not exist, asks the GitHub
    login, the pohunek host name of this machine (`local` names it as well; any
    other name must resolve to the same `host_id`), the
    [example](../../../examples/README.md) to start from and the three Matrix
    values, then runs `autoreview init` with them and with the paths of this
    machine (`--store-path`, `--gh-bin`, `--pohunek-bin`,
-   `--pohunek-state-home`, `--pohunek-runtime-dir`). An existing configuration
-   is never overwritten.
+   `--pohunek-state-home`, `--pohunek-runtime-dir`; on a Mac the last one only
+   when `XDG_RUNTIME_DIR` is set). An existing configuration is never
+   overwritten.
 5. **Secrets file.** Creates the empty secrets file with mode 0600 when it is
    missing.
 
@@ -152,8 +204,9 @@ prints it; it goes on with:
 6. **Secrets and validate.** Reads the variable names of the `*_env` keys of
    `config.yaml` and prints each as `set` or `missing` in the secrets file; it
    never reads, prints or writes a value. Then it runs
-   `autoreview validate` in a transient user unit with the secrets file, the
-   environment the service gets, and reads the agent profiles the policy needs.
+   `autoreview validate` in a transient user unit with the secrets file (on a
+   Mac with `--env-file`), the environment the service gets, and reads the
+   agent profiles the policy needs.
 7. **Profile questions.** For each profile that does not exist yet: the agent
    (`claude` for `claude-structured` reviewers, `codex` for `codex-envelope`
    ones, as `reviewers.<id>.protocol` in the policy says), the model, the
@@ -186,6 +239,39 @@ prints it; it goes on with:
 12. **Lingering.** Without it, systemd stops pohunek and autoreview when you log
     out and starts them only at the next login.
 
+On a Mac, steps 11 and 12 are one step, **launchd agents**. It prints the
+`match` and `trigger` lines, then installs the two agents one after the other.
+For each, it runs `launchctl bootout gui/<uid>/<label>` when the agent is
+loaded and waits until launchd no longer lists it, then writes the file and
+runs `launchctl enable` and `launchctl bootstrap gui/<uid> <file>`. A stopping
+job can take the agent's stop budget of 90 s, so the wait ends after 95 s; a
+bootout that exits 36 (the job is still stopping) counts as done. An
+agent file with other text is shown as a diff and replaced only after its own
+question. Each failure stops with exit code 10 and leaves that agent as follows:
+- the previous agent file cannot be read: the script stops before it changes
+  anything;
+- a failed bootout: its file and job are unchanged;
+- a job still listed after 95 s: the file is unchanged, and the job is not
+  loaded again when it stops; run the script again then;
+- writing, enabling or loading the new definition failed: the previous file is
+  loaded, written back first when it changed, or the new file is removed when
+  there was none.
+
+An agent installed earlier in the same run stays installed. When the running
+service does not run the installed binary, it asks to restart it and runs
+`launchctl kickstart -k gui/<uid>/io.github.pohunekd.autoreview`. It ends with the
+[newsyslog lines](../runbooks/troubleshooting.md#logs) for the logs and the
+commands that remove the agents: `launchctl bootout gui/<uid>/<label>` and
+deleting `~/Library/LaunchAgents/<label>.plist`, for both labels. Then check
+them with `scripts/macos-check service`. It reads only, and prints one `ok` line
+for each of these:
+- both agents are loaded and hold no secret;
+- the service runs the installed binary;
+- the queue has its 13 hours;
+- the secrets file is 0600 and the log private;
+- the pohunek socket the service dials, consistent with `pohunek.runtime_dir`;
+- one `autoreview validate` in the agent's environment.
+
 A third run with the same `--dir` on the finished setup prints every step as
 `in place, skipped`, asks nothing and ends with `setup: nothing to change`.
 
@@ -195,21 +281,22 @@ A third run with the same `--dir` on the finished setup prints every step as
 |---|---|---|
 | 0 | Done, nothing to change, a dry run, or the stop after the configuration was written | After that stop: edit the policy, fill the secrets file, run the script again |
 | 1 | A bad flag or an empty answer | Run again with the flag or the answer |
-| 2 | A platform the release archives do not cover | Install pohunek by hand; the script supports Linux `x86_64` |
-| 3 | A missing tool or condition, or a path that pohunek refuses ([before you start](#before-you-start)) | Do what the message names after `;` and each listed path names (`chmod go-w <path>` for a writable one), then run again. The hooks step stops the same way, with pohunek's reason, when pohunek refuses the config home it uses for an agent |
+| 2 | A platform the release archives do not cover | Install pohunek by hand; the script supports Linux `x86_64`, and macOS 14 or newer on Apple Silicon |
+| 3 | A missing tool or condition, or a path that pohunek refuses ([before you start](#before-you-start)) | Do what the message names after `;` and each listed path names (`chmod go-w <path>` for a writable one), then run again. The hooks step stops the same way, with pohunek's reason, when pohunek refuses the config home it uses for an agent. On a Mac also bash 3.2, a relative `XDG_RUNTIME_DIR`, a directory in a folder that privacy protection closes, or no Python 3.11 on the daemon's search path (`pohunek service refresh-path`) |
 | 4 | You declined a step, or stdin is not a terminal | Nothing of that step changed; run again in a terminal |
 | 5 | A download, its checksum or its attestation failed | Check the network and the release; never install an archive that failed |
 | 6 | A pohunek command failed | Read pohunek's message above it; `pohunek doctor` and the pohunek install guide help. When its installer lists live sessions that an upgrade would not carry over, end them (`pohunek session list` shows them) and run the script again, or download and verify the daemon archive by hand as the pohunek install guide describes and run its `packaging/install-daemon.sh --accept-runtime-loss`; the temporary copy that its message names is removed when the script exits |
 | 7 | Installing autoreview failed | Check that `~/.local/bin` is writable |
 | 8 | `autoreview init` or `profiles install` refused | Look up the code in the [CLI error codes](../../cli.md#error-codes) |
 | 9 | A secret is missing, the secrets file is not mode 0600, or `validate` failed | Fill the file with an editor, or fix the key that the code names |
-| 10 | Writing the units, `systemctl --user` or `loginctl` failed | `journalctl --user -u autoreview.service` shows the service log |
+| 10 | Writing the units, `systemctl --user` or `loginctl` failed; on a Mac, the previous agent file could not be read (nothing changed), writing an agent or `launchctl` failed, or a booted-out agent was still listed after 95 s | `journalctl --user -u autoreview.service` shows the service log; on a Mac it is `~/.local/state/autoreview/logs/autoreview.log`, and `launchctl print gui/$(id -u)/io.github.pohunekd.autoreview` shows the agent. The message says what it left ([launchd agents](#the-steps)). A `launchctl bootstrap` from an SSH login without a logged-in session fails; run the script in your session |
 
 ## After the setup
 
 - The service reads the configuration and the policy at start: after an edit,
   run `autoreview --config <dir>/config.yaml validate` with the secrets set and
-  `systemctl --user restart autoreview.service`.
+  `systemctl --user restart autoreview.service`; on a Mac
+  `launchctl kickstart -k gui/$(id -u)/io.github.pohunekd.autoreview`.
 - Register each repository of the policy with `pohunek project add` and run a
   first review as the [quickstart](quickstart.md) describes from step 9 on. A
   reviewer on a `checkout: base` pipeline (the examples use it) reads the change

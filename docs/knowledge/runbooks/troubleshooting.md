@@ -18,6 +18,33 @@ OWNER/REPO NUMBER` shows everything the engine knows about one pull request. Eve
 error is a JSON object with `"error": "<code>"` on stdout and exit status 1; the
 codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 
+## Logs
+
+The service writes one JSON line per event to stderr; "the log" below is where
+that goes:
+
+| Install | Log | Rotation |
+|---|---|---|
+| systemd units of path b | `journalctl -u autoreview.service` (`autoreview-queue.service` for the queue) | the journal |
+| `scripts/setup` on Linux | `journalctl --user -u autoreview.service` | the journal |
+| `scripts/setup` on a Mac | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`) | none by launchd; see below |
+
+launchd does not rotate these files, and rotation needs root. `scripts/setup`
+prints two lines for `/etc/newsyslog.d/autoreview.conf`, which keep 5 old
+files and rotate a log at 10 MiB:
+
+```text
+/Users/<you>/.local/state/autoreview/logs/autoreview.log <you>:staff 600 5 10240 * N
+/Users/<you>/.local/state/autoreview/logs/autoreview-queue.log <you>:staff 600 5 10240 * N
+```
+
+newsyslog cannot signal a launchd job, so the review agent keeps writing to the
+rotated file until it restarts (a login, an upgrade, or `launchctl kickstart -k
+gui/$(id -u)/io.github.pohunekd.autoreview`); the queue job opens its log anew
+at every run. A log file that autoreview limits itself is #520. Whether an agent
+is loaded and running: `launchctl print gui/$(id -u)/io.github.pohunekd.autoreview`,
+or `scripts/macos-check service` for every check at once.
+
 ## Symptom table
 
 | Symptom or code | Usual cause | Fix |
