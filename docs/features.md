@@ -97,6 +97,11 @@ one versioned JSON document for a dashboard of your own.
 `autoreview serve` can serve the same numbers to Prometheus.
 [Review statistics](stats.md)
 
+**Records what became of each finding.** Every published finding is stored
+with its reviewer, rule, severity and outcome, such as refuted by the verifier,
+so review quality can be measured without rating findings by hand.
+[Finding outcomes](knowledge/concepts/finding-outcomes.md)
+
 ## Requirements
 
 - A pohunek daemon on one or more review hosts, with the repositories
@@ -129,6 +134,7 @@ one versioned JSON document for a dashboard of your own.
 | [Decisions](knowledge/concepts/decisions.md) | Outcomes, own pull requests, notes hand-off, approval waits |
 | [Incremental reviews](knowledge/concepts/incremental-reviews.md) | Re-review scope and prior findings |
 | [Verification](knowledge/concepts/verification.md) | The verifier and escalation |
+| [Finding outcomes](knowledge/concepts/finding-outcomes.md) | What became of each published finding |
 | [Notifications](knowledge/concepts/notifications.md) | Events, levels, backends, review queue |
 | [GitHub identity](knowledge/concepts/github-identity.md) | Which account posts, token scopes |
 | [State and recovery](knowledge/concepts/state-and-recovery.md) | Store, retries, resume, sessions |

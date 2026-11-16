@@ -118,6 +118,8 @@ store:
   # A published decision older than this does not serve as the baseline of
   # an incremental review.
   published_retention_seconds: 7776000
+  # The outcome of a published finding is kept this long after its last change.
+  outcome_retention_seconds: 31536000
 
 cli:
   review_list_limit: 50
@@ -392,6 +394,7 @@ summary is too short or too long.
 | `path` | SQLite database of discovery state and reviews. Back it up with `autoreview backup-db` |
 | `review_retention_seconds` | How long a finished review stays |
 | `published_retention_seconds` | How long a published decision counts as the baseline of an incremental review |
+| `outcome_retention_seconds` | How long the [outcome of a published finding](knowledge/concepts/finding-outcomes.md) stays after its last change |
 
 ## cli
 
