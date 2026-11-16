@@ -2,7 +2,7 @@
 type: Concept
 id: concept/review-report
 title: Review report
-description: What autoreview report measures over a range of UTC days - the time from the creation of a review attempt and from the review request to its first publication, the share of decisions approved without a human, waiting for a human or requesting changes, the verifier demotion rate per reviewer, and the outcomes of the published findings per reviewer, severity and repository - how each number is computed from the store, how to read it, and what it does not measure yet.
+description: What autoreview report measures over a range of UTC days - the time from the creation of a review attempt and from the review request to its first publication, the share of decisions approved without a human, waiting for a human or requesting changes, the reviewer disagreement rate, the verifier demotion rate per reviewer, and the outcomes of the published findings per reviewer, severity and repository - how each number is computed from the store and how to read it.
 source_kind: manual
 intents: [help, debug]
 ---
@@ -10,8 +10,7 @@ intents: [help, debug]
 # Review report
 
 > **Status: after 0.4.0.** `autoreview report` comes after 0.4.0. The weekly line
-> in the review queue digest and the reviewer disagreement rate are not available
-> yet (#52).
+> in the review queue digest is not available yet (#52).
 
 `autoreview report` gives a periodic, comparable picture of how the reviews
 perform, so a change of a prompt, a model or a policy can be judged on numbers.
@@ -85,6 +84,32 @@ the same range. It differs from the `demoted` column of the findings table,
 which counts the published findings of the range by the day they were
 published, and has no whole.
 
+## Reviewer disagreement
+
+The disagreement compares the reviewers of one attempt with each other, from
+each reviewer's own result before the results are combined and before the
+verifier checks them:
+
+- `multi_reviewer`: the published attempts of the range, on the UTC day they
+  completed, in which two or more reviewers have a stored result. An attempt
+  with one reviewer, such as an incremental review that runs one, compares
+  nothing. An attempt that adopts a hand-off runs no reviewer; the attempt that
+  handed the notes over counts instead. A resumed attempt keeps one result per
+  reviewer, so nothing counts twice. Failed, superseded and expired attempts
+  publish nothing and do not count.
+- `disagreed`: those where at least one reviewer made a blocking claim and at
+  least one made none (no finding, or notes only), and `disagreed_percent`: in
+  percent of `multi_reviewer`, rounded as the shares above, `null` (`none`)
+  without such an attempt.
+- `blocked_alone` in each `reviews.by_reviewer` entry: the disagreeing attempts
+  in which that reviewer made a blocking claim. With three reviewers, two that
+  block against one that does not both count.
+
+A claim counts as the reviewer made it, so an attempt whose lone blocking claim
+the verifier later demoted still disagreed. A high rate means the reviewers
+often judge the same change differently; compare `blocked_alone` with the
+reviewer's `verifier_demoted_percent` to see whether its lone claims hold.
+
 ## Finding metrics
 
 Each part, the total and every reviewer, severity and repository, counts:
@@ -138,11 +163,7 @@ whose messages name `stats`.
   repository and reviewer. Reviews pruned before these counts were kept, or by
   an earlier release after a rollback, have none there, so their days count too
   few checked findings and the rate covers only the kept attempts.
-
-## Not measured yet
-
-These numbers need data that the report does not read yet (#52):
-
-- **Reviewer disagreement**: in the outcome records a merged finding keeps only
-  its first reviewer, and a reviewer without findings has no row. Each
-  reviewer's own result is kept with the review only until it is pruned.
+- The prune keeps the reviewer disagreement in the same daily rollup, per
+  repository and per repository and reviewer. Reviews pruned before these
+  counts were kept, or by an earlier release after a rollback, have none there,
+  so their days count too few attempts and the rate covers only the kept ones.
