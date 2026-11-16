@@ -1,7 +1,8 @@
 name: Release
 
-# A pushed tag v<version> builds the static musl archives, attests them and
-# creates a draft release; the owner reviews and publishes the draft. A manual
+# A pushed tag v<version> builds the static musl archives and the ad-hoc signed
+# Apple Silicon archive, attests them and creates a draft release; the owner
+# reviews and publishes the draft. A manual
 # run is a dry run: it builds the archives of the selected ref and uploads them
 # as workflow artifacts, and attests and publishes nothing. The workflow never
 # creates, moves or deletes a tag.
@@ -147,8 +148,10 @@ jobs:
             dist/autoreview-${{ needs.meta.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
 
-  # Builds and ad-hoc signs the Apple Silicon binary on macOS. An ad-hoc
-  # signature needs no certificate or secret.
+  # Apple Silicon in two jobs: build-darwin builds and ad-hoc signs the binary
+  # on macOS, and package-darwin packs it on Linux with the same GNU tar as the
+  # musl archives and runs nothing from it. An ad-hoc signature needs no
+  # certificate or secret; the provenance comes from the attest job.
   build-darwin:
     name: build aarch64-apple-darwin
     needs: meta
@@ -218,11 +221,53 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # The binary is untrusted data here: its checksum and name are checked, and
+  # it is packed, never run.
+  package-darwin:
+    name: package aarch64-apple-darwin
+    needs: [meta, build-darwin]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      TARGET: aarch64-apple-darwin
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: binary-aarch64-apple-darwin
+          path: ${{ runner.temp }}/binary
+      - name: Check the binary artifact
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/binary"
+          test "$(ls -A | LC_ALL=C sort | tr '\n' ' ')" = "autoreview autoreview.sha256 "
+          sha256sum -c -- autoreview.sha256
+      - name: Package
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          scripts/release-archive "$VERSION" "$TARGET" "$RUNNER_TEMP/binary/autoreview" dist
+          cd dist
+          sha256sum -c -- "autoreview-$VERSION-$TARGET.tar.gz.sha256"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archive-aarch64-apple-darwin
+          path: |
+            dist/autoreview-${{ needs.meta.outputs.version }}-aarch64-apple-darwin.tar.gz
+            dist/autoreview-${{ needs.meta.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+          if-no-files-found: error
+
   # The only job that can mint an OIDC token. It runs no repository code and
   # no build script; it signs exactly the files the build jobs uploaded.
   attest:
     name: attest
-    needs: build
+    needs: [build, package-darwin]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
