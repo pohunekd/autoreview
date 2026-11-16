@@ -113,7 +113,7 @@ pub struct Record {
     /// The failed run that `autoreview retry` overrode; [`plan`] never handles it again.
     ///
     /// A withdrawal and a retarget keep it, so neither one stops the head again before the
-    /// retry starts.
+    /// retry starts. A started run, a handled run and a completion clear it.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub retried_workflow: String,
     /// Marks a dispatch that continues a review the author limit let through.
@@ -227,12 +227,14 @@ pub struct Decision {
 
 /// Applies durable completion evidence to a record after its workflows were cleaned up.
 ///
-/// A completed review ends the streak of runs that spend no retry, so both of its counts are 0.
+/// A completed review ends the streak of runs that spend no retry, so both of its counts are 0,
+/// and it overrides no run.
 pub fn reconcile_completed(mut record: Record, workflow_ids: &BTreeSet<String>) -> Record {
     if !record.workflow_id.is_empty() && workflow_ids.contains(&record.workflow_id) {
         record.phase = phase::COMPLETED.to_owned();
         record.error_code = String::new();
         (record.usage_limited, record.fetch_mismatches) = (0, 0);
+        record.retried_workflow.clear();
     }
     let mut retained = Vec::new();
     for workflow_id in record.blocking_workflows {
@@ -350,10 +352,12 @@ pub fn plan(
                 notify: false,
             });
         }
+        // A started run and a completed review override no run.
         if latest_run.active() {
             r.phase = phase::RUNNING.to_owned();
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
+            r.retried_workflow.clear();
             return Ok(Decision {
                 record: r,
                 dispatch: false,
@@ -365,6 +369,7 @@ pub fn plan(
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             (r.usage_limited, r.fetch_mismatches) = (0, 0);
+            r.retried_workflow.clear();
             return Ok(Decision {
                 record: r,
                 dispatch: false,
@@ -652,6 +657,7 @@ pub fn plan_on_base(
     // A running record would wait for a run that `plan` does not see.
     if record.phase == phase::RUNNING && other.contains(record.workflow_id.as_str()) {
         record.phase = phase::COMPLETED.to_owned();
+        record.retried_workflow.clear();
     }
     let mut decision = plan(record, target, &visible, now, policy)?;
     let waits = decision.dispatch
@@ -1602,6 +1608,72 @@ mod tests {
         plan_on_base(away.record, target, runs, &main, workflow_id, now, policy).expect("plan")
     }
 
+    /// Plans `record` on `base`, as discovery does for a head whose published review is `w0`.
+    fn plan_on(
+        base: &str,
+        record: Record,
+        target: &Target,
+        runs: &[Run],
+        bases: &BTreeMap<String, String>,
+        now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let retarget = Retarget {
+            base_branch: base,
+            run_bases: bases,
+            published_workflow: "w0",
+        };
+        let workflow_id = |attempt: i64| format!("w{attempt}");
+        match plan_retarget(&record, target, runs, &retarget, workflow_id, now, policy) {
+            Ok(Some(decision)) => decision,
+            Ok(None) => plan_on_base(record, target, runs, &retarget, workflow_id, now, policy)
+                .expect("plan"),
+            Err(error) => panic!("plan: {error}"),
+        }
+    }
+
+    /// Publishes `w0` on `main`, stops the head with usage limits on `dev`, retries it by hand
+    /// into a host wait, then plans one pass on `main` and the next on `dev`.
+    fn retried_through_the_published_base(
+        target: &Target,
+        runs: &mut Vec<Run>,
+        mut now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let mut record = dispatch_and_end(Record::default(), target, runs, "", now, policy).record;
+        let mut bases = BTreeMap::from([("w0".to_owned(), "main".to_owned())]);
+        for _ in 0..4 {
+            now += Duration::hours(1);
+            let mut due = plan_on("dev", record, target, runs, &bases, now, policy);
+            if !due.dispatch {
+                let later = now + policy.debounce;
+                due = plan_on("dev", due.record, target, runs, &bases, later, policy);
+            }
+            assert!(due.dispatch, "not dispatched on dev: {due:?}");
+            let mut running = due.record;
+            running.workflow_id = format!("w{}", running.attempt);
+            runs.push(Run {
+                target: target.clone(),
+                workflow_id: running.workflow_id.clone(),
+                attempt: running.attempt,
+                status: "completed".to_owned(),
+                result: "failure".to_owned(),
+                failure: REVIEWER_USAGE_LIMITED.to_owned(),
+                ..Run::default()
+            });
+            bases.insert(running.workflow_id.clone(), "dev".to_owned());
+            record = plan_on("dev", running, target, runs, &bases, now, policy).record;
+        }
+        assert!(
+            record.phase == phase::FAILED,
+            "dev did not stop: {record:?}"
+        );
+        now += Duration::hours(1);
+        let waiting = retried_then_host_wait(&record, target, runs, now, policy).record;
+        let on_main = plan_on("main", waiting, target, runs, &bases, now, policy);
+        plan_on("dev", on_main.record, target, runs, &bases, now, policy)
+    }
+
     /// Retries the stopped `record` by hand, with the record that `apply_force` writes for it,
     /// and dispatches the retry to a route that finds no review host.
     fn retried_then_host_wait(
@@ -1708,12 +1780,13 @@ mod tests {
         const GONE: &str = "withdrawn and back";
         const PUBLISHED: &str = "published, then limited on another base branch";
         const RETRIED: &str = "retried by hand, then a host wait";
+        const THROUGH_PUBLISHED: &str = "stopped on dev, retried, one pass on the published main";
         let wait = |notify: bool, minutes: i64| ("retry_wait", notify, minutes);
         let stop = ("failed", true, 0);
         // Each case: its name, the ending of each run, the phase, notice and delay after each, and
         // the retries spent at the end.
         type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool, i64)], i64);
-        let cases: [Case<'_>; 15] = [
+        let cases: [Case<'_>; 16] = [
             (
                 "stops after its own delays",
                 &[U, U, U, U],
@@ -1885,6 +1958,12 @@ mod tests {
                 ],
                 0,
             ),
+            (
+                "a retry by hand through the published base stays stopped",
+                &[THROUGH_PUBLISHED],
+                &[("failed", false, 0)],
+                0,
+            ),
         ];
         for (name, endings, want, retries) in cases {
             let (target, mut now, policy) = fixture();
@@ -1907,6 +1986,8 @@ mod tests {
                     published_then_limited_on_dev(record, &target, &mut runs, now, &policy)
                 } else if *ending == RETRIED {
                     retried_then_host_wait(&record, &target, &runs, now, &policy)
+                } else if *ending == THROUGH_PUBLISHED {
+                    retried_through_the_published_base(&target, &mut runs, now, &policy)
                 } else {
                     dispatch_and_end(record, &target, &mut runs, ending, now, &policy)
                 };

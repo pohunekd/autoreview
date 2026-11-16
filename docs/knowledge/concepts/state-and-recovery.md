@@ -127,10 +127,13 @@ These rules also apply to the layers:
   review, a retarget, a withdrawal that is listed again on the next pass and
   `autoreview retry` neither reset them nor count a run twice. A stopped head
   is withdrawn like a waiting one: a return on the next pass handles its
-  stopping run again without a second notice, so a head that a streak or a
-  failure that is not retried stopped stays stopped, and one that spent its
-  retries gets them again, as a waiting one does. A retry by hand still starts
-  after a withdrawal or a retarget. Both counts start again only on a new head or
+  stopping run again without a second notice, so a head that a streak, or a
+  run's failure that is not retried, stopped stays stopped. One that spent its
+  retries gets them again, as a waiting one does, and one that its route
+  stopped before a run starts again. A retry by hand still starts after a
+  withdrawal, or after a retarget away to a base branch that no run completed
+  and back; a pass on the base branch of the published review ends the retry,
+  and the head is stopped again. Both counts start again only on a new head or
   request, on any other ending of a run (a published review sets both to 0),
   and when a withdrawn record is still not listed on the next pass: it is
   dropped, and the head then starts both counts and its retries again.
