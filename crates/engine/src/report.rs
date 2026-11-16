@@ -19,13 +19,13 @@ use crate::error::Error;
 use crate::integrations::Integrations;
 use crate::model::repository_valid;
 use crate::stats::{
-    Counters, Keyed, STATS_RANGE_INVALID, StatsRange, history, keyed, seconds_text,
+    Counters, Keyed, STATS_RANGE_INVALID, StatsRange, history, keyed, median_and_p90, seconds_text,
 };
 use crate::store::outcome_checks::{OUTCOME_OPEN_AT_CLOSE, OUTCOME_OPEN_AT_MERGE};
 use crate::store::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Rollup};
 
 /// Version of the report document; a changed field gets a new version.
-pub const REPORT_SCHEMA_VERSION: i64 = 1;
+pub const REPORT_SCHEMA_VERSION: i64 = 2;
 
 /// Error code of a `--pipeline` that no rule of the policy runs.
 pub const PIPELINE_NOT_CONFIGURED: &str = "pipeline_not_configured";
@@ -102,11 +102,15 @@ pub struct ReviewMetrics {
     /// `commented` in percent of `decided`, one decimal.
     pub commented_percent: Option<f64>,
     /// Median seconds from the creation of a published attempt to its completion.
-    ///
-    /// It starts at the attempt, not at the review request, which the store does not keep.
     pub attempt_to_publication_median_seconds: Option<i64>,
     /// 90th percentile of the same seconds, nearest rank.
     pub attempt_to_publication_p90_seconds: Option<i64>,
+    /// Median seconds from the review request of a published attempt to its completion.
+    ///
+    /// Only attempts with a known request time count; a label trigger has none.
+    pub request_to_publication_median_seconds: Option<i64>,
+    /// 90th percentile of the same seconds, nearest rank.
+    pub request_to_publication_p90_seconds: Option<i64>,
 }
 
 /// Outcome counts of the findings published in the range: totals and breakdowns.
@@ -183,9 +187,12 @@ fn percent(part: i64, whole: i64) -> Option<f64> {
 }
 
 /// Returns the timing and decision metrics of one bucket of the statistics history.
-pub fn review_metrics(counters: &Counters) -> ReviewMetrics {
+///
+/// `request_seconds` are the seconds from the review request to publication of the bucket.
+pub fn review_metrics(counters: &Counters, request_seconds: Vec<i64>) -> ReviewMetrics {
     let decided = counters.published + counters.approval_expired;
     let waited = counters.approved_after_wait + counters.approval_expired;
+    let (request_median, request_p90) = median_and_p90(request_seconds);
     ReviewMetrics {
         published: counters.published,
         approval_expired: counters.approval_expired,
@@ -200,6 +207,8 @@ pub fn review_metrics(counters: &Counters) -> ReviewMetrics {
         commented_percent: percent(counters.commented, decided),
         attempt_to_publication_median_seconds: counters.publication_median_seconds,
         attempt_to_publication_p90_seconds: counters.publication_p90_seconds,
+        request_to_publication_median_seconds: request_median,
+        request_to_publication_p90_seconds: request_p90,
     }
 }
 
@@ -305,6 +314,12 @@ impl fmt::Display for ReportDocument {
             seconds_text(reviews.attempt_to_publication_median_seconds),
             seconds_text(reviews.attempt_to_publication_p90_seconds)
         )?;
+        writeln!(
+            f,
+            "  review request to publication: median {}, p90 {}",
+            seconds_text(reviews.request_to_publication_median_seconds),
+            seconds_text(reviews.request_to_publication_p90_seconds)
+        )?;
         let findings = &self.findings;
         let mut rows = vec![("total".to_owned(), &findings.total)];
         for (kind, entries) in [
@@ -384,13 +399,18 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             });
             snapshot.rollup = Rollup::default();
         }
-        let history = history(&snapshot, &range, review_cutoff)?;
+        let (history, mut requests) = history(&snapshot, &range, review_cutoff)?;
         let counters = match (pipeline, repository) {
             (None, Some(name)) => (history.by_repository.into_iter())
                 .find(|entry| entry.key == name)
                 .map(|entry| entry.counts)
                 .unwrap_or_default(),
             _ => history.totals,
+        };
+        // Each attempt has one repository, so the repositories together are the total.
+        let request_seconds = match repository {
+            Some(name) => requests.remove(name).unwrap_or_default(),
+            None => requests.into_values().flatten().collect(),
         };
         live(cancel)?;
         // A second read: a publication between the two reads shows in one part only.
@@ -402,7 +422,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             until: range.until.to_string(),
             repository: request.repository.clone(),
             pipeline: request.pipeline.clone(),
-            reviews: review_metrics(&counters),
+            reviews: review_metrics(&counters, request_seconds),
             findings: finding_metrics(&outcomes, repository, pipeline),
         })
     }
@@ -532,10 +552,12 @@ mod tests {
             ..Counters::default()
         };
         let nothing = Counters::default();
+        // Four of the five publications have a request time, given unsorted.
         let cases = [
             (
                 "one sixth is 16.7, one third 33.3",
                 thirds,
+                vec![3000, 600, 1500, 900],
                 ReviewMetrics {
                     published: 5,
                     approval_expired: 1,
@@ -550,11 +572,14 @@ mod tests {
                     commented_percent: Some(16.7),
                     attempt_to_publication_median_seconds: Some(750),
                     attempt_to_publication_p90_seconds: Some(9000),
+                    request_to_publication_median_seconds: Some(900),
+                    request_to_publication_p90_seconds: Some(3000),
                 },
             ),
             (
                 "6.25 rounds up to 6.3",
                 sixteenths,
+                Vec::new(),
                 ReviewMetrics {
                     published: 16,
                     decided: 16,
@@ -567,10 +592,15 @@ mod tests {
                     ..ReviewMetrics::default()
                 },
             ),
-            ("nothing decided", nothing, ReviewMetrics::default()),
+            (
+                "nothing decided",
+                nothing,
+                Vec::new(),
+                ReviewMetrics::default(),
+            ),
         ];
-        for (name, counters, want) in cases {
-            assert_eq!(review_metrics(&counters), want, "{name}");
+        for (name, counters, request_seconds, want) in cases {
+            assert_eq!(review_metrics(&counters, request_seconds), want, "{name}");
         }
     }
 }
