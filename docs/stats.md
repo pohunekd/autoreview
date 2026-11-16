@@ -119,7 +119,10 @@ autoreview stats --json | jq '{schema_version, generated_at}'
   review starts), when `autoreview retry` or the MCP tool `retry` starts a review, and when
   discovery withdraws or drops its record after the pull request left every trigger. A
   record that one pass withdraws, for example after a failed author-permission read, is
-  `withdrawn` for that pass and counts here again when the next pass lists it.
+  `withdrawn` for that pass and counts here again when the next pass lists it and stops
+  it again (a streak, or a run's failure that is not retried). A head stopped by spent
+  retries returns as `retry_wait`, and one stopped by its route before any run as
+  `waiting`; neither counts here.
   `autoreview review` shows the record.
 - `by_repository` and `by_host`: the queued, running and awaiting counts per repository
   and per review host, sorted by `key`. The host is the one chosen when the review was
@@ -203,7 +206,8 @@ day the attempt completed, and only inside the range.
   [`current.stopped`](#current-state); not attempts, and not part of `completed`. A stop
   is recorded in the rollup when it happens, under its repository, so the prune does not
   change it. A pull request that is retried and stops again counts again, and so does a
-  stopped one that one pass withdrew and the next pass lists again. A schedule record
+  stopped one that one pass withdrew and the next pass lists and stops again (a streak,
+  or a run's failure that is not retried). A schedule record
   names no rule or reviewer, so `stopped` is `0` in `by_rule` and `by_reviewer`, and a
   repository with only stops in the range has a `by_repository` entry. Stops while an
   engine without the rollup ran are not counted.
