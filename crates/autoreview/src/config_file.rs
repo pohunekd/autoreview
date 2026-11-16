@@ -100,6 +100,10 @@ pub(crate) const GUARD_INPUT_MAX_BYTES: usize = 4 << 20;
 /// Largest lexicon file, in bytes; the scan time grows with the number of entries.
 const LEXICON_MAX_BYTES: usize = 64 << 10;
 
+/// Whether `pohunek.runtime_dir` may be left out. pohunek requires `XDG_RUNTIME_DIR` on Linux;
+/// on macOS it has a default (`/private/tmp/pohunek-<uid>`) that no value of the variable names.
+pub(crate) const RUNTIME_DIR_OPTIONAL: bool = cfg!(target_os = "macos");
+
 /// A configuration value read without type coercion, so that each key decides what it accepts and
 /// names itself when it refuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -887,7 +891,7 @@ fn map_file(
     let pohunek = section(&file.pohunek, "pohunek")?;
     let pohunek_bin = text(&pohunek.bin, "pohunek.bin")?;
     let pohunek_state = text(&pohunek.state_home, "pohunek.state_home")?;
-    let pohunek_runtime = Some(text(&pohunek.runtime_dir, "pohunek.runtime_dir")?);
+    let pohunek_runtime = runtime_dir(&pohunek.runtime_dir, RUNTIME_DIR_OPTIONAL)?;
     let pohunek_timeout = seconds(&pohunek.timeout_seconds, "pohunek.timeout_seconds")?;
     let pohunek_hosts = text_list(&pohunek.hosts, "pohunek.hosts")?;
     if pohunek_hosts.is_empty() {
@@ -1912,6 +1916,23 @@ fn text(value: &Option<Value>, key: &str) -> Result<String, Error> {
     }
 }
 
+/// Reads `pohunek.runtime_dir`, which only an `optional` platform may leave out.
+///
+/// Where it is optional, an absent key or a YAML null (`runtime_dir:`, `~`) reads as `None`, so
+/// the pohunek child gets no `XDG_RUNTIME_DIR`; empty or whitespace text names no directory and
+/// is refused.
+fn runtime_dir(value: &Option<Value>, optional: bool) -> Result<Option<String>, Error> {
+    const KEY: &str = "pohunek.runtime_dir";
+    match value {
+        None if optional => Ok(None),
+        Some(Value::Text(text)) if optional && text.trim().is_empty() => Err(invalid(
+            KEY,
+            "must not be blank; leave the key out to use pohunek's default",
+        )),
+        _ => text(value, KEY).map(Some),
+    }
+}
+
 /// Reads a list of text.
 fn text_list(value: &Option<Value>, key: &str) -> Result<Vec<String>, Error> {
     match present(value, key)? {
@@ -2884,6 +2905,10 @@ pub(crate) mod tests {
             if path == "publish.marker" {
                 continue;
             }
+            // `pohunek_runtime_dir_is_required_on_linux_only` covers an absent runtime directory.
+            if RUNTIME_DIR_OPTIONAL && path == "pohunek.runtime_dir" {
+                continue;
+            }
             // `cli` holds one key, so removing it leaves `cli:` null, which reads as the section.
             let named = if path == "cli.review_list_limit" {
                 "cli"
@@ -2893,6 +2918,66 @@ pub(crate) mod tests {
             let expected = format!("configuration_missing: {named}");
             assert_eq!(error_text(mapped(&text)), expected, "removing {path}");
         }
+    }
+
+    /// `pohunek.runtime_dir` stays required on Linux and may be left out on macOS, where the
+    /// pohunek child then gets no `XDG_RUNTIME_DIR` (#513). The rule rows run on every host;
+    /// the loader rows follow the host, so the macOS CI job runs the macOS ones.
+    #[test]
+    fn pohunek_runtime_dir_is_required_on_linux_only() {
+        const MISSING: &str = "configuration_missing: pohunek.runtime_dir";
+        const BLANK: &str = "configuration_invalid: pohunek.runtime_dir: must not be blank; \
+            leave the key out to use pohunek's default";
+        // (value, or `None` for an absent key; optional; the value read or the error)
+        let rules = [
+            (None, false, Err(MISSING)),
+            (Some("~"), false, Err(MISSING)),
+            (Some("\"\""), false, Err(MISSING)),
+            (Some("\" \""), false, Err(MISSING)),
+            (Some("/run/autoreview"), false, Ok(Some("/run/autoreview"))),
+            (Some("run/autoreview"), false, Ok(Some("run/autoreview"))),
+            (None, true, Ok(None)),
+            (Some("~"), true, Ok(None)),
+            (Some("\"\""), true, Err(BLANK)),
+            (Some("\" \""), true, Err(BLANK)),
+            (Some("/private/tmp/x"), true, Ok(Some("/private/tmp/x"))),
+            (
+                Some("[/run]"),
+                true,
+                Err("configuration_invalid: pohunek.runtime_dir: must be text"),
+            ),
+        ];
+        for (value, optional, expected) in rules {
+            let read = runtime_dir(&value.and_then(scalar), optional);
+            let read = read
+                .as_ref()
+                .map(Option::as_deref)
+                .map_err(ToString::to_string);
+            assert_eq!(
+                read,
+                expected.map_err(str::to_owned),
+                "{value:?} {optional}"
+            );
+        }
+        let line = "  runtime_dir: /run/autoreview\n";
+        let absent = parse(&mutated(line, ""), secret, example_policy);
+        if RUNTIME_DIR_OPTIONAL {
+            let config = absent.expect("macOS loads a config without the runtime directory");
+            assert_eq!(config.pohunek_runtime, None);
+        } else {
+            assert_eq!(error_text(absent), MISSING);
+        }
+        let relative = parse(
+            &mutated(line, "  runtime_dir: run\n"),
+            secret,
+            example_policy,
+        );
+        assert_eq!(
+            error_text(relative),
+            "configuration_invalid: config: Pohunek runtime directory path must be absolute"
+        );
+        let present = parse(EXAMPLE, secret, example_policy).expect("the example loads");
+        assert_eq!(present.pohunek_runtime.as_deref(), Some("/run/autoreview"));
     }
 
     #[test]
