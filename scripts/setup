@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Sets up autoreview on one Linux machine that also runs the pohunek daemon:
-# autoreview, pohunek, the configuration, the secrets file, the runtime
-# packages, the hooks, the agent profiles and the user service.
+# Sets up autoreview on one Linux machine, or one Mac on Apple Silicon, that
+# also runs the pohunek daemon: autoreview, pohunek, the configuration, the
+# secrets file, the runtime packages, the hooks, the agent profiles and, on
+# Linux, the user service.
 #
 # usage: scripts/setup [--dry-run] [--dir DIR] [--login LOGIN]
 #                      [--pohunek-host HOST] [--example NAME]
@@ -18,6 +19,14 @@
 # docs/knowledge/guides/getting-started.md.
 set -euo pipefail
 
+# Associative arrays and mapfile need bash 4; macOS runs /bin/bash 3.2 for
+# `#!/usr/bin/env bash` unless a newer bash comes first on PATH.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+    printf 'setup: %s\n' "missing bash 4 or newer (found $BASH_VERSION); on macOS run" \
+        "brew install bash and run setup with it: \$(brew --prefix)/bin/bash $0 ..." >&2
+    exit 3
+fi
+
 # The pohunek release that a missing or too old pohunek is replaced with; the
 # head fetch at session start needs 0.43.0 and a head-checkout review 0.43.1.
 POHUNEK_VERSION="0.43.1"
@@ -31,6 +40,12 @@ AUTOREVIEW_VERSION="0.5.0"
 CODEX_ADAPTER_RELEASE="0.4.0"
 # pohunek's login service needs systemd 255 or newer.
 SYSTEMD_MIN_VERSION=255
+# The oldest macOS major release that the darwin archives of pohunek and
+# autoreview are built for.
+MACOS_MIN_MAJOR=14
+# The folders of the home directory that macOS privacy protection (TCC) closes
+# to a launchd job without an explicit grant.
+TCC_FOLDERS=(Desktop Documents Downloads "Library/Mobile Documents")
 # The reviewer adapters need Python 3.11 or newer.
 PYTHON_MIN_VERSION="3.11.0"
 POHUNEK_REPOSITORY="zajca/pohunek"
@@ -144,6 +159,11 @@ pohunek_state() {
 # pohunek publishes no Linux archive. Fails where autoreview publishes none.
 choose_targets() {
     local system=$1 machine=$2 libc=$3
+    if [ "$system" = Darwin ]; then
+        [ "$machine" = arm64 ] || return 1
+        echo "aarch64-apple-darwin aarch64-apple-darwin"
+        return
+    fi
     [ "$system" = Linux ] || return 1
     case $machine in
         x86_64)
@@ -238,6 +258,67 @@ path_trust() {
     esac
 }
 
+# Prints the macOS `stat -f '%u %Mp%Lp %HT'` line $1 as the `stat -c '%u %a %F'`
+# line of Linux that path_trust reads: the mode without leading zeros and the
+# type in lower case. Fails on a malformed line.
+bsd_stat_line() {
+    local owner mode type
+    read -r owner mode type <<<"$1"
+    [[ $owner =~ ^[0-9]+$ && $mode =~ ^[0-7]+$ && -n $type ]] || return 1
+    printf '%s %o %s\n' "$owner" "$((8#$mode))" "$(tr '[:upper:]' '[:lower:]' <<<"$type")"
+}
+
+# Prints the path_trust line of path $1.
+stat_line() {
+    if [ "$os" = Darwin ]; then
+        bsd_stat_line "$(LC_ALL=C stat -f '%u %Mp%Lp %HT' -- "$1")"
+    else
+        LC_ALL=C stat -c '%u %a %F' -- "$1"
+    fi
+}
+
+# Prints the owner uid of path $1.
+file_owner() {
+    if [ "$os" = Darwin ]; then
+        stat -f %u -- "$1"
+    else
+        stat -c %u "$1"
+    fi
+}
+
+# Prints the permission bits of path $1 in octal without leading zeros.
+file_mode() {
+    local mode
+    if [ "$os" = Darwin ]; then
+        mode=$(stat -f '%Mp%Lp' -- "$1") && printf '%o\n' "$((8#$mode))"
+    else
+        stat -c %a "$1"
+    fi
+}
+
+# Reports whether path $1 is one of the TCC_FOLDERS of home $2 or inside one.
+# APFS compares names without case, so the comparison ignores case too.
+tcc_protected() {
+    local path folder
+    path=$(tr '[:upper:]' '[:lower:]' <<<"$1")
+    for folder in "${TCC_FOLDERS[@]}"; do
+        folder=$(tr '[:upper:]' '[:lower:]' <<<"$2/$folder")
+        case $path in
+            "$folder" | "$folder"/*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Prints the command that checks a downloaded .sha256 file $1 on this platform.
+checksum_command() {
+    if [ "$os" = Darwin ]; then
+        echo "shasum -a 256 --check $1"
+    else
+        echo "sha256sum --check $1"
+    fi
+}
+
 # Checks the pure functions of this script against fixed tables; reads nothing
 # else. The profile tables and the paths are local, so the functions under
 # test read them.
@@ -245,7 +326,7 @@ self_test() {
     local checks=0 failures=0 expected name
     local autoreview_bin=/h/.local/bin/autoreview pohunek_timeout=45
     local dir=/h/autoreview env_file=/h/.config/autoreview/autoreview.env
-    local AUTOREVIEW_VERSION=0.5.0 CODEX_ADAPTER_RELEASE=0.4.0
+    local AUTOREVIEW_VERSION=0.5.0 CODEX_ADAPTER_RELEASE=0.4.0 os=Linux
     local -a install_command=() unit_names=() unit_texts=()
     local -A profile_agent=([one]=claude [two]=codex) profile_model=([one]=m-1 [two]=m.2)
     local -A profile_effort=([one]=max [two]=xhigh) profile_input=([one]=1048576 [two]=2048)
@@ -290,7 +371,52 @@ self_test() {
     check "aarch64" "aarch64-unknown-linux-musl -" \
         "$(choose_targets Linux aarch64 gnu || echo error)"
     check "armv7" error "$(choose_targets Linux armv7l gnu || echo error)"
-    check "macOS" error "$(choose_targets Darwin arm64 none || echo error)"
+    check "macOS on Apple Silicon" "aarch64-apple-darwin aarch64-apple-darwin" \
+        "$(choose_targets Darwin arm64 none || echo error)"
+    check "macOS on Intel" error "$(choose_targets Darwin x86_64 none || echo error)"
+    check "BSD stat of a directory" "501 755 directory" \
+        "$(bsd_stat_line '501 0755 Directory' || echo error)"
+    check "BSD stat of a sticky directory" "0 1777 directory" \
+        "$(bsd_stat_line '0 1777 Directory' || echo error)"
+    check "BSD stat of a file" "501 600 regular file" \
+        "$(bsd_stat_line '501 0600 Regular File' || echo error)"
+    check "BSD stat of a link" "501 755 symbolic link" \
+        "$(bsd_stat_line '501 0755 Symbolic Link' || echo error)"
+    check "BSD stat malformed" error "$(bsd_stat_line 'x 0755 Directory' || echo error)"
+    check "trust of root's sticky directory on macOS" trusted \
+        "$(path_trust "$(bsd_stat_line '0 1777 Directory')" 501 0 ancestor || echo error)"
+    check "trust of a group-writable directory on macOS" writable \
+        "$(path_trust "$(bsd_stat_line '501 0775 Directory')" 501 0 dir || echo error)"
+    check "trust of a private file on macOS" trusted \
+        "$(path_trust "$(bsd_stat_line '501 0600 Regular File')" 501 0 file || echo error)"
+    tcc() {
+        if tcc_protected "$1" /Users/a; then echo protected; else echo open; fi
+    }
+    check "TCC Documents" protected "$(tcc /Users/a/Documents)"
+    check "TCC below Desktop" protected "$(tcc /Users/a/Desktop/autoreview)"
+    check "TCC in another case" protected "$(tcc /Users/a/downloads/x)"
+    check "TCC iCloud Drive" protected \
+        "$(tcc '/Users/a/Library/Mobile Documents/com~apple~CloudDocs')"
+    check "TCC a longer name" open "$(tcc /Users/a/Documentsx)"
+    check "TCC the config home" open "$(tcc /Users/a/.config/autoreview)"
+    check "TCC another home" open "$(tcc /Users/b/Documents)"
+    check "daemon python missing" missing "$(daemon_python_state missing || echo error)"
+    check "daemon python of Homebrew" ok \
+        "$(daemon_python_state '/opt/homebrew/bin/python3 3.13.1' || echo error)"
+    check "daemon python 3.11.0" ok "$(daemon_python_state '/x/python3 3.11.0' || echo error)"
+    check "daemon python of Apple" old \
+        "$(daemon_python_state '/usr/bin/python3 3.9.6' || echo error)"
+    check "daemon python in a path with a space" ok \
+        "$(daemon_python_state '/Users/a/App Support/bin/python3 3.12.0' || echo error)"
+    check "daemon python without a version" error \
+        "$(daemon_python_state '/x/python3 junk' || echo error)"
+    check "checksum command on Linux" "sha256sum --check a.sha256" "$(checksum_command a.sha256)"
+    check "checksum command on macOS" "shasum -a 256 --check a.sha256" \
+        "$(os=Darwin checksum_command a.sha256)"
+    check "download check line on macOS" "shasum -a 256 --check x.tar.gz.sha256" \
+        "$(os=Darwin download_commands o/r x.tar.gz 1.0.0 | tail -n 1)"
+    check "download check line on Linux" "sha256sum --check x.tar.gz.sha256" \
+        "$(download_commands o/r x.tar.gz 1.0.0 | tail -n 1)"
     check "systemd 255" 255 "$(systemd_version_of 'systemd 255 (255.4-1ubuntu8)' || echo error)"
     check "systemd 257" 257 "$(systemd_version_of 'systemd 257 (257.9-arch1-1)' || echo error)"
     check "systemd other text" error "$(systemd_version_of 'not systemd 255' || echo error)"
@@ -573,7 +699,7 @@ untrusted_lines() {
     local target=$1 role current="" part line state owner mode reason i user root
     local -a parts found=()
     user=$(id -u)
-    root=$(stat -c %u /) || fail 3 "missing the owner of /; stat failed"
+    root=$(file_owner /) || fail 3 "missing the owner of /; stat failed"
     IFS=/ read -r -a parts <<<"${target#/}"
     for part in "${parts[@]}"; do
         [ -n "$part" ] || continue
@@ -586,7 +712,7 @@ untrusted_lines() {
         current=${found[i]}
         role=ancestor
         [ "$current" != "$target" ] || role=$2
-        line=$(LC_ALL=C stat -c '%u %a %F' -- "$current") \
+        line=$(stat_line "$current") \
             || fail 3 "missing the mode of $current; stat failed"
         state=$(path_trust "$line" "$user" "$root" "$role") \
             || fail 3 "missing the mode of $current; stat printed $line"
@@ -651,40 +777,67 @@ check_trust() {
 
 # Reads the platform, the tools and the locations. Changes nothing.
 detect_machine() {
-    local system machine libc targets tool missing="" python systemd name
+    local system machine libc targets tool missing="" python systemd name macos
+    local -a tools
     system=$(uname -s)
     machine=$(uname -m)
+    os=$system
     libc=none
     if getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
         libc=gnu
     elif [ -e "/lib/ld-musl-$machine.so.1" ]; then
         libc=musl
     fi
-    targets=$(choose_targets "$system" "$machine" "$libc") \
-        || fail 2 "only Linux x86_64 and aarch64 are supported, not $system $machine"
+    if [ "$system" = Darwin ]; then
+        targets=$(choose_targets "$system" "$machine" "$libc") \
+            || fail 2 "only Apple Silicon (arm64) Macs are supported, not $machine"
+        macos=$(sw_vers -productVersion)
+        if [[ ! ${macos%%.*} =~ ^[0-9]+$ ]] || [ "${macos%%.*}" -lt "$MACOS_MIN_MAJOR" ]; then
+            fail 2 "only macOS $MACOS_MIN_MAJOR or newer is supported, not $macos"
+        fi
+        platform="macOS $macos on $machine"
+        tools=(curl tar shasum gh python3 install diff stat readlink)
+    else
+        targets=$(choose_targets "$system" "$machine" "$libc") \
+            || fail 2 "only Linux x86_64 and aarch64 are supported, not $system $machine"
+        platform="$machine with the $libc C library"
+        tools=(curl tar sha256sum gh python3 systemctl systemd-run loginctl install diff stat
+            readlink)
+    fi
     read -r autoreview_target pohunek_target <<<"$targets"
-    platform="$machine with the $libc C library"
-    for tool in curl tar sha256sum gh python3 systemctl systemd-run loginctl install diff stat \
-        readlink; do
+    for tool in "${tools[@]}"; do
         command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
     done
     [ -z "$missing" ] || fail 3 "missing$missing; install them with the package manager"
     python=$(python3 -I -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')
     [ "$(version_compare "$python" "$PYTHON_MIN_VERSION")" != -1 ] \
         || fail 3 "missing Python $PYTHON_MIN_VERSION or newer as python3 (found $python)"
-    systemd=$(systemd_version_of "$(systemctl --version | head -n 1)") \
-        || fail 3 "missing a readable systemd version; systemctl --version did not name one"
-    [ "$systemd" -ge "$SYSTEMD_MIN_VERSION" ] \
-        || fail 3 "missing systemd $SYSTEMD_MIN_VERSION or newer (found $systemd)"
-    systemctl --user show-environment >/dev/null 2>&1 \
-        || fail 3 "missing a systemd user manager with a session bus;" \
-            "install dbus-user-session and log in again"
+    if [ "$os" = Linux ]; then
+        systemd=$(systemd_version_of "$(systemctl --version | head -n 1)") \
+            || fail 3 "missing a readable systemd version; systemctl --version did not name one"
+        [ "$systemd" -ge "$SYSTEMD_MIN_VERSION" ] \
+            || fail 3 "missing systemd $SYSTEMD_MIN_VERSION or newer (found $systemd)"
+        systemctl --user show-environment >/dev/null 2>&1 \
+            || fail 3 "missing a systemd user manager with a session bus;" \
+                "install dbus-user-session and log in again"
+    fi
     gh auth status >/dev/null 2>&1 || fail 3 "missing a gh login; run gh auth login"
     gh_bin=$(command -v gh)
     unit_path_safe "${HOME:-}" || fail 3 "missing a HOME of letters, digits, '.', '_', '-' and '/'"
-    [[ ${XDG_RUNTIME_DIR:-} == /* ]] \
-        || fail 3 "missing XDG_RUNTIME_DIR; log in through a session that sets it"
-    runtime_dir=$XDG_RUNTIME_DIR
+    # pohunek on macOS gives its launchd daemon the XDG_RUNTIME_DIR of `service install`,
+    # and its own runtime directory when that was unset. The same rule holds for the pohunek
+    # calls of this script, so the value is passed on as it is: without one, autoreview init
+    # writes no pohunek.runtime_dir.
+    runtime_dir=""
+    if [ "$os" = Linux ]; then
+        [[ ${XDG_RUNTIME_DIR:-} == /* ]] \
+            || fail 3 "missing XDG_RUNTIME_DIR; log in through a session that sets it"
+        runtime_dir=$XDG_RUNTIME_DIR
+    elif [ -n "${XDG_RUNTIME_DIR+set}" ]; then
+        [[ $XDG_RUNTIME_DIR == /* ]] \
+            || fail 3 "missing an absolute XDG_RUNTIME_DIR; unset it or set it to an absolute path"
+        runtime_dir=$XDG_RUNTIME_DIR
+    fi
     # pohunek uses the $HOME default only for an unset variable; it refuses an empty one.
     for name in XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME; do
         [ -n "${!name-unset}" ] \
@@ -702,9 +855,18 @@ detect_machine() {
     [[ $data_home == /* && $data_home != *//* && $data_home != */ \
         && ! $data_home =~ /\.\.?(/|$) ]] \
         || fail 3 "missing an absolute XDG_DATA_HOME without an empty, '.' or '..' part or a trailing '/'"
+    if [ "$os" = Darwin ]; then
+        for name in "$config_home" "$state_home" "$data_home"; do
+            if tcc_protected "$name" "$HOME"; then
+                fail 3 "$name is in a folder that macOS privacy protection closes to" \
+                    "launchd jobs; keep the XDG homes out of ${TCC_FOLDERS[*]}"
+            fi
+        done
+    fi
     autoreview_bin=$HOME/.local/bin/autoreview
     env_file=$config_home/autoreview/autoreview.env
     unit_dir=$config_home/systemd/user
+    [ "$os" = Linux ] || unit_dir=$HOME/Library/LaunchAgents
     agents_dir=$config_home/pohunek/agents
     service_config=$config_home/pohunek/service.toml
     user_name=$(id -un)
@@ -775,10 +937,16 @@ check_secrets() {
     done
 }
 
-# Runs validate in a transient user unit with the secrets file of the service,
-# so it sees the environment that `autoreview serve` gets. Sets
+# Runs validate with the secrets file of the service, so it sees the environment
+# that `autoreview serve` gets: in a transient user unit on Linux, with
+# --env-file on macOS, where the launchd agent passes the same flag. Sets
 # validate_output and returns the exit status of validate.
 run_validate() {
+    if [ "$os" = Darwin ]; then
+        validate_output=$("$autoreview_bin" --config "$dir/config.yaml" --env-file "$env_file" \
+            validate </dev/null)
+        return
+    fi
     validate_output=$(systemd-run --user --wait --pipe --quiet --collect \
         -p "EnvironmentFile=$env_file" \
         "$autoreview_bin" --config "$dir/config.yaml" validate </dev/null)
@@ -849,15 +1017,20 @@ download_checked() {
     then
         fail 5 "$name failed its checksum: $name.sha256 does not name it"
     fi
-    (cd "$work" && sha256sum --check --quiet -- "$name.sha256") >/dev/null \
-        || fail 5 "$name failed its checksum"
+    if [ "$os" = Darwin ]; then
+        (cd "$work" && shasum -a 256 --check --status -- "$name.sha256") \
+            || fail 5 "$name failed its checksum"
+    else
+        (cd "$work" && sha256sum --check --quiet -- "$name.sha256") >/dev/null \
+            || fail 5 "$name failed its checksum"
+    fi
 }
 
 # Prints the commands of a download of asset $2 of release v$3 of repository $1.
 download_commands() {
     local base="https://github.com/$1/releases/download/v$3"
     printf '%s\n' "curl -fsSL -o $2 $base/$2" "curl -fsSL -o $2.sha256 $base/$2.sha256" \
-        "sha256sum --check $2.sha256"
+        "$(checksum_command "$2.sha256")"
 }
 
 step_autoreview() {
@@ -981,9 +1154,11 @@ step_config() {
     local output
     local -a command=("$autoreview_bin" init --dir "$dir" --login "$login"
         --pohunek-host "$pohunek_host" --example "$example" --store-path "$dir/autoreview.db"
-        --gh-bin "$gh_bin" --pohunek-bin "$pohunek_bin" --pohunek-state-home "$state_home"
-        --pohunek-runtime-dir "$runtime_dir" --matrix-homeserver-url "$matrix_url"
-        --matrix-room "$matrix_room" --matrix-mention-user "$matrix_user")
+        --gh-bin "$gh_bin" --pohunek-bin "$pohunek_bin" --pohunek-state-home "$state_home")
+    # Without the flag, init on macOS writes no pohunek.runtime_dir: pohunek's default applies.
+    [ -z "$runtime_dir" ] || command+=(--pohunek-runtime-dir "$runtime_dir")
+    command+=(--matrix-homeserver-url "$matrix_url" --matrix-room "$matrix_room"
+        --matrix-mention-user "$matrix_user")
     approve "configuration" "umask 077" "$(printf '%q ' "${command[@]}")"
     # $dir holds the store too. The umask keeps it 0700 also when the installed
     # release's init creates it with the mode of the umask.
@@ -995,9 +1170,80 @@ step_config() {
     created_config=1
 }
 
+# Prints the [environment] search_path of pohunek's service.toml $1, one
+# directory per line. On macOS pohunek gives its launchd daemon job this PATH,
+# and the daemon passes it to the reviewer adapters.
+daemon_search_path() {
+    python3 -I -c '
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as handle:
+    document = tomllib.load(handle)
+for entry in document["environment"]["search_path"]:
+    print(entry)
+' "$1"
+}
+
+# Prints `<path> <version>` of the python3 that `env` finds first on the PATH of
+# the pohunek daemon, or `missing`. Fails when the search path is unreadable or
+# empty, or the python3 prints no version.
+daemon_python() {
+    local listed directory version
+    local -a directories
+    listed=$(daemon_search_path "$service_config") || return 1
+    [ -n "$listed" ] || return 1
+    mapfile -t directories <<<"$listed"
+    for directory in "${directories[@]}"; do
+        if [ -f "$directory/python3" ] && [ -x "$directory/python3" ]; then
+            version=$("$directory/python3" -I -c \
+                'import sys; print("%d.%d.%d" % sys.version_info[:3])') || return 1
+            echo "$directory/python3 $version"
+            return
+        fi
+    done
+    echo missing
+}
+
+# Prints ok, old or missing for the daemon_python answer $1; fails on a malformed one.
+daemon_python_state() {
+    if [ "$1" = missing ]; then
+        echo missing
+        return
+    fi
+    case $(version_compare "${1##* }" "$PYTHON_MIN_VERSION") in
+        0 | 1) echo ok ;;
+        -1) echo old ;;
+        *) return 1 ;;
+    esac
+}
+
+# Stops unless the reviewer adapters, which start as `env -S python3 -I` under
+# the pohunek daemon, find Python 3.11 or newer on the daemon's PATH (macOS).
+step_daemon_python() {
+    local found state
+    found=$(daemon_python) \
+        || fail 3 "missing a readable, non-empty [environment] search_path in $service_config;" \
+            "run pohunek service refresh-path"
+    state=$(daemon_python_state "$found") \
+        || fail 3 "missing an X.Y.Z version from the python3 on the PATH of the pohunek daemon"
+    case $state in
+        ok) in_place "python3 of the pohunek daemon, ${found% *} ${found##* }" ;;
+        missing)
+            fail 3 "missing python3 on the PATH of the pohunek daemon; install Python" \
+                "$PYTHON_MIN_VERSION or newer, then run pohunek service refresh-path"
+            ;;
+        old)
+            fail 3 "the pohunek daemon finds ${found% *} (${found##* }) first; the adapters" \
+                "need Python $PYTHON_MIN_VERSION or newer: install it, then run" \
+                "pohunek service refresh-path"
+            ;;
+    esac
+}
+
 step_secrets_file() {
     if [ -f "$env_file" ]; then
-        [ "$(stat -c %a "$env_file")" = 600 ] \
+        [ "$(file_mode "$env_file")" = 600 ] \
             || fail 9 "$env_file must have mode 0600; run chmod 0600 $env_file"
         in_place "secrets file $env_file"
         return
@@ -1336,7 +1582,7 @@ plan() {
 
 # Prints every step with its state from the detection; changes nothing.
 print_plan() {
-    local state
+    local state found
     detect_autoreview
     detect_pohunek
     echo "setup plan for $user_name on $platform:"
@@ -1351,6 +1597,17 @@ print_plan() {
         state="will run ($pohunek_state)"
     fi
     plan "pohunek $POHUNEK_VERSION with its login service" "$state"
+    if [ "$os" = Darwin ]; then
+        state="checked after pohunek"
+        if [ "$pohunek_state" != ok ]; then
+            :
+        elif found=$(daemon_python) && state=$(daemon_python_state "$found"); then
+            [ "$found" = missing ] || state="$state ($found)"
+        else
+            state="unreadable search path; run pohunek service refresh-path"
+        fi
+        plan "python3 $PYTHON_MIN_VERSION or newer on the PATH of the pohunek daemon" "$state"
+    fi
     if [ -z "$dir" ]; then
         plan "configuration and the later steps" "needs --dir"
         return
@@ -1370,6 +1627,10 @@ print_plan() {
         plan "secrets, validate, profiles, packages, hooks" "decided after the steps above"
     else
         plan_profiles
+    fi
+    if [ "$os" = Darwin ]; then
+        plan "launchd agents of autoreview and the queue" "not written by setup yet (#513)"
+        return
     fi
     detect_units
     if [ "${#units_missing[@]}" -eq 0 ] && [ "${#units_changed[@]}" -eq 0 ] \
@@ -1451,6 +1712,7 @@ run_steps() {
     declare -gA profile_input=() profile_result=() profile_retention=()
     step_autoreview
     step_pohunek
+    [ "$os" = Linux ] || step_daemon_python
     step_config
     step_secrets_file
     if [ "$created_config" -eq 1 ]; then
@@ -1466,8 +1728,15 @@ run_steps() {
     step_packages
     step_hooks
     step_profiles
-    step_service
-    step_linger
+    if [ "$os" = Darwin ]; then
+        echo "setup: the launchd agents of autoreview are not written by setup yet (#513);"
+        echo "until then run the service in a terminal:"
+        printf '  %q --config %q --env-file %q serve\n' "$autoreview_bin" "$dir/config.yaml" \
+            "$env_file"
+    else
+        step_service
+        step_linger
+    fi
     if [ "$changed" -eq 1 ]; then
         echo "setup: done"
     else
@@ -1492,6 +1761,10 @@ main() {
     if [ -n "$dir" ]; then
         unit_path_safe "$dir" \
             || fail 1 "--dir must be an absolute path of letters, digits, '.', '_', '-' and '/'"
+        if [ "$os" = Darwin ] && tcc_protected "$dir" "$HOME"; then
+            fail 1 "--dir must not be in ${TCC_FOLDERS[*]}: macOS privacy protection closes" \
+                "them to the launchd job of autoreview"
+        fi
     fi
     print_plan
     if [ "$dry_run" -eq 1 ]; then
