@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Features
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 Šafář review (the `autoreview` service and command) is a small service that
 reviews GitHub pull requests with coding agents you already run. It finds pull
@@ -75,7 +75,7 @@ Untrusted authors, and forks whose author is not listed in `logins`, are reviewe
 from the base checkout and are never approved automatically.
 [Untrusted authors](knowledge/safety/untrusted-authors.md)
 
-**Screens pull request text.** An optional text guard (after 0.4.0) scores the
+**Screens pull request text.** An optional text guard scores the
 texts of a pull request (title, body, commit messages, comments, review threads,
 added lines) for hidden instructions before the reviewers start, and can log,
 wait for a person or comment on a suspect pull request. `autoreview guard scan`
@@ -109,8 +109,8 @@ with its reviewer, rule, severity and outcome, such as refuted by the verifier
 or fixed in a later review, or still open when the pull request was merged or
 closed, so review quality can be measured without rating findings by hand.
 `autoreview findings list` prints them as JSON lines, and `autoreview report`
-(after 0.4.0) turns them, with the timing and the decisions of the reviews, into
-shares per reviewer, severity and repository over a range of days.
+turns them, with the timing and the decisions of the reviews, into shares per
+reviewer, severity and repository over a range of days.
 [Finding outcomes](knowledge/concepts/finding-outcomes.md),
 [review report](knowledge/concepts/review-report.md)
 

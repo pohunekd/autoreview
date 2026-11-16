@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Getting started
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release and `scripts/setup`. The script installs the autoreview release
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release and `scripts/setup`. The script installs the autoreview release
 > named by `AUTOREVIEW_VERSION` in the script, which must know the `init` layout
 > flags and `profiles install --pohunek-timeout-seconds` (0.4.0 or later). A
 > part that is not available names its open issue.
@@ -226,8 +226,8 @@ A third run with the same `--dir` on the finished setup prints every step as
   whose Codex adapters 0.4.0 refuses (`review_nonce_mismatch`), it names each
   Codex profile it kept and prints the command with placeholders for the flags.
 - A directory made by an earlier setup run may have mode 0755 and its store
-  0644, which lets other local users read the review history. From the first
-  release after 0.4.0, `validate`, and with it the script, stops on such a store
+  0644, which lets other local users read the review history. From 0.5.0 on,
+  `validate`, and with it the script, stops on such a store
   with exit code 9 and prints the `chmod` command for each path. Run
   `chmod 700 <dir>` and `chmod 600 <dir>/autoreview.db*`, with the `--dir` you
   gave the script, before the upgrade or when it stops, then run the script

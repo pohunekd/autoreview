@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Solo maintainer
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 A single maintainer reviews the repositories they own. Their own pull requests
 get a comment, because GitHub does not let an author approve or request changes

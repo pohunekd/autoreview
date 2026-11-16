@@ -9,8 +9,8 @@ intents: [update, help]
 
 # Upgrade and backup
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue. A container
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue. A container
 > image is not available (#40).
 
 Back up first, validate before every restart, and keep the previous binary
@@ -49,8 +49,8 @@ retention settings (`store.review_retention_seconds`,
    ```
 
    `validate` loads `config.yaml`, the policy and every prompt. A new key or a changed
-   policy rule shows up here as a named error. Fix it before the restart. After
-   0.4.0 it also refuses a store directory or store file that grants the group
+   policy rule shows up here as a named error. Fix it before the restart. From
+   0.5.0 on it also refuses a store directory or store file that grants the group
    or other users any access, and names the `chmod` that fixes each path. A
    store that a command run by hand created, such as a first
    `sudo -u autoreview autoreview poll` under umask 022, has 0644 files; run

@@ -9,8 +9,8 @@ intents: [setup, project, help]
 
 # Policy reference
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 The policy decides **what** is reviewed, **by whom**, and **what happens with
 the result**. It lives in its own file, `policy.yaml`, next to the prompt files

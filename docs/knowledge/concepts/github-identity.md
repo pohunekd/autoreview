@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # GitHub identity
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 autoreview acts on GitHub through **credentials**. A credential is one GitHub
 token, the account (its **login**) that the token belongs to, and the

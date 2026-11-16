@@ -9,8 +9,8 @@ intents: [debug, help, update]
 
 # State and recovery
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 autoreview keeps all of its state in one SQLite file, `store.path` in
 [config.yaml](../../configuration.md#store). A restart does not lose a review in
@@ -35,7 +35,7 @@ The database holds the published text of reviews and the finding excerpts that
 refer to the repository. Protect it accordingly. Retention (below) limits how
 long it keeps completed reviews.
 
-After 0.4.0 the store is private to the user of the service. A new database
+From 0.5.0 on the store is private to the user of the service. A new database
 gets mode 0600, and `autoreview init` creates its `--dir` with mode 0700 when
 the store lies inside it. `autoreview validate` refuses a store directory or
 file that grants the group or other users any access, with

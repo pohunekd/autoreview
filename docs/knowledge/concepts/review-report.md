@@ -9,8 +9,9 @@ intents: [help, debug]
 
 # Review report
 
-> **Status: after 0.4.0.** `autoreview report` and its weekly line in the review
-> queue digest come after 0.4.0.
+> **Status: after 0.5.0.** `autoreview report` and its weekly line in the review
+> queue digest are part of the 0.5.0 release. This page describes them on `main`
+> after that release, where `report --pipeline` also covers pruned reviews.
 
 `autoreview report` gives a periodic, comparable picture of how the reviews
 perform, so a change of a prompt, a model or a policy can be judged on numbers.

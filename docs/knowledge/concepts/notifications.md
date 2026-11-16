@@ -9,8 +9,8 @@ intents: [setup, help, debug]
 
 # Notifications
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 autoreview tells people about reviews that need them, and it records the rest.
 Each **event** has a **level**. Each level goes to one or more **backends**. The

@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Enable the text guard
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 The text guard of a rule ([`guard`](../../policy.md#guard)) scans the text of a
 pull request for instructions hidden from a human reader before the reviewers

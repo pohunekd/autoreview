@@ -9,8 +9,8 @@ intents: [setup, update, debug, help]
 
 # Configuration reference
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 `config.yaml` holds the technical settings of one autoreview service: which
 GitHub account it acts as, which pohunek hosts run the reviewers, how often it
@@ -33,7 +33,7 @@ other name is `configuration_invalid` naming the key.
 The service finds the file through `--config <path>` or the
 `AUTOREVIEW_CONFIG` environment variable; with neither it refuses to start.
 
-A `config.yaml` written for 0.4.0 needs five more keys after 0.4.0:
+A `config.yaml` written for 0.4.0 needs five more keys from 0.5.0 on:
 `schedule.usage_limit_retry_delays_seconds`,
 `schedule.outcome_check_interval_seconds`, `limits.max_issue_characters`,
 `store.outcome_retention_seconds` and `pohunek.head_checkout_host_hooks`.

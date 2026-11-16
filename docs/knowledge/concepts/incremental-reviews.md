@@ -9,8 +9,8 @@ intents: [help, debug]
 
 # Incremental reviews
 
-> **Status: after 0.4.0.** This page describes autoreview on `main` after the
-> 0.4.0 release. A part that is not available names its open issue.
+> **Status: after 0.5.0.** This page describes autoreview on `main` after the
+> 0.5.0 release. A part that is not available names its open issue.
 
 A push to a pull request that was reviewed before starts a new review of the new
 head. That review is either **incremental** (only the commits since the last
