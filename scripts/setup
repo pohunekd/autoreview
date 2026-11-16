@@ -1895,7 +1895,7 @@ install_agent() {
     local label=${agent_labels[$1]} file=$unit_dir/${agent_names[$1]} previous="" current
     local again="" deadline
     if [ -f "$file" ]; then
-        previous=$(cat "$file"; echo x) || fail 10 "reading $file failed"
+        previous=$(cat "$file" && echo x) || fail 10 "reading $file failed"
     fi
     if launchctl print "$agent_domain/$label" >/dev/null 2>&1; then
         again=" again"
