@@ -7,6 +7,7 @@
 
 use autoreview_go_compat::go_time::format_rfc3339_nano;
 use rusqlite::{Connection, Row, params};
+use serde::Serialize;
 use time::OffsetDateTime;
 
 use super::reviews::{time_key, unavailable};
@@ -57,7 +58,9 @@ const OUTCOME_COLUMNS: &str = "repository, number, finding_key, tracked_key, wor
      blocking, outcome, outcome_head_sha, published_at, updated_at";
 
 /// One published finding and what became of it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// It serializes with the column names in column order, the fields of `findings list`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct FindingOutcome {
     /// Repository as `owner/name`.
     pub repository: String,
@@ -101,6 +104,18 @@ pub struct FindingOutcome {
     pub published_at: String,
     /// Time the row was last written, RFC 3339 in UTC.
     pub updated_at: String,
+}
+
+/// One finding outcome with the end of its pull request, as `findings list` prints it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ListedOutcome {
+    /// The outcome row; its fields come first.
+    #[serde(flatten)]
+    pub finding: FindingOutcome,
+    /// How the pull request ended, `merged` or `closed`; empty until a state read saw it end.
+    pub ended: String,
+    /// Head SHA that the pull request ended on; empty while `ended` is empty.
+    pub end_head_sha: String,
 }
 
 /// What a published review decided about one earlier finding of its pull request.
@@ -200,11 +215,31 @@ impl Store {
         repository: &str,
         since: OffsetDateTime,
     ) -> Result<Vec<FindingOutcome>, Error> {
+        let listed = self.list_outcomes(repository, since)?;
+        Ok(listed.into_iter().map(|listed| listed.finding).collect())
+    }
+
+    /// Returns the outcomes of `repository` published at or after `since`, oldest first, each
+    /// with the end of its pull request.
+    ///
+    /// `ended` is empty for a pull request whose state was never read or has not ended.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_unavailable` when SQLite fails.
+    pub fn list_outcomes(
+        &self,
+        repository: &str,
+        since: OffsetDateTime,
+    ) -> Result<Vec<ListedOutcome>, Error> {
         let since = format_rfc3339_nano(since);
         let connection = self.lock_connection()?;
+        // `USING` merges `repository` and `number`, so the outcome columns stay unqualified.
         let mut statement = connection
             .prepare(&format!(
-                "SELECT {OUTCOME_COLUMNS} FROM finding_outcomes \
+                "SELECT {OUTCOME_COLUMNS}, COALESCE(ended, ''), COALESCE(end_head_sha, '') \
+                 FROM finding_outcomes \
+                 LEFT JOIN finding_outcome_pull_requests USING (repository, number) \
                  WHERE repository = ?1 AND {} >= {} \
                  ORDER BY {}, number, finding_key",
                 time_key("published_at"),
@@ -213,7 +248,13 @@ impl Store {
             ))
             .map_err(unavailable)?;
         let rows = statement
-            .query_map(params![repository, since], read_row)
+            .query_map(params![repository, since], |row| {
+                Ok(ListedOutcome {
+                    finding: read_row(row)?,
+                    ended: row.get(19)?,
+                    end_head_sha: row.get(20)?,
+                })
+            })
             .map_err(unavailable)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
     }

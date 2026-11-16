@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, approve, resolve, retry, review-queue, backup-db, prune-branches and guard scan - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches and guard scan - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -27,7 +27,7 @@ Every command except `init`, `profiles install` and `guard scan` reads the
 configuration from `--config` or `AUTOREVIEW_CONFIG` and validates it together
 with the policy before doing anything. Output is
 one JSON object (or array) on stdout, except the text summary of `stats` without
-`--json`; logs are JSON lines on stderr. A failed
+`--json` and the JSON lines of `findings list`; logs are JSON lines on stderr. A failed
 command prints `{"error": "<code>", ...}` with a stable error code and exits
 with status 1, so scripts and agents can branch on the code.
 
@@ -438,10 +438,46 @@ no state.
 | `autoreview review --repository OWNER/REPO NUMBER` | Everything the engine knows about one pull request: current head, reviews with their `author_class`, published decisions, waits, hand-offs, and `skipped` with the reason when the last discovery pass skipped it |
 | `autoreview awaiting` | Reviews that wait for a human approval |
 | `autoreview stats [--since DATE [--until DATE]] [--json]` | Review statistics from the store: the current state and, with `--since`, daily counts over UTC days; see [review statistics](stats.md) |
+| `autoreview findings list --repo OWNER/REPO --since DATE` | The recorded outcome of each published finding of one repository, one JSON object per line; see [below](#autoreview-findings-list) |
 | `autoreview review-queue` | Sends the review queue to `notify.review_queue.backends` and prints it. Run it from a timer |
 
 A review's `author_class` is the class it was dispatched with, `trusted` or
 `untrusted`; a review stored before author classes has no `author_class`.
+
+### `autoreview findings list`
+
+```
+autoreview findings list --repo <owner/name> --since <YYYY-MM-DD>
+```
+
+Prints the [finding outcomes](knowledge/concepts/finding-outcomes.md) of one
+repository: one JSON object per line for every finding published at or after
+midnight UTC of `--since`, oldest first (then by pull request number and finding
+key). Both flags are required. It calls neither GitHub nor pohunek and has no row
+limit; a repository or a range without findings prints nothing and exits with
+status 0.
+
+| Field | Value |
+|---|---|
+| `repository`, `number` | The pull request; the repository as lowercase `owner/name` |
+| `finding_key` | The head SHA cut to 12 characters, `:` and the finding ID |
+| `tracked_key` | The key a later review settles the finding by; empty once it is no longer tracked |
+| `workflow_id`, `finding_id`, `head_sha` | The review that published the finding first, its ID there and the head it was published on |
+| `reviewer_id`, `pipeline`, `rule` | The reviewer (the first one of a merged finding), the pipeline and the rule `match` |
+| `severity`, `confidence`, `path`, `line` | As published |
+| `blocking` | `true` when the finding held the merge back when it was published |
+| `outcome` | `open`, `refuted`, `not_blocking`, `fixed`, `answered`, `open_at_merge` or `open_at_close` |
+| `outcome_head_sha` | The head the outcome was decided at; empty while `open` |
+| `published_at`, `updated_at` | When the finding was published and when its row last changed, RFC 3339 in UTC |
+| `ended` | `merged` or `closed` once a state read saw the pull request end, empty before; a reopened pull request keeps its earlier end until it ends again |
+| `end_head_sha` | The head the pull request ended on; empty while `ended` is empty |
+
+The fields always come in this order. A row holds no title or body of a finding.
+A `--repo` that is not a lowercase `owner/name` is `repository_not_allowed`, a
+`--since` that is not an existing `YYYY-MM-DD` day or a missing flag is
+`command_invalid`, and a store that cannot be opened is `store_unavailable`. Like
+every command that opens the store, it creates an empty one at `store.path` when
+none exists.
 
 ## Act
 
