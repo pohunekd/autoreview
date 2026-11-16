@@ -148,10 +148,12 @@ jobs:
             dist/autoreview-${{ needs.meta.outputs.version }}-${{ matrix.target }}.tar.gz.sha256
           if-no-files-found: error
 
-  # Apple Silicon in two jobs: build-darwin builds and ad-hoc signs the binary
-  # on macOS, and package-darwin packs it on Linux with the same GNU tar as the
-  # musl archives and runs nothing from it. An ad-hoc signature needs no
-  # certificate or secret; the provenance comes from the attest job.
+  # Apple Silicon in three jobs, so that the bytes that are released are never
+  # produced and checked on the same runner: build-darwin builds and ad-hoc
+  # signs the binary on macOS, package-darwin packs it on Linux with the same
+  # GNU tar as the musl archives and runs nothing from it, and verify-darwin
+  # checks the packed archive on a fresh macOS runner. An ad-hoc signature needs
+  # no certificate or secret; the provenance comes from the attest job.
   build-darwin:
     name: build aarch64-apple-darwin
     needs: meta
@@ -263,11 +265,36 @@ jobs:
             dist/autoreview-${{ needs.meta.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
           if-no-files-found: error
 
+  # Checks the packed archive as a user does: checksum, members, signature,
+  # identifier, libraries and version, with scripts/macos-check. The
+  # attestation does not exist yet; the attest job makes it after this job.
+  verify-darwin:
+    name: verify aarch64-apple-darwin
+    needs: [meta, package-darwin]
+    runs-on: macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: archive-aarch64-apple-darwin
+          path: ${{ runner.temp }}/archive
+      - name: Check the archive
+        run: |
+          scripts/macos-check archive --no-attestation \
+            "$RUNNER_TEMP/archive/autoreview-$VERSION-aarch64-apple-darwin.tar.gz"
+
   # The only job that can mint an OIDC token. It runs no repository code and
   # no build script; it signs exactly the files the build jobs uploaded.
   attest:
     name: attest
-    needs: [build, package-darwin]
+    needs: [build, verify-darwin]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
