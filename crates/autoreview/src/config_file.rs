@@ -499,6 +499,8 @@ struct StoreFile {
     review_retention_seconds: Option<Value>,
     /// How long a published decision is an incremental baseline, in seconds.
     published_retention_seconds: Option<Value>,
+    /// How long the outcome of a published finding stays after its last change, in seconds.
+    outcome_retention_seconds: Option<Value>,
 }
 
 /// The `cli` section.
@@ -1002,6 +1004,10 @@ fn map_file(
         &store.published_retention_seconds,
         "store.published_retention_seconds",
     )?;
+    let outcome_retention = seconds(
+        &store.outcome_retention_seconds,
+        "store.outcome_retention_seconds",
+    )?;
     let cli = section(&file.cli, "cli")?;
     let review_list_limit = positive(&cli.review_list_limit, "cli.review_list_limit")?;
     let publish = section(&file.publish, "publish")?;
@@ -1069,6 +1075,7 @@ fn map_file(
         discovery_lock_poll,
         review_retention,
         published_retention,
+        outcome_retention,
         session_start_attempts,
         session_cleanup_attempts,
         reviewer_run_attempts,

@@ -310,6 +310,8 @@ pub struct Config {
     pub matrix_max_characters: i64,
     /// Time that the last published decision of a pull request is kept as a baseline.
     pub published_retention: Duration,
+    /// Time that the outcome of a published finding stays in the database after its last change.
+    pub outcome_retention: Duration,
     /// Longest excerpt of a review in a Matrix message, in characters.
     pub excerpt_characters: i64,
     /// Width of the pohunek terminal of a review session, in columns.
@@ -576,7 +578,7 @@ impl Config {
     }
 
     /// Returns all durations that have a range check.
-    fn durations(&self) -> [Duration; 17] {
+    fn durations(&self) -> [Duration; 18] {
         [
             self.gh_timeout,
             self.pohunek_timeout,
@@ -595,6 +597,7 @@ impl Config {
             self.discovery_lock_poll,
             self.review_retention,
             self.published_retention,
+            self.outcome_retention,
         ]
     }
 
@@ -1209,6 +1212,7 @@ mod tests {
             ai_signed_pattern: "Written by AI:".to_owned(),
             matrix_max_characters: 4000,
             published_retention: Duration::from_secs(7 * 24 * 60 * 60),
+            outcome_retention: Duration::from_secs(365 * 24 * 60 * 60),
             excerpt_characters: 1000,
             terminal_cols: 120,
             terminal_rows: 100,
