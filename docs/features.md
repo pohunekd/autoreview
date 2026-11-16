@@ -99,7 +99,8 @@ one versioned JSON document for a dashboard of your own.
 
 **Records what became of each finding.** Every published finding is stored
 with its reviewer, rule, severity and outcome, such as refuted by the verifier
-or fixed in a later review, so review quality can be measured without rating findings by hand.
+or fixed in a later review, or still open when the pull request was merged or
+closed, so review quality can be measured without rating findings by hand.
 [Finding outcomes](knowledge/concepts/finding-outcomes.md)
 
 ## Requirements
