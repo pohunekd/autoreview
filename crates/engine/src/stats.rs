@@ -1346,13 +1346,13 @@ fn current_state(
 /// Counts the rows, the step runs and the rollup of the snapshot inside `range`.
 ///
 /// Returns the history with the seconds from the review request to publication of the first
-/// publications `firsts`, and the verifier's verdicts.
+/// publications `firsts`, the verifier's verdicts and the reviewer disagreement.
 pub(crate) fn history(
     snapshot: &StatsSnapshot,
     range: &StatsRange,
     pruned_before: OffsetDateTime,
     firsts: &BTreeSet<String>,
-) -> Result<(History, RequestSeconds, Checks), Error> {
+) -> Result<(History, RequestSeconds, Checks, Disagreements), Error> {
     let mut tally = HistoryTally::default();
     let (reviews, plans) = (&snapshot.reviews, &snapshot.plans);
     let (verifier, slots) = (&snapshot.verifier, &snapshot.slots);
@@ -1368,6 +1368,7 @@ pub(crate) fn history(
     let mut steps: BTreeMap<String, StepTally> = BTreeMap::new();
     let mut requests = RequestSeconds::new();
     let mut checks = Checks::new();
+    let mut disagreements = Disagreements::new();
     let mut day = range.since;
     while day <= range.until {
         let bucket = tally.days.remove(&day).unwrap_or_default();
@@ -1393,6 +1394,9 @@ pub(crate) fn history(
         for (key, counts) in bucket.checks {
             checks.entry(key).or_default().merge(counts);
         }
+        for (repository, counts) in bucket.disagreements {
+            disagreements.entry(repository).or_default().merge(counts);
+        }
         days.insert(day, bucket.total);
         let Some(next) = day.next_day() else {
             break;
@@ -1411,7 +1415,7 @@ pub(crate) fn history(
         failed_by_code: keyed(failures, |failed| FailedCount { failed }),
         steps: keyed(steps, StepTally::finish),
     };
-    Ok((history, requests, checks))
+    Ok((history, requests, checks, disagreements))
 }
 
 /// Turns a sorted map into breakdown entries, finishing each value with `finish`.

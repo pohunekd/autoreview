@@ -18,7 +18,7 @@ use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_FIXED, PRIOR_OPEN, prior_key};
 use crate::model::{PullRequest, Verification};
 use crate::protocol::fixtures::sha;
-use crate::report::{ReportRequest, VerifierCounts};
+use crate::report::{ReportRequest, ReviewerCounts};
 use crate::review::input::STEP_VERIFICATION;
 use crate::stats::Keyed;
 use crate::store::{FindingOutcome, REVIEW_COMPLETED, ReviewFilter};
@@ -262,7 +262,8 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
             (median, reviews.request_to_publication_p90_seconds)
         })
     };
-    // The verifier's counts of every repository, of the checked one and of the other one.
+    // The verifier's counts and the reviewer disagreement of every repository, of the checked
+    // one and of the other one.
     let checks = || {
         let (checked, other) = (checked.repository.clone(), pr.repository.clone());
         [None, Some(checked), Some(other)].map(|repository| {
@@ -272,18 +273,32 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
                 ..ReportRequest::default()
             };
             let report = h.engine.review_report(&CancellationToken::new(), &request);
-            report.expect("the report reads").reviews.by_reviewer
+            let reviews = report.expect("the report reads").reviews;
+            let attempts = (reviews.multi_reviewer, reviews.disagreed);
+            (attempts, reviews.disagreed_percent, reviews.by_reviewer)
         })
     };
-    let verdicts = |key: &str, checked, demoted, percent| Keyed {
+    let verdicts = |key: &str, checked, demoted, percent, blocked_alone| Keyed {
         key: key.to_owned(),
-        counts: VerifierCounts {
+        counts: ReviewerCounts {
             verifier_checked: checked,
             verifier_demoted: demoted,
             verifier_demoted_percent: Some(percent),
+            blocked_alone,
         },
     };
-    let verified = vec![verdicts("opus", 1, 1, 100.0), verdicts("sonnet", 1, 0, 0.0)];
+    // Sonnet found nothing on the checked pull request's second head, so Opus blocked alone;
+    // both blocked on its first head. Both reviewers left notes on the first notes head, the
+    // adopted hand-off ran no reviewer and the incremental notes head only Sonnet.
+    let verified = vec![
+        verdicts("opus", 1, 1, 100.0, 1),
+        verdicts("sonnet", 1, 0, 0.0, 0),
+    ];
+    let wanted_checks = [
+        ((3, 1), Some(33.3), verified.clone()),
+        ((2, 1), Some(50.0), verified),
+        ((1, 0), Some(0.0), Vec::new()),
+    ];
     let kept = history();
     let kept_requests = requests();
     let kept_checks = checks();
@@ -292,6 +307,7 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     let split = parse_rfc3339(&latest).expect("the creation time decodes");
     let partly = h.store.prune_reviews(split).expect("prune the earlier");
     let partly_requests = requests();
+    let partly_checks = checks();
     let cutoff = OffsetDateTime::now_utc() + time::Duration::days(1);
     let pruned = h.store.prune_reviews(cutoff).expect("prune the reviews");
     let rolled_up = history();
@@ -301,7 +317,8 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
     assert!(
         partly == 2
             && pruned == 3
-            && kept_checks == [verified.clone(), verified, Vec::new()]
+            && kept_checks == wanted_checks
+            && partly_checks == kept_checks
             && rolled_up_checks == kept_checks
             && kept["totals"]["notes_to_author"] == json!(2)
             && kept["by_repository"][0]["notes_to_author"] == json!(2)
@@ -313,8 +330,8 @@ async fn renewed_request_after_a_notes_handoff_asks_for_approval_without_a_revie
             && rolled_up_requests == kept_requests,
         "pruned {partly} and {pruned}: kept = {kept}, rolled up = {rolled_up}, request times \
          kept = {kept_requests:?}, partly = {partly_requests:?}, rolled up = \
-         {rolled_up_requests:?}, checks kept = {kept_checks:?}, rolled up = \
-         {rolled_up_checks:?}"
+         {rolled_up_requests:?}, checks kept = {kept_checks:?}, partly = {partly_checks:?}, \
+         rolled up = {rolled_up_checks:?}"
     );
     h.stop_engine().await;
 }
