@@ -1058,7 +1058,7 @@ pub(crate) fn reviewer_output(
 /// Returns the output of a finished verifier session.
 ///
 /// Every claim gets the verdict that `finding` or `prior` picks.
-fn verifier_output(
+pub(crate) fn verifier_output(
     request: &SessionRequest,
     finding: impl Fn(&ClaimFinding) -> &'static str,
     prior: impl Fn(&ClaimPrior) -> &'static str,
