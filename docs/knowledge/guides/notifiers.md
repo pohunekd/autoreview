@@ -112,10 +112,8 @@ notify:
     max_items: 50
 ```
 
-- Until M3, every Matrix backend that a route or the review queue reaches must
-  share `homeserver_url`, `access_token_env` and `mention_user`; only `room`
-  differs. Otherwise `config.yaml` is refused with `configuration_invalid` and
-  the first route key whose backend differs from an earlier one.
+- Each Matrix backend has its own `homeserver_url`, `access_token_env`, `room`
+  and `mention_user`, so two backends can use two homeservers or two accounts.
 - `mention_user` is used only in `action` messages, because digests never
   mention anyone.
 - The homeserver URL must use HTTPS. Plain HTTP is accepted only on `127.0.0.1`.

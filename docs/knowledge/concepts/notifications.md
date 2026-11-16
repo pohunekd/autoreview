@@ -259,8 +259,7 @@ rest of the engine.
 5. **Secrets come from the environment or the `--env-file`.** A backend that needs
    a token names the variable in an `*_env` key, as the Matrix backend does.
 
-Phase 6 of the project plan lists further backends as later decisions, each made
-when a concrete need arrives.
+A further backend is added when a concrete need arrives.
 
 ## Related pages
 

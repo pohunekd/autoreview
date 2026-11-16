@@ -83,8 +83,9 @@ example is `label:ai:review`, so a review starts when a pull request carries
 the `ai:review` label. Create that label in the repository if it does not
 exist yet.
 
-Every notification level and the review queue need a `matrix` backend; a
-route to a `none` backend is refused at load. The example routes them to one
+Every notification level and the review queue need a backend; a `none`
+backend only logs the messages, see [no notifier](notifiers.md#no-notifier).
+The example routes them to one
 `matrix` backend with placeholder values: set its `homeserver_url`, `room` and
 `mention_user` with the [notifiers guide](notifiers.md), and export its token
 as `AUTOREVIEW_MATRIX_TOKEN` in the same way as the GitHub token in step 7.

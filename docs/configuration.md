@@ -17,10 +17,12 @@ GitHub account it acts as, which pohunek hosts run the reviewers, how often it
 polls, its limits, where it keeps state and where notifications go. What gets
 reviewed and how is in [policy.yaml](policy.md).
 
-**Every key is required.** autoreview has no built-in defaults: a missing key
-stops the service at startup with an error that names it.
+**Every key is required**, except `publish.marker` and the optional sections
+`pohunek.host_state`, `mcp`, `metrics` and `guards`. autoreview has no built-in
+defaults: a missing key stops the service at startup with an error that names it.
 [`examples/config.yaml`](../examples/config.yaml) holds every key with a
-recommended value and a comment, and it loads as it is; its `notify` block routes
+recommended value and a comment. It loads once `policy_file` names a valid policy
+and the variables of its `*_env` keys are set; its `notify` block routes
 every level and the review queue to one `matrix` backend with placeholder values.
 CI loads it with every example policy. Secrets are never in
 the file; keys ending in `_env` name the environment variable that holds them, or the
@@ -646,10 +648,10 @@ Besides each key's own range, `validate` enforces:
   `limits.max_summary_characters`; `limits.excerpt_characters` is at most a
   quarter of `notify.max_characters`.
 - `publish.github_body_max_bytes` is at most 65536.
-- `publish.signature` is one line that starts with `publish.ai_signed_pattern`,
-  leading symbols such as an emoji ignored on both, and cannot mention anyone,
-  embed HTML or imitate the review marker. `publish.ai_signed_pattern` needs text
-  after its leading symbols.
+- `publish.signature` is one line of at most 200 bytes that starts with
+  `publish.ai_signed_pattern`, leading symbols such as an emoji ignored on both,
+  and cannot mention anyone, embed HTML or imitate the review marker.
+  `publish.ai_signed_pattern` needs text after its leading symbols.
 - `publish.marker` is `autoreview` or `hermes-pr-review`; `marker:` without a
   value is refused as missing.
 - A policy rule with [`guard`](policy.md#guard) needs `guards.text`; without it

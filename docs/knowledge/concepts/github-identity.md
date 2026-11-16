@@ -240,14 +240,14 @@ The rule is therefore cited here as the engine's rule, not as a GitHub guarantee
 
 ## Why not a GitHub App yet
 
-The project decision is a personal token or a machine user (decision D5 of the
-project plan); GitHub App installation tokens are not available (#47). Two
+autoreview acts as a personal token or a machine user; GitHub App installation
+tokens are not available (#47). Two
 points are open:
 
 - **Review requests.** The trigger `review-requested` asks whether the pull request
   requests a review from the credential's login. Review requests are made to users
   and teams. Whether a GitHub App identity can be requested as a reviewer is an
-  open question that the plan lists for phase 6. This page does not verify the
+  open question. This page does not verify the
   GitHub documentation on it.
 - **Label trigger.** Label triggers work under any identity that can read the
   pull request, so a GitHub App would support them without that question being

@@ -169,7 +169,7 @@ The secrets file holds the variable of the credential's `token_env` and the
 backend secrets as `NAME=value` lines. Write the values with an editor, never
 on a command line, for example with `sudoedit /etc/autoreview/autoreview.env`.
 See [secrets](knowledge/safety/secrets.md). The units pass the file with
-`--env-file`, so it must be owned by `autoreview` with mode `0600`; the
+`--env-file`, so it must be owned by `autoreview` with mode `0600` or `0400`; the
 installer checks the owner and the mode, prints the command that fixes them,
 and never reads the values.
 

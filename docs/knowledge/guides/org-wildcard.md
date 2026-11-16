@@ -55,13 +55,13 @@ pipelines:
   companion:
     reviewers: [sonnet]
     incremental_reviewers: [sonnet]
-    prompt: prompts/companion.md     # Rust and Slint checklist, not written by init
+    prompt: prompts/companion.md     # Rust and Slint checklist
     checkout: base
     project_sources: [manual]
   android:
     reviewers: [sonnet]
     incremental_reviewers: [sonnet]
-    prompt: prompts/android.md       # Kotlin checklist, not written by init
+    prompt: prompts/android.md       # Kotlin checklist
     checkout: base
     project_sources: [manual]
   generic:
