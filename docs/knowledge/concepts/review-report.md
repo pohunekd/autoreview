@@ -9,8 +9,8 @@ intents: [help, debug]
 
 # Review report
 
-> **Status: after 0.4.0.** `autoreview report` comes after 0.4.0. The weekly line
-> in the review queue digest is not available yet (#52).
+> **Status: after 0.4.0.** `autoreview report` and its weekly line in the review
+> queue digest come after 0.4.0.
 
 `autoreview report` gives a periodic, comparable picture of how the reviews
 perform, so a change of a prompt, a model or a policy can be judged on numbers.
@@ -129,6 +129,14 @@ Each part, the total and every reviewer, severity and repository, counts:
 A merged finding counts under its first reviewer only. Read `fixed_percent`
 over a range that ended some time ago: right after a range, most findings are
 still `open`.
+
+## Weekly line
+
+With `notifications.weekly_report: digest` in the policy, the hourly
+`autoreview review-queue` run appends this text, for every repository and
+pipeline from 7 UTC days before today to today, to its message once a week. The
+range of two consecutive reports shares one day. See
+[weekly report](notifications.md#weekly-report) for when it is sent and retried.
 
 ## Filters and retention
 

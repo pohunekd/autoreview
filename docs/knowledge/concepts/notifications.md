@@ -185,7 +185,8 @@ Rules for the queue:
   that no credential serves, are left out without a read.
 - At most `notify.review_queue.max_items` pull requests are listed. The message
   says when it was truncated.
-- Nothing is sent when nothing waits. The command still prints an empty list.
+- Nothing is sent when nothing waits and no weekly report is due. The command
+  still prints an empty list.
 - A pull request whose state cannot be read is left out of this message, and the
   next run includes it again.
 - The message is cut between entries, never inside one, so formatted content stays
@@ -193,6 +194,32 @@ Rules for the queue:
 - The message gets one attempt on each queue backend. Each failure is logged as
   `review queue digest dropped` with the backend and the code, and the command
   fails with the code of the first backend that failed.
+
+### Weekly report
+
+With `notifications.weekly_report: digest` in the policy, the queue message ends
+once a week with the text of `autoreview report --since <today - 7 days>` for
+every repository and pipeline (the last 7 UTC days and today so far, see
+[review report](review-report.md)). `off` or no key sends none. It is sent:
+
+- by the first `review-queue` run on the 7th UTC day after the day of the last
+  send, or by the first run at all. With an hourly timer it comes shortly after
+  midnight UTC on the same weekday each week. When nothing waits, the message is
+  the report alone. The printed result has `"weekly_report": true`.
+- only after every queue backend took the message: the time of the send is then
+  stored, so a failed send is repeated by the next run. A send that the store
+  then fails to record is repeated too.
+- when the clock went back to a day before the stored send: once, after which
+  the weekly rhythm continues from the corrected clock.
+- whole or not at all: when it does not fit `notify.max_characters` with at
+  least one waiting entry, the requests are sent alone, the warning
+  `weekly report dropped` with `review_queue_too_long` is logged, and the next
+  run tries again. Entries are dropped before the report, like any other cut.
+
+A report that fails (a store error, or `report_range_pruned` when
+`store.outcome_retention_seconds` is under 8 days) is left out with the warning
+`weekly report skipped` and its code; the queue is still sent and the report is
+tried again by the next run.
 
 ## Message contents
 
