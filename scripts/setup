@@ -1281,7 +1281,7 @@ import tomllib
 try:
     with open(sys.argv[1], "rb") as handle:
         environment = tomllib.load(handle).get("environment")
-except (OSError, tomllib.TOMLDecodeError) as error:
+except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
     sys.exit(f"setup: cannot read {sys.argv[1]}: {error}")
 entries = environment.get("search_path") if isinstance(environment, dict) else None
 if not (isinstance(entries, list) and entries and all(
@@ -1575,14 +1575,14 @@ agent_environment() {
 # Prints the agent plist of label $1 that runs `autoreview $2` and logs to $3: the review
 # service ($4 = service) restarts after a failure, the queue ($4 = queue) runs at QUEUE_HOURS.
 agent_plist() {
-    local label=$1 command=$2 log=$3 kind=$4 argument hour
+    local label=$1 subcommand=$2 log=$3 kind=$4 argument hour
     printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"' \
         '  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' '<plist version="1.0">' '<dict>'
     printf '\t<key>Label</key>\n\t<string>%s</string>\n' "$label"
     printf '\t<key>ProgramArguments</key>\n\t<array>\n'
     for argument in "$autoreview_bin" --config "$dir/config.yaml" --env-file "$env_file" \
-        "$command"; do
+        "$subcommand"; do
         printf '\t\t<string>%s</string>\n' "$(xml_text "$argument")"
     done
     printf '\t</array>\n\t<key>EnvironmentVariables</key>\n\t<dict>\n'
@@ -1820,10 +1820,14 @@ started_binary_state() {
 
 # Prints the service_binary_state of the agent process $1. launchd starts the binary by
 # its path, so the path alone cannot show a replaced file: a binary modified after the
-# start of the process is stale.
+# start of the process is stale. Both paths are resolved, because `ps -o comm=` may name a
+# symbolic link that launchd ran, such as a ~/.local/bin/autoreview link to a build.
 agent_binary_state() {
     local running installed state started modified
     running=$(ps -o comm= -p "$1" 2>/dev/null) || running=""
+    if [ -n "$running" ]; then
+        running=$(readlink -f "$running" 2>/dev/null) || running=""
+    fi
     installed=$(readlink -f "$autoreview_bin" 2>/dev/null) || installed=""
     if [ -z "$installed" ]; then
         echo unknown
@@ -1871,35 +1875,36 @@ detect_agents() {
 # Writes agent file $1 with the text $2 through a temporary file and a rename.
 write_agent_file() {
     local temporary=${1%/*}/.${1##*/}.setup
-    { printf '%s' "$2" >"$temporary" && chmod 0644 "$temporary" && mv -f "$temporary" "$1"; } \
-        || fail 10 "writing $1 failed"
+    printf '%s' "$2" >"$temporary" && chmod 0644 "$temporary" && mv -f "$temporary" "$1"
 }
 
-# Writes and loads agent $1 (an index of render_agents). When the new definition does not
-# load, the text before it is written back and loaded again, or the new file is removed.
+# Writes and loads agent $1 (an index of render_agents). The loaded job is booted out
+# before the file changes, so a failed bootout leaves the old file with the old job. When
+# writing, enabling or loading the new definition fails, the text before it is written back
+# and loaded again, or the new file is removed.
 install_agent() {
     local label=${agent_labels[$1]} file=$unit_dir/${agent_names[$1]} previous=""
     if [ -f "$file" ]; then
         previous=$(cat "$file"; echo x) || fail 10 "reading $file failed"
     fi
-    write_agent_file "$file" "${agent_texts[$1]}"
     if launchctl print "$agent_domain/$label" >/dev/null 2>&1; then
         launchctl bootout "$agent_domain/$label" \
-            || fail 10 "launchctl bootout $agent_domain/$label failed"
+            || fail 10 "launchctl bootout $agent_domain/$label failed; nothing was changed"
     fi
-    launchctl enable "$agent_domain/$label" \
-        || fail 10 "launchctl enable $agent_domain/$label failed"
-    if launchctl bootstrap "$agent_domain" "$file"; then
+    if write_agent_file "$file" "${agent_texts[$1]}" \
+        && launchctl enable "$agent_domain/$label" \
+        && launchctl bootstrap "$agent_domain" "$file"; then
         return
     fi
     if [ -n "$previous" ]; then
-        write_agent_file "$file" "${previous%x}"
-        launchctl bootstrap "$agent_domain" "$file" \
-            || fail 10 "launchctl bootstrap failed for the new $file and for its previous text"
-        fail 10 "launchctl bootstrap failed for the new $file; its previous text is loaded again"
+        if write_agent_file "$file" "${previous%x}" \
+            && launchctl bootstrap "$agent_domain" "$file"; then
+            fail 10 "installing the new $file failed; its previous text is loaded again"
+        fi
+        fail 10 "installing the new $file failed, and loading its previous text failed too"
     fi
     rm -f -- "$file"
-    fail 10 "launchctl bootstrap failed for $file; the file was removed"
+    fail 10 "installing $file failed; the file was removed"
 }
 
 # The macOS counterpart of step_service and step_linger: the two LaunchAgents in the login
@@ -1939,11 +1944,13 @@ step_agents() {
         approve "replacing the changed agents (the diff above)" \
             "${agents_changed[@]/#/write $unit_dir/}"
     fi
-    local -a commands=("install -d -m 0700 $log_dir")
+    local -a commands=()
+    [ -d "$log_dir" ] || commands+=("install -d -m 0700 $log_dir")
+    [ -d "$unit_dir" ] || commands+=("install -d -m 0755 $unit_dir")
     for i in "${!agent_names[@]}"; do
         label=${agent_labels[i]}
-        commands+=("write $unit_dir/${agent_names[i]}"
-            "launchctl bootout $agent_domain/$label (when it is loaded)"
+        commands+=("launchctl bootout $agent_domain/$label (when it is loaded)"
+            "write $unit_dir/${agent_names[i]}"
             "launchctl enable $agent_domain/$label"
             "launchctl bootstrap $agent_domain $unit_dir/${agent_names[i]}")
     done

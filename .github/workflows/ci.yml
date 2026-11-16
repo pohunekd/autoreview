@@ -87,6 +87,7 @@ jobs:
         run: |
           test "$(uname -sm)" = "Darwin arm64"
           prefix="$(brew --prefix)"
+          test -x "$prefix/bin/bash"
           "$prefix/bin/bash" --version | head -n 1
           echo "$prefix/bin" >> "$GITHUB_PATH"
       - name: Setup self-test and launchd lint

@@ -104,7 +104,10 @@ check_service() {
     pid=$(printf '%s\n' "$status" | sed -n 's/^[[:space:]]*pid = //p' | head -n 1)
     [ "$state" = running ] || fail "$AGENT_LABEL is ${state:-unknown}, not running; read its log"
     running=$(ps -o comm= -p "$pid") || fail "ps -p $pid"
-    [ "$running" = "$binary" ] || fail "pid $pid does not run $binary"
+    # `ps -o comm=` may name a symbolic link that launchd ran, so both sides are resolved.
+    resolved=$(readlink -f "$running") || fail "readlink -f $running"
+    target=$(readlink -f "$binary") || fail "readlink -f $binary"
+    [ "$resolved" = "$target" ] || fail "pid $pid does not run $binary"
     ok "$AGENT_LABEL runs $binary as pid $pid"
 
     last=$((QUEUE_ENTRIES - 1))
