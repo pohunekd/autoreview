@@ -3,6 +3,21 @@
 Release notes of autoreview, newest first. Unreleased changes are fragments
 under `changelog.d/`; `scripts/changelog fold` moves them here.
 
+## 0.6.0 - 2026-11-16
+
+### Added
+
+- Each release also publishes `autoreview-<version>-aarch64-apple-darwin.tar.gz` for Apple Silicon Macs on macOS 14 or newer, with its `.sha256` file and a build provenance attestation. The binary is ad-hoc signed and not notarized; `scripts/macos-check archive <archive>` checks the checksum, the attestation, the signature and the version on a Mac. ([#513](https://github.com/pohunekd/autoreview/issues/513))
+- `scripts/setup` sets up autoreview on a Mac with Apple Silicon and macOS 14 or newer, with bash 4 or newer (`brew install bash`). It installs the `aarch64-apple-darwin` archives of autoreview and pohunek after their checksum and attestation checks, writes the configuration without `pohunek.runtime_dir` when `XDG_RUNTIME_DIR` is unset, refuses configuration and XDG directories in the folders that macOS privacy protection closes to launchd jobs, checks that the pohunek daemon finds Python 3.11 or newer for the reviewer adapters, and installs two LaunchAgents next to pohunek's: the review service and the hourly review queue from 08:00 to 20:00, with secrets only through `--env-file` and logs under `$XDG_STATE_HOME/autoreview/logs`. `scripts/macos-check service` checks the installed agents. ([#513](https://github.com/pohunekd/autoreview/issues/513))
+
+### Changed
+
+- `autoreview report --pipeline` now also covers pruned reviews: the prune keeps the report's counts per repository and pipeline, so a `--pipeline` range is no longer refused because it starts before the review retention. Besides the outcome-retention check, it refuses with `report_range_pruned` a range with a day that 0.4.0 or 0.5.0 pruned, because those days have daily counts but none per pipeline; reviews pruned by a release without the rollup count as zero. `stats` output is unchanged. ([#52](https://github.com/pohunekd/autoreview/issues/52))
+- `scripts/setup` installs pohunek 0.43.1 when pohunek is missing or older than 0.41.0, so a fresh setup can fetch the pull request head at session start and run head-checkout reviews. A pohunek of 0.41.0 or later that is already installed is kept. ([#505](https://github.com/pohunekd/autoreview/issues/505))
+- The product is named Šafář review in the README and the features page, as on pohunek.dev; the repository, the binary and command `autoreview`, the configuration and the release archive names are unchanged. ([#509](https://github.com/pohunekd/autoreview/issues/509))
+- `autoreview profiles install --agent codex` on a host other than Linux, such as a Mac review host, fails with `profile_agent_unsupported` before it calls pohunek or writes a file, because the Codex adapter needs Linux `PR_SET_CHILD_SUBREAPER` to end the processes that Codex leaves. Claude reviewers install as before, and a policy may still name Codex reviewers on Linux hosts. ([#513](https://github.com/pohunekd/autoreview/issues/513))
+- On macOS, `pohunek.runtime_dir` may be left out of `config.yaml`: autoreview then passes no `XDG_RUNTIME_DIR` to the pohunek CLI, which reaches its daemon in pohunek's macOS default directory, and `autoreview init` leaves the key out unless `--pohunek-runtime-dir` is given. On Linux the key stays required. ([#513](https://github.com/pohunekd/autoreview/issues/513))
+
 ## 0.5.0 - 2026-11-16
 
 ### Added

@@ -34,7 +34,7 @@ POHUNEK_VERSION="0.43.1"
 POHUNEK_MIN_VERSION="0.41.0"
 # The autoreview release that is installed; it must know the init layout flags
 # and the --pohunek-timeout-seconds of profiles install (0.4.0 or later).
-AUTOREVIEW_VERSION="0.5.0"
+AUTOREVIEW_VERSION="0.6.0"
 # The first release that refuses the Codex adapter of every earlier release
 # (review_nonce_mismatch); a Codex profile written before it needs a reinstall.
 CODEX_ADAPTER_RELEASE="0.4.0"
