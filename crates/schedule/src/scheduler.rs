@@ -110,6 +110,12 @@ pub struct Record {
     /// `fetch_mismatches` before the failure of `handled_workflow` was handled.
     #[serde(skip_serializing_if = "is_zero")]
     pub handled_fetch_mismatches: i64,
+    /// The failed run that `autoreview retry` overrode; [`plan`] never handles it again.
+    ///
+    /// A withdrawal and a retarget keep it, so neither one stops the head again before the
+    /// retry starts. A started run, a handled run and a completion clear it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub retried_workflow: String,
     /// Marks a dispatch that continues a review the author limit let through.
     ///
     /// A host wait keeps it, so the dispatch after the wait is not held as a new start.
@@ -142,6 +148,7 @@ impl Default for Record {
             fetch_mismatches: 0,
             handled_usage_limited: 0,
             handled_fetch_mismatches: 0,
+            retried_workflow: String::new(),
             continues: false,
             skip_notified: false,
         }
@@ -220,12 +227,14 @@ pub struct Decision {
 
 /// Applies durable completion evidence to a record after its workflows were cleaned up.
 ///
-/// A completed review ends the streak of runs that spend no retry, so both of its counts are 0.
+/// A completed review ends the streak of runs that spend no retry, so both of its counts are 0,
+/// and it overrides no run.
 pub fn reconcile_completed(mut record: Record, workflow_ids: &BTreeSet<String>) -> Record {
     if !record.workflow_id.is_empty() && workflow_ids.contains(&record.workflow_id) {
         record.phase = phase::COMPLETED.to_owned();
         record.error_code = String::new();
         (record.usage_limited, record.fetch_mismatches) = (0, 0);
+        record.retried_workflow.clear();
     }
     let mut retained = Vec::new();
     for workflow_id in record.blocking_workflows {
@@ -287,16 +296,19 @@ pub fn plan(
             fetch_mismatches: 0,
             handled_usage_limited: 0,
             handled_fetch_mismatches: 0,
+            retried_workflow: String::new(),
             continues: false,
             skip_notified: false,
         };
-        // A withdrawn record of this identity keeps its streak counts: neither its head nor its
-        // request changed, and a failed listing of its candidate is enough to withdraw it.
+        // A withdrawn record of this identity keeps its streak counts and the run that a retry
+        // overrode: neither its head nor its request changed, and a failed listing of its
+        // candidate is enough to withdraw it.
         if previous.identity == target_identity {
             record.usage_limited = previous.usage_limited;
             record.fetch_mismatches = previous.fetch_mismatches;
             record.handled_usage_limited = previous.handled_usage_limited;
             record.handled_fetch_mismatches = previous.handled_fetch_mismatches;
+            record.retried_workflow = previous.retried_workflow;
             withdrawn_handled = previous.handled_workflow;
         }
         record
@@ -340,10 +352,12 @@ pub fn plan(
                 notify: false,
             });
         }
+        // A started run and a completed review override no run.
         if latest_run.active() {
             r.phase = phase::RUNNING.to_owned();
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
+            r.retried_workflow.clear();
             return Ok(Decision {
                 record: r,
                 dispatch: false,
@@ -355,14 +369,22 @@ pub fn plan(
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             (r.usage_limited, r.fetch_mismatches) = (0, 0);
+            r.retried_workflow.clear();
             return Ok(Decision {
                 record: r,
                 dispatch: false,
                 notify: false,
             });
         }
-        // Each terminal result is handled once; later polls keep its retry deadline.
-        if fresh || r.workflow_id != latest_run.workflow_id || r.phase == phase::RUNNING {
+        // The run that a retry overrode is never handled again; the record only starts above
+        // it. Each other terminal result is handled once; later polls keep its retry deadline.
+        let overridden = r.phase != phase::RUNNING
+            && !r.retried_workflow.is_empty()
+            && r.retried_workflow == latest_run.workflow_id;
+        if overridden {
+            r.attempt = r.attempt.max(latest_run.attempt.wrapping_add(1));
+        } else if fresh || r.workflow_id != latest_run.workflow_id || r.phase == phase::RUNNING {
+            r.retried_workflow.clear();
             r.workflow_id = latest_run.workflow_id.clone();
             r.attempt = latest_run.attempt;
             let code = failure_code(&latest_run.failure);
@@ -372,6 +394,9 @@ pub fn plan(
             let repeated = r.phase != phase::RUNNING
                 && !r.handled_workflow.is_empty()
                 && r.handled_workflow == latest_run.workflow_id;
+            let rehandled = !repeated
+                && !withdrawn_handled.is_empty()
+                && withdrawn_handled == latest_run.workflow_id;
             if !superseded(&code) {
                 if repeated {
                     r.retries = r.handled_retries;
@@ -379,8 +404,7 @@ pub fn plan(
                     r.fetch_mismatches = r.handled_fetch_mismatches;
                 } else {
                     // The run that a withdrawn record handled counts once, from its snapshots.
-                    if !withdrawn_handled.is_empty() && withdrawn_handled == latest_run.workflow_id
-                    {
+                    if rehandled {
                         r.usage_limited = r.handled_usage_limited;
                         r.fetch_mismatches = r.handled_fetch_mismatches;
                     }
@@ -421,6 +445,8 @@ pub fn plan(
             } else {
                 r = after_failure(r, &code, now, policy)?;
             }
+            // Only a stopped record stops again on its own handled run; its stop was notified.
+            notify = notify && !(rehandled && r.phase == phase::FAILED);
             return Ok(Decision {
                 record: r,
                 dispatch: false,
@@ -551,8 +577,10 @@ pub fn plan_unreviewed(
     }
     let mut decision = plan(record, target, &visible, now, policy)?;
     // The handled failure is never this record's workflow; it only stops a second notice. The
-    // streak counts stay, so a retarget neither resets nor repeats them.
+    // streak counts and the run that a retry overrode stay, so a retarget neither resets nor
+    // repeats them.
     if let Some(kept) = kept {
+        decision.record.retried_workflow = kept.retried_workflow;
         decision.record.handled_workflow = kept.handled_workflow;
         decision.record.handled_retries = kept.handled_retries;
         decision.record.handled_usage_limited = kept.handled_usage_limited;
@@ -629,6 +657,7 @@ pub fn plan_on_base(
     // A running record would wait for a run that `plan` does not see.
     if record.phase == phase::RUNNING && other.contains(record.workflow_id.as_str()) {
         record.phase = phase::COMPLETED.to_owned();
+        record.retried_workflow.clear();
     }
     let mut decision = plan(record, target, &visible, now, policy)?;
     let waits = decision.dispatch
@@ -775,6 +804,22 @@ fn after_usage_limit(mut r: Record, now: OffsetDateTime, policy: &Policy) -> Res
     r.due_at = due_after(now, *delay)?;
     r.attempt = r.attempt.wrapping_add(1);
     Ok(r)
+}
+
+/// Withdraws the record of a pull request that no trigger listed on a pass.
+///
+/// Returns whether discovery keeps the record. A waiting, retrying or stopped record is
+/// withdrawn and kept for one more pass, so a return keeps its streak counts and a stopped head
+/// stays stopped; a withdrawn or completed record is dropped once it blocks nothing.
+pub fn withdraw(record: &mut Record) -> bool {
+    match record.phase.as_str() {
+        phase::WAITING | phase::RETRY_WAIT | phase::FAILED => {
+            record.phase = phase::WITHDRAWN.to_owned();
+            true
+        }
+        phase::WITHDRAWN | phase::COMPLETED => !record.blocking_workflows.is_empty(),
+        _ => true,
+    }
 }
 
 /// Keeps a dispatched record due while no review host can start its review.
@@ -944,7 +989,7 @@ mod tests {
         AUTHOR_LIMIT_REACHED, AuthorBound, Decision, HEAD_FETCH_MISMATCH, Policy,
         REVIEWER_USAGE_LIMITED, Record, Retarget, Run, Target, after_failure,
         head_mismatch_notification, limit_author, notification, plan, plan_on_base, plan_retarget,
-        reconcile_completed, retryable, wait_for_host,
+        reconcile_completed, retryable, wait_for_host, withdraw,
     };
     use crate::diagnostic::{diagnostic, failure_explanation};
     use crate::phase;
@@ -1563,6 +1608,104 @@ mod tests {
         plan_on_base(away.record, target, runs, &main, workflow_id, now, policy).expect("plan")
     }
 
+    /// Plans `record` on `base`, as discovery does for a head whose published review is `w0`.
+    fn plan_on(
+        base: &str,
+        record: Record,
+        target: &Target,
+        runs: &[Run],
+        bases: &BTreeMap<String, String>,
+        now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let retarget = Retarget {
+            base_branch: base,
+            run_bases: bases,
+            published_workflow: "w0",
+        };
+        let workflow_id = |attempt: i64| format!("w{attempt}");
+        match plan_retarget(&record, target, runs, &retarget, workflow_id, now, policy) {
+            Ok(Some(decision)) => decision,
+            Ok(None) => plan_on_base(record, target, runs, &retarget, workflow_id, now, policy)
+                .expect("plan"),
+            Err(error) => panic!("plan: {error}"),
+        }
+    }
+
+    /// Publishes `w0` on `main`, stops the head with usage limits on `dev`, retries it by hand
+    /// into a host wait, then plans one pass on `main` and the next on `dev`.
+    fn retried_through_the_published_base(
+        target: &Target,
+        runs: &mut Vec<Run>,
+        mut now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let mut record = dispatch_and_end(Record::default(), target, runs, "", now, policy).record;
+        let mut bases = BTreeMap::from([("w0".to_owned(), "main".to_owned())]);
+        for _ in 0..4 {
+            now += Duration::hours(1);
+            let mut due = plan_on("dev", record, target, runs, &bases, now, policy);
+            if !due.dispatch {
+                let later = now + policy.debounce;
+                due = plan_on("dev", due.record, target, runs, &bases, later, policy);
+            }
+            assert!(due.dispatch, "not dispatched on dev: {due:?}");
+            let mut running = due.record;
+            running.workflow_id = format!("w{}", running.attempt);
+            runs.push(Run {
+                target: target.clone(),
+                workflow_id: running.workflow_id.clone(),
+                attempt: running.attempt,
+                status: "completed".to_owned(),
+                result: "failure".to_owned(),
+                failure: REVIEWER_USAGE_LIMITED.to_owned(),
+                ..Run::default()
+            });
+            bases.insert(running.workflow_id.clone(), "dev".to_owned());
+            record = plan_on("dev", running, target, runs, &bases, now, policy).record;
+        }
+        assert!(
+            record.phase == phase::FAILED,
+            "dev did not stop: {record:?}"
+        );
+        now += Duration::hours(1);
+        let waiting = retried_then_host_wait(&record, target, runs, now, policy).record;
+        let on_main = plan_on("main", waiting, target, runs, &bases, now, policy);
+        plan_on("dev", on_main.record, target, runs, &bases, now, policy)
+    }
+
+    /// Retries the stopped `record` by hand, with the record that `apply_force` writes for it,
+    /// and dispatches the retry to a route that finds no review host.
+    fn retried_then_host_wait(
+        record: &Record,
+        target: &Target,
+        runs: &[Run],
+        now: OffsetDateTime,
+        policy: &Policy,
+    ) -> Decision {
+        let forced = Record {
+            identity: record.identity.clone(),
+            phase: phase::RETRY_WAIT.to_owned(),
+            due_at: now,
+            attempt: record.attempt.wrapping_add(1),
+            workflow_id: record.workflow_id.clone(),
+            retried_workflow: record.workflow_id.clone(),
+            handled_workflow: record.handled_workflow.clone(),
+            usage_limited: record.usage_limited,
+            fetch_mismatches: record.fetch_mismatches,
+            handled_usage_limited: record.handled_usage_limited,
+            handled_fetch_mismatches: record.handled_fetch_mismatches,
+            ..Record::default()
+        };
+        let due = plan(forced, target, runs, now, policy).expect("plan");
+        assert!(due.dispatch, "the retry was not dispatched: {due:?}");
+        Decision {
+            record: wait_for_host(due.record, "pohunek_request_failed"),
+            dispatch: false,
+            notify: false,
+        }
+    }
+
     /// Publishes a successful run of `record` on `main` and retargets the head to `dev` before
     /// discovery plans the success; the run on `dev` ends with a usage limit at `now`.
     fn published_then_limited_on_dev(
@@ -1625,7 +1768,9 @@ mod tests {
     // A run that a usage limit ended waits on the usage limit delays and keeps the retry budget;
     // it notifies on the first limited run of its streak and when the delays are spent. A
     // fetch mismatch and a usage limit share one streak, so neither resets the other's count;
-    // pruned runs and a retarget away and back keep both counts (#461).
+    // pruned runs and a retarget away and back keep both counts (#461). A retry by hand of a
+    // stopped head still starts after a host wait and a withdrawal or a retarget, and a stopped
+    // head stays stopped after a withdrawal, with no second notice (#466).
     #[test]
     fn usage_limit_retries_on_its_own_delays_then_stops() {
         const U: &str = REVIEWER_USAGE_LIMITED;
@@ -1634,12 +1779,14 @@ mod tests {
         const BACK: &str = "retarget away and back";
         const GONE: &str = "withdrawn and back";
         const PUBLISHED: &str = "published, then limited on another base branch";
+        const RETRIED: &str = "retried by hand, then a host wait";
+        const THROUGH_PUBLISHED: &str = "stopped on dev, retried, one pass on the published main";
         let wait = |notify: bool, minutes: i64| ("retry_wait", notify, minutes);
         let stop = ("failed", true, 0);
         // Each case: its name, the ending of each run, the phase, notice and delay after each, and
         // the retries spent at the end.
         type Case<'a> = (&'a str, &'a [&'a str], &'a [(&'a str, bool, i64)], i64);
-        let cases: [Case<'_>; 11] = [
+        let cases: [Case<'_>; 16] = [
             (
                 "stops after its own delays",
                 &[U, U, U, U],
@@ -1759,6 +1906,64 @@ mod tests {
                 &[wait(true, 15), wait(false, 30), wait(true, 15)],
                 0,
             ),
+            (
+                "a retry by hand outlasts a host wait and a withdrawal",
+                &[U, U, U, U, RETRIED, GONE, U],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(false, 60),
+                    stop,
+                    ("retry_wait", false, 0),
+                    ("waiting", false, 2),
+                    stop,
+                ],
+                0,
+            ),
+            (
+                "a retry by hand outlasts a host wait and a retarget",
+                &[U, U, U, U, RETRIED, BACK, U],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(false, 60),
+                    stop,
+                    ("retry_wait", false, 0),
+                    ("waiting", false, 2),
+                    stop,
+                ],
+                0,
+            ),
+            (
+                "a head stopped by the usage limit stays stopped after a withdrawal",
+                &[U, U, U, U, GONE],
+                &[
+                    wait(true, 15),
+                    wait(false, 30),
+                    wait(false, 60),
+                    stop,
+                    ("failed", false, 0),
+                ],
+                0,
+            ),
+            (
+                "a head stopped by fetch mismatches stays stopped after a withdrawal",
+                &[M, M, M, M, GONE],
+                &[
+                    ("waiting", false, 2),
+                    ("waiting", false, 2),
+                    ("waiting", false, 2),
+                    stop,
+                    ("failed", false, 0),
+                ],
+                0,
+            ),
+            (
+                "a retry by hand through the published base stays stopped",
+                &[THROUGH_PUBLISHED],
+                &[("failed", false, 0)],
+                0,
+            ),
         ];
         for (name, endings, want, retries) in cases {
             let (target, mut now, policy) = fixture();
@@ -1773,14 +1978,16 @@ mod tests {
                 let decision = if *ending == BACK {
                     away_and_back(record, &target, &runs, now, &policy)
                 } else if *ending == GONE {
-                    // Discovery withdraws a waiting record whose candidate it did not list.
-                    let withdrawn = Record {
-                        phase: phase::WITHDRAWN.to_owned(),
-                        ..record
-                    };
+                    // Discovery withdraws a record whose candidate it did not list on one pass.
+                    let mut withdrawn = record;
+                    assert!(withdraw(&mut withdrawn), "{name}: the record was dropped");
                     plan(withdrawn, &target, &runs, now, &policy).expect("plan")
                 } else if *ending == PUBLISHED {
                     published_then_limited_on_dev(record, &target, &mut runs, now, &policy)
+                } else if *ending == RETRIED {
+                    retried_then_host_wait(&record, &target, &runs, now, &policy)
+                } else if *ending == THROUGH_PUBLISHED {
+                    retried_through_the_published_base(&target, &mut runs, now, &policy)
                 } else {
                     dispatch_and_end(record, &target, &mut runs, ending, now, &policy)
                 };
