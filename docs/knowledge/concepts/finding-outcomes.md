@@ -68,7 +68,9 @@ is resumed after a restart writes its rows again; rows already stored stay,
 and rows it already settled are no longer `open`. One rare case is not a
 no-op: a review of the same head that publishes findings again under `P` IDs an
 earlier review of that head used can move one tracked key once more when it is
-resumed.
+resumed. A finding published again under such a key while the earlier finding
+with that key stays open loses its tracked key instead, so the two findings are
+never settled together.
 
 ## Retention
 

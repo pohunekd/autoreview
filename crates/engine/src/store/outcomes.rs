@@ -119,12 +119,15 @@ pub enum Settlement {
         /// Key of the new finding that publishes it again.
         republished: String,
     },
-    /// A new finding reuses `key`, so an open row of another review stops being tracked by it.
+    /// An open row of another review stops being tracked by `key`.
+    ///
+    /// A new finding reuses the key, or the row's finding would move onto a key that another
+    /// open finding keeps.
     Untracked {
-        /// The reused key.
+        /// The tracked key that the row loses.
         key: String,
-        /// Workflow ID of the review that first published the new finding; its rows stay.
-        origin: String,
+        /// Workflow IDs whose rows stay: the publishing review and the hand-off it adopts.
+        kept: [String; 2],
     },
 }
 
@@ -262,10 +265,13 @@ fn settle(
             "UPDATE finding_outcomes SET tracked_key = ?2, updated_at = ?3 WHERE rowid = ?1",
             params![row, republished, now],
         ),
-        Settlement::Untracked { origin, .. } => connection.execute(
-            "UPDATE finding_outcomes SET tracked_key = '', updated_at = ?3 \
-             WHERE rowid = ?1 AND workflow_id != ?2",
-            params![row, origin, now],
+        Settlement::Untracked {
+            kept: [publisher, origin],
+            ..
+        } => connection.execute(
+            "UPDATE finding_outcomes SET tracked_key = '', updated_at = ?4 \
+             WHERE rowid = ?1 AND workflow_id NOT IN (?2, ?3)",
+            params![row, publisher, origin, now],
         ),
     }
     .map_err(unavailable)?;
