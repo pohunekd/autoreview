@@ -10,6 +10,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs::File;
 use std::io::Read;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -99,6 +100,18 @@ pub(crate) const GUARD_INPUT_MAX_BYTES: usize = 4 << 20;
 
 /// Largest lexicon file, in bytes; the scan time grows with the number of entries.
 const LEXICON_MAX_BYTES: usize = 64 << 10;
+
+/// Smallest `log.max_file_bytes`: 1 MiB.
+const LOG_FILE_BYTES_MIN: i64 = 1 << 20;
+
+/// Largest `log.max_file_bytes`: 1 GiB.
+const LOG_FILE_BYTES_MAX: i64 = 1 << 30;
+
+/// Smallest `log.kept_files`.
+const LOG_KEPT_FILES_MIN: i64 = 1;
+
+/// Largest `log.kept_files`.
+const LOG_KEPT_FILES_MAX: i64 = 100;
 
 /// Whether `pohunek.runtime_dir` may be left out. pohunek requires `XDG_RUNTIME_DIR` on Linux;
 /// on macOS it has a default (`/private/tmp/pohunek-<uid>`) that no value of the variable names.
@@ -217,6 +230,33 @@ pub(crate) struct FileConfig {
     /// section without keys, so `guards.text` is reported missing.
     #[serde(default, deserialize_with = "present_section")]
     guards: Option<GuardsFile>,
+    /// The `log` section; without it autoreview logs to stderr only. A null section reads as a
+    /// section without keys, so `log.directory` is reported missing.
+    #[serde(default, deserialize_with = "present_section")]
+    log: Option<LogFile>,
+}
+
+/// The `log` section.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogFile {
+    /// Absolute path of the directory that holds the log files.
+    directory: Option<Value>,
+    /// Size from which a log file is rotated, in bytes.
+    max_file_bytes: Option<Value>,
+    /// Rotated files kept besides the current one.
+    kept_files: Option<Value>,
+}
+
+/// The validated `log` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LogSettings {
+    /// Clean absolute path of the directory that holds the log files.
+    pub(crate) directory: PathBuf,
+    /// Size from which a log file is rotated, in bytes.
+    pub(crate) max_file_bytes: u64,
+    /// Rotated files kept besides the current one.
+    pub(crate) kept_files: usize,
 }
 
 /// The `guards` section.
@@ -624,6 +664,18 @@ pub(crate) fn resolve_path(
     Ok(PathBuf::from(raw))
 }
 
+/// The engine configuration and the optional sections of one config file.
+pub(crate) struct Loaded {
+    /// The engine configuration.
+    pub(crate) config: Config,
+    /// The `mcp` section, when the file has one.
+    pub(crate) mcp: Option<McpConfig>,
+    /// The `metrics` section, when the file has one.
+    pub(crate) metrics: Option<MetricsConfig>,
+    /// The `log` section, when the file has one.
+    pub(crate) log: Option<LogSettings>,
+}
+
 /// Reads the config file at `path` and maps it, see [`parse`].
 ///
 /// A secret comes from `env_file` when the file names its variable, else from the environment.
@@ -633,10 +685,7 @@ pub(crate) fn resolve_path(
 /// Returns the errors of [`parse`], and `configuration_invalid` naming `config` when the file
 /// cannot
 /// be read.
-pub(crate) fn load(
-    path: &Path,
-    env_file: Option<&EnvFile>,
-) -> Result<(Config, Option<McpConfig>, Option<MetricsConfig>), Error> {
+pub(crate) fn load(path: &Path, env_file: Option<&EnvFile>) -> Result<Loaded, Error> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         Error::config(CONFIGURATION_INVALID, DOCUMENT_NAME, Some(Box::new(error)))
     })?;
@@ -647,7 +696,83 @@ pub(crate) fn load(
     let file = parse_file(&text)?;
     let mcp = mcp_section(&file)?;
     let metrics = metrics_section(&file)?;
-    Ok((config, mcp, metrics))
+    let log = log_section(&file)?;
+    Ok(Loaded {
+        config,
+        mcp,
+        metrics,
+        log,
+    })
+}
+
+/// Reads the `log` section; `None` when the configuration has no `log` key.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for an absent key of the section (`log.directory` for a null
+/// section) and `configuration_invalid` for a directory that is not a clean absolute path, has a
+/// control character or is an existing file, and for a number out of range or not an integer.
+pub(crate) fn log_section(file: &FileConfig) -> Result<Option<LogSettings>, Error> {
+    let Some(log) = &file.log else {
+        return Ok(None);
+    };
+    let directory = log_directory(&log.directory)?;
+    let max_file_bytes = ranged(
+        &log.max_file_bytes,
+        "log.max_file_bytes",
+        LOG_FILE_BYTES_MIN..=LOG_FILE_BYTES_MAX,
+    )?;
+    let kept_files = ranged(
+        &log.kept_files,
+        "log.kept_files",
+        LOG_KEPT_FILES_MIN..=LOG_KEPT_FILES_MAX,
+    )?;
+    Ok(Some(LogSettings {
+        directory,
+        max_file_bytes: u64::try_from(max_file_bytes)
+            .map_err(|_| invalid("log.max_file_bytes", "is out of range"))?,
+        kept_files: usize::try_from(kept_files)
+            .map_err(|_| invalid("log.kept_files", "is out of range"))?,
+    }))
+}
+
+/// Reads `log.directory`, which must not name an existing file.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for an absent key and `configuration_invalid` for a path that
+/// is not clean and absolute, has a control character or names an existing non-directory.
+fn log_directory(value: &Option<Value>) -> Result<PathBuf, Error> {
+    let key = "log.directory";
+    let directory = text(value, key)?;
+    if !clean_absolute(&directory) {
+        return Err(invalid(key, "must be a clean absolute path"));
+    }
+    if directory.chars().any(char::is_control) {
+        return Err(invalid(key, "must not contain a control character"));
+    }
+    let path = PathBuf::from(directory);
+    if std::fs::metadata(&path).is_ok_and(|metadata| !metadata.is_dir()) {
+        return Err(invalid(key, "must not be an existing file"));
+    }
+    Ok(path)
+}
+
+/// Reads an integer that lies in `range`.
+fn ranged(value: &Option<Value>, key: &str, range: RangeInclusive<i64>) -> Result<i64, Error> {
+    let number = integer(present(value, key)?, key)?;
+    if !range.contains(&number) {
+        return Err(Error::config(
+            CONFIGURATION_INVALID,
+            key,
+            Some(Box::from(format!(
+                "must be from {} to {}",
+                range.start(),
+                range.end()
+            ))),
+        ));
+    }
+    Ok(number)
 }
 
 /// Reads the `mcp` section; `None` when the configuration has none.
@@ -3450,6 +3575,121 @@ pub(crate) mod tests {
             );
         }
         let unknown = format!("{full}  bearer_token_env: AUTOREVIEW_METRICS_TOKEN\n");
+        assert!(
+            parse_file(&unknown).is_err(),
+            "the section refuses a key it does not know"
+        );
+    }
+
+    #[test]
+    fn log_section_is_optional_and_every_key_is_required() {
+        let section = concat!(
+            "log:\n  directory: /var/lib/autoreview/logs\n",
+            "  max_file_bytes: 10485760\n  kept_files: 5\n",
+        );
+        let full = format!("{EXAMPLE}{section}");
+        let loaded = log_section(&parse_file(&full).expect("valid YAML"))
+            .expect("the section is valid")
+            .expect("the section is present");
+        assert_eq!(
+            loaded,
+            LogSettings {
+                directory: PathBuf::from("/var/lib/autoreview/logs"),
+                max_file_bytes: 10_485_760,
+                kept_files: 5,
+            }
+        );
+        assert!(
+            log_section(&parse_file(EXAMPLE).expect("the example parses"))
+                .is_ok_and(|log| log.is_none()),
+            "the example keeps the log file off"
+        );
+        let bytes = concat!(
+            "configuration_invalid: log.max_file_bytes: ",
+            "must be from 1048576 to 1073741824"
+        );
+        let kept = "configuration_invalid: log.kept_files: must be from 1 to 100";
+        let directory = "configuration_invalid: log.directory: must be a clean absolute path";
+        let integer_bytes = "configuration_invalid: log.max_file_bytes: must be an integer";
+        let cases = [
+            (section, "log:\n", "configuration_missing: log.directory"),
+            (
+                "  directory: /var/lib/autoreview/logs\n",
+                "",
+                "configuration_missing: log.directory",
+            ),
+            (
+                "  max_file_bytes: 10485760\n",
+                "",
+                "configuration_missing: log.max_file_bytes",
+            ),
+            (
+                "  kept_files: 5\n",
+                "",
+                "configuration_missing: log.kept_files",
+            ),
+            ("/var/lib/autoreview/logs", "var/log", directory),
+            ("/var/lib/autoreview/logs", "/var/log/", directory),
+            (
+                "/var/lib/autoreview/logs",
+                "\"/var/log/a\\u0001b\"",
+                "configuration_invalid: log.directory: must not contain a control character",
+            ),
+            (
+                "/var/lib/autoreview/logs",
+                "/dev/null",
+                "configuration_invalid: log.directory: must not be an existing file",
+            ),
+            ("max_file_bytes: 10485760", "max_file_bytes: 1048575", bytes),
+            (
+                "max_file_bytes: 10485760",
+                "max_file_bytes: 1073741825",
+                bytes,
+            ),
+            ("max_file_bytes: 10485760", "max_file_bytes: -1", bytes),
+            (
+                "max_file_bytes: 10485760",
+                "max_file_bytes: \"10485760\"",
+                integer_bytes,
+            ),
+            (
+                "max_file_bytes: 10485760",
+                "max_file_bytes: 1.5",
+                integer_bytes,
+            ),
+            ("kept_files: 5", "kept_files: 0", kept),
+            ("kept_files: 5", "kept_files: 101", kept),
+            (
+                "kept_files: 5",
+                "kept_files: true",
+                "configuration_invalid: log.kept_files: must be an integer",
+            ),
+        ];
+        for (old, new, expected) in cases {
+            // The example holds a commented copy of the section, so only the section changes.
+            let text = format!("{EXAMPLE}{}", section.replacen(old, new, 1));
+            let result = log_section(&parse_file(&text).expect("valid YAML"));
+            assert_eq!(
+                result.expect_err("the section is refused").to_string(),
+                expected,
+                "{old:?} -> {new:?}"
+            );
+        }
+        let accepted = [
+            ("max_file_bytes: 10485760", "max_file_bytes: 1048576"),
+            ("max_file_bytes: 10485760", "max_file_bytes: 1073741824"),
+            ("kept_files: 5", "kept_files: 1"),
+            ("kept_files: 5", "kept_files: 100"),
+        ];
+        for (old, new) in accepted {
+            let text = format!("{EXAMPLE}{}", section.replacen(old, new, 1));
+            let result = log_section(&parse_file(&text).expect("valid YAML"));
+            assert!(
+                result.is_ok_and(|log| log.is_some()),
+                "{new:?} is inside the range"
+            );
+        }
+        let unknown = format!("{full}  level: debug\n");
         assert!(
             parse_file(&unknown).is_err(),
             "the section refuses a key it does not know"

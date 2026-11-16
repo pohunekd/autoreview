@@ -18,7 +18,7 @@ polls, its limits, where it keeps state and where notifications go. What gets
 reviewed and how is in [policy.yaml](policy.md).
 
 **Every key is required**, except `publish.marker`, `pohunek.runtime_dir` on macOS
-and the optional sections `pohunek.host_state`, `mcp`, `metrics` and `guards`.
+and the optional sections `pohunek.host_state`, `mcp`, `metrics`, `log` and `guards`.
 autoreview has no built-in defaults: a missing key stops the service at startup
 with an error that names it.
 [`examples/config.yaml`](../examples/config.yaml) holds every key with a
@@ -607,6 +607,62 @@ authentication in front of it when a scraper on another host reads it; see the
 the engine lock, so a second `serve` with the same section fails with
 `metrics_listen_failed`; see [`autoreview serve`](cli.md#autoreview-serve).
 
+## log
+
+Optional. Without it autoreview logs to stderr only: the journal under systemd,
+the launchd output file on macOS. With it, `serve`, `review-queue` and `mcp`
+write their log lines to a file of their own in `directory` and rotate it by
+size. When the section is present, every command validates it at load, so a
+broken section stops `validate` too, and every key is required; a `log:` key
+without a value is refused with `configuration_missing: log.directory`.
+
+| Key | Meaning |
+|---|---|
+| `directory` | Clean absolute path of the directory that holds the log files, without control characters. autoreview creates it with mode 0700 when it is missing; a path that names an existing file is refused |
+| `max_file_bytes` | Size from which a log file is rotated, in bytes. From 1048576 (1 MiB) to 1073741824 (1 GiB) |
+| `kept_files` | Rotated files kept besides the current one. From 1 to 100 |
+
+```yaml
+log:
+  directory: /var/lib/autoreview/logs
+  max_file_bytes: 10485760
+  kept_files: 5
+```
+
+Each command writes one file in `directory`; the other commands validate the
+section and write none:
+
+| Command | File |
+|---|---|
+| `serve` | `autoreview.log` |
+| `review-queue` | `autoreview-queue.log` |
+| `mcp` | `autoreview-mcp.log` |
+
+Before a line that would take the file past `max_file_bytes`, the file becomes
+`<file>.1`, `<file>.1` becomes `<file>.2` and so on up to
+`<file>.<kept_files>`, whose old content is replaced, and a new file is
+started. A line is never split, so a line longer than the limit fills a new file
+alone and that file passes the limit by that one line. When a rename or the
+opening of the new file fails, the line is appended to the current file, which
+may then pass the limit, and the rotation is tried again after 60 seconds.
+
+With the file in use, a log line goes to the file only. stderr gets only the
+lines the file could not take, in full; one error line of the writer per 60
+seconds (`log write failed` or `log rotation failed`, with the count of such
+lines held back since the previous one); and panics. Lines logged before the
+configuration is read go to stderr. The JSON that a command prints on stdout does
+not change.
+
+Created files have mode 0600 and a created directory 0700; existing modes are
+left alone. When the directory cannot be created or a file cannot be opened, the
+command stops with `configuration_invalid` naming `log.directory` and the system
+error.
+
+A command holds an exclusive `flock` on `<file>.lock` until it exits. A second
+process of the same command on the same directory, or a filesystem that cannot
+lock, leaves the file alone: the process logs one `log file in use` warning on
+stderr and keeps logging there.
+
 ## guards
 
 Optional. `guards.text` holds the settings of the prompt-injection guard that a
@@ -667,6 +723,7 @@ Besides each key's own range, `validate` enforces:
   `publish.ai_signed_pattern` needs text after its leading symbols.
 - `publish.marker` is `autoreview` or `hermes-pr-review`; `marker:` without a
   value is refused as missing.
+- `log.directory` is a clean absolute path and does not name an existing file.
 - A policy rule with [`guard`](policy.md#guard) needs `guards.text`; without it
   the load fails with
   `configuration_missing: guards.text: the policy rule for <match> sets guard`.

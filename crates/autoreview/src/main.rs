@@ -41,6 +41,7 @@ use time::OffsetDateTime;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
+use crate::config_file::Loaded;
 use crate::env_file::{ENV_FILE_FLAG, EnvFile};
 use crate::error_response::{
     COMMAND_INVALID, HEAD_PREFIX_INVALID, HEAD_SHA_INVALID, error_response,
@@ -72,6 +73,9 @@ const REVIEW_IDENTITY_INVALID: &str = "review_identity_invalid";
 
 /// Error code of a configuration value that the command refuses.
 const CONFIGURATION_INVALID: &str = "configuration_invalid";
+
+/// Configuration key named when the log directory cannot be created or its files opened.
+const LOG_DIRECTORY_KEY: &str = "log.directory";
 
 /// Error code of a configuration key that the command needs and the file lacks.
 const CONFIGURATION_MISSING: &str = "configuration_missing";
@@ -365,7 +369,21 @@ async fn run(
     let environment = std::env::var_os(CONFIG_ENV);
     let path = config_file::resolve_path(config_path.as_deref(), environment.as_deref())?;
     let env_file = env_file_path.as_deref().map(EnvFile::read).transpose()?;
-    let (config, mcp, metrics) = config_file::load(&path, env_file.as_ref())?;
+    let Loaded {
+        config,
+        mcp,
+        metrics,
+        log,
+    } = config_file::load(&path, env_file.as_ref())?;
+    if let (Some(settings), Some(file_name)) = (&log, log_file_name(&command)) {
+        logging::attach(settings, file_name).map_err(|error| {
+            Error::config(
+                CONFIGURATION_INVALID,
+                LOG_DIRECTORY_KEY,
+                Some(Box::new(error)),
+            )
+        })?;
+    }
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;
     match command {
@@ -382,6 +400,18 @@ async fn run(
             let sections = Sections { mcp, metrics };
             run_engine(command, config, sections, external, &cancel).await
         }
+    }
+}
+
+/// Returns the name of the log file that `command` writes in `log.directory`.
+///
+/// The commands that run as a unit or a server write one; the others log to stderr only.
+fn log_file_name(command: &Command) -> Option<&'static str> {
+    match command {
+        Command::Engine(EngineCommand::Serve) => Some(logging::SERVE_LOG_FILE),
+        Command::Engine(EngineCommand::ReviewQueue) => Some(logging::QUEUE_LOG_FILE),
+        Command::Engine(EngineCommand::Mcp) => Some(logging::MCP_LOG_FILE),
+        _ => None,
     }
 }
 
