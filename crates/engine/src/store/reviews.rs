@@ -105,6 +105,16 @@ pub struct StoredReview {
     pub completed_at: String,
 }
 
+/// Which rows of a range `Store::stats_snapshot` reads beside the review rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotReads {
+    /// The rows the statistics document counts: the step runs, the rollup and the plans.
+    Counted,
+    /// The rows of `Counted` and those only the report counts: the verifier's steps, the
+    /// reviewer slots and the `request_id` rows.
+    Report,
+}
+
 /// What `Store::stats_snapshot` reads in one transaction.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StatsSnapshot {
@@ -119,13 +129,14 @@ pub struct StatsSnapshot {
     /// The stored plans of the reviews completed inside the range, by workflow ID, undecoded;
     /// empty without a range.
     pub plans: BTreeMap<String, String>,
-    /// The verifier's steps of the reviews completed inside the range; empty without a range.
+    /// The verifier's steps of the reviews completed inside the range; empty without a range
+    /// and without `SnapshotReads::Report`.
     pub verifier: VerifierSteps,
     /// The reviewer slots of the successful reviews completed inside the range, by workflow ID
-    /// and reviewer ID, undecoded; empty without a range.
+    /// and reviewer ID, undecoded; empty without a range and without `SnapshotReads::Report`.
     pub slots: BTreeMap<String, BTreeMap<String, String>>,
     /// The review requests whose first publication was pruned, as `repository#number#request
-    /// ID`; empty without a range.
+    /// ID`; empty without a range and without `SnapshotReads::Report`.
     pub pruned_requests: BTreeSet<String>,
 }
 
@@ -330,14 +341,16 @@ impl Store {
     }
 
     /// Reads the reviews of `stats_reviews`, the discovery state and, with `range`, the step
-    /// runs that ended inside it, the rollup of its days, the plans, the verifier's steps and the
-    /// reviewer slots of the reviews completed inside it and the pruned review requests, as one
-    /// snapshot.
+    /// runs that ended inside it, the rollup of its days and the plans of the reviews completed
+    /// inside it, as one snapshot. With `SnapshotReads::Report` it also reads the verifier's
+    /// steps and the reviewer slots of those reviews and the pruned review requests.
     ///
     /// A deferred transaction takes no write lock; in WAL mode its first read fixes the
     /// snapshot, so a write of another process between the reads is not seen, and a pruned
     /// review is either a row or in the rollup. Without `range` the step runs, the rollup, the
-    /// plans, the verifier's steps, the slots and the pruned requests are empty and not read.
+    /// plans, the verifier's steps, the slots and the pruned requests are empty and not read;
+    /// with `SnapshotReads::Counted` the verifier's steps, the slots and the pruned requests
+    /// are empty and not read.
     ///
     /// # Errors
     ///
@@ -346,6 +359,7 @@ impl Store {
     pub fn stats_snapshot(
         &self,
         range: Option<(OffsetDateTime, OffsetDateTime)>,
+        reads: SnapshotReads,
     ) -> Result<StatsSnapshot, Error> {
         let mut connection = self.lock_connection()?;
         let transaction = connection
@@ -361,8 +375,11 @@ impl Store {
                     &start.date().to_string(),
                     &end.date().to_string(),
                 )?,
-                completed_steps(&transaction, (start, end))?,
-                pruned_requests(&transaction)?,
+                completed_steps(&transaction, (start, end), reads)?,
+                match reads {
+                    SnapshotReads::Counted => BTreeSet::new(),
+                    SnapshotReads::Report => pruned_requests(&transaction)?,
+                },
             ),
             None => Default::default(),
         };
@@ -533,8 +550,8 @@ fn collect_reviews(
     Ok(reviews)
 }
 
-/// Returns the stored plan, the verifier's steps and the reviewer slots of each review
-/// completed inside `range`.
+/// Returns the stored plan of each review completed inside `range` and, with
+/// `SnapshotReads::Report`, its verifier's steps and reviewer slots; without it those are empty.
 ///
 /// These are the completed rows of `stats_reviews` whose completion `compute` counts.
 ///
@@ -544,6 +561,7 @@ fn collect_reviews(
 fn completed_steps(
     connection: &Connection,
     (start, end): (OffsetDateTime, OffsetDateTime),
+    reads: SnapshotReads,
 ) -> Result<(BTreeMap<String, String>, VerifierSteps, SlotRows), Error> {
     let completed = time_key("completed_at");
     let (low, high) = (time_key("?2"), time_key("?3"));
@@ -554,6 +572,9 @@ fn completed_steps(
     let (start, end) = (format_rfc3339_nano(start), format_rfc3339_nano(end));
     let bound: [&dyn ToSql; 3] = [&REVIEW_COMPLETED, &start, &end];
     let plans = stored_steps(connection, &filter, &bound, STEP_PLAN)?;
+    if reads == SnapshotReads::Counted {
+        return Ok((plans, VerifierSteps::default(), SlotRows::new()));
+    }
     let verifier = verifier_steps(connection, &filter, &bound)?;
     Ok((plans, verifier, slot_rows(connection, &filter, &bound)?))
 }

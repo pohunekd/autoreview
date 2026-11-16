@@ -19,7 +19,7 @@ use crate::discovery::poll::live;
 use crate::engine::{Clock, Engine};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
-use crate::store::{REVIEW_COMPLETED, StepRun, StoredReview};
+use crate::store::{REVIEW_COMPLETED, SnapshotReads, StepRun, StoredReview};
 
 #[doc(inline)]
 pub use server::{METRICS_PATH, MetricsConfig, MetricsServer};
@@ -89,7 +89,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// `store_state_invalid` for a schedule key without `#`.
     pub fn metrics_text(&self, cancel: &CancellationToken) -> Result<String, Error> {
         live(cancel)?;
-        let snapshot = self.store.stats_snapshot(None)?;
+        let snapshot = self.store.stats_snapshot(None, SnapshotReads::Counted)?;
         let gauges = Gauges::read(&snapshot.reviews, &snapshot.discovery.schedule)?;
         let none = Counts::default();
         let guard = self.metrics.as_ref().map(Metrics::lock);

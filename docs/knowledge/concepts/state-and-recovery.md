@@ -286,9 +286,10 @@ with `error_code` `store_state_invalid`, and the store keeps growing until that
 review is repaired or removed. The `error` field of the log line names the
 review's workflow ID. Such a review is a defect or a damaged store to report
 (see the [CLI error codes](../../cli.md#error-codes)). The same rows stop
-`autoreview stats --since` and `autoreview report` when their range reaches the
-review (see [`autoreview stats`](../../stats.md)). A `request_id` row is read
-as a key and never decoded.
+`autoreview report` when its range reaches the review; `autoreview stats --since`
+stops only for the review row and the plan, and reads no slot, verification,
+combined artifact or `request_id` row (see [`autoreview stats`](../../stats.md)).
+A `request_id` row is read as a key and never decoded.
 
 The two reads for the request time scan whole tables: `reviews` has no index on
 the pull request of a review, and the `request_id` rows lie in `stats_rollup`
