@@ -35,6 +35,8 @@ autoreview stats [--since DATE [--until DATE]] [--json]
   the same moment.
 - `autoreview serve` can serve the same numbers to Prometheus; see
   [Prometheus metrics](#prometheus-metrics).
+- `autoreview report` turns the counts of a range into shares, beside the outcomes of
+  the published findings; see the [review report](knowledge/concepts/review-report.md).
 
 ## The range
 
