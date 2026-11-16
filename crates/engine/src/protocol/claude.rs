@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{BoxError, Error};
+use crate::messages::excerpt;
+use crate::model::finding::category_valid;
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
 use crate::protocol::reason::trailing_reason;
 use crate::protocol::request::checkout_name;
@@ -40,6 +42,9 @@ const EXIT_REFUSED: i64 = 64;
 
 /// HTTP status of the API error that ends a run on a rate or usage limit.
 const STATUS_TOO_MANY_REQUESTS: i64 = 429;
+
+/// Characters of a refused category that the warning shows. A fixed size, not a tunable.
+const CATEGORY_LOG_CHARACTERS: i64 = 80;
 
 /// Protocol name of the wrapper.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,6 +144,9 @@ pub(crate) struct ClaudeFinding {
     pub(crate) body: String,
     /// Whether the reviewer marks the finding as blocking; absent means the finding blocks.
     pub(crate) blocking: Option<bool>,
+    /// Category slug of the finding; absent or `null` means none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) category: Option<String>,
 }
 
 autoreview_go_compat::object_only_serde!(ClaudeFinding);
@@ -195,7 +203,9 @@ pub(crate) fn parse_claude_output(
             )));
         }
         let non_blocking = finding.non_blocking();
+        let category = finding_category(pr, &finding.id, finding.category.as_deref());
         result_findings.push(Finding {
+            category,
             source_id: finding.id,
             severity: finding.severity,
             confidence: finding.confidence,
@@ -213,6 +223,26 @@ pub(crate) fn parse_claude_output(
         findings: result_findings,
         ..ReviewerResult::default()
     })
+}
+
+/// Returns the category of finding `id`, or an empty one when the reviewer gave none.
+///
+/// A value that is not a category slug does not refuse the review: the finding is kept without
+/// a category and one warning names the review and the value.
+fn finding_category(pr: &PullRequest, id: &str, category: Option<&str>) -> String {
+    let Some(category) = category else {
+        return String::new();
+    };
+    if category_valid(category) {
+        return category.to_owned();
+    }
+    tracing::warn!(
+        review_id = %pr.review_id(),
+        finding = id,
+        category = %excerpt(category, CATEGORY_LOG_CHARACTERS),
+        "finding category refused"
+    );
+    String::new()
 }
 
 /// Reads the schema-enforced structured output of a finished Claude session on `checkout`.
@@ -436,14 +466,16 @@ mod tests {
             &pr,
             json!([
                 {"id": "C001", "severity": "high", "confidence": "high", "blocking": true,
-                 "path": "a.go", "line": 1, "side": "RIGHT", "title": "Bug", "body": "Details."},
+                 "path": "a.go", "line": 1, "side": "RIGHT", "title": "Bug", "body": "Details.",
+                 "category": "missing-test"},
                 {"id": "C002", "severity": "low", "confidence": "high", "blocking": false,
-                 "path": "a.go", "line": 2, "side": "RIGHT", "title": "Note", "body": "Details."},
+                 "path": "a.go", "line": 2, "side": "RIGHT", "title": "Note", "body": "Details.",
+                 "category": "Missing Test"},
                 {"id": "C003", "severity": "medium", "confidence": "high", "path": "a.go",
                  "line": 3, "side": "RIGHT", "title": "Unflagged", "body": "Details."},
                 {"id": "C004", "severity": "medium", "confidence": "high", "blocking": true,
                  "path": "a.go", "line": 4, "side": "RIGHT", "title": "Below the floor",
-                 "body": "Details."}
+                 "body": "Details.", "category": "a-category-slug-of-forty-one-characters-x"}
             ]),
             None,
         );
@@ -454,6 +486,13 @@ mod tests {
             .map(|finding| !finding.non_blocking)
             .collect();
         assert_eq!(blocking, vec![true, false, true, false]);
+        // A valid slug is kept; a refused slug, an absent one and an over-long one leave none.
+        let categories: Vec<&str> = result
+            .findings
+            .iter()
+            .map(|finding| finding.category.as_str())
+            .collect();
+        assert_eq!(categories, vec!["missing-test", "", "", ""]);
     }
 
     #[test]
