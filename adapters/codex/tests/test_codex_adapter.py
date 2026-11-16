@@ -13,6 +13,7 @@ import select
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import termios
 import time
@@ -30,6 +31,13 @@ POHUNEK_NO_DAEMON = "--no-daemon"
 COMMITTER = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
 UNSIGNED = ["-c", "commit.gpgsign=false"]
 NONCE = "00112233445566778899aabbccddeeff"
+# The adapter becomes the Linux `PR_SET_CHILD_SUBREAPER` of Codex before its title; elsewhere
+# it refuses to run, so a test that gets past that point runs on Linux only.
+LINUX = sys.platform == "linux"
+SUBREAPER_ONLY = "needs Linux PR_SET_CHILD_SUBREAPER"
+# The adapter starts as `env -S python3 -I`. The tests' interpreter comes first, so macOS does
+# not run it with Apple's older /usr/bin/python3.
+CHILD_PATH = f"{Path(sys.executable).parent}:/usr/bin:/bin"
 
 
 def load_module(name: str, path: Path):
@@ -429,6 +437,7 @@ class WrapperTests(unittest.TestCase):
                 )
 
 
+@unittest.skipUnless(LINUX, SUBREAPER_ONLY)
 class BaseCheckoutTests(unittest.TestCase):
     """A base checkout starts at the base branch tip; Codex reads the head through git."""
 
@@ -438,7 +447,7 @@ class BaseCheckoutTests(unittest.TestCase):
         self.root = Path(directory.name)
         (self.root / "home").mkdir()
         self.environment = {
-            "PATH": "/usr/bin:/bin",
+            "PATH": CHILD_PATH,
             "HOME": str(self.root / "home"),
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -868,7 +877,7 @@ class VersionProbeTests(unittest.TestCase):
         home.mkdir(exist_ok=True)
         return subprocess.run(
             [str(script), *arguments],
-            env={"PATH": "/usr/bin:/bin", "HOME": str(home), **(session or {})},
+            env={"PATH": CHILD_PATH, "HOME": str(home), **(session or {})},
             cwd=home,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -924,12 +933,13 @@ class VersionProbeTests(unittest.TestCase):
             root = Path(directory)
             script = self.install_wrapper(root, "{fake}\n")
             result = self.run_wrapper(
-                root, script, ["/bin/true", "262144", "262144", "60", "model-x", "high"]
+                root, script, ["/usr/bin/true", "262144", "262144", "60", "model-x", "high"]
             )
 
         self.assertEqual(result.returncode, wrapper.EXIT_USAGE)
         self.assertIn("differs", result.stderr)
 
+    @unittest.skipUnless(LINUX, SUBREAPER_ONLY)
     def test_title_precedes_the_read_of_the_input_frame(self) -> None:
         # pohunek writes the input of a `manifest_idle` runtime only after an idle
         # title, so a title that waits for the input deadlocks the session start.
@@ -952,7 +962,7 @@ class VersionProbeTests(unittest.TestCase):
                     "high",
                     POHUNEK_NO_DAEMON,
                 ],
-                env={"PATH": "/usr/bin:/bin", "HOME": str(home)},
+                env={"PATH": CHILD_PATH, "HOME": str(home)},
                 cwd=home,
                 stdin=secondary,
                 stdout=subprocess.PIPE,
@@ -980,6 +990,35 @@ class VersionProbeTests(unittest.TestCase):
         self.assertEqual(stdout, b"")
         self.assertEqual(process.returncode, wrapper.EXIT_USAGE)
         self.assertIn(b"bracketed-paste start marker", stderr)
+
+    @unittest.skipIf(LINUX, "Linux has PR_SET_CHILD_SUBREAPER")
+    def test_refuses_to_run_without_the_linux_subreaper(self) -> None:
+        # Without its reaper the adapter could not end what Codex leaves, so it stops before
+        # the title, and pohunek never writes the prompt.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = self.install_wrapper(root, "{fake}\n")
+            fake = str(root / "fake-codex")
+            primary, secondary = pty.openpty()
+            process = subprocess.Popen(
+                [str(script), fake, "262144", "262144", "60", "model-x", "high"],
+                env={"PATH": CHILD_PATH, "HOME": str(root)},
+                cwd=root,
+                stdin=secondary,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            os.close(secondary)
+            try:
+                stdout, stderr = process.communicate(timeout=10)
+            finally:
+                process.kill()
+                process.wait()
+                os.close(primary)
+
+        self.assertEqual(stdout, b"")
+        self.assertEqual(process.returncode, wrapper.EXIT_USAGE)
+        self.assertIn(SUBREAPER_ONLY.encode("utf-8"), stderr)
 
     def test_refuses_arguments_beyond_one_trailing_no_daemon(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
