@@ -38,6 +38,13 @@ pub(crate) const RUNTIME_PACKAGE_MISSING: &str = "runtime_package_missing";
 /// Error code of a pohunek CLI call that failed or printed an unexpected answer.
 pub(crate) const POHUNEK_COMMAND_FAILED: &str = "pohunek_command_failed";
 
+/// Error code of an `--agent` whose adapter cannot run on this machine.
+pub(crate) const PROFILE_AGENT_UNSUPPORTED: &str = "profile_agent_unsupported";
+
+/// Whether the Codex adapter runs on this machine: it ends the processes that Codex leaves as
+/// their Linux `PR_SET_CHILD_SUBREAPER` reaper, which macOS lacks.
+const CODEX_ADAPTER_SUPPORTED: bool = cfg!(target_os = "linux");
+
 /// The subcommands of `profiles`.
 #[derive(Debug, Subcommand)]
 pub(crate) enum ProfilesCommand {
@@ -214,9 +221,9 @@ impl Runtime {
 /// # Errors
 ///
 /// Returns `command_invalid` when `--config` is given or a flag does not fit the agent,
-/// `configuration_invalid` naming a flag or a variable, `pohunek_command_failed`,
-/// `profile_host_not_local`, `runtime_package_missing`, `profile_foreign` and
-/// `profile_write_failed`.
+/// `configuration_invalid` naming a flag or a variable, `profile_agent_unsupported`,
+/// `pohunek_command_failed`, `profile_host_not_local`, `runtime_package_missing`,
+/// `profile_foreign` and `profile_write_failed`.
 pub(crate) async fn run(
     config_path: Option<&Path>,
     command: &ProfilesCommand,
@@ -258,7 +265,8 @@ pub(crate) async fn run(
 /// # Errors
 ///
 /// Returns `command_invalid` for a Codex flag given with `--agent claude` or missing with
-/// `--agent codex`, and `configuration_invalid` naming the flag whose value is refused.
+/// `--agent codex`, `profile_agent_unsupported` naming `--agent` for Codex on a host other than
+/// Linux, and `configuration_invalid` naming the flag whose value is refused.
 pub(crate) fn settings(arguments: &InstallArguments) -> Result<Settings, Error> {
     let runtime = match (
         arguments.agent,
@@ -283,6 +291,17 @@ pub(crate) fn settings(arguments: &InstallArguments) -> Result<Settings, Error> 
             )));
         }
     };
+    // `--host` must name this machine, so its platform is the review host's.
+    if runtime.agent() == Agent::Codex && !CODEX_ADAPTER_SUPPORTED {
+        let message = "the Codex adapter needs Linux PR_SET_CHILD_SUBREAPER to end the \
+            processes that Codex leaves; on this host install a Claude reviewer";
+        return Err(Error::config_with_message(
+            PROFILE_AGENT_UNSUPPORTED,
+            "--agent",
+            message,
+            None,
+        ));
+    }
     if !profile_name_valid(&arguments.name) {
         return Err(invalid_flag(
             "--name",
