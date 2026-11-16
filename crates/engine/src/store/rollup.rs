@@ -57,6 +57,14 @@ pub(crate) const DIMENSION_REQUEST_ID: &str = "request_id";
 ///
 /// The key is `repository#reviewer ID`, on the UTC day the review completed.
 pub(crate) const DIMENSION_VERIFIER: &str = "verifier";
+/// Dimension of the published attempts that two or more reviewers reviewed, per repository.
+///
+/// The key is the repository, on the UTC day the review completed.
+pub(crate) const DIMENSION_DISAGREEMENT: &str = "disagreement";
+/// Dimension of the reviewers that blocked alone in a disagreeing attempt.
+///
+/// The key is `repository#reviewer ID`, on the UTC day the review completed.
+pub(crate) const DIMENSION_DISAGREEMENT_REVIEWER: &str = "disagreement_reviewer";
 
 /// Counter of the pull requests whose schedule record entered `failed`.
 pub(crate) const COUNTER_STOPPED: &str = "stopped";
@@ -66,6 +74,12 @@ pub(crate) const COUNTER_FIRST_PUBLICATION: &str = "first_publication";
 pub(crate) const COUNTER_CHECKED: &str = "checked";
 /// Counter of the checked findings found not blocking or refuted.
 pub(crate) const COUNTER_DEMOTED: &str = "demoted";
+/// Counter of the published attempts with the results of two or more reviewers.
+pub(crate) const COUNTER_MULTI_REVIEWER: &str = "multi_reviewer";
+/// Counter of those attempts where one reviewer made a blocking claim and another none.
+pub(crate) const COUNTER_DISAGREED: &str = "disagreed";
+/// Counter of the disagreeing attempts in which the reviewer made a blocking claim.
+pub(crate) const COUNTER_BLOCKED_ALONE: &str = "blocked_alone";
 
 /// One counter of one key of one dimension on one UTC day.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,7 +87,7 @@ pub struct RollupCount {
     /// UTC day, `YYYY-MM-DD`.
     pub day: String,
     /// What the key names: `day`, `repository`, `rule`, `reviewer`, `failure`, `step`,
-    /// `request_id` or `verifier`.
+    /// `request_id`, `verifier`, `disagreement` or `disagreement_reviewer`.
     pub dimension: String,
     /// Repository, rule `match`, reviewer ID, error code, step, review request or
     /// `repository#reviewer ID`; empty for `day`.
