@@ -22,17 +22,20 @@ use crate::engine::{Clock, Engine};
 use crate::error::Error;
 use crate::integrations::Integrations;
 use crate::model::review::APPROVAL_KIND_APPROVE;
-use crate::model::{Decision, Outcome, ReviewOutcome};
+use crate::model::{Decision, Outcome, ReviewOutcome, Verification};
 use crate::publish::plan::PublicationPlan;
+use crate::review::input::ArtifactOutcome;
 use crate::store::rollup::{
-    COUNTER_FIRST_PUBLICATION, DIMENSION_DAY, DIMENSION_FAILURE, DIMENSION_REPOSITORY,
-    DIMENSION_REQUEST, DIMENSION_REQUEST_ID, DIMENSION_REVIEWER, DIMENSION_RULE, DIMENSION_STEP,
+    COUNTER_CHECKED, COUNTER_DEMOTED, COUNTER_FIRST_PUBLICATION, DIMENSION_DAY, DIMENSION_FAILURE,
+    DIMENSION_REPOSITORY, DIMENSION_REQUEST, DIMENSION_REQUEST_ID, DIMENSION_REVIEWER,
+    DIMENSION_RULE, DIMENSION_STEP, DIMENSION_VERIFIER,
 };
 use crate::store::{
     EndedStepRun, RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
     REVIEW_RUNNING, Rollup, RollupCount, RollupSample, StatsSnapshot, StepOutcome, StepRun,
-    StoredReview,
+    StoredReview, VerifierSteps,
 };
+use crate::verify::{VERDICT_CONFIRMED, VERDICT_NOT_BLOCKING, VERDICT_REFUTED};
 
 /// Version of the statistics document; a changed field gets a new version.
 pub const STATS_SCHEMA_VERSION: i64 = 1;
@@ -680,10 +683,32 @@ struct DayTally {
     steps: BTreeMap<String, StepTally>,
     /// Seconds from the review request to publication, per repository.
     requests: RequestSeconds,
+    /// The verifier's verdicts, per repository and reviewer ID.
+    checks: Checks,
 }
 
 /// Seconds from the review request to publication of published attempts, per repository.
 pub(crate) type RequestSeconds = BTreeMap<String, Vec<i64>>;
+
+/// The verifier's verdicts per repository and reviewer ID of the checked finding.
+pub(crate) type Checks = BTreeMap<(String, String), CheckCounts>;
+
+/// The verifier's verdicts on the findings of one reviewer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct CheckCounts {
+    /// Findings that a finished verification gave a verdict.
+    pub(crate) checked: i64,
+    /// Checked findings found not blocking or refuted.
+    pub(crate) demoted: i64,
+}
+
+impl CheckCounts {
+    /// Adds the counts of `other`.
+    fn merge(&mut self, other: Self) {
+        self.checked += other.checked;
+        self.demoted += other.demoted;
+    }
+}
 
 impl DayTally {
     /// Returns the breakdown map of a review `dimension`, or `None` for another dimension.
@@ -730,11 +755,13 @@ impl HistoryTally {
 
     /// Counts the starts and completions of `reviews` on the days of `range`, every day
     /// without one; a published attempt whose plan in `plans` handed the notes to the author
-    /// also counts them, and one in `firsts` its seconds from the review request.
+    /// also counts them, and one in `firsts` its seconds from the review request. A completed
+    /// attempt also counts the verdicts of its verification in `verifier`.
     fn add_reviews(
         &mut self,
         reviews: &[StoredReview],
         plans: &BTreeMap<String, String>,
+        verifier: &VerifierSteps,
         range: Option<&StatsRange>,
         firsts: &BTreeSet<String>,
     ) -> Result<(), Error> {
@@ -774,6 +801,55 @@ impl HistoryTally {
                 let notes = |bucket: &mut Tally| bucket.counters.notes_to_author += 1;
                 self.add(review, completed.date(), notes);
             }
+            self.add_checks(review, completed.date(), verifier)?;
+        }
+        Ok(())
+    }
+
+    /// Counts the verdicts of the verification of `review` on `day`, per reviewer of the
+    /// checked finding as the combined artifact names it.
+    ///
+    /// A verification that did not finish checked nothing. A verdict on a finding that the
+    /// combined artifact does not hold, or holds without a reviewer, counts nowhere.
+    fn add_checks(
+        &mut self,
+        review: &StoredReview,
+        day: Date,
+        verifier: &VerifierSteps,
+    ) -> Result<(), Error> {
+        let Some(text) = verifier.verifications.get(&review.workflow_id) else {
+            return Ok(());
+        };
+        let verification: Verification = serde_json::from_str(text)
+            .map_err(|err| state_invalid(review, &format!("verification: {err}")))?;
+        if !verification.error_code.is_empty() {
+            return Ok(());
+        }
+        let combined: ArtifactOutcome = match verifier.combined.get(&review.workflow_id) {
+            Some(text) => serde_json::from_str(text)
+                .map_err(|err| state_invalid(review, &format!("combined artifact: {err}")))?,
+            None => ArtifactOutcome::default(),
+        };
+        let checks = &mut self.days.entry(day).or_default().checks;
+        for check in &verification.findings {
+            let demoted = match check.verdict.as_str() {
+                VERDICT_CONFIRMED => 0,
+                VERDICT_NOT_BLOCKING | VERDICT_REFUTED => 1,
+                _ => continue,
+            };
+            let findings = &combined.artifact.findings;
+            let Some(finding) = findings.iter().find(|finding| finding.id == check.id) else {
+                continue;
+            };
+            if finding.reviewer_id.is_empty() {
+                continue;
+            }
+            let repository = review.input.pull_request.repository.clone();
+            let counts = checks.entry((repository, finding.reviewer_id.clone()));
+            counts.or_default().merge(CheckCounts {
+                checked: 1,
+                demoted,
+            });
         }
         Ok(())
     }
@@ -815,6 +891,24 @@ impl HistoryTally {
                     if let Some(counter) = step.counts.named_mut(&count.counter) {
                         *counter += value;
                     }
+                }
+                DIMENSION_VERIFIER => {
+                    let counts = match count.counter.as_str() {
+                        COUNTER_CHECKED => CheckCounts {
+                            checked: value,
+                            demoted: 0,
+                        },
+                        COUNTER_DEMOTED => CheckCounts {
+                            checked: 0,
+                            demoted: value,
+                        },
+                        _ => continue,
+                    };
+                    let Some((repository, reviewer)) = count.key.split_once('#') else {
+                        return Err(store_invalid(format!("rollup verifier key {}", count.key)));
+                    };
+                    let key = (repository.to_owned(), reviewer.to_owned());
+                    bucket.checks.entry(key).or_default().merge(counts);
                 }
                 dimension => {
                     if let (true, Some(map)) =
@@ -889,6 +983,15 @@ impl HistoryTally {
             for (repository, seconds) in &bucket.requests {
                 push_samples(&mut rollup, &day, DIMENSION_REQUEST, repository, seconds);
             }
+            for ((repository, reviewer), counts) in &bucket.checks {
+                let key = format!("{repository}#{reviewer}");
+                for (name, value) in [
+                    (COUNTER_CHECKED, counts.checked),
+                    (COUNTER_DEMOTED, counts.demoted),
+                ] {
+                    push_count(&mut rollup, &day, DIMENSION_VERIFIER, &key, name, value);
+                }
+            }
         }
         rollup
     }
@@ -932,24 +1035,27 @@ fn push_tally(rollup: &mut Rollup, day: &str, dimension: &str, key: &str, tally:
     push_samples(rollup, day, dimension, key, &tally.seconds);
 }
 
-/// Returns the rollup of pruned reviews: their starts, completions, notes and step runs.
+/// Returns the rollup of pruned reviews: their starts, completions, notes, verdicts and step
+/// runs.
 ///
-/// `runs` are the step runs of `reviews`, `plans` their stored plans by workflow ID, and
-/// `firsts` the first publications of `first_publications`; each of `reviews` among them
-/// adds its request seconds and its `request_id` count.
+/// `runs` are the step runs of `reviews`, `plans` their stored plans by workflow ID,
+/// `verifier` their verifier's steps, and `firsts` the first publications of
+/// `first_publications`; each of `reviews` among them adds its request seconds and its
+/// `request_id` count.
 ///
 /// # Errors
 ///
-/// Returns `store_state_invalid` as `compute` does for the same rows, and for the plan of a
-/// published attempt that does not decode.
+/// Returns `store_state_invalid` as `compute` does for the same rows, for the plan of a
+/// published attempt and for a verification or combined artifact that does not decode.
 pub(crate) fn rollup(
     reviews: &[StoredReview],
     runs: &[EndedStepRun],
     plans: &BTreeMap<String, String>,
+    verifier: &VerifierSteps,
     firsts: &BTreeSet<String>,
 ) -> Result<Rollup, Error> {
     let mut tally = HistoryTally::default();
-    tally.add_reviews(reviews, plans, None, firsts)?;
+    tally.add_reviews(reviews, plans, verifier, None, firsts)?;
     tally.add_runs(runs)?;
     let mut rollup = tally.into_rollup();
     for review in reviews {
@@ -975,8 +1081,9 @@ pub(crate) fn rollup(
 /// # Errors
 ///
 /// Returns `store_state_invalid` for a timestamp, an outcome or a rollup day that does not
-/// decode, for a completed row without `completed_at`, for the plan of a published row that
-/// does not decode, and for a schedule key without `#`.
+/// decode, for a completed row without `completed_at`, for the plan of a published row, the
+/// verification or combined artifact of a completed row or a `verifier` rollup key that does
+/// not decode, and for a schedule key without `#`.
 pub fn compute(
     snapshot: &StatsSnapshot,
     range: Option<&StatsRange>,
@@ -1084,15 +1191,16 @@ fn current_state(
 /// Counts the rows, the step runs and the rollup of the snapshot inside `range`.
 ///
 /// Returns the history with the seconds from the review request to publication of the first
-/// publications `firsts`.
+/// publications `firsts`, and the verifier's verdicts.
 pub(crate) fn history(
     snapshot: &StatsSnapshot,
     range: &StatsRange,
     pruned_before: OffsetDateTime,
     firsts: &BTreeSet<String>,
-) -> Result<(History, RequestSeconds), Error> {
+) -> Result<(History, RequestSeconds, Checks), Error> {
     let mut tally = HistoryTally::default();
-    tally.add_reviews(&snapshot.reviews, &snapshot.plans, Some(range), firsts)?;
+    let (plans, verifier) = (&snapshot.plans, &snapshot.verifier);
+    tally.add_reviews(&snapshot.reviews, plans, verifier, Some(range), firsts)?;
     tally.add_runs(&snapshot.steps)?;
     tally.add_rollup(&snapshot.rollup)?;
     let mut totals = Tally::default();
@@ -1103,6 +1211,7 @@ pub(crate) fn history(
     let mut failures: BTreeMap<String, i64> = BTreeMap::new();
     let mut steps: BTreeMap<String, StepTally> = BTreeMap::new();
     let mut requests = RequestSeconds::new();
+    let mut checks = Checks::new();
     let mut day = range.since;
     while day <= range.until {
         let bucket = tally.days.remove(&day).unwrap_or_default();
@@ -1125,6 +1234,9 @@ pub(crate) fn history(
         for (repository, seconds) in bucket.requests {
             requests.entry(repository).or_default().extend(seconds);
         }
+        for (key, counts) in bucket.checks {
+            checks.entry(key).or_default().merge(counts);
+        }
         days.insert(day, bucket.total);
         let Some(next) = day.next_day() else {
             break;
@@ -1143,7 +1255,7 @@ pub(crate) fn history(
         failed_by_code: keyed(failures, |failed| FailedCount { failed }),
         steps: keyed(steps, StepTally::finish),
     };
-    Ok((history, requests))
+    Ok((history, requests, checks))
 }
 
 /// Turns a sorted map into breakdown entries, finishing each value with `finish`.

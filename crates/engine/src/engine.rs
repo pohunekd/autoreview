@@ -44,6 +44,9 @@ const ENGINE_LOCK_MODE: u32 = 0o600;
 /// Step that stores the combined review of a workflow.
 pub(crate) const STEP_ARTIFACT: &str = "artifact";
 
+/// Step that stores the reviewers' combined findings, before anchoring and the verifier.
+pub(crate) const STEP_COMBINED: &str = "artifact/combined";
+
 /// Step that stores the GitHub publication of a workflow.
 pub(crate) const STEP_PUBLICATION: &str = "publication";
 

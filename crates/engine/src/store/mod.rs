@@ -34,7 +34,7 @@ pub use discovery::{
 pub use outcomes::{FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Settlement};
 pub use reviews::{
     RESULT_FAILURE, RESULT_SUCCESS, REVIEW_AWAITING, REVIEW_COMPLETED, REVIEW_QUEUED,
-    REVIEW_RUNNING, ReviewFilter, StatsSnapshot, StoredReview,
+    REVIEW_RUNNING, ReviewFilter, StatsSnapshot, StoredReview, VerifierSteps,
 };
 pub use rollup::{Rollup, RollupCount, RollupSample};
 pub use steps::{EndedStepRun, ReviewStep, StepOutcome, StepRun};
