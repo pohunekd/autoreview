@@ -67,7 +67,8 @@ at most once per `schedule.outcome_check_interval_seconds` (see
 failed in that pass is not read. If the pull request was merged or closed, its
 `open` rows become `open_at_merge` or `open_at_close` at the head it ended on,
 other rows keep their outcome, and the store records how it ended. A pull
-request with no `open` row is not read again. A pull request that is still
+request with no `open` row is not read, so the store records no end for one
+whose rows were all decided before it ended. A pull request that is still
 open, that GitHub does not return, or whose read fails changes nothing: it is
 read again after the interval (a failed read logs `pull request state of
 finding outcomes unreadable`). A pass reads at most the pull requests with
@@ -102,7 +103,9 @@ failed`, and the next check after the interval ends it.
 
 `autoreview findings list --repo OWNER/REPO --since DATE` prints the rows of
 one repository published at or after midnight UTC of `DATE`, oldest first, one
-JSON object per line, each with how its pull request ended. The
+JSON object per line, each with how its pull request ended, as far as a state
+read saw it: the end stays empty for a pull request whose rows were all decided
+before it ended. The
 [CLI reference](../../cli.md#autoreview-findings-list) lists every field. A
 pull request that is reopened after it ended keeps its earlier end in the list
 until it ends again.
