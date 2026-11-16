@@ -72,7 +72,13 @@ open, that GitHub does not return, or whose read fails changes nothing: it is
 read again after the interval (a failed read logs `pull request state of
 finding outcomes unreadable`). A pass reads at most the pull requests with
 `open` rows that left the search; the first pass after an upgrade reads all of
-them.
+them. The pull requests that were read longest ago come first, so one whose
+read keeps failing does not hold back the others of its credential.
+
+An end is final for the rows that were `open` when it was read: if a closed
+pull request is reopened, those rows keep `open_at_close`, and the store keeps
+the earlier end until the pull request ends again. Rows that reviews publish
+after the reopen are new `open` rows and end at the next end.
 
 ## When recording fails
 

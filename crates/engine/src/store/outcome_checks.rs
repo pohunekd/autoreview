@@ -43,7 +43,8 @@ const ENDED_CLOSED: &str = "closed";
 impl Store {
     /// Returns the pull requests with open outcomes whose state was not read since `cutoff`.
     ///
-    /// A pull request whose state was never read is due. The order is repository, number.
+    /// A pull request whose state was never read is due and comes first; the others follow
+    /// from the oldest read, so one whose read keeps failing cannot hold back the rest.
     ///
     /// # Errors
     ///
@@ -53,13 +54,15 @@ impl Store {
         let connection = self.lock_connection()?;
         let mut statement = connection
             .prepare(&format!(
-                "SELECT DISTINCT o.repository, o.number FROM finding_outcomes o \
+                "SELECT o.repository, o.number FROM finding_outcomes o \
                  LEFT JOIN finding_outcome_pull_requests p \
                  ON p.repository = o.repository AND p.number = o.number \
                  WHERE o.outcome = ?1 AND (p.checked_at IS NULL OR {} < {}) \
-                 ORDER BY o.repository, o.number",
+                 GROUP BY o.repository, o.number \
+                 ORDER BY p.checked_at IS NOT NULL, {}, o.repository, o.number",
                 time_key("p.checked_at"),
                 time_key("?2"),
+                time_key("p.checked_at"),
             ))
             .map_err(unavailable)?;
         let rows = statement

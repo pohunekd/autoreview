@@ -123,10 +123,12 @@ the earlier release runs, the reviews it prunes and the pull requests it stops
 are not added to the rollup, so the statistics of their days can be too low.
 
 The release with [finding outcomes](../concepts/finding-outcomes.md) adds the
-table `finding_outcomes` the same way, without a new schema version. An
-earlier release opens such a store and ignores the table, so a rollback to it
-needs no restore. While the earlier release runs, its publications record no
-outcomes and nothing prunes the table.
+tables `finding_outcomes` and `finding_outcome_pull_requests` (the state reads
+of pull requests with open outcomes) the same way, without a new schema
+version. An earlier release opens such a store and ignores the tables, so a
+rollback to it needs no restore. While the earlier release runs, its
+publications record no outcomes, no pull request is read for its outcomes,
+and nothing prunes the tables.
 
 ## Roll back
 

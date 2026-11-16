@@ -17,7 +17,7 @@ use crate::messages::APPROVAL_REQUESTED_TITLE;
 use crate::model::PullRequest;
 use crate::model::review::{Decision, DiscussionThread, PRIOR_FIXED, PRIOR_OPEN, prior_key};
 use crate::protocol::fixtures::sha;
-use crate::store::{REVIEW_COMPLETED, ReviewFilter};
+use crate::store::{FindingOutcome, REVIEW_COMPLETED, ReviewFilter};
 use crate::testing::fake::{reviewer_output, settling_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
 
@@ -747,7 +747,8 @@ async fn open_prior_finding_without_an_open_thread_is_published_again() {
 }
 
 // A merge ends the findings that are still open at the merged head, a settled finding keeps
-// its outcome, and the ended pull request is not read again.
+// its outcome, and the ended pull request is not read again. A pull request whose read keeps
+// failing does not hold the merge back.
 #[tokio::test]
 async fn merge_ends_the_open_findings_and_keeps_the_settled_ones() {
     let mut h = start_harness(|config| {
@@ -796,6 +797,19 @@ async fn merge_ends_the_open_findings_and_keeps_the_settled_ones() {
     h.wait_for("the settled outcomes", || outcomes(&h, &pr) == settled)
         .await;
 
+    // A pull request whose state read always fails sorts first on the same credential.
+    let broken = FindingOutcome {
+        repository: pr.repository.clone(),
+        finding_key: fixed_key.clone(),
+        outcome: "open".to_owned(),
+        published_at: "2026-01-01T00:00:00Z".to_owned(),
+        ..FindingOutcome::default()
+    };
+    (h.store)
+        .record_outcomes(&pr.repository, 0, &pr.head_sha, &[], &[broken])
+        .expect("the broken outcome is stored");
+    let key = format!("{}#0", pr.repository);
+    h.fake.lock().failing_state_reads.insert(key);
     let mut merged = pr.clone();
     merged.head_sha = sha("e");
     h.fake.merge(merged.clone());

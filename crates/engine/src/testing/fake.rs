@@ -138,6 +138,8 @@ pub(crate) struct FakeState {
     pub(crate) failing_credentials: BTreeMap<String, String>,
     /// Every pull request state read, as `repository#number credential`, in order.
     pub(crate) state_reads: Vec<String>,
+    /// Pull requests whose state read fails transiently, by `repository#number`.
+    pub(crate) failing_state_reads: BTreeSet<String>,
     /// Hosts whose daemon advertises the fetch of an extra ref at session start.
     pub(crate) fetch_ref_hosts: BTreeSet<String>,
     /// Number of the next capability reads that fail as a transient `pohunek_request_failed`.
@@ -367,7 +369,9 @@ impl Integrations for FakeIntegration {
         let result = {
             let mut state = self.lock();
             state.state_reads.push(format!("{key} {}", credential.name));
-            if state.failing_credentials.contains_key(&credential.name) {
+            if state.failing_credentials.contains_key(&credential.name)
+                || state.failing_state_reads.contains(&key)
+            {
                 return ready(Err(transient_error()));
             }
             match state.current.get(&key) {
