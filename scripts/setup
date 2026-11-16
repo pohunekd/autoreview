@@ -18,8 +18,9 @@
 # docs/knowledge/guides/getting-started.md.
 set -euo pipefail
 
-# The pohunek release that a missing or too old pohunek is replaced with.
-POHUNEK_VERSION="0.41.0"
+# The pohunek release that a missing or too old pohunek is replaced with; the
+# head fetch at session start needs 0.43.0 and a head-checkout review 0.43.1.
+POHUNEK_VERSION="0.43.1"
 # The oldest pohunek release that is kept.
 POHUNEK_MIN_VERSION="0.41.0"
 # The autoreview release that is installed; it must know the init layout flags
