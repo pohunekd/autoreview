@@ -61,6 +61,9 @@ pub(crate) struct Rules<'a> {
     pub(crate) owners: &'a Owners,
     /// The branch of every pohunek session of the host.
     pub(crate) sessions: &'a BTreeSet<String>,
+    /// Branches whose session `--yes` removes before planning; a dry run plans them without
+    /// their worktree, so `checked_out` is ignored for them.
+    pub(crate) freed: &'a BTreeSet<String>,
     /// The only branches to list; `None` lists every branch under the prefix.
     pub(crate) only: Option<&'a BTreeSet<&'a str>>,
     /// `--older-than-days` as a duration; `None` lists every age.
@@ -164,7 +167,7 @@ fn verdict(branch: &str, checked_out: bool, rules: &Rules<'_>) -> Verdict {
     if rules.sessions.contains(branch) {
         return Verdict::SessionLive;
     }
-    if checked_out {
+    if checked_out && !rules.freed.contains(branch) {
         return Verdict::CheckedOut;
     }
     let Some(older_than) = rules.older_than else {
@@ -186,7 +189,7 @@ fn verdict(branch: &str, checked_out: bool, rules: &Rules<'_>) -> Verdict {
 ///
 /// The ID is [`WORKFLOW_ID_PREFIX`] and 64 lowercase hex digits; a `-` and at least one more
 /// character must follow it, as `<reviewer>-run<N>` does.
-fn workflow_id<'a>(branch: &'a str, prefix: &str) -> Option<&'a str> {
+pub(crate) fn workflow_id<'a>(branch: &'a str, prefix: &str) -> Option<&'a str> {
     let token = branch.strip_prefix(prefix)?;
     let length = WORKFLOW_ID_PREFIX.len() + WORKFLOW_DIGEST_LEN;
     let id = token.get(..length)?;

@@ -120,11 +120,13 @@ fn plan_keeps_every_branch_a_review_session_or_worktree_needs() {
         (Some(30), [TooRecent, TooRecent, AgeUnknown, Delete]),
         (Some(31), [TooRecent, TooRecent, AgeUnknown, AgeUnknown]),
     ];
+    let freed = BTreeSet::new();
     for (days, aged) in cases {
         let rules = Rules {
             prefix: PREFIX,
             owners: &owners,
             sessions: &sessions,
+            freed: &freed,
             only: None,
             older_than: days.map(|days| Duration::from_secs(days * DAY)),
             retention: Duration::from_secs(30 * DAY),
