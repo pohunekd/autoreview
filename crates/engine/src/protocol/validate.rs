@@ -315,6 +315,7 @@ pub(crate) mod tests {
             head_checkout_host_hooks: crate::config::HostHooksChoice::Refuse,
             host_state: None,
             text_guard: None,
+            guidance: None,
             notify: NotifySettings::single_for_tests(),
             secret_variables: std::collections::BTreeSet::new(),
             queue_max_items: 10,

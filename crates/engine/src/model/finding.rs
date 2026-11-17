@@ -45,9 +45,26 @@ pub struct Finding {
     /// Verdict of the finding.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub verdict: String,
+    /// Slug that groups findings of one kind; empty when the reviewer gave none.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub category: String,
 }
 
 autoreview_go_compat::object_only_serde!(Finding);
+
+/// Longest category slug, in characters.
+const CATEGORY_MAX_CHARACTERS: usize = 40;
+
+/// Reports whether `value` is a category slug: words of `a-z` and `0-9` joined by single hyphens.
+pub(crate) fn category_valid(value: &str) -> bool {
+    value.len() <= CATEGORY_MAX_CHARACTERS
+        && value.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+}
 
 /// Output of one reviewer session.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

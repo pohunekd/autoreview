@@ -172,6 +172,13 @@ notify:
 #   max_file_bytes: 10485760
 #   kept_files: 5
 
+# Optional: suggest a rule for the agent guidance of a repository when findings
+# of one category recur; both keys are required when the section is present.
+# Without it nothing is counted. See docs/configuration.md.
+# guidance:
+#   recurrence_threshold: 3
+#   window_days: 30
+
 # Optional: the prompt-injection guard of the policy rules that set `guard`;
 # every key is required when the section is present. Only reviews of such a
 # rule read and scan text. See docs/configuration.md.

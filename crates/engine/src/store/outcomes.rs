@@ -11,7 +11,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 
 use super::reviews::{time_key, unavailable};
-use super::{Store, outcome_checks};
+use super::{Store, guidance, outcome_checks};
 use crate::Error;
 
 /// The DDL of the outcomes, run after `ROLLUP_SCHEMA`; a store that predates it gains it.
@@ -165,8 +165,9 @@ impl Store {
         settlements: &[Settlement],
         published: &[FindingOutcome],
     ) -> Result<(), Error> {
-        let now = self.timestamp();
         self.in_tx(|transaction| {
+            // Read under the write lock, so `updated_at` follows the commit order.
+            let now = self.timestamp();
             // Every settlement picks its rows before any change: a key that one settlement
             // moves a row to can be the key that another one of the same review names.
             let mut picked = Vec::new();
@@ -290,8 +291,8 @@ impl Store {
 
     /// Deletes the outcomes last written before `cutoff` and returns how many it deleted.
     ///
-    /// The state reads of their pull requests last made before `cutoff` go in the same
-    /// transaction.
+    /// The state reads of their pull requests last made before `cutoff`, their categories and
+    /// the guidance suggestions made before `cutoff` go in the same transaction.
     ///
     /// # Errors
     ///
@@ -310,6 +311,7 @@ impl Store {
                 )
                 .map_err(unavailable)?;
             outcome_checks::prune(transaction, &cutoff)?;
+            guidance::prune(transaction, &cutoff)?;
             Ok(i64::try_from(rows).unwrap_or(i64::MAX))
         })
     }

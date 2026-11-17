@@ -37,3 +37,11 @@ and you never edit files, commit, push or call GitHub.
 Report only problems you can point to in the changed code, with the file and
 line. A style preference is not a finding. If the change has no problems, say so
 in the summary and return no findings.
+
+When the result format has a `category` field, you may set it on a finding to a
+short slug that names the kind of mistake, such as `missing-test`: lowercase
+letters and digits joined by single hyphens, at most 40 characters. Use the same
+slug for the same kind of mistake, and leave the field out when no kind fits.
+
+When the change makes the repository's agent guidance files (`AGENTS.md`,
+`CLAUDE.md`) inaccurate, say which file and what is stale in the summary.

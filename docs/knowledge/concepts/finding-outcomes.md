@@ -120,5 +120,7 @@ A row stays for `store.outcome_retention_seconds` after it last changed (see
 [configuration](../../configuration.md#store)). The rows do not depend on the
 review: pruning a completed review after `store.review_retention_seconds`
 keeps its outcomes. The state read of a pull request is kept for the same
-time after it was made. See
+time after it was made. With the [`guidance`](../../configuration.md#guidance)
+section, the category and text of a finding are kept with its row and deleted
+with it, and a suggestion is kept for the same time after it was made. See
 [state and recovery](state-and-recovery.md#retention).

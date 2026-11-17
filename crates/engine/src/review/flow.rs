@@ -23,7 +23,7 @@ use crate::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, SessionRequest,
 };
 use crate::intent::bound_issues;
-use crate::messages::published_message;
+use crate::messages::{guidance_suggested_message, published_message};
 use crate::model::{
     Artifact, Discussion, LinkedIssues, Outcome, PublishResult, PublishedRecord, PullRequest,
     ReviewInput, ReviewOutcome,
@@ -589,6 +589,53 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         }
     }
 
+    /// Sends the guidance suggestions that the findings fixed so far made due in `repository`.
+    ///
+    /// Nothing is counted without the `guidance` section. A failed count is logged and never
+    /// fails the review; a suggestion is sent once per review and category.
+    ///
+    /// # Errors
+    ///
+    /// Returns the shutdown error.
+    async fn suggest_guidance(&self, repository: &str) -> Result<(), Error> {
+        let Some(rule) = self.engine.config.guidance else {
+            return Ok(());
+        };
+        let review_id = self.input.pull_request.review_id();
+        let raised = (self.engine.store).raise_suggestions(repository, &self.workflow_id, rule);
+        let suggestions = match raised {
+            Ok(suggestions) => suggestions,
+            Err(err) => {
+                tracing::error!(
+                    review_id = %review_id,
+                    error_code = error_code(&err),
+                    error = %err,
+                    "guidance suggestions not raised"
+                );
+                return Ok(());
+            }
+        };
+        for suggestion in suggestions {
+            let level = match self.engine.level(Event::GuidanceSuggested) {
+                Ok(level) => level,
+                Err(err) => {
+                    tracing::error!(
+                        review_id = %review_id,
+                        error_code = error_code(&err),
+                        "guidance suggestion has no level"
+                    );
+                    return Ok(());
+                }
+            };
+            let limit = self.engine.config.excerpt_characters;
+            let message = guidance_suggested_message(&suggestion, limit);
+            let name = format!("guidance-{}", suggestion.category);
+            self.notify_at(&name, Event::GuidanceSuggested, level, &message)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Renders and publishes the review once, records it and completes the review.
     ///
     /// # Errors
@@ -680,6 +727,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             artifact,
             published_at.0,
         );
+        self.suggest_guidance(&current.repository).await?;
         let blocking = blocking_count(&self.input, artifact);
         let event: Event = publication_event(plan, blocking);
         let message = published_message(

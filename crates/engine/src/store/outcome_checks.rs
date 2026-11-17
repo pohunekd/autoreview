@@ -114,8 +114,9 @@ impl Store {
         } else {
             (OUTCOME_OPEN_AT_CLOSE, ENDED_CLOSED)
         };
-        let now = self.timestamp();
         self.in_tx(|transaction| {
+            // Read under the write lock, so `updated_at` follows the commit order.
+            let now = self.timestamp();
             let rows = transaction
                 .execute(
                     "UPDATE finding_outcomes SET outcome = ?3, outcome_head_sha = ?4, \

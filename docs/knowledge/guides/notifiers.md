@@ -149,6 +149,10 @@ notify:
     approved: [matrix-approvals]
 ```
 
+- `guidance_suggested`, the suggestion of a guidance rule for findings that
+  recur (see [`guidance`](../../configuration.md#guidance)), is a quiet `digest`
+  event by default; `guidance_suggested: [matrix-guidance]` sends it to a room
+  of its own.
 - The key is an event of the [policy notifications](../../policy.md#notifications),
   and the value follows the rules of a level route: one or more backends, each
   named once. A Matrix backend there may use another homeserver, token or

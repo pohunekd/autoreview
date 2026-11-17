@@ -669,6 +669,41 @@ process of the same command on the same directory, or a filesystem that cannot
 lock, leaves the file alone: the process logs one `log file in use` warning on
 stderr and keeps logging there.
 
+## guidance
+
+Optional. Without it autoreview counts nothing and sends no `guidance_suggested`
+event. With it, a repository whose reviews keep finding the same kind of mistake
+gets one suggestion to write a rule for it in its agent guidance (`AGENTS.md` or
+`CLAUDE.md`). A reviewer may give each finding a `category`, a slug such as
+`missing-test`. When `recurrence_threshold` findings of one category, in one
+repository, were settled as `fixed` within the last `window_days` days and after
+the last suggestion for that category, the review that settled the last of them
+raises the event [`guidance_suggested`](policy.md#notifications). It names the
+repository, the category and the pull request, key and body of each counted
+finding, and its route follows `notify.routes` like any event; its default level
+is `digest`. Raising it records the time, so the next suggestion for the
+category needs a new set of fixed findings. A finding is counted from the
+publication that follows the first start with the section; findings published
+before are not counted. The count stops at `store.outcome_retention_seconds`,
+after which the finding outcomes are pruned. autoreview only suggests: it writes
+to no repository and opens no pull request.
+
+When the section is present, every command validates it at load, so a broken
+section stops `validate` too, and every key is required; a `guidance:` key
+without a value is refused with `configuration_missing:
+guidance.recurrence_threshold`.
+
+| Key | Meaning |
+|---|---|
+| `recurrence_threshold` | Findings of one category that raise a suggestion. From 2 to 100 |
+| `window_days` | Days back from now in which a fixed finding counts. From 1 to 365 |
+
+```yaml
+guidance:
+  recurrence_threshold: 3
+  window_days: 30
+```
+
 ## guards
 
 Optional. `guards.text` holds the settings of the prompt-injection guard that a

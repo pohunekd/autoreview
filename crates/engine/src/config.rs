@@ -184,6 +184,15 @@ pub struct TextGuard {
     pub lexicon: Lexicon,
 }
 
+/// The settings of the guidance suggestions, from `guidance`; without them nothing is counted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GuidanceConfig {
+    /// Findings of one category, fixed within the window, that raise a suggestion.
+    pub recurrence_threshold: usize,
+    /// How far back from now a fixed finding counts.
+    pub window: Duration,
+}
+
 /// The technical settings of the engine. What is reviewed and how it is published lives in the
 /// review policy.
 ///
@@ -221,6 +230,8 @@ pub struct Config {
     pub host_state: Option<HostStateRules>,
     /// The text guard settings, or `None` when the configuration has no `guards.text`.
     pub text_guard: Option<TextGuard>,
+    /// The guidance suggestion settings, or `None` when the configuration has no `guidance`.
+    pub guidance: Option<GuidanceConfig>,
     /// The notification backends, their routes and the backends of the review queue.
     pub notify: NotifySettings,
     /// Names of the variables that hold the configured secrets.
@@ -1184,6 +1195,7 @@ mod tests {
             head_checkout_host_hooks: super::HostHooksChoice::Refuse,
             host_state: None,
             text_guard: None,
+            guidance: None,
             notify: NotifySettings::single_for_tests(),
             secret_variables: std::collections::BTreeSet::new(),
             queue_max_items: 10,

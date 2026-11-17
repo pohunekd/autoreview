@@ -107,7 +107,8 @@ impl MergedFinding {
 /// Merges `finding` into its first duplicate of another reviewer, or adds it.
 ///
 /// The merged finding keeps its identifier and first reviewer, takes the higher confidence and
-/// the longer body with its title, and blocks when either finding blocks.
+/// the longer body with its title, and blocks when either finding blocks. It keeps the first
+/// category that a reviewer gave.
 fn add_finding(merged: &mut Vec<MergedFinding>, finding: Finding) {
     let target = merged.iter_mut().find(|candidate| {
         !candidate.reviewer_ids.contains(&finding.reviewer_id)
@@ -130,6 +131,9 @@ fn add_finding(merged: &mut Vec<MergedFinding>, finding: Finding) {
         kept.body.clone_from(&finding.body);
     }
     kept.non_blocking = kept.non_blocking && finding.non_blocking;
+    if kept.category.is_empty() {
+        kept.category.clone_from(&finding.category);
+    }
     target.reviewer_ids.push(finding.reviewer_id);
     target.labels.push(finding.reviewer_label);
 }

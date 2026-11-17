@@ -161,6 +161,12 @@ rollback to it needs no restore. While the earlier release runs, its
 publications record no outcomes, no pull request is read for its outcomes,
 and nothing prunes the tables.
 
+The release with the [`guidance`](../../configuration.md#guidance) section adds
+the tables `finding_categories` and `guidance_suggestions` the same way, without
+a new schema version. An earlier release ignores them, so a rollback needs no
+restore; while it runs, no category is recorded and no suggestion is made. A
+`category` in a stored finding is ignored by it as an unknown key.
+
 ## Roll back
 
 Roll back only with a backup taken before the upgrade:
@@ -186,14 +192,17 @@ Roll back only with a backup taken before the upgrade:
    `store.outcome_retention_seconds` for a release before finding outcomes, or
    `schedule.outcome_check_interval_seconds` for a release before the outcomes at
    merge and close, or `pohunek.head_checkout_host_hooks` for a release before
-   head checkouts without the repository's hooks. On a converted
+   head checkouts without the repository's hooks, or `guidance` and
+   `notify.routes.guidance_suggested` for a release before guidance
+   suggestions. On a converted
    deployment, remove the matching `HERMES_PR_REVIEW_*` variable too, or run
    the old release's `scripts/env-to-config`, which refuses it as unknown.
    Do the same for the policy: restore the policy of the old version, or remove
    what the new version added, such as `intent_check` from the policy's
    pipelines for a release before the intent check, or `guard` from every rule
    of the policy and `guards` from `config.yaml` for a release before the guard
-   sections.
+   sections, or `notifications.guidance_suggested` for a release before guidance
+   suggestions.
 5. Run `validate` with the old version, then start the service.
 
 A rollback goes to an earlier autoreview release (Rust).
