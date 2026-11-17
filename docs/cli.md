@@ -571,14 +571,15 @@ does not change the exit code.
 | 0 | The report was printed and every threshold given is met |
 | 1 | The run did not start: an invalid case (`eval_cases_invalid`), `eval_pipeline_unknown`, `eval_no_cases`, `eval_repeat_invalid`, `eval_too_many_trials`, `eval_threshold_no_data` (a threshold without a case of its class), `eval_checkout_unsupported`, `eval_head_ref_reserved` (a `head_ref` branch under a review branch prefix), `credential_not_covered` or a configuration error |
 | 2 | A threshold is not met (`eval_threshold_not_met`) |
-| 3 | A trial could not be measured or panicked (`eval_trial_panicked`), a threshold has no completed trial, or the run was cancelled with Ctrl-C and printed its partial report without a verdict on the thresholds (`eval_trials_failed`) |
+| 3 | A trial could not be measured or panicked (`eval_trial_panicked`), a threshold has no completed trial, or the run was cancelled with Ctrl-C or by a panicked trial and printed its partial report without a verdict on the thresholds (`eval_trials_failed`) |
 
 A failed trial enters no rate and carries its error code in the report:
 `eval_trial_timeout`, `eval_trial_panicked` (the trial task panicked; the other
-trials are stopped and every session is removed), `eval_session_budget_exhausted` (more than
-`eval.max_sessions` session starts in the run), `eval_verifier_failed` (the
-verifier did not finish, so the claims would publish unchecked), `shutdown` (the
-run was cancelled before the trial started) or the code the review failed with.
+trials are stopped and every session is removed),
+`eval_session_budget_exhausted` (more than `eval.max_sessions` session starts in
+the run), `eval_verifier_failed` (the verifier did not finish, so the claims
+would publish unchecked), `shutdown` (the run was cancelled before the trial
+started) or the code the review failed with.
 
 ## Service
 

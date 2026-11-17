@@ -65,7 +65,7 @@ impl RunCounters {
         branches.unwrap_or_else(PoisonError::into_inner).clone()
     }
 
-    /// Returns the `(host, session ID)` of every session that stays open on its host.
+    /// Returns the `(host, session ID)` of every session whose latest removal failed.
     pub fn sessions_left(&self) -> BTreeSet<(String, String)> {
         let left = self.left.lock();
         left.unwrap_or_else(PoisonError::into_inner).clone()
@@ -139,8 +139,8 @@ impl<I: Integrations + Send + Sync> EvalIntegration<I> {
     /// Removes every session this trial started, also one whose start did not return.
     ///
     /// It uses a token that is not cancelled and gives each call at most `limit`. A session
-    /// that is gone already is a no-op; one that stays is logged and listed in
-    /// [`RunCounters::sessions_left`].
+    /// that is gone already is a no-op and is not listed; one that stays is logged and listed
+    /// in [`RunCounters::sessions_left`] until a later call removes it.
     pub async fn remove_sessions(&self, limit: Duration) {
         let fresh = CancellationToken::new();
         let (mut sessions, pending) = {
@@ -157,11 +157,14 @@ impl<I: Integrations + Send + Sync> EvalIntegration<I> {
         }
         for session in &sessions {
             let removal = self.inner.remove_session_confirmed(&fresh, session);
+            let key = (session.host.clone(), session.session_id.clone());
             match tokio::time::timeout(limit, removal).await {
-                Ok(Ok(())) => {}
+                Ok(Ok(())) => {
+                    let left = self.counters.left.lock();
+                    left.unwrap_or_else(PoisonError::into_inner).remove(&key);
+                }
                 _ => {
                     tracing::warn!(session = %session.session_id, "eval session not removed");
-                    let key = (session.host.clone(), session.session_id.clone());
                     let left = self.counters.left.lock();
                     left.unwrap_or_else(PoisonError::into_inner).insert(key);
                 }

@@ -434,5 +434,13 @@ mod tests {
         assert_eq!(seventh.status, TrialStatus::Completed);
         let open = fake.snapshot().3;
         assert!(open > 0 && counters.sessions_left().len() == open);
+        // A later removal that succeeds takes the sessions out of the list again.
+        fake.lock().keeping_sessions = false;
+        engine
+            .integration
+            .remove_sessions(config.session_timeout)
+            .await;
+        assert!(counters.sessions_left().is_empty());
+        assert_eq!(fake.snapshot().3, 0);
     }
 }
