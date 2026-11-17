@@ -81,6 +81,15 @@ pub struct ChangedFiles {
     pub truncated: bool,
 }
 
+/// The files changed between two commits, with the lines that accept an inline comment.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RangeFiles {
+    /// The changed files, in listing order; never cut short.
+    pub changed: ChangedFiles,
+    /// RIGHT-side commentable lines of each changed file.
+    pub commentable: CommentableLines,
+}
+
 /// What a read of one repository file at a commit found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositoryFile {
@@ -394,6 +403,20 @@ pub trait Integrations {
         credential: &Credential,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<LinkedIssues, Error>> + Send;
+
+    /// Reads the files that `head` changes against `base`, as the three-dot compare shows them.
+    ///
+    /// It reads with `credential`'s token. An answer without a file list, a comparison that
+    /// GitHub cuts short, or a changed file whose patch GitHub leaves out, is an error, never
+    /// a shorter answer.
+    fn read_range_files(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        base: &str,
+        head: &str,
+    ) -> impl Future<Output = Result<RangeFiles, Error>> + Send;
 
     /// Reads the file `path` of `repository` at the commit `sha`.
     ///

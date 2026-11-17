@@ -26,7 +26,7 @@ use crate::config::Credential;
 use crate::error::{BoxError, Error, WORKFLOW_FAILED};
 use crate::integrations::{
     ChangedFile, ChangedFiles, CommentReaction, CommentableLines, GitHubReview, GuardText,
-    GuardTexts, HeadCheckoutHooks, Integrations, PullRequestSignals, PullRequestState,
+    GuardTexts, HeadCheckoutHooks, Integrations, PullRequestSignals, PullRequestState, RangeFiles,
     ReadiedDraft, RepositoryFile, ReviewRequest, ReviewRequestList, SessionRequest, ThreadComment,
     TokenAnswer,
 };
@@ -613,6 +613,26 @@ impl Integrations for FakeIntegration {
         let result = ChangedFiles {
             files: state.changed.clone(),
             truncated: state.changed_truncated,
+        };
+        drop(state);
+        ready(Ok(result))
+    }
+
+    fn read_range_files(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        _repository: &str,
+        _base: &str,
+        _head: &str,
+    ) -> impl Future<Output = Result<RangeFiles, Error>> + Send {
+        let state = self.lock();
+        let result = RangeFiles {
+            changed: ChangedFiles {
+                files: state.changed.clone(),
+                truncated: false,
+            },
+            commentable: state.commentable.clone(),
         };
         drop(state);
         ready(Ok(result))
