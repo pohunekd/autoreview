@@ -11,7 +11,11 @@ unsound = "all"
 yanked = "warn"
 # Each entry carries a reason that links the issue tracking the fix, for
 # example { id = "RUSTSEC-0000-0000", reason = "no fixed release, see #123" }.
-ignore = []
+ignore = [
+    # chrono is unmaintained, with no known vulnerability. rmcp depends on it on
+    # every target, and no rmcp release drops it yet.
+    { id = "RUSTSEC-2026-0543", reason = "chrono via rmcp, see #566" },
+]
 
 [licenses]
 # Each licence names the crates whose licence expression needs it. A crate that
