@@ -235,6 +235,15 @@ class WrapperTests(unittest.TestCase):
             with self.assertRaisesRegex(wrapper.InputFrameError, "invalid size"):
                 wrapper.encoded_result(self.write_result(directory, value), 10, HEAD)
 
+        # A null category is dropped, so the result is what an adapter without the field sends.
+        value = review_result(
+            findings=[finding(category="missing-test"), finding(category=None), finding()]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            encoded = wrapper.encoded_result(self.write_result(directory, value), 4096, HEAD)
+        findings = json.loads(base64.b64decode(encoded, validate=True))["findings"]
+        self.assertEqual(findings, [finding(category="missing-test"), finding(), finding()])
+
     def test_result_rejects_interrupted_or_wrong_head(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             for status, reviewed_head in (("interrupted", HEAD), ("completed", "b" * 40)):
@@ -293,6 +302,8 @@ class WrapperTests(unittest.TestCase):
         self.assertIn("prior_findings", schema["required"])
         self.assertIn("blocking", item["required"])
         self.assertEqual(item["properties"]["blocking"], {"type": "boolean"})
+        self.assertIn("category", item["required"])
+        self.assertEqual(item["properties"]["category"], {"type": ["string", "null"]})
         self.assertEqual(verdict["required"], ["key", "status", "note", "relies_on"])
         self.assertEqual(verdict["properties"]["status"]["enum"], ["fixed", "still_open", "answered"])
         self.assertFalse(verdict["additionalProperties"])

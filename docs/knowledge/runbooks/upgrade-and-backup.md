@@ -75,7 +75,10 @@ retention settings (`store.review_retention_seconds`,
    Install every Codex profile before the restart:
    the engine binds each Codex run to a nonce that only the adapter of this
    release writes back, and fails the runs of an older one with
-   `review_nonce_mismatch`.
+   `review_nonce_mismatch`. The Codex adapter of this release may return a
+   finding `category`, which an engine from before this release refuses with
+   `review_result_invalid`, so keep the time between the install and the
+   restart short.
 5. Restart the service and check its state:
 
    ```sh

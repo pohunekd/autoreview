@@ -167,6 +167,7 @@ RESULT_SCHEMA = {
                     "line",
                     "title",
                     "body",
+                    "category",
                 ],
                 "properties": {
                     "severity": {
@@ -182,6 +183,9 @@ RESULT_SCHEMA = {
                     "line": {"type": "integer", "minimum": 1},
                     "title": {"type": "string"},
                     "body": {"type": "string"},
+                    # Codex needs every property required, so an absent category is a null.
+                    # The engine checks the slug and drops an invalid one.
+                    "category": {"type": ["string", "null"]},
                 },
             },
         },
@@ -878,6 +882,13 @@ def validate_blocking_and_prior_findings(value: dict) -> None:
         raise InputFrameError("Codex review result has invalid prior findings")
 
 
+def drop_null_categories(findings: list) -> None:
+    """Removes a `null` category from each finding: the engine reads an absent one as none."""
+    for finding in findings:
+        if finding.get("category", "") is None:
+            del finding["category"]
+
+
 def encoded_result(path: Path, maximum_bytes: int, expected_head_sha: str) -> str:
     try:
         data = path.read_bytes()
@@ -894,6 +905,7 @@ def encoded_result(path: Path, maximum_bytes: int, expected_head_sha: str) -> st
     if value.get("status") != "completed" or value.get("reviewed_head_sha") != expected_head_sha:
         raise InputFrameError("Codex did not complete a review of the trusted pull request head")
     validate_blocking_and_prior_findings(value)
+    drop_null_categories(value["findings"])
     compact = json.dumps(
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")

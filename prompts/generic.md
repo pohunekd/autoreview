@@ -24,6 +24,6 @@ Use stable finding IDs C001, C002, and so on. Include only actionable defects or
 
 The summary must be substantive. State what changed and what was reviewed, then give one sentence per check with its outcome: tests, compatibility, and reuse. Also state when a check could not run and why. When there are no blocking findings, explicitly explain that no actionable correctness, security, compatibility, test, or maintainability issues were found in the trusted review scope. Never return a placeholder such as "test", "done", or "no issues".
 
-When the result format has a `category` field, you may set it on a finding to a short slug that names the kind of mistake, such as `missing-test` or `unchecked-error`: lowercase letters and digits joined by single hyphens, at most 40 characters. Use the same slug for the same kind of mistake, and leave the field out when no kind fits.
+When the result format has a `category` field, you may set it on a finding to a short slug that names the kind of mistake, such as `missing-test` or `unchecked-error`: lowercase letters and digits joined by single hyphens, at most 40 characters. Use the same slug for the same kind of mistake, and when no kind fits, leave the field out, or set it to `null` where the result format requires every field.
 
 When the change makes the repository's agent guidance files (`AGENTS.md`, `CLAUDE.md`) inaccurate, say which file and what is stale in the summary.

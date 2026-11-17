@@ -44,15 +44,15 @@ is refused with `review_adapter_outdated`, without a fresh session. So is a
 result line in mode `text`, with or without a refusal: its adapter ran the
 request as a plain prompt (see [wire names](#wire-names)).
 
-A finding of a `claude-structured` result may carry an optional `category`: a
-slug of lowercase letters and digits joined by single hyphens, 1 to 40
-characters, such as `missing-test`. A result without it stays valid. A string
-that is not such a slug does not refuse the review: the finding is kept without
-a category and the engine logs one `finding category refused` warning that names
-the review and the value. A `category` that is not a string is refused like any
-other field of the wrong type. A `codex-envelope` report has no `category`. The
-engine uses the category only for the [`guidance`](../../configuration.md#guidance)
-suggestions.
+A finding of a `claude-structured` or `codex-envelope` result may carry an
+optional `category`: a slug of lowercase letters and digits joined by single
+hyphens, 1 to 40 characters, such as `missing-test`. A result without it stays
+valid. A string that is not such a slug does not refuse the review: the finding
+is kept without a category and the engine logs one `finding category refused`
+warning that names the review and the value (for a Codex report, the position of
+the finding in the report). A `category` that is not a string is refused like any
+other field of the wrong type. The engine uses the category only for the
+[`guidance`](../../configuration.md#guidance) suggestions.
 
 With `codex-envelope` the engine looks for one result frame at the end of the
 output and decodes it strictly. The frame must not be larger than
@@ -439,7 +439,11 @@ example, with `profile_agent_unsupported`. It has two parts:
 
 The report has the fields `findings`, `summary`, `tests`, `status`,
 `reviewed_head_sha` and `prior_findings`. A finding has `severity`,
-`confidence`, `blocking`, `path`, `line`, `title` and `body`. A prior finding
+`confidence`, `blocking`, `path`, `line`, `title`, `body` and `category`. The
+output schema of Codex lists every property as required, so the adapter's
+schema makes `category` a string or `null`, and the adapter removes a `null`
+one before it hands the report to the engine. An engine from before this field
+refuses a report whose finding carries a category. A prior finding
 verdict has `key`, `status` (`fixed`, `still_open` or `answered`), `note` and
 `relies_on`, as in the Claude result. The engine reads both fields and refuses
 a report without them (`review_adapter_outdated`).
