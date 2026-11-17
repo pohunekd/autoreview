@@ -11,5 +11,7 @@ mod process;
 
 pub use git::{branch_refs, config_entries, delete_ref, worktrees};
 pub use integrations::External;
-pub use pohunek::branches::{host_is_local, project_roots, session_branches};
+pub use pohunek::branches::{
+    SessionSummary, host_is_local, list_sessions, project_roots, session_branches,
+};
 pub use pohunek::local_pohunek_json;

@@ -186,7 +186,7 @@ fn verdict(branch: &str, checked_out: bool, rules: &Rules<'_>) -> Verdict {
 ///
 /// The ID is [`WORKFLOW_ID_PREFIX`] and 64 lowercase hex digits; a `-` and at least one more
 /// character must follow it, as `<reviewer>-run<N>` does.
-fn workflow_id<'a>(branch: &'a str, prefix: &str) -> Option<&'a str> {
+pub(crate) fn workflow_id<'a>(branch: &'a str, prefix: &str) -> Option<&'a str> {
     let token = branch.strip_prefix(prefix)?;
     let length = WORKFLOW_ID_PREFIX.len() + WORKFLOW_DIGEST_LEN;
     let id = token.get(..length)?;

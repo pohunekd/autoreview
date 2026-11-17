@@ -79,20 +79,55 @@ pub async fn project_roots(
     Ok(roots.into_iter().collect())
 }
 
-/// Returns the branch of every session of `host`, whatever its state.
+/// One session of `session list --json`, reduced to what a prune decides on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    /// Identifier of the session.
+    pub id: String,
+    /// Name of the session.
+    pub name: String,
+    /// Branch the session works on; empty when it has none.
+    pub branch: String,
+    /// Lifecycle state of the session; `running` for a live session.
+    pub state: String,
+}
+
+/// Returns every session of `host`, whatever its state.
 ///
 /// # Errors
 ///
 /// Returns the pohunek failure of `session list`, and `pohunek_response_invalid` for an answer
 /// that holds no session list.
+pub async fn list_sessions(
+    config: &Config,
+    cancel: &CancellationToken,
+    host: &str,
+) -> Result<Vec<SessionSummary>, Error> {
+    let output = pohunek_call(config, cancel, &session_list_arguments(host)).await?;
+    let entries: Vec<Option<PohunekSession>> = decode_ok(&output).ok_or_else(response_invalid)?;
+    Ok(zero_entries(entries)
+        .into_iter()
+        .map(|session| SessionSummary {
+            id: session.id,
+            name: session.name,
+            branch: session.branch,
+            state: session.state,
+        })
+        .collect())
+}
+
+/// Returns the branch of every session of `host`, whatever its state.
+///
+/// # Errors
+///
+/// Returns the failures of [`list_sessions`].
 pub async fn session_branches(
     config: &Config,
     cancel: &CancellationToken,
     host: &str,
 ) -> Result<BTreeSet<String>, Error> {
-    let output = pohunek_call(config, cancel, &session_list_arguments(host)).await?;
-    let entries: Vec<Option<PohunekSession>> = decode_ok(&output).ok_or_else(response_invalid)?;
-    Ok(zero_entries(entries)
+    Ok(list_sessions(config, cancel, host)
+        .await?
         .into_iter()
         .map(|session| session.branch)
         .filter(|branch| !branch.is_empty())

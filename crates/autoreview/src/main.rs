@@ -6,6 +6,7 @@ mod config_file;
 mod env_file;
 mod error_response;
 mod eval_cli;
+mod eval_prune;
 mod guard_scan;
 mod init;
 mod logging;

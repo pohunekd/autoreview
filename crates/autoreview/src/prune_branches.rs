@@ -6,7 +6,7 @@
 
 // Rust guideline compliant 2026-11-14
 
-mod plan;
+pub(crate) mod plan;
 
 #[cfg(test)]
 mod tests;
