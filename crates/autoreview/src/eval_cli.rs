@@ -2,14 +2,14 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use autoreview_engine::Error;
 use autoreview_engine::eval::case::{CaseError, load_cases};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
-use crate::print_json;
+use crate::{command_invalid, print_json};
 
 /// Error code of a cases directory with an invalid case; its document is the stdout object.
 pub(crate) const EVAL_CASES_INVALID: &str = "eval_cases_invalid";
@@ -55,9 +55,14 @@ struct InvalidCases {
 ///
 /// # Errors
 ///
-/// Returns `eval_cases_invalid` after printing the errors, and `workflow_failed` when stdout
-/// cannot be written.
-pub(crate) fn run(command: &EvalCommand) -> Result<(), Error> {
+/// Returns `command_invalid` for `--config`, `eval_cases_invalid` after printing the errors,
+/// and `workflow_failed` when stdout cannot be written.
+pub(crate) fn run(config: Option<&Path>, command: &EvalCommand) -> Result<(), Error> {
+    if config.is_some() {
+        return Err(command_invalid(Some(
+            "--config is not an option of eval validate; it reads no configuration".into(),
+        )));
+    }
     match command {
         EvalCommand::Validate(arguments) => match load_cases(&arguments.cases) {
             Ok(cases) => {

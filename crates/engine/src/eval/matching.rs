@@ -207,7 +207,7 @@ mod tests {
         }
     }
 
-    /// An expected finding is caught by the path and the reported line, at each stage (D4).
+    /// An expected finding is caught by the path and the reported line, at each stage.
     #[test]
     fn expected_findings_are_matched_by_path_and_reported_line() {
         let wanted = Expect::Blocking(vec![

@@ -40,6 +40,9 @@ const MAX_TITLE_CHARS: usize = 200;
 /// Longest case or pipeline identifier, in characters.
 const MAX_ID_CHARS: usize = 64;
 
+/// Longest YAML error message kept in a case error, in characters.
+const MAX_YAML_MESSAGE_CHARS: usize = 300;
+
 /// Extension of a case file.
 const CASE_EXTENSION: &str = "yaml";
 
@@ -115,7 +118,8 @@ pub struct CaseError {
     pub file: String,
     /// Stable code, `eval_case_` and a reason.
     pub code: &'static str,
-    /// The key at fault, such as `expect.blocking[0].lines`; empty for a whole file.
+    /// The key at fault, such as `expect.blocking[0].lines`; empty for a whole file. For
+    /// `eval_case_key_unknown` it is the name of the unknown key alone.
     pub key: String,
     /// What is wrong.
     pub message: String,
@@ -218,6 +222,15 @@ fn identifier_valid(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
 }
 
+/// Reports whether `branch` is a branch name that git accepts in `refs/heads/<branch>`.
+fn head_branch_valid(branch: &str) -> bool {
+    branch_valid(branch)
+        && !branch.starts_with('-')
+        && branch
+            .split('/')
+            .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
+}
+
 /// Reports whether `path` is a relative repository path that a file list can name.
 fn path_valid(path: &str) -> bool {
     !path.is_empty()
@@ -241,9 +254,11 @@ fn check_finding(raw: &RawFinding, index: usize, out: &mut Collector) -> Option<
     let key = |name: &str| format!("expect.blocking[{index}].{name}");
     let before = out.errors.len();
     if !path_valid(&raw.path) {
-        let message = "must be a relative path of at most 4096 bytes without `.`, `..`, empty \
-                       parts, backslashes or NUL";
-        out.add("eval_case_finding_path_invalid", &key("path"), message);
+        let message = format!(
+            "must be a relative path of at most {MAX_PATH_BYTES} bytes without `.`, `..`, \
+             empty parts, backslashes or NUL"
+        );
+        out.add("eval_case_finding_path_invalid", &key("path"), &message);
     }
     let (first_line, last_line) = match raw.lines.as_slice() {
         &[first, last] if first >= 1 && last >= first && last - first < MAX_RANGE_LINES => {
@@ -323,7 +338,9 @@ fn yaml_error(error: &serde_saphyr::Error, out: &mut Collector) {
         }
         _ => ("eval_case_yaml_invalid", String::new()),
     };
-    let message: String = plain.to_string().chars().take(300).collect();
+    let message: String = (plain.to_string().chars())
+        .take(MAX_YAML_MESSAGE_CHARS)
+        .collect();
     out.add(code, &key, &message);
 }
 
@@ -350,11 +367,8 @@ pub fn parse_case(file: &str, text: &str) -> Result<Case, Vec<CaseError>> {
         out.add("eval_case_version_unsupported", "version", "must be 1");
     }
     if !identifier_valid(&raw.id) {
-        out.add(
-            "eval_case_id_invalid",
-            "id",
-            "must be 1 to 64 of a-z, 0-9, `.`, `_`, `-`",
-        );
+        let message = format!("must be 1 to {MAX_ID_CHARS} of a-z, 0-9, `.`, `_`, `-`");
+        out.add("eval_case_id_invalid", "id", &message);
     }
     if file.strip_suffix(&format!(".{CASE_EXTENSION}")) != Some(raw.id.as_str()) {
         out.add(
@@ -388,7 +402,7 @@ pub fn parse_case(file: &str, text: &str) -> Result<Case, Vec<CaseError>> {
     let head_ref = raw.head_ref.unwrap_or_else(|| default_ref.clone());
     let branch_ref = head_ref
         .strip_prefix("refs/heads/")
-        .is_some_and(branch_valid);
+        .is_some_and(head_branch_valid);
     if head_ref != default_ref && !branch_ref {
         out.add(
             "eval_case_head_ref_invalid",
@@ -420,13 +434,12 @@ pub fn parse_case(file: &str, text: &str) -> Result<Case, Vec<CaseError>> {
         let message = "must list distinct pipeline names, or be left out";
         out.add("eval_case_pipelines_invalid", "pipelines", message);
     }
+    let titled = raw.title.is_some();
     let title = raw.title.unwrap_or_default();
-    if !title.is_empty() && !text_valid(&title, MAX_TITLE_CHARS) {
-        out.add(
-            "eval_case_title_invalid",
-            "title",
-            "must be 1 to 200 characters without control characters",
-        );
+    if titled && !text_valid(&title, MAX_TITLE_CHARS) {
+        let message =
+            format!("must be 1 to {MAX_TITLE_CHARS} characters without control characters");
+        out.add("eval_case_title_invalid", "title", &message);
     }
     let expect = check_expect(raw.expect, &mut out);
     let Some(expect) = expect.filter(|_| out.errors.is_empty()) else {
@@ -449,8 +462,10 @@ pub fn parse_case(file: &str, text: &str) -> Result<Case, Vec<CaseError>> {
 /// Reads every case of the directory `dir`, not recursively.
 ///
 /// A `.yml` file and a file without extension are errors; any other extension and any name that
-/// starts with a dot is ignored. A symbolic link named like a case file is an error, so no case
-/// is read from outside the directory, and an entry that cannot be read is an error of its own
+/// starts with a dot is ignored. Extensions compare ignoring ASCII case. A symbolic link or any
+/// other entry that is not a regular file, named like a case file, is an error, so no case is
+/// read from outside the directory and no pipe is opened; an entry that cannot be read is an
+/// error of its own
 /// while the rest of the directory is still checked. Two cases of one repository, pull request
 /// and head are the same review identity.
 ///
@@ -483,7 +498,9 @@ pub fn load_cases(dir: &Path) -> Result<Vec<Case>, Vec<CaseError>> {
         if file.starts_with('.') {
             continue;
         }
-        let extension = path.extension().and_then(|value| value.to_str());
+        let extension =
+            (path.extension().and_then(|value| value.to_str())).map(str::to_ascii_lowercase);
+        let extension = extension.as_deref();
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(cause) => {
@@ -509,6 +526,10 @@ pub fn load_cases(dir: &Path) -> Result<Vec<Case>, Vec<CaseError>> {
         }
         if metadata.file_type().is_symlink() {
             errors.push(unreadable(&file, &"a case file is not a symbolic link"));
+            continue;
+        }
+        if !metadata.is_file() {
+            errors.push(unreadable(&file, &"a case file is a regular file"));
             continue;
         }
         if metadata.len() > MAX_CASE_BYTES {
@@ -610,6 +631,16 @@ lines: [40, 52]\n      description: Lock released before the entry is inserted.\
             ),
             (head_ref("refs/heads/a..b"), "eval_case_head_ref_invalid"),
             (head_ref("refs/heads/"), "eval_case_head_ref_invalid"),
+            (head_ref("refs/heads/x/"), "eval_case_head_ref_invalid"),
+            (head_ref("refs/heads/a//b"), "eval_case_head_ref_invalid"),
+            (head_ref("refs/heads/x.lock"), "eval_case_head_ref_invalid"),
+            (
+                head_ref("refs/heads/a.lock/b"),
+                "eval_case_head_ref_invalid",
+            ),
+            (head_ref("refs/heads/.x"), "eval_case_head_ref_invalid"),
+            (head_ref("refs/heads/a/.x"), "eval_case_head_ref_invalid"),
+            (head_ref("refs/heads/-x"), "eval_case_head_ref_invalid"),
             (head_ref("refs/tags/v1"), "eval_case_head_ref_invalid"),
             (head_ref("main"), "eval_case_head_ref_invalid"),
             (head_ref("\"\""), "eval_case_head_ref_invalid"),
@@ -622,8 +653,8 @@ lines: [40, 52]\n      description: Lock released before the entry is inserted.\
                 "eval_case_version_unsupported",
             ),
             (
-                valid.replace("id: widgets-cache-race", "id: Widgets"),
-                "eval_case_id_invalid",
+                valid.replace("title: Cache race", "title: \"\""),
+                "eval_case_title_invalid",
             ),
             (
                 valid.replace("id: widgets-cache-race", "id: other"),
@@ -718,8 +749,15 @@ lines: [40, 52]\n      description: Lock released before the entry is inserted.\
         ];
         for (text, want) in rows {
             let errors = parse(&text).expect_err("the row is invalid");
-            assert!(codes(&errors).contains(&want), "{want}: got {errors:?}");
+            assert_eq!(codes(&errors), [want], "{errors:?}");
         }
+        // A bad id is also not the file name.
+        let errors = parse(&valid.replace("id: widgets-cache-race", "id: Widgets"))
+            .expect_err("an upper-case id is invalid");
+        assert_eq!(
+            codes(&errors),
+            ["eval_case_id_invalid", "eval_case_id_mismatch"]
+        );
         let dir = tempfile::tempdir().expect("create the cases directory");
         let write = |name: &str, text: &str| {
             std::fs::write(dir.path().join(name), text).expect("write a file")
@@ -730,6 +768,8 @@ lines: [40, 52]\n      description: Lock released before the entry is inserted.\
             &valid.replace("widgets-cache-race", "widgets-copy"),
         );
         write("widgets-old.yml", &valid);
+        write("widgets-upper.YML", &valid);
+        write("widgets-upper.YAML", &valid);
         write("widgets-big.yaml", &"#".repeat(70_000));
         write("README.md", "ignored");
         write(".gitkeep", "");
@@ -748,6 +788,8 @@ lines: [40, 52]\n      description: Lock released before the entry is inserted.\
             found,
             [
                 "eval_case_extension",
+                "eval_case_extension",
+                "eval_case_id_mismatch",
                 "eval_case_identity_duplicate",
                 "eval_case_too_large",
                 "eval_case_unreadable",
