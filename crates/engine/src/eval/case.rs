@@ -32,10 +32,10 @@ pub const MAX_RANGE_LINES: i64 = 200;
 const MAX_PATH_BYTES: usize = 4096;
 
 /// Longest description of an expected finding, in characters.
-const MAX_DESCRIPTION_CHARS: usize = 500;
+pub const MAX_DESCRIPTION_CHARS: usize = 500;
 
 /// Longest pull request title, in characters.
-const MAX_TITLE_CHARS: usize = 200;
+pub const MAX_TITLE_CHARS: usize = 200;
 
 /// Longest case or pipeline identifier, in characters.
 const MAX_ID_CHARS: usize = 64;
@@ -212,7 +212,7 @@ impl Collector {
 }
 
 /// Reports whether `value` is an identifier: lowercase letters, digits, `.`, `_` and `-`.
-fn identifier_valid(value: &str) -> bool {
+pub fn identifier_valid(value: &str) -> bool {
     let mut chars = value.chars();
     chars
         .next()
@@ -223,7 +223,7 @@ fn identifier_valid(value: &str) -> bool {
 }
 
 /// Reports whether `branch` is a branch name that git accepts in `refs/heads/<branch>`.
-fn head_branch_valid(branch: &str) -> bool {
+pub fn head_branch_valid(branch: &str) -> bool {
     branch_valid(branch)
         && !branch.starts_with('-')
         && !branch.ends_with('.')

@@ -90,6 +90,30 @@ pub struct RangeFiles {
     pub commentable: CommentableLines,
 }
 
+/// One file that a commit changes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CommitFile {
+    /// Path of the file after the commit.
+    pub path: String,
+    /// Change status, such as `added`, `modified`, `renamed` or `removed`.
+    pub status: String,
+    /// Path before a rename; set only for a renamed file.
+    pub previous_path: Option<String>,
+    /// Unified diff of the file; empty for a change without text lines, such as a binary file.
+    pub patch: String,
+}
+
+/// A commit with its one parent and the files it changes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CommitRead {
+    /// SHA of the parent commit.
+    pub parent: String,
+    /// First line of the commit message.
+    pub subject: String,
+    /// The changed files, never cut short.
+    pub files: Vec<CommitFile>,
+}
+
 /// What a read of one repository file at a commit found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositoryFile {
