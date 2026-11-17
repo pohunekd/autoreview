@@ -64,8 +64,9 @@ reviewed head SHA. A report without `prior_findings`, or with a finding without
 ### Wire names
 
 Between the engine and an adapter the protocols are named `autoreview-claude/v1`
-and `autoreview-codex/v3`. Each adapter answers in the name of the request it
-got. The engine reads the legacy Claude result name too, so a review that an
+and `autoreview-codex/v3`. The Claude adapter answers in the name of the request
+it got; the Codex adapter answers a `v3` request in the `autoreview-codex/v2`
+markers, which carry the nonce of the request. The engine reads the legacy Claude result name too, so a review that an
 earlier engine started still finishes; a later release removes the legacy
 names (#393). Claude and Codex profiles must be installed from this release
 before the engine is updated (see below); a rollback of the engine needs no

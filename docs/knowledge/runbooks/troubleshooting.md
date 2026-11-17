@@ -505,8 +505,9 @@ list):
   carries the nonce of the request. Every run of a profile whose adapter comes
   from an earlier release ends so: its session output ends with
   `[pohunek-codex-review exited with status 64]` after
-  `codex-adapter: trusted protocol is ambiguous or unknown`, or, for an adapter
-  from release 0.3.0 or earlier, after
+  `codex-adapter: trusted nonce is valid only with autoreview-codex/v2` for an
+  adapter from release 0.4.0 to 0.6.0, or, for an adapter from release 0.3.0 or
+  earlier, after
   `codex-adapter: trusted pull request head is missing or ambiguous`. Run
   [`autoreview profiles install`](../../cli.md#autoreview-profiles-install) for
   the profile, then `autoreview retry`. A Codex run that an engine restart left

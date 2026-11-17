@@ -135,9 +135,9 @@ DROPPED_ENVIRONMENT = frozenset(
 DROPPED_ENVIRONMENT_PREFIX = "AUTOREVIEW_"
 PRIOR_STATUSES = ("fixed", "still_open", "answered")
 PRIOR_VERDICT_KEYS = frozenset({"key", "status", "note", "relies_on"})
-# An engine of `autoreview-codex/v2` or later names the head line `- Trusted head commit:`, so that an
-# adapter of release 0.3.0 or earlier finds no head line and refuses before Codex sees the
-# nonce; an older engine names it `- Trusted head SHA:`. Exactly one of them is read.
+# An engine of `autoreview-codex/v2` or later names the head line `- Trusted head commit:`,
+# so that an adapter of release 0.3.0 or earlier finds no head line and refuses before Codex
+# sees the nonce; an older engine names it `- Trusted head SHA:`. Exactly one of them is read.
 TRUSTED_HEAD_PATTERN = re.compile(r"(?m)^- Trusted head (?:SHA|commit): ([0-9a-f]{40})$")
 TRUSTED_BASE_PATTERN = re.compile(r"(?m)^- Trusted base SHA: ([0-9a-f]{40})$")
 TRUSTED_CHECKOUT_PATTERN = re.compile(r"(?m)^- Trusted checkout: (.*)$")
