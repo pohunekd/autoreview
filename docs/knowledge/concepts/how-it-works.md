@@ -9,8 +9,8 @@ intents: [help, setup, debug]
 
 # How a review works
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 This page follows one pull request from the moment it asks for a review to the
 moment its reviewer sessions are removed. Each step names the reference key

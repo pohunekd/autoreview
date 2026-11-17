@@ -127,17 +127,22 @@ It never creates a tag and never publishes.
    and every action an operator must take (a new config key, a profile
    reinstall) goes under `Upgrading`; write "Nothing to do" when that is true.
    The owner approves the full text. Before step 6 edits the release, each
-   check prints the value after it:
+   check exits 0 (read the exit code; `grep -c` itself exits 1 when it counts
+   0):
 
    ```bash
-   grep -c 'TODO(release-post)' <post-file>                   # 0
-   grep -cx '<!-- pohunek-changelog:start -->' <post-file>    # 1
-   grep -cx '<!-- pohunek-changelog:end -->' <post-file>      # 1
+   ! grep -q 'TODO(release-post)' <post-file>
+   test "$(grep -cx '<!-- pohunek-changelog:start -->' <post-file>)" = 1
+   test "$(grep -cx '<!-- pohunek-changelog:end -->' <post-file>)" = 1
    ```
 6. Wait for the `Release` run. It builds one archive per target, attests the
    archives and their `.sha256` files, and creates a draft release whose body
    is the `CHANGELOG.md` section. Replace the body with the approved post:
-   `gh release edit vX.Y.Z --notes-file <post-file>`. Check the draft (three
+   `gh release edit vX.Y.Z --notes-file <post-file>`. Confirm the stored body
+   with `gh release view vX.Y.Z --json body --jq .body | diff - <post-file>`:
+   it prints nothing when the body is the approved file, and a difference of
+   only the trailing newline (the stored body may have none) is not a
+   mismatch. Check the draft (three
    archives: the two musl targets and `aarch64-apple-darwin`, three `.sha256`
    files, the post). On a Mac, fetch the darwin archive of the run, the bytes
    of the draft asset:

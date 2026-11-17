@@ -9,7 +9,7 @@ intents: [configure, help]
 
 # Repository review rules (REVIEW.md)
 
-> **Status: after 0.6.0.** A pipeline with `repository_review_rules: read` reads
+> **Status: after 0.7.0.** A pipeline with `repository_review_rules: read` reads
 > the `REVIEW.md` of the repository's base commit; with `ignore` the file is
 > never read.
 

@@ -4,11 +4,11 @@ Policy-driven AI pull request review on top of [pohunek](https://github.com/zajc
 Šafář review is the product name; the repository, the binary and the command are
 `autoreview`.
 
-> **Status: 0.6.0.** autoreview 0.6.0 is the current release. It ships static
+> **Status: 0.7.0.** autoreview 0.7.0 is the current release. It ships static
 > Linux binaries for `x86_64` and `aarch64` as release archives, each with a
 > `.sha256` file and a build provenance attestation, and an ad-hoc signed
 > archive for Apple Silicon Macs with `scripts/setup` on macOS (#513); see
-> [install](docs/install.md). The `main` branch holds changes after 0.6.0, and
+> [install](docs/install.md). The `main` branch holds changes after 0.7.0, and
 > the documentation describes it.
 > The [Rough plan](#rough-plan) table is the roadmap; a part that is not available
 > names its open issue.
@@ -109,7 +109,7 @@ Rules:
 
 ## Documentation
 
-The documentation describes autoreview on `main` after the 0.6.0 release; a
+The documentation describes autoreview on `main` after the 0.7.0 release; a
 part that is not available names its open issue.
 
 - [Features](docs/features.md) - what it does and a map of every page

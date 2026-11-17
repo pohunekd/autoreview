@@ -9,8 +9,8 @@ intents: [update, help]
 
 # Upgrade and backup
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue. A container
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue. A container
 > image is not available (#40).
 
 Back up first, validate before every restart, and keep the previous binary

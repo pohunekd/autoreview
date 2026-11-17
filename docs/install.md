@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Install autoreview
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue. The release
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue. The release
 > archives are published from `v0.1.0` on; the release workflow builds and
 > attests them. The systemd units and their installer of path b are in the
 > archives from 0.4.0 on. The Apple Silicon archive and `scripts/setup` on macOS
@@ -54,11 +54,10 @@ pohunek daemon runs and the repositories are registered.
 ## Choose an install path
 
 To run autoreview and the pohunek daemon together on one Linux machine, or one
-Mac with Apple Silicon (from 0.6.0 on, #513), as your own
-user, run `scripts/setup` from a checkout of
-the repository: it installs both from their release archives, writes the
-configuration and the user service (systemd user units on Linux, launchd agents
-on macOS), and asks before every change. See
+Mac with Apple Silicon (from 0.6.0 on, #513), as your own user, run
+`scripts/setup` from a checkout of the repository: it installs both from their
+release archives, writes the configuration and the user service (systemd user
+units on Linux, launchd agents on macOS), and asks before every change. See
 [getting started](knowledge/guides/getting-started.md). The paths below are for
 a dedicated server user on Linux; on a Mac, use `scripts/setup`. To learn the
 steps on one repository first, follow the
@@ -86,7 +85,7 @@ provenance attestation. The binary needs no system library.
 Download the archive and its checksum file, then check the checksum:
 
 ```sh
-version=0.6.0                        # the release to install, without the v
+version=0.7.0                        # the release to install, without the v
 target=x86_64-unknown-linux-musl     # or aarch64-unknown-linux-musl
 archive="autoreview-$version-$target.tar.gz"
 curl -fLO "https://github.com/pohunekd/autoreview/releases/download/v$version/$archive"

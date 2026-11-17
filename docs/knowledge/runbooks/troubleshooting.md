@@ -9,8 +9,8 @@ intents: [debug, help]
 
 # Troubleshooting
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 Start with two commands. `autoreview candidates` shows what the next discovery
 pass would consider, per rule and trigger. `autoreview review --repository
