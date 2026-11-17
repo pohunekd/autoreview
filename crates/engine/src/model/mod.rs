@@ -34,5 +34,5 @@ pub use review::{
     DiscussionComment, DiscussionThread, FindingCheck, GuardOutcome, GuardSignal, IntentOutcome,
     LinkedIssue, LinkedIssues, Outcome, PollResult, PriorCheck, PriorResult, PriorVerdict,
     PublishResult, PublishedRecord, ResolveRequest, ResolveResult, RetryRequest, RetryResult,
-    ReviewOutcome, SessionIdentity, Verification, prior_key,
+    ReviewOutcome, ReviewRulesOutcome, SessionIdentity, Verification, prior_key,
 };

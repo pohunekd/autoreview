@@ -28,6 +28,12 @@ pub(crate) const STEP_DISCUSSION: &str = "discussion";
 /// Step that stores the issues the pull request closes, bounded, for an intent check.
 pub(crate) const STEP_LINKED_ISSUES: &str = "linked_issues";
 
+/// Step that stores the outcome of the read of the repository's `REVIEW.md`.
+pub(crate) const STEP_REVIEW_RULES: &str = "review_rules";
+
+/// Step that stores the changed-files listing that the rules read and the human review share.
+pub(crate) const STEP_CHANGED_FILES: &str = "changed_files";
+
 /// Step that stores the lines that accept an inline comment.
 pub(crate) const STEP_COMMENTABLE: &str = "commentable";
 

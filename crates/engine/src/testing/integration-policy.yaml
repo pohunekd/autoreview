@@ -18,7 +18,16 @@ pipelines:
     project_sources: [manual]
     repository_review_rules: ignore
     verifier: {reviewer: opus, prompt: verifier.md, escalate_severities: [critical], escalate_count: 2}
+  ruled:
+    reviewers: [opus]
+    incremental_reviewers: [opus]
+    prompt: prompt.md
+    checkout: base
+    project_sources: [manual]
+    repository_review_rules: read
+    verifier: {reviewer: opus, prompt: verifier.md, escalate_severities: [critical], escalate_count: 2}
 repositories:
+  - {match: rules/*, trigger: review-requested, pipeline: ruled, on_findings: request_changes, on_clean: approve, authors: {trusted: any}}
   - {match: acme/manual, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await, authors: {trusted: any}}
   - {match: acme/notes, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await, on_notes: comment, authors: {trusted: any}}
   - {match: acme/*, trigger: review-requested, pipeline: dual, on_findings: request_changes, on_clean: approve, authors: {trusted: any}}

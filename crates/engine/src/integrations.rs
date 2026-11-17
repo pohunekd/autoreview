@@ -58,7 +58,7 @@ pub struct PullRequestState {
 pub type CommentableLines = BTreeMap<String, Vec<i64>>;
 
 /// One file that a pull request changes, as the changed-files listing reports it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ChangedFile {
     /// Path of the file, relative to the repository root.
     pub path: String,
@@ -73,7 +73,7 @@ pub struct ChangedFile {
 }
 
 /// The changed files of a pull request and whether the listing stopped before its end.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ChangedFiles {
     /// The files listed, in listing order.
     pub files: Vec<ChangedFile>,

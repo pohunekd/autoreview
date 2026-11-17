@@ -4,7 +4,7 @@
 
 use std::sync::atomic::AtomicI64;
 
-use autoreview_policy::{Event, IntentCheck, OnClean, OnSuspect, Reviewer};
+use autoreview_policy::{Event, IntentCheck, OnClean, OnSuspect, RepositoryReviewRules, Reviewer};
 use autoreview_schedule::scheduler::superseded;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
@@ -23,7 +23,9 @@ use crate::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, SessionRequest,
 };
 use crate::intent::bound_issues;
-use crate::messages::{guidance_suggested_message, published_message};
+use crate::messages::{
+    guidance_suggested_message, published_message, review_rules_ignored_message,
+};
 use crate::model::{
     Artifact, Discussion, LinkedIssues, Outcome, PublishResult, PublishedRecord, PullRequest,
     ReviewInput, ReviewOutcome,
@@ -150,6 +152,24 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             && !review.input.adopts_handoff()
         {
             review.linked = Some(review.linked_issues().await?);
+        }
+        // An adopted hand-off runs no reviewer, so it reads no rules either.
+        if review.input.rule.pipeline.repository_review_rules == RepositoryReviewRules::Read
+            && !review.input.adopts_handoff()
+        {
+            match review.review_rules().await {
+                // The policy has no event for a degraded review that goes on, so the notice
+                // uses `review_stopped`, at that event's level.
+                Ok(outcome) if !outcome.invalid_code.is_empty() => {
+                    let message =
+                        review_rules_ignored_message(&review.input, &outcome.invalid_code);
+                    review
+                        .notify("review_rules_ignored", Event::ReviewStopped, &message)
+                        .await?;
+                }
+                Ok(_) => {}
+                Err(err) => return review.fail(err).await,
+            }
         }
         for reviewer in review.input.reviewers.clone() {
             let prompt = match new_nonce().and_then(|nonce| {
@@ -485,17 +505,14 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             usize::try_from(self.engine.config.excerpt_characters).unwrap_or_default();
         let notes = i64::try_from(self.input.split_findings(&artifact.findings).1.len())
             .unwrap_or(i64::MAX);
+        let listing = if signals.needs_changed_files() {
+            self.changed_files(current).await?
+        } else {
+            ChangedFiles::default()
+        };
         self.once::<Vec<String>, _>(STEP_HUMAN_REVIEW, || {
-            let integration = &*self.engine.integration;
-            let (cancel, credential) = (&self.cancel, self.credential());
+            let listing = &listing;
             async move {
-                let listing = if signals.needs_changed_files() {
-                    integration
-                        .list_changed_files(cancel, credential?, current)
-                        .await?
-                } else {
-                    ChangedFiles::default()
-                };
                 let facts = HumanReviewFacts {
                     labels: &current.labels,
                     author: &current.author,
