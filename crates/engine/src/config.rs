@@ -320,6 +320,8 @@ pub struct Config {
     pub max_discussion_characters: i64,
     /// Largest text of the issues a pull request closes that one reviewer request carries.
     pub max_issue_characters: i64,
+    /// Largest `REVIEW.md` of a repository that the engine reads, in bytes.
+    pub max_review_rules_bytes: i64,
     /// Longest file path of a finding, in characters.
     pub max_path_characters: i64,
     /// Longest test name, in characters.
@@ -1244,6 +1246,7 @@ mod tests {
             max_body_characters: 4000,
             max_discussion_characters: 8000,
             max_issue_characters: 8000,
+            max_review_rules_bytes: 32 << 10,
             max_path_characters: 512,
             max_test_characters: 256,
             github_body_max_bytes: 65_536,

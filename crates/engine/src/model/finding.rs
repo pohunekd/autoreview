@@ -48,6 +48,9 @@ pub struct Finding {
     /// Slug that groups findings of one kind; empty when the reviewer gave none.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub category: String,
+    /// The `skip` glob of the repository review rules that turned the finding into a note.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub skipped_by: String,
 }
 
 autoreview_go_compat::object_only_serde!(Finding);

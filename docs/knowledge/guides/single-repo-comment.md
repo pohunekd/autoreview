@@ -51,6 +51,7 @@ pipelines:
     prompt: prompts/generic.md       # copied from prompts/ of this repository
     checkout: base                   # repository guidance comes from the trusted base
     project_sources: [manual]        # only repositories registered with pohunek project add
+    repository_review_rules: read
 
 repositories:
   - match: zajca/pohunek

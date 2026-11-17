@@ -110,12 +110,14 @@ pipelines:
     prompt: prompts/core.md          # only for zajca/pohunek
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
   generic:
     reviewers: [opus]
     incremental_reviewers: [opus]
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 ```
 
 Several repositories may share one prompt by sharing one pipeline. Do not

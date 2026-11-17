@@ -19,12 +19,14 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
   light:
     reviewers: [codex]
     incremental_reviewers: [codex]
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 
 repositories:
   # A repository has one trigger: a second rule for the same repository is unreachable.

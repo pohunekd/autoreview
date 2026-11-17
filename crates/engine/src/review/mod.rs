@@ -7,6 +7,7 @@ pub(crate) mod collect;
 pub(crate) mod flow;
 pub(crate) mod guard;
 pub(crate) mod input;
+pub(crate) mod rules;
 pub(crate) mod sessions;
 pub(crate) mod verify_step;
 

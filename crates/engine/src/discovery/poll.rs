@@ -427,7 +427,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                         decision.record.awaits_host = false;
                         let published = state.published.get(key);
                         let (scope, prior) = self.plan_review(cancel, candidate, published).await?;
-                        let handoff = self.notes_handoff(published, pr)?;
+                        let handoff = self.notes_handoff(published, pr, &candidate.rule)?;
                         let mode = scope.mode.clone();
                         let prior_findings = prior.len();
                         let attempt = decision.record.attempt;

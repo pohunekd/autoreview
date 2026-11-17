@@ -53,6 +53,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 
 repositories:
   - match: pohunekd/pohunek-companion

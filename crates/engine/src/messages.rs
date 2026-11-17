@@ -473,6 +473,19 @@ pub(crate) fn approved_review_failed_message(input: &ReviewInput, code: &str) ->
     )
 }
 
+/// The message that reports a review run without the rules of an invalid base `REVIEW.md`.
+pub(crate) fn review_rules_ignored_message(input: &ReviewInput, code: &str) -> String {
+    format!(
+        concat!(
+            "Review for {} at {} runs without repository review rules: the REVIEW.md of the ",
+            "base commit is invalid ({}) and the pull request changes it."
+        ),
+        input.pull_request.key(),
+        head_prefix(&input.pull_request.head_sha),
+        code
+    )
+}
+
 /// The message that asks the owner to remove a possibly started session.
 pub(crate) fn orphaned_session_message(request: &SessionRequest, code: &str) -> String {
     format!(

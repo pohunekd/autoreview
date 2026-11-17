@@ -19,18 +19,21 @@ pipelines:
     prompt: prompts/companion.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
   android:
     reviewers: [sonnet]
     incremental_reviewers: [sonnet]
     prompt: prompts/android.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
   generic:
     reviewers: [codex]
     incremental_reviewers: [codex]
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 
 repositories:
   # Specific repositories come first: a pohunekd/* rule above them would make them unreachable.

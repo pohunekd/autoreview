@@ -140,6 +140,7 @@ reviewer, severity and repository over a range of days.
 | [Configuration](configuration.md) | `config.yaml` and environment |
 | [CLI](cli.md) | Commands and error codes |
 | [Review statistics](stats.md) | The `stats` document for dashboards |
+| [REVIEW.md](review-rules.md) | Review rules that a repository keeps at its root: skipped paths and CI tools |
 
 | Concepts | |
 |---|---|

@@ -27,8 +27,8 @@ itself, and the rest of the organization is only commented.
 
 ```yaml
 pipelines:                                 # prompt, checkout base and project_sources are shared
-  core: {reviewers: [opus, sonnet], incremental_reviewers: [opus], prompt: prompts/generic.md, checkout: base, project_sources: [manual], verifier: {reviewer: opus, prompt: prompts/verifier.md, escalate_severities: [critical], escalate_count: 3}}
-  site: {reviewers: [sonnet], incremental_reviewers: [sonnet], prompt: prompts/generic.md, checkout: base, project_sources: [manual], verifier: {reviewer: sonnet, prompt: prompts/verifier.md, escalate_severities: [critical, high], escalate_count: 1}}
+  core: {reviewers: [opus, sonnet], incremental_reviewers: [opus], prompt: prompts/generic.md, checkout: base, project_sources: [manual], repository_review_rules: read, verifier: {reviewer: opus, prompt: prompts/verifier.md, escalate_severities: [critical], escalate_count: 3}}
+  site: {reviewers: [sonnet], incremental_reviewers: [sonnet], prompt: prompts/generic.md, checkout: base, project_sources: [manual], repository_review_rules: read, verifier: {reviewer: sonnet, prompt: prompts/verifier.md, escalate_severities: [critical, high], escalate_count: 1}}
 
 repositories:
   - match: zajca/pohunek                   # 1. specific rule
@@ -88,9 +88,9 @@ Two models and a verifier pay off only where an approval happens without a perso
 ```yaml
 pipelines:
   cheap:                                   # protocol codex-envelope
-    {reviewers: [codex], incremental_reviewers: [codex], prompt: prompts/generic.md, checkout: base, project_sources: [manual]}
+    {reviewers: [codex], incremental_reviewers: [codex], prompt: prompts/generic.md, checkout: base, project_sources: [manual], repository_review_rules: read}
   strict:                                  # protocol claude-structured; equal lists for approve
-    {reviewers: [opus, sonnet], incremental_reviewers: [opus, sonnet], prompt: prompts/generic.md, checkout: base, project_sources: [manual], verifier: {reviewer: opus, prompt: prompts/verifier.md, escalate_severities: [critical, high], escalate_count: 2}}
+    {reviewers: [opus, sonnet], incremental_reviewers: [opus, sonnet], prompt: prompts/generic.md, checkout: base, project_sources: [manual], repository_review_rules: read, verifier: {reviewer: opus, prompt: prompts/verifier.md, escalate_severities: [critical, high], escalate_count: 2}}
 
 repositories:
   - match: pohunekd/pohunek-companion

@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use autoreview_policy::{Checkout, OnClean, Reviewer, VERIFIER_REVIEWER_ID};
+use autoreview_policy::{Checkout, OnClean, ReviewRules, Reviewer, VERIFIER_REVIEWER_ID};
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,7 @@ use crate::protocol::request::{
     trusted_checkout_lines,
 };
 use crate::protocol::validate::bounded_text;
+use crate::review_rules::rules_section;
 
 /// JSON Schema of the verifier output.
 const VERIFY_SCHEMA: &[u8] = include_bytes!("../schemas/verify-schema.json");
@@ -229,6 +230,7 @@ pub(crate) fn build_verifier_request(
     claims: &VerificationClaims,
     discussion: &Discussion,
     linked: Option<&LinkedIssues>,
+    rules: Option<&ReviewRules>,
 ) -> Result<String, Error> {
     if serde_json::from_slice::<IgnoredAny>(VERIFY_SCHEMA).is_err() {
         return Err(Error::workflow("embedded_asset_invalid", true, None));
@@ -269,6 +271,12 @@ pub(crate) fn build_verifier_request(
     }
     if let Some(intent) = verifier_section(linked)? {
         prompt.push_str(&format!("\n{intent}\n"));
+    }
+    if let Some(rules) = rules {
+        prompt.push_str(&format!(
+            "\n{}\n",
+            rules_section(rules, &pr.base_sha, true)?
+        ));
     }
     let schema = compact_schema(VERIFY_SCHEMA)?;
     let prompt_json = go_json(&prompt).map_err(request_invalid)?;

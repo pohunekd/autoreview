@@ -10,6 +10,7 @@ use crate::error::{Error, WORKFLOW_FAILED, error_code};
 use crate::integrations::Integrations;
 use crate::model::Verification;
 use crate::protocol::go_utf8_lossy;
+use crate::review_rules::RequestSections;
 use crate::store::{ReviewStep, StepOutcome, StepRun};
 use crate::verify::{
     VERDICT_CONFIRMED, VERDICT_NOT_BLOCKING, VERDICT_REFUTED, VERDICT_REOPENED, VERDICT_UPHELD,
@@ -67,8 +68,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Some(stored) = loaded {
             return Ok(stored);
         }
-        let linked = self.linked.as_ref();
-        let prompt = build_verifier_request(&self.input, claims, &self.discussion, linked)
+        let RequestSections { linked, rules } = self.sections();
+        let prompt = build_verifier_request(&self.input, claims, &self.discussion, linked, rules)
             .map_err(StepFailure::without_run)?;
         let Some(slot) = self.verifier.as_mut() else {
             let error = Error::workflow(WORKFLOW_FAILED, true, None);

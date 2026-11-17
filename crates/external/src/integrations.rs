@@ -11,8 +11,8 @@ use autoreview_engine::Error;
 use autoreview_engine::config::{Config, Credential};
 use autoreview_engine::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, GuardTexts, HeadCheckoutHooks, Integrations,
-    PullRequestSignals, PullRequestState, ReadiedDraft, ReviewRequestList, SessionRequest,
-    TokenAnswer,
+    PullRequestSignals, PullRequestState, ReadiedDraft, RepositoryFile, ReviewRequestList,
+    SessionRequest, TokenAnswer,
 };
 use autoreview_engine::model::{
     CandidateList, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
@@ -294,6 +294,20 @@ impl Integrations for External {
     ) -> Result<LinkedIssues, Error> {
         (self.github)
             .list_closing_issues(cancel, credential, pull_request)
+            .await
+    }
+
+    async fn read_repository_file(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        sha: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<RepositoryFile, Error> {
+        (self.github)
+            .read_repository_file(cancel, credential, repository, sha, path, max_bytes)
             .await
     }
 

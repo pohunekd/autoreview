@@ -198,14 +198,16 @@ Roll back only with a backup taken before the upgrade:
    head checkouts without the repository's hooks, or `guidance` and
    `notify.routes.guidance_suggested` for a release before guidance
    suggestions, or `schedule.signal_check_interval_seconds` for a release before
-   the dismissed-review and reaction signals. An earlier release opens a store
+   the dismissed-review and reaction signals, or `limits.max_review_rules_bytes`
+   for a release before the repository review rules. An earlier release opens a store
    that holds the signal table and ignores it; a finding it prunes leaves a
    signal row that the next prune of this release deletes. On a converted
    deployment, remove the matching `HERMES_PR_REVIEW_*` variable too, or run
    the old release's `scripts/env-to-config`, which refuses it as unknown.
    Do the same for the policy: restore the policy of the old version, or remove
    what the new version added, such as `intent_check` from the policy's
-   pipelines for a release before the intent check, or `guard` from every rule
+   pipelines for a release before the intent check, or `repository_review_rules`
+   from every pipeline for a release before the repository review rules, or `guard` from every rule
    of the policy and `guards` from `config.yaml` for a release before the guard
    sections, or `notifications.guidance_suggested` for a release before guidance
    suggestions.

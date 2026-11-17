@@ -32,9 +32,11 @@ use crate::messages::{
     SessionCleanupFailure, approved_review_failed_message, orphaned_session_message,
     session_cleanup_failed_message, superseded_message,
 };
+use crate::model::ReviewRulesOutcome;
 use crate::model::review::milliseconds;
 use crate::model::{Discussion, GuardOutcome, LinkedIssues, PullRequest, ReviewInput, RunLimits};
 use crate::notify::Notification;
+use crate::review_rules::RequestSections;
 use crate::store::{RESULT_FAILURE, ReviewStep, StepOutcome, StepRun};
 
 /// Step name of the read of the current pull request in the retry log.
@@ -187,6 +189,8 @@ pub(crate) struct Review<'a, I, C> {
     pub(crate) discussion: Discussion,
     /// The issues the pull request closes, read for a pipeline with an intent check.
     pub(crate) linked: Option<LinkedIssues>,
+    /// The outcome of the read of the base `REVIEW.md`, for a pipeline that reads it.
+    pub(crate) rules: Option<ReviewRulesOutcome>,
     /// The text guard result of a review whose rule has a guard.
     pub(crate) guard: Option<GuardOutcome>,
     /// Set once the user approved a waiting review.
@@ -196,6 +200,17 @@ pub(crate) struct Review<'a, I, C> {
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
+    /// Returns what the request sections of this review carry besides the discussion.
+    pub(crate) fn sections(&self) -> RequestSections<'_> {
+        RequestSections {
+            linked: self.linked.as_ref(),
+            rules: self
+                .rules
+                .as_ref()
+                .and_then(|outcome| outcome.rules.as_ref()),
+        }
+    }
+
     /// Returns the loop limits of the review, read from its input.
     pub(crate) fn limits(&self) -> &RunLimits {
         &self.input.limits

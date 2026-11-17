@@ -22,6 +22,7 @@ pub mod publish;
 pub mod report;
 pub(crate) mod review;
 pub(crate) mod review_queue;
+pub(crate) mod review_rules;
 pub mod stats;
 pub mod store;
 pub(crate) mod verify;

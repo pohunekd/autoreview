@@ -4,7 +4,9 @@
 
 use std::sync::atomic::AtomicI64;
 
-use autoreview_policy::{Event, IntentCheck, OnClean, OnSuspect, Reviewer};
+use autoreview_policy::{
+    Event, HumanReview, IntentCheck, OnClean, OnSuspect, RepositoryReviewRules, Reviewer,
+};
 use autoreview_schedule::scheduler::superseded;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
@@ -23,7 +25,9 @@ use crate::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, Integrations, SessionRequest,
 };
 use crate::intent::bound_issues;
-use crate::messages::{guidance_suggested_message, published_message};
+use crate::messages::{
+    guidance_suggested_message, published_message, review_rules_ignored_message,
+};
 use crate::model::{
     Artifact, Discussion, LinkedIssues, Outcome, PublishResult, PublishedRecord, PullRequest,
     ReviewInput, ReviewOutcome,
@@ -38,8 +42,12 @@ use crate::publish::plan::{PublicationPlan, blocking_count, plan_publication, pu
 use crate::publish::render::{
     HumanReviewFacts, RenderSettings, human_review_signals, render_review,
 };
+use crate::review_rules::apply_skip;
 use crate::store::{RESULT_SUCCESS, ReviewStep, StepOutcome, StoredReview};
 use crate::verify::{apply_verification, claims_of, verifier_reviewer};
+
+/// Human review signal of a pull request that changes the `REVIEW.md` that reviews it.
+const REVIEW_RULES_CHANGED_SIGNAL: &str = "changes REVIEW.md";
 
 /// Step name of the lookup of a review posted before a restart, in the retry log.
 const STEP_PUBLISHED_REVIEW: &str = "published_review";
@@ -116,6 +124,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             verifier: None,
             discussion: Discussion::default(),
             linked: None,
+            rules: None,
             guard: None,
             approved: false,
             retries: AtomicI64::new(0),
@@ -151,6 +160,22 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         {
             review.linked = Some(review.linked_issues().await?);
         }
+        // An adopted hand-off runs no reviewer, so it reads no rules either.
+        if review.input.rule.pipeline.repository_review_rules == RepositoryReviewRules::Read
+            && !review.input.adopts_handoff()
+        {
+            let outcome = match review.review_rules().await {
+                Ok(outcome) => outcome,
+                Err(err) => return review.fail(err).await,
+            };
+            if !outcome.invalid_code.is_empty() {
+                // The policy has no event for a degraded review that goes on, so the notice
+                // uses `review_stopped`, at that event's level.
+                let message = review_rules_ignored_message(&review.input, &outcome.invalid_code);
+                (review.notify("review_rules_ignored", Event::ReviewStopped, &message)).await?;
+            }
+            review.rules = Some(outcome);
+        }
         for reviewer in review.input.reviewers.clone() {
             let prompt = match new_nonce().and_then(|nonce| {
                 build_reviewer_request(
@@ -158,7 +183,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     &review.input,
                     &reviewer,
                     &review.discussion,
-                    review.linked.as_ref(),
+                    review.sections(),
                     &nonce,
                     None,
                 )
@@ -357,7 +382,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             Ok(current) => current,
             Err(err) => return self.fail(err).await,
         };
-        let artifact = combined.artifact;
+        let rules = (self.rules.clone()).and_then(|outcome| outcome.rules);
+        let artifact = apply_skip(combined.artifact, rules.as_ref());
         if artifact.findings.is_empty() && artifact.prior_results.is_empty() {
             return self.plan(&current, artifact).await;
         }
@@ -387,6 +413,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             artifact = apply_verification(artifact, verification);
         }
         let settled = settle_prior(&self.input, &self.discussion, artifact);
+        let settled = apply_skip(settled, rules.as_ref());
         let artifact = anchor_findings(&self.input, settled, &commentable);
         self.plan(&current, artifact).await
     }
@@ -433,6 +460,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 .fail(Error::workflow("handoff_review_mismatch", true, None))
                 .await;
         }
+        // The stored outcome holds the `REVIEW.md` facts of the hand-off. The current rule still
+        // decides whether they hold an approval, so a pipeline that reads the rules keeps them.
+        if self.input.rule.pipeline.repository_review_rules == RepositoryReviewRules::Read {
+            self.rules.clone_from(&artifact.review_rules);
+        }
         self.plan(&current, artifact).await
     }
 
@@ -447,6 +479,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Some(linked) = &self.linked {
             artifact.intent = Some(linked.outcome());
         }
+        artifact.review_rules.clone_from(&self.rules);
         // Only a result that changes the publication rides on the artifact; `log` changes nothing.
         artifact.guard =
             (self.guard.clone()).filter(|guard| guard.suspect && guard.outcome != OnSuspect::Log);
@@ -467,14 +500,22 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Evaluates the human review signals of the rule once per review.
     ///
-    /// Only a clean review that its rule approves without the user needs them.
+    /// Only a clean review that its rule approves without the user needs them. A pull request
+    /// that changes `REVIEW.md` on a pipeline that reads it is a signal of its own, also for a
+    /// rule without `human_review`: a pull request cannot approve its own change to the rules.
     async fn human_review(
         &self,
         current: &PullRequest,
         artifact: &Artifact,
     ) -> Result<Vec<String>, Error> {
-        let Some(signals) = self.input.rule.human_review.as_ref() else {
-            return Ok(Vec::new());
+        let reads_rules = self.rules.is_some();
+        let rules_changed =
+            (self.rules.as_ref()).is_some_and(|rules| rules.changed_by_pull_request);
+        let configured = HumanReview::default();
+        let signals = match self.input.rule.human_review.as_ref() {
+            Some(signals) => signals,
+            None if reads_rules => &configured,
+            None => return Ok(Vec::new()),
         };
         let blocking = blocking_count(&self.input, artifact);
         if self.input.rule.on_clean != OnClean::Approve || blocking > 0 {
@@ -485,16 +526,27 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             usize::try_from(self.engine.config.excerpt_characters).unwrap_or_default();
         let notes = i64::try_from(self.input.split_findings(&artifact.findings).1.len())
             .unwrap_or(i64::MAX);
+        // A pipeline that read the rules shares the stored listing, whose cut-short end is a
+        // signal too: a pull request could push `REVIEW.md` past the end. Any other pipeline
+        // lists the files inside the step, and only when a signal reads them.
+        let stored = if reads_rules {
+            Some(self.changed_files(current).await?)
+        } else {
+            None
+        };
         self.once::<Vec<String>, _>(STEP_HUMAN_REVIEW, || {
+            let stored = stored.as_ref();
             let integration = &*self.engine.integration;
             let (cancel, credential) = (&self.cancel, self.credential());
             async move {
-                let listing = if signals.needs_changed_files() {
-                    integration
-                        .list_changed_files(cancel, credential?, current)
-                        .await?
-                } else {
-                    ChangedFiles::default()
+                let listing = match stored {
+                    Some(listing) => listing.clone(),
+                    None if signals.needs_changed_files() => {
+                        integration
+                            .list_changed_files(cancel, credential?, current)
+                            .await?
+                    }
+                    None => ChangedFiles::default(),
                 };
                 let facts = HumanReviewFacts {
                     labels: &current.labels,
@@ -505,7 +557,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                     notes,
                     list_budget,
                 };
-                Ok(human_review_signals(signals, &facts))
+                let mut matched = human_review_signals(signals, &facts);
+                if rules_changed {
+                    matched.insert(0, REVIEW_RULES_CHANGED_SIGNAL.to_owned());
+                }
+                Ok(matched)
             }
         })
         .await

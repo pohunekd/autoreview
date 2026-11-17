@@ -58,7 +58,7 @@ pub struct PullRequestState {
 pub type CommentableLines = BTreeMap<String, Vec<i64>>;
 
 /// One file that a pull request changes, as the changed-files listing reports it.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ChangedFile {
     /// Path of the file, relative to the repository root.
     pub path: String,
@@ -73,12 +73,25 @@ pub struct ChangedFile {
 }
 
 /// The changed files of a pull request and whether the listing stopped before its end.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ChangedFiles {
     /// The files listed, in listing order.
     pub files: Vec<ChangedFile>,
     /// Set when the listing ended at a limit, so `files` may not be every changed file.
     pub truncated: bool,
+}
+
+/// What a read of one repository file at a commit found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RepositoryFile {
+    /// The commit has no file at the path.
+    Absent,
+    /// The file is UTF-8 text within the size limit.
+    Text(String),
+    /// The file is larger than the size limit.
+    TooLarge,
+    /// The file is binary, truncated, not valid UTF-8 or not a regular file.
+    NotText,
 }
 
 /// One pull request text that the text guard scans.
@@ -381,6 +394,21 @@ pub trait Integrations {
         credential: &Credential,
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<LinkedIssues, Error>> + Send;
+
+    /// Reads the file `path` of `repository` at the commit `sha`.
+    ///
+    /// It reads with `credential`'s token. A file over `max_bytes` bytes is `TooLarge` and its
+    /// text is not returned. A commit that the repository does not have is an error, never
+    /// `Absent`.
+    fn read_repository_file(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        sha: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> impl Future<Output = Result<RepositoryFile, Error>> + Send;
 
     /// Reads the texts of the `fields` that a rule's text guard scans.
     ///

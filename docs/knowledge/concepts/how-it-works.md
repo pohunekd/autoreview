@@ -71,8 +71,10 @@ review at once. The scheduler waits `schedule.debounce_seconds` of quiet time
 after the head it saw, so a burst of pushes is reviewed once.
 
 A head that a published review already covers is not reviewed again. After a
-notes hand-off, a renewed request for the same head adopts the stored result. A
-retarget to another base branch gets a full review of the same head (see
+notes hand-off, a renewed request for the same head adopts the stored result,
+except on a `read` pipeline for a hand-off stored without a rules outcome (see
+[REVIEW.md](../../review-rules.md)). A retarget to another base branch gets a
+full review of the same head (see
 [incremental reviews](incremental-reviews.md#full-or-incremental)).
 
 ## 2. Rule resolution and copy at dispatch
@@ -94,7 +96,10 @@ A rule with `guard` scans the configured texts of the pull request for hidden
 instructions once per review, before any reviewer starts, and stores the result
 with the review; see [the text guard](../safety/prompt-injection.md#the-text-guard).
 A pipeline with `intent_check: issues` also hands the reviewers the issues that
-the pull request closes in its own repository, as untrusted data.
+the pull request closes in its own repository, as untrusted data. A pipeline
+with `repository_review_rules: read` reads the `REVIEW.md` of the base commit
+and hands its rules to the reviewers and the verifier; its `skip` globs turn
+findings in those paths into notes, see [REVIEW.md](../../review-rules.md).
 
 ## 3. Project routing on pohunek hosts
 

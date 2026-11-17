@@ -12,6 +12,7 @@ mod guard;
 mod human_review;
 mod parse;
 mod query;
+mod review_rules;
 mod types;
 
 pub use author_limit::{AuthorLimit, OverLimit};
@@ -22,10 +23,11 @@ pub use authors::{
 pub use guard::{GuardField, OnSuspect, RuleGuard};
 pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};
+pub use review_rules::{ReviewRules, ReviewRulesError, parse_review_rules};
 pub use types::{
     Checkout, EVENTS, Event, IntentCheck, Level, OPTIONAL_EVENTS, OnClean, OnFindings, OnNotes,
-    Pipeline, Policy, Protocol, REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind,
-    VERIFIER_REVIEWER_ID, Verifier, WORKFLOW_EVENTS,
+    Pipeline, Policy, Protocol, REPUBLISHED_PREFIX, RepositoryReviewRules, Reviewer, Rule, Trigger,
+    TriggerKind, VERIFIER_REVIEWER_ID, Verifier, WORKFLOW_EVENTS,
 };
 
 /// Errors from policy parsing, policy types and human review validation.
@@ -243,6 +245,20 @@ pub enum Error {
     /// A pipeline intent check is null or unknown.
     #[error("pipeline {pipeline}: intent_check must be off or issues")]
     PipelineIntentCheck {
+        /// The pipeline name.
+        pipeline: String,
+    },
+
+    /// A pipeline has no `repository_review_rules` key.
+    #[error("pipeline {pipeline}: repository_review_rules is required")]
+    PipelineRepositoryReviewRulesMissing {
+        /// The pipeline name.
+        pipeline: String,
+    },
+
+    /// A pipeline's `repository_review_rules` is null or unknown.
+    #[error("pipeline {pipeline}: repository_review_rules must be read or ignore")]
+    PipelineRepositoryReviewRules {
         /// The pipeline name.
         pipeline: String,
     },

@@ -12,6 +12,7 @@ use crate::integrations::{ChangedFile, GitHubReview, InlineComment};
 use crate::intent::intent_line;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Artifact, Finding, GuardOutcome, PriorResult, ReviewInput};
+use crate::review_rules::rules_line;
 use crate::verify::{demoted, verification_line};
 
 /// Configured values that shape the rendered review.
@@ -83,6 +84,11 @@ pub(crate) fn render_review(
     }
     if let Some(intent) = &artifact.intent {
         sections.push(intent_line(intent));
+    }
+    if let Some(outcome) = &artifact.review_rules
+        && let Some(line) = rules_line(outcome, &artifact.findings)
+    {
+        sections.push(line);
     }
     let verification = verification_line(artifact.verification.as_ref());
     if !verification.is_empty() {
@@ -239,14 +245,20 @@ fn finding_heading(finding: &Finding) -> String {
 
 /// Lists the non-blocking notes in a collapsed section that opens no inline thread.
 ///
-/// A note shows its heading and, in a paragraph of its own, its location. Only a note the
-/// verifier demoted keeps its body, which carries the reason.
+/// A note shows its heading and, in a paragraph of its own, its location. A note that the
+/// review rules skipped shows a fixed reason, and a note the verifier demoted keeps its body,
+/// which carries the reason.
 fn render_notes(notes: &[Finding]) -> String {
     let items: Vec<String> = notes
         .iter()
         .map(|note| {
             let location = format!("{}\n\n{}", finding_heading(note), location(note));
-            if demoted(note) {
+            if !note.skipped_by.is_empty() {
+                format!(
+                    "{location}\n\nSkipped by REVIEW.md: the path matches `skip` pattern {}.",
+                    code_span(&note.skipped_by)
+                )
+            } else if demoted(note) {
                 format!("{location}\n\n{}", neutralize_block(&note.body))
             } else {
                 location
@@ -1536,6 +1548,24 @@ mod tests {
                 && message.find("Reply to this message with: approve")
                     <= message.find("check before approving"),
             "an answered prior finding must be shown below the reply instruction: {message}"
+        );
+    }
+
+    /// A glob with a backtick is shown in a code span that the glob cannot close.
+    #[test]
+    fn a_skipped_note_shows_its_glob_in_a_code_span() {
+        let note = Finding {
+            path: "docs/a`b.md".to_owned(),
+            line: 3,
+            title: "Typo".to_owned(),
+            non_blocking: true,
+            skipped_by: "docs/*`*".to_owned(),
+            ..Finding::default()
+        };
+        let notes = super::render_notes(&[note]);
+        assert!(
+            notes.contains("the path matches `skip` pattern ``docs/*`*``."),
+            "notes = {notes}"
         );
     }
 }

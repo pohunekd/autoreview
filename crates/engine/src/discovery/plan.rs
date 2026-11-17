@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use autoreview_policy::{OnClean, Rule};
+use autoreview_policy::{OnClean, RepositoryReviewRules, Rule};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{Clock, Engine, STEP_ARTIFACT, STEP_PUBLICATION};
@@ -218,7 +218,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Returns the published review that handed non-blocking findings to the author.
     ///
     /// At an unchanged head and base branch the review adopts that result while it is stored;
-    /// otherwise the reviewers run and the clean outcome waits for the user.
+    /// otherwise the reviewers run and the clean outcome waits for the user. A rule that reads
+    /// `REVIEW.md` adopts only a result that carries the rules outcome.
     ///
     /// # Errors
     ///
@@ -227,6 +228,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         &self,
         published: Option<&PublishedRecord>,
         pr: &PullRequest,
+        rule: &Rule,
     ) -> Result<Option<NotesHandoff>, Error> {
         let Some(published) = published else {
             return Ok(None);
@@ -244,16 +246,26 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         }
         let stored = self
             .store
-            .load_step::<Artifact>(&published.workflow_id, STEP_ARTIFACT)?
-            .is_some();
-        if !stored {
+            .load_step::<Artifact>(&published.workflow_id, STEP_ARTIFACT)?;
+        // A pipeline that reads the rules adopts only a result that carries the rules outcome,
+        // so an approval never skips the `REVIEW.md` hold.
+        let reads = rule.pipeline.repository_review_rules == RepositoryReviewRules::Read;
+        let adoptable = stored
+            .as_ref()
+            .is_some_and(|artifact| !reads || artifact.review_rules.is_some());
+        if !adoptable {
+            let reason = if stored.is_some() {
+                "handoff_review_without_rules"
+            } else {
+                "handoff_review_not_stored"
+            };
             tracing::info!(
                 review_id = %pr.review_id(),
-                reason = "handoff_review_not_stored",
+                reason,
                 "notes hand-off reviewed again"
             );
         }
-        handoff.adopt = stored;
+        handoff.adopt = adoptable;
         Ok(Some(handoff))
     }
 

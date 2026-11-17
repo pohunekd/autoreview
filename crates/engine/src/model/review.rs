@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use autoreview_policy::{Event, Level, OnSuspect, Trigger};
+use autoreview_policy::{Event, Level, OnSuspect, ReviewRules, Trigger};
 use serde::{Deserialize, Serialize};
 use time::Duration;
 use time::OffsetDateTime;
@@ -169,6 +169,23 @@ pub struct IntentOutcome {
 
 autoreview_go_compat::object_only_serde!(IntentOutcome);
 
+/// What the read of the base `REVIEW.md` gave; the review stores it, so a resume sees it again.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, remote = "Self")]
+pub struct ReviewRulesOutcome {
+    /// The base commit the rules were read at.
+    pub base_sha: String,
+    /// The rules of the base commit; `None` when it has no file or its file is invalid.
+    pub rules: Option<ReviewRules>,
+    /// Code of the invalid base file that a pull request changing `REVIEW.md` was reviewed
+    /// without; empty otherwise.
+    pub invalid_code: String,
+    /// Whether the pull request changes `REVIEW.md`, as a path or as a rename source.
+    pub changed_by_pull_request: bool,
+}
+
+autoreview_go_compat::object_only_serde!(ReviewRulesOutcome);
+
 /// Discussion on the pull request since earlier reviews.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, remote = "Self")]
@@ -319,6 +336,9 @@ pub struct Artifact {
     /// What the intent check compared; absent for a pipeline without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent: Option<IntentOutcome>,
+    /// What the repository review rules did; absent when the review read none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_rules: Option<ReviewRulesOutcome>,
     /// The text guard result when it changes the publication; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guard: Option<GuardOutcome>,

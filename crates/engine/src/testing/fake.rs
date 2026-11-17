@@ -27,7 +27,8 @@ use crate::error::{BoxError, Error, WORKFLOW_FAILED};
 use crate::integrations::{
     ChangedFile, ChangedFiles, CommentReaction, CommentableLines, GitHubReview, GuardText,
     GuardTexts, HeadCheckoutHooks, Integrations, PullRequestSignals, PullRequestState,
-    ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest, ThreadComment, TokenAnswer,
+    ReadiedDraft, RepositoryFile, ReviewRequest, ReviewRequestList, SessionRequest, ThreadComment,
+    TokenAnswer,
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
@@ -95,6 +96,8 @@ pub(crate) struct FakeState {
     pub(crate) commentable: CommentableLines,
     /// Changed files that the fake returns.
     pub(crate) changed: Vec<ChangedFile>,
+    /// Whether the changed-files listing that the fake returns stops before its end.
+    pub(crate) changed_truncated: bool,
     /// Discussion that the fake returns.
     pub(crate) discussion: Discussion,
     /// Prior findings of each discussion read, in order.
@@ -103,6 +106,12 @@ pub(crate) struct FakeState {
     pub(crate) closing_issues: Option<LinkedIssues>,
     /// Pull request of each closing-issue read, as `repository#number`, in order.
     pub(crate) closing_reads: Vec<String>,
+    /// Repository files by `<sha>:<path>`; a file that is not listed is absent.
+    pub(crate) files: BTreeMap<String, String>,
+    /// Error code and permanence that every file read fails with; `None` reads normally.
+    pub(crate) file_failure: Option<(String, bool)>,
+    /// Every file read, as `repository@sha:path`, in order.
+    pub(crate) file_reads: Vec<String>,
     /// Texts that the guard read returns, filtered by the fields it asks for.
     pub(crate) guard_texts: Vec<GuardText>,
     /// Number of guard reads.
@@ -600,10 +609,12 @@ impl Integrations for FakeIntegration {
         _credential: &Credential,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send {
+        let state = self.lock();
         let result = ChangedFiles {
-            files: self.lock().changed.clone(),
-            truncated: false,
+            files: state.changed.clone(),
+            truncated: state.changed_truncated,
         };
+        drop(state);
         ready(Ok(result))
     }
 
@@ -633,6 +644,31 @@ impl Integrations for FakeIntegration {
             state.closing_reads.push(pull_request.key());
             (state.closing_issues.clone())
                 .ok_or_else(|| Error::workflow("github_request_rejected", true, None))
+        };
+        ready(result)
+    }
+
+    fn read_repository_file(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        repository: &str,
+        sha: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> impl Future<Output = Result<RepositoryFile, Error>> + Send {
+        let result = {
+            let mut state = self.lock();
+            state.file_reads.push(format!("{repository}@{sha}:{path}"));
+            if let Some((code, permanent)) = state.file_failure.clone() {
+                Err(Error::workflow(code, permanent, None))
+            } else {
+                Ok(match state.files.get(&format!("{sha}:{path}")) {
+                    None => RepositoryFile::Absent,
+                    Some(text) if text.len() as u64 > max_bytes => RepositoryFile::TooLarge,
+                    Some(text) => RepositoryFile::Text(text.clone()),
+                })
+            }
         };
         ready(result)
     }

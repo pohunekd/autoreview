@@ -54,6 +54,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
     verifier:
       reviewer: opus
       prompt: prompts/verifier.md
@@ -65,6 +66,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 
 repositories:
   - match: zajca/pohunek
@@ -157,6 +159,7 @@ A pipeline says how a pull request is reviewed.
 | `project_sources` | Which pohunek projects may serve the repository: `manual` (registered with `pohunek project add`), `auto` (discovered), or both. autoreview checks only the form of a name (lowercase letters, digits, `_` and `-`, at most 32 characters) and passes it to pohunek unchanged |
 | `verifier` | Optional, see below |
 | `intent_check` | Optional. `issues`: the reviewers compare the change with the issues the pull request closes, see [intent check](#intent-check). `off`, or no key: no comparison. `intent_check: null` is an error |
+| `repository_review_rules` | Required. `read`: the reviewers and the verifier get the `REVIEW.md` of the base commit. `ignore`: the file is never read. A missing key, `null` or any other value is an error. The key changes the policy digest only when it is `read` |
 
 ### Verifier
 
@@ -202,6 +205,26 @@ be read: a failed or refused read never fails the review, it is logged as
 `linked issues could not be read`. Without the key, or with `off`, nothing is
 read and the request is unchanged. The key changes the policy digest only when
 it is `issues`.
+
+### Repository review rules
+
+With `repository_review_rules: read`, the engine reads the `REVIEW.md` of the
+pull request's base commit once per review and hands its `skip` globs, `ci_tools`
+and prose to the reviewers and the verifier as untrusted guidance; see
+[REVIEW.md](review-rules.md). The file is never read from the pull request head,
+so a pull request cannot change the rules that review it. For an untrusted
+author no rule approves, so a skipped finding never becomes an approval there.
+
+`skip` lets anyone who can write to the base branch turn findings into notes, so
+a review can be clean, and on a rule that approves clean reviews an approval,
+because of what a REVIEW.md says. `read` is the operator's opt-in for that;
+use `ignore` for a pipeline whose repositories you do not trust to that extent.
+A pull request chooses what lies under a skipped path, so pair `skip` on an
+approving rule with the same globs in `human_review.paths`. A pull request that
+changes `REVIEW.md` is held for a person on an approving rule.
+The published summary shows how many findings became notes. An invalid or too
+large file fails the review (`review_rules_invalid`, `review_rules_too_large`),
+except for a pull request that changes `REVIEW.md`.
 
 ## Repository rules
 
@@ -276,6 +299,10 @@ Rules:
 - Logins are lowercase. The names `trusted` and `untrusted` are read as author
   classes, so a login with either name cannot be listed. A class entry matches
   the author class that the policy decided for the review.
+- On a pipeline with `repository_review_rules: read`, a pull request that changes
+  `REVIEW.md` is a signal of its own (`changes REVIEW.md`), also on a rule without
+  a `human_review` section: its clean review waits for a person, see
+  [REVIEW.md](review-rules.md#a-pull-request-that-changes-reviewmd).
 - Each list holds at most 50 entries. Every label, glob and author is listed
   once, and every number is a positive integer. A value that breaks one of these
   rules fails the policy at startup.
@@ -538,6 +565,8 @@ request content itself is always untrusted input. See
 | `authors is required` | State who the rule trusts; `trusted: any` reviews every author, forks included, with the rule's outcomes |
 | `untrusted pipeline must use checkout base` | Use a base-checkout pipeline for untrusted authors |
 | `pipeline <name>: intent_check must be off or issues` | Set `off` or `issues`, or remove the key |
+| `pipeline <name>: repository_review_rules is required` | Add `repository_review_rules: read` or `ignore` to the pipeline |
+| `pipeline <name>: repository_review_rules must be read or ignore` | Set `read` or `ignore`; `null` is refused |
 | `authors.untrusted is required unless trusted is any` | Add `untrusted: skip` or an untrusted mapping |
 | `authors.untrusted.on_clean must be comment or await, never approve` | Use `comment` or `await` |
 | `author_limit.reviews must be between 1 and 1000` | Set `reviews`; also shown when it is missing |

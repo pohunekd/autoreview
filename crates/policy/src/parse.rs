@@ -22,9 +22,9 @@ use crate::human_review::{FileHumanReview, parse_human_review};
 use crate::types::{
     Checkout, EVENTS, Event, IntentCheck, Level, MAX_APPROVAL_HOURS, MAX_POLICY_BYTES,
     MAX_PROMPT_BYTES, MAX_REVIEWERS_PER_PR, MAX_RULES, OPTIONAL_EVENTS, OnClean, OnFindings,
-    OnNotes, Pipeline, Policy, Protocol, REPUBLISHED_PREFIX, Reviewer, Rule, Trigger, TriggerKind,
-    VERIFIER_REVIEWER_ID, Verifier, is_finding_prefix, is_identifier, is_label, is_owner,
-    is_profile, is_repo_name, is_source,
+    OnNotes, Pipeline, Policy, Protocol, REPUBLISHED_PREFIX, RepositoryReviewRules, Reviewer, Rule,
+    Trigger, TriggerKind, VERIFIER_REVIEWER_ID, Verifier, is_finding_prefix, is_identifier,
+    is_label, is_owner, is_profile, is_repo_name, is_source,
 };
 
 /// Most characters a reviewer label may have.
@@ -111,6 +111,9 @@ struct FilePipeline {
     /// Intent check name; absent means off, null is refused.
     #[serde(deserialize_with = "present")]
     intent_check: Option<Option<String>>,
+    /// Repository review rules mode; required, null is refused.
+    #[serde(deserialize_with = "present")]
+    repository_review_rules: Option<Option<String>>,
 }
 
 /// A verifier as written in the policy file.
@@ -674,6 +677,20 @@ fn parse_pipelines(
                 });
             }
         };
+        let repository_review_rules = match value.repository_review_rules.as_ref() {
+            None => {
+                return Err(Error::PipelineRepositoryReviewRulesMissing {
+                    pipeline: name.clone(),
+                });
+            }
+            Some(Some(raw)) if raw == "read" => RepositoryReviewRules::Read,
+            Some(Some(raw)) if raw == "ignore" => RepositoryReviewRules::Ignore,
+            Some(_) => {
+                return Err(Error::PipelineRepositoryReviewRules {
+                    pipeline: name.clone(),
+                });
+            }
+        };
         let prompt = load_prompt(name, &value.prompt, read_prompt)?;
         let verifier = parse_verifier(name, value.verifier.as_ref(), reviewers, read_prompt)?;
         pipelines.insert(
@@ -688,6 +705,7 @@ fn parse_pipelines(
                 project_sources: sources,
                 verifier,
                 intent_check,
+                repository_review_rules,
             },
         );
     }
@@ -1138,6 +1156,7 @@ mod tests {
     use crate::guard::{GuardField, OnSuspect, RuleGuard};
     use crate::types::{
         Event, IntentCheck, Level, MAX_PROMPT_BYTES, OnClean, OnFindings, OnNotes, Policy,
+        RepositoryReviewRules,
     };
 
     /// The authors section of the acme/special rule in the valid policy.
@@ -1148,8 +1167,8 @@ reviewers:
   opus: {protocol: claude-structured, agent_profile: claude-profile, label: Opus, finding_prefix: O}
   codex: {protocol: codex-envelope, agent_profile: codex-profile, label: Codex, finding_prefix: X}
 pipelines:
-  main: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompts/main.md, checkout: base, verifier: {reviewer: opus, prompt: prompts/verifier.md, escalate_severities: [critical], escalate_count: 2}, project_sources: [manual]}
-  side: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompts/side.md, checkout: head, project_sources: [manual, auto]}
+  main: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompts/main.md, checkout: base, verifier: {reviewer: opus, prompt: prompts/verifier.md, escalate_severities: [critical], escalate_count: 2}, project_sources: [manual], repository_review_rules: ignore}
+  side: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompts/side.md, checkout: head, project_sources: [manual, auto], repository_review_rules: ignore}
 repositories:
   - {match: acme/special, authors: {trusted: any}, trigger: review-requested, pipeline: main, on_findings: request_changes, on_clean: await}
   - {match: acme/*, authors: {trusted: any}, trigger: review-requested, pipeline: main, on_findings: request_changes, on_clean: approve}
@@ -1505,6 +1524,42 @@ notifications:
         );
     }
 
+    /// `ignore` hashes nothing, so a policy that only adds the key keeps its digest.
+    #[test]
+    fn repository_review_rules_parse_and_change_the_digest_only_when_read() {
+        let rules = |policy: &Policy, repository: &str| {
+            policy
+                .resolve(repository)
+                .map(|rule| rule.pipeline.repository_review_rules.clone())
+        };
+        let ignored = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
+        assert_eq!(
+            rules(&ignored, "acme/other"),
+            Some(RepositoryReviewRules::Ignore)
+        );
+        let document = VALID_POLICY.replacen(
+            "project_sources: [manual], repository_review_rules: ignore",
+            "project_sources: [manual], repository_review_rules: read",
+            1,
+        );
+        let read =
+            parse(document.as_bytes(), prompts).expect("repository_review_rules read parses");
+        assert_ne!(
+            read.digest(),
+            ignored.digest(),
+            "read must change the digest"
+        );
+        assert_eq!(
+            rules(&read, "acme/other"),
+            Some(RepositoryReviewRules::Read)
+        );
+        assert_eq!(
+            rules(&read, "solo/app"),
+            Some(RepositoryReviewRules::Ignore),
+            "a pipeline that says ignore must stay ignore"
+        );
+    }
+
     #[test]
     fn human_review_parses_and_changes_the_digest() {
         let first = parse(VALID_POLICY.as_bytes(), prompts).expect("the valid policy parses");
@@ -1610,6 +1665,9 @@ notifications:
             ("bad checkout", valid.replacen("checkout: head", "checkout: merge", 1), "checkout must be"),
             ("null intent_check", valid.replacen("checkout: head", "checkout: head, intent_check: null", 1), "pipeline side: intent_check must be off or issues"),
             ("unknown intent_check", valid.replacen("checkout: head", "checkout: head, intent_check: pr", 1), "pipeline side: intent_check must be off or issues"),
+            ("missing repository_review_rules", valid.replacen("project_sources: [manual, auto], repository_review_rules: ignore", "project_sources: [manual, auto]", 1), "pipeline side: repository_review_rules is required"),
+            ("null repository_review_rules", valid.replacen("repository_review_rules: ignore}\nrepositories", "repository_review_rules: null}\nrepositories", 1), "pipeline side: repository_review_rules must be read or ignore"),
+            ("unknown repository_review_rules", valid.replacen("project_sources: [manual, auto], repository_review_rules: ignore", "project_sources: [manual, auto], repository_review_rules: head", 1), "pipeline side: repository_review_rules must be read or ignore"),
             ("prompt escapes directory", valid.replacen("prompt: prompts/side.md", "prompt: ../side.md", 1), "inside the policy directory"),
             ("missing prompt", valid.replacen("prompt: prompts/side.md", "prompt: prompts/none.md", 1), "prompts/none.md"),
             ("missing event", valid.replacen("  superseded: log\n", "", 1), "event superseded needs a level"),
@@ -1621,7 +1679,7 @@ notifications:
             ("null weekly report", valid.replacen("  superseded: log\n", "  superseded: log\n  weekly_report: null\n", 1), "event weekly_report level must be digest or off"),
             ("unknown weekly report level", valid.replacen("  superseded: log\n", "  superseded: log\n  weekly_report: weekly\n", 1), "event weekly_report level must be digest or off"),
             ("approval timeout", valid.replacen("timeout_hours: 24", "timeout_hours: 0", 1), "timeout_hours"),
-            ("no source", valid.replacen("project_sources: [manual]}", "project_sources: []}", 1), "project_sources"),
+            ("no source", valid.replacen("project_sources: [manual], repository", "project_sources: [], repository", 1), "project_sources"),
             ("second document", format!("{valid}---\nversion: 1\n"), "exactly one YAML document"),
             ("duplicate key", valid.replacen("unmatched: skip", "unmatched: skip\nunmatched: skip", 1), "mapping key \"unmatched\" already defined"),
             ("verifier of another protocol", valid.replacen("verifier: {reviewer: opus,", "verifier: {reviewer: codex,", 1), "verifier must use protocol"),

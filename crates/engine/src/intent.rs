@@ -188,6 +188,7 @@ mod tests {
     use crate::protocol::fixtures::{NONCE, codex, opus, sha, test_input, test_pull_request};
     use crate::protocol::request::build_reviewer_request;
     use crate::protocol::validate::tests::test_config;
+    use crate::review_rules::RequestSections;
     use crate::verify::{VerificationClaims, build_verifier_request};
 
     /// Returns the issues `(title, body)` of `acme/widget`, numbered from 1, as read.
@@ -335,7 +336,10 @@ mod tests {
                 &input,
                 reviewer,
                 &discussion,
-                Some(linked),
+                RequestSections {
+                    linked: Some(linked),
+                    rules: None,
+                },
                 NONCE,
                 None,
             )
@@ -354,7 +358,7 @@ mod tests {
                 ..Verifier::default()
             });
             let (claims, discussion) = (VerificationClaims::default(), Discussion::default());
-            let raw = build_verifier_request(&input, &claims, &discussion, Some(linked))
+            let raw = build_verifier_request(&input, &claims, &discussion, Some(linked), None)
                 .expect("the verifier request builds");
             let request: Value = serde_json::from_str(&raw).expect("the request is JSON");
             request["prompt"].as_str().unwrap_or_default().to_owned()
