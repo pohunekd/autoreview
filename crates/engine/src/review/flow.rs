@@ -40,6 +40,7 @@ use crate::publish::plan::{PublicationPlan, blocking_count, plan_publication, pu
 use crate::publish::render::{
     HumanReviewFacts, RenderSettings, human_review_signals, render_review,
 };
+use crate::review_rules::apply_skip;
 use crate::store::{RESULT_SUCCESS, ReviewStep, StepOutcome, StoredReview};
 use crate::verify::{apply_verification, claims_of, verifier_reviewer};
 
@@ -376,7 +377,8 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             Ok(current) => current,
             Err(err) => return self.fail(err).await,
         };
-        let artifact = combined.artifact;
+        let rules = (self.rules.clone()).and_then(|outcome| outcome.rules);
+        let artifact = apply_skip(combined.artifact, rules.as_ref());
         if artifact.findings.is_empty() && artifact.prior_results.is_empty() {
             return self.plan(&current, artifact).await;
         }
@@ -406,6 +408,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             artifact = apply_verification(artifact, verification);
         }
         let settled = settle_prior(&self.input, &self.discussion, artifact);
+        let settled = apply_skip(settled, rules.as_ref());
         let artifact = anchor_findings(&self.input, settled, &commentable);
         self.plan(&current, artifact).await
     }

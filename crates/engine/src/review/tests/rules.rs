@@ -2,14 +2,17 @@
 
 // Rust guideline compliant 2026-11-17
 
-use serde_json::Value;
+use autoreview_policy::VERIFIER_REVIEWER_ID;
+use serde_json::{Value, json};
 
 use crate::integrations::{ChangedFile, SessionRequest};
 use crate::model::PullRequest;
+use crate::model::review::Decision;
 use crate::protocol::fixtures::sha;
 use crate::store::ReviewFilter;
-use crate::testing::fake::reviewer_output;
+use crate::testing::fake::{reviewer_output, verifier_output};
 use crate::testing::harness::{Harness, integration_pull_request, start_harness};
+use crate::verify::{VERDICT_CONFIRMED, VERDICT_UPHELD};
 
 /// Returns a pull request of `repository` whose base commit is `base`.
 fn pull_request(repository: &str, base: &str) -> PullRequest {
@@ -124,5 +127,90 @@ async fn the_base_review_rules_are_read_and_an_unusable_file_fails_the_review() 
     assert_eq!(
         failures(&h, &unreadable),
         ["review_rules_unreadable".to_owned()]
+    );
+}
+
+/// D2: a blocking finding in a `skip` path is published as a note with the reason and never
+/// reaches the verifier, whose request carries the rules; a review whose only finding is
+/// skipped is clean and is approved.
+#[tokio::test]
+async fn a_finding_in_a_skipped_path_is_a_note_with_its_reason() {
+    let h = start_harness(|_| {}).await;
+    h.fake.lock().commentable = [("src/lib.rs".to_owned(), vec![3])].into();
+    let finding = |path: &str, title: &str| {
+        json!({
+            "severity": "high", "confidence": "high", "blocking": true, "path": path,
+            "line": 3, "title": title, "body": "Breaks the build.",
+        })
+    };
+    let both = reviewer_output(vec![
+        finding("docs/guide.md", "Typo"),
+        finding("src/lib.rs", "Overflow"),
+    ]);
+    let skipped_only = reviewer_output(vec![finding("docs/guide.md", "Typo")]);
+    h.set_output(
+        move |request: &SessionRequest| match request.reviewer.id.as_str() {
+            VERIFIER_REVIEWER_ID => {
+                verifier_output(request, |_| VERDICT_CONFIRMED, |_| VERDICT_UPHELD)
+            }
+            _ if request.pull_request.repository == "rules/clean" => skipped_only(request),
+            _ => both(request),
+        },
+    );
+    let rules = "---\nskip: [\"docs/**\"]\n---\nStrict.".to_owned();
+    let mixed = pull_request("rules/mixed", "c");
+    let clean = pull_request("rules/clean", "d");
+    for pr in [&mixed, &clean] {
+        h.fake
+            .lock()
+            .files
+            .insert(format!("{}:REVIEW.md", pr.base_sha), rules.clone());
+        h.fake.open(pr.clone(), h.rule(&pr.repository));
+    }
+    h.poll_until("both reviews", || h.publications() == 2).await;
+
+    let (published, _, started, _) = h.fake.snapshot();
+    let heads = h.fake.lock().published_keys.clone();
+    let body_of = |pr: &PullRequest| {
+        let index = heads.iter().position(|key| *key == pr.key());
+        index
+            .and_then(|index| published.get(index))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let (mixed_review, clean_review) = (body_of(&mixed), body_of(&clean));
+    let reason = "Skipped by REVIEW.md: the path matches `skip` pattern `docs/**`.";
+    assert_eq!(mixed_review.decision, Decision::RequestChanges);
+    assert!(
+        mixed_review.body.contains(reason),
+        "body = {}",
+        mixed_review.body
+    );
+    assert_eq!(clean_review.decision, Decision::Approve);
+    assert!(
+        clean_review.body.contains(reason),
+        "body = {}",
+        clean_review.body
+    );
+    // Only the finding outside the skipped path is a claim, and the verifier sees the rules.
+    let verifier = (started.iter())
+        .find(|request| {
+            request.reviewer.id == VERIFIER_REVIEWER_ID && request.pull_request.key() == mixed.key()
+        })
+        .map(|request| request.prompt.clone())
+        .unwrap_or_default();
+    assert!(
+        verifier.contains("Overflow") && !verifier.contains("Typo"),
+        "verifier = {verifier}"
+    );
+    assert!(
+        verifier.contains("Repository review rules (untrusted JSON"),
+        "verifier = {verifier}"
+    );
+    assert!(
+        !started.iter().any(|request| {
+            request.reviewer.id == VERIFIER_REVIEWER_ID && request.pull_request.key() == clean.key()
+        }),
+        "a review of skipped findings only runs no verifier"
     );
 }

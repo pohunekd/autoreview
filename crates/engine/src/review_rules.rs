@@ -2,10 +2,10 @@
 
 // Rust guideline compliant 2026-11-17
 
-use autoreview_policy::ReviewRules;
+use autoreview_policy::{ReviewRules, match_glob};
 
 use crate::error::Error;
-use crate::model::LinkedIssues;
+use crate::model::{Artifact, LinkedIssues};
 use crate::protocol::request::{go_json, request_invalid};
 
 /// Instructions that precede the rules; the JSON line after them is untrusted.
@@ -32,6 +32,27 @@ pub(crate) struct RequestSections<'a> {
     pub(crate) linked: Option<&'a LinkedIssues>,
     /// The rules of the base `REVIEW.md`, for a pipeline that reads them.
     pub(crate) rules: Option<&'a ReviewRules>,
+}
+
+/// Turns every blocking finding whose path matches a `skip` glob into a note.
+///
+/// The finding records the first matching glob in `skipped_by`. Without rules the artifact is
+/// returned as it is. A finding that is already a note keeps its place and gets no reason.
+pub(crate) fn apply_skip(mut artifact: Artifact, rules: Option<&ReviewRules>) -> Artifact {
+    let Some(rules) = rules else {
+        return artifact;
+    };
+    for finding in &mut artifact.findings {
+        let glob = rules
+            .skip
+            .iter()
+            .find(|glob| match_glob(glob, &finding.path));
+        if let Some(glob) = glob.filter(|_| !finding.non_blocking) {
+            finding.non_blocking = true;
+            finding.skipped_by.clone_from(glob);
+        }
+    }
+    artifact
 }
 
 /// Returns the rules section of a request: the instructions and the rules on one line of JSON.
