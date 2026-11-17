@@ -2,7 +2,7 @@
 type: Guide
 id: guide/eval-suite
 title: Regression-test a review configuration
-description: Check a change to a prompt, model, reviewer profile or policy against known pull requests with autoreview eval - the case files and fixture branches, a config file of its own with a read-only credential, recall and false blocking thresholds, repeats, cost bounds, the runner precondition and the limits of the run.
+description: Check a change to a prompt, model, reviewer profile or policy against known pull requests with autoreview eval - the case files and fixture branches, turning a missed defect into a case with eval add, a config file of its own with a read-only credential, recall and false blocking thresholds, repeats, cost bounds, the runner precondition and the limits of the run.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -48,6 +48,36 @@ Protect `eval-cases/**` with a ruleset that blocks deletion and force pushes. A
 branch that moved fails its trials at the fetch and never scores another commit.
 A `head_ref` branch under `session.branch_prefix` or `eval.session_branch_prefix`
 is refused when the run starts.
+
+## Turn a missed defect into a case
+
+A defect that reached the default branch past a review is the best case to keep.
+Take the base and head SHAs of the pull request that the review saw and the commit
+that fixed the defect, and run [`eval add`](../../cli.md#autoreview-eval-add) with
+the eval config:
+
+```
+autoreview --config eval-config.yaml eval add --cases examples/eval/cases \
+  --from-pr acme/widgets#214 --fix <fix-sha> --id widgets-cache-race \
+  --base-sha <base-sha> --head-sha <head-sha> --base-branch main
+```
+
+It writes `widgets-cache-race.yaml` and prints it. Read the printed ranges and
+`skipped` before committing the file:
+
+- The expected lines are the ones the fix changed in the file as it was before the
+  fix, so the case is only written when the file is the same at the reviewed head.
+  A file that moved needs `--lines PATH:FIRST-LAST`.
+- A file qualifies only if the pull request has an added line in it: a reviewer
+  cannot block on a file it did not change, so `skipped` lists the fix's other
+  files. Pass `--path` for each file when several qualify.
+- A suite holds one case per pull request head, so a second miss on the same head
+  is refused with the name of the file to edit by hand.
+- When `refs/pull/<number>/head` moved past the reviewed head, pass `--head-branch`
+  and run the two `git` commands that the output prints, with your own credentials;
+  until the branch exists, the case fails at the fetch.
+
+Then run `eval validate` on the directory and `eval run` on the new case.
 
 ## Set up the run
 

@@ -25,10 +25,10 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Credential;
 use crate::error::{BoxError, Error, WORKFLOW_FAILED};
 use crate::integrations::{
-    ChangedFile, ChangedFiles, CommentReaction, CommentableLines, GitHubReview, GuardText,
-    GuardTexts, HeadCheckoutHooks, Integrations, PullRequestSignals, PullRequestState, RangeFiles,
-    ReadiedDraft, RepositoryFile, ReviewRequest, ReviewRequestList, SessionRequest, ThreadComment,
-    TokenAnswer,
+    ChangedFile, ChangedFiles, CommentReaction, CommentableLines, CommitRead, GitHubReview,
+    GuardText, GuardTexts, HeadCheckoutHooks, Integrations, PullRequestSignals, PullRequestState,
+    RangeFiles, ReadiedDraft, RepositoryFile, ReviewRequest, ReviewRequestList, SessionRequest,
+    ThreadComment, TokenAnswer,
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
@@ -108,6 +108,10 @@ pub(crate) struct FakeState {
     pub(crate) closing_reads: Vec<String>,
     /// Repository files by `<sha>:<path>`; a file that is not listed is absent.
     pub(crate) files: BTreeMap<String, String>,
+    /// Commits that the commit read returns, by SHA; a SHA that is not listed is not found.
+    pub(crate) commits: BTreeMap<String, CommitRead>,
+    /// Blob IDs by `<sha>:<path>`; a path that is not listed is no file.
+    pub(crate) blobs: BTreeMap<String, String>,
     /// Error code and permanence that every file read fails with; `None` reads normally.
     pub(crate) file_failure: Option<(String, bool)>,
     /// Every file read, as `repository@sha:path`, in order.
@@ -671,6 +675,30 @@ impl Integrations for FakeIntegration {
                 .ok_or_else(|| Error::workflow("github_request_rejected", true, None))
         };
         ready(result)
+    }
+
+    fn read_commit(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        _repository: &str,
+        sha: &str,
+    ) -> impl Future<Output = Result<CommitRead, Error>> + Send {
+        let found = self.lock().commits.get(sha).cloned();
+        ready(found.ok_or_else(|| Error::workflow("github_commit_not_found", true, None)))
+    }
+
+    fn read_blob_ids(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        _repository: &str,
+        first: (&str, &str),
+        second: (&str, &str),
+    ) -> impl Future<Output = Result<[Option<String>; 2], Error>> + Send {
+        let state = self.lock();
+        let id = |(sha, path): (&str, &str)| state.blobs.get(&format!("{sha}:{path}")).cloned();
+        ready(Ok([id(first), id(second)]))
     }
 
     fn read_repository_file(

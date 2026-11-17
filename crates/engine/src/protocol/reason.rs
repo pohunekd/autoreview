@@ -82,7 +82,7 @@ fn neutralized(text: &str) -> String {
 /// Reports whether a logged reason shows `character` as `?`.
 ///
 /// Controls (Cc), format characters (Cf) and the line and paragraph separators (Zl, Zp).
-fn is_neutralized(character: char) -> bool {
+pub(crate) fn is_neutralized(character: char) -> bool {
     character.is_control()
         || LINE_SEPARATORS.contains(&character)
         || FORMAT_CHARACTERS

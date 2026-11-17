@@ -10,8 +10,8 @@ use std::time::Duration;
 use autoreview_engine::Error;
 use autoreview_engine::config::{Config, Credential};
 use autoreview_engine::integrations::{
-    ChangedFiles, CommentableLines, GitHubReview, GuardTexts, HeadCheckoutHooks, Integrations,
-    PullRequestSignals, PullRequestState, RangeFiles, ReadiedDraft, RepositoryFile,
+    ChangedFiles, CommentableLines, CommitRead, GitHubReview, GuardTexts, HeadCheckoutHooks,
+    Integrations, PullRequestSignals, PullRequestState, RangeFiles, ReadiedDraft, RepositoryFile,
     ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use autoreview_engine::model::{
@@ -307,6 +307,31 @@ impl Integrations for External {
     ) -> Result<LinkedIssues, Error> {
         (self.github)
             .list_closing_issues(cancel, credential, pull_request)
+            .await
+    }
+
+    async fn read_commit(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        sha: &str,
+    ) -> Result<CommitRead, Error> {
+        (self.github)
+            .commit(cancel, credential, repository, sha)
+            .await
+    }
+
+    async fn read_blob_ids(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        first: (&str, &str),
+        second: (&str, &str),
+    ) -> Result<[Option<String>; 2], Error> {
+        (self.github)
+            .blob_ids(cancel, credential, repository, first, second)
             .await
     }
 

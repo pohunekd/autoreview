@@ -8,8 +8,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use autoreview_engine::config::NotifySettings;
-use autoreview_engine::eval::case::{Case, CaseError, load_cases};
+use autoreview_engine::config::{Config, Credential, NotifySettings};
+use autoreview_engine::eval::add::{
+    FixSelection, Skipped, clean_title, fix_description, fix_ranges, write_case,
+};
+use autoreview_engine::eval::case::{
+    Case, CaseError, Expect, Expected, head_branch_valid, identifier_valid, load_cases,
+};
 use autoreview_engine::eval::config::EvalConfig;
 use autoreview_engine::eval::integration::{EvalIntegration, RunCounters};
 use autoreview_engine::eval::report::{
@@ -17,6 +22,8 @@ use autoreview_engine::eval::report::{
     check_thresholds_have_cases, evaluate_gate, exit_status, totals,
 };
 use autoreview_engine::eval::trial::{eval_pull_request, eval_rule};
+use autoreview_engine::integrations::Integrations;
+use autoreview_engine::model::{branch_valid, repository_valid, sha_valid};
 use autoreview_engine::store::Store;
 use autoreview_engine::{Engine, Error, SystemClock};
 use autoreview_external::External;
@@ -61,6 +68,67 @@ pub(crate) enum EvalCommand {
     /// Reviews every case with the real reviewers and verifier, publishes nothing, and prints
     /// the report.
     Run(RunArguments),
+    /// Writes a new case from the commit that fixed a defect a review let through, and prints it.
+    Add(AddArguments),
+}
+
+/// The options of `eval add`.
+#[derive(Debug, Args)]
+pub(crate) struct AddArguments {
+    /// Directory of the case files; the new case is written there as `<id>.yaml`.
+    #[arg(long, value_name = "DIR")]
+    cases: PathBuf,
+    /// The pull request that was reviewed, as `owner/name#number`.
+    #[arg(long, value_name = "OWNER/NAME#N", value_parser = pull_request_ref)]
+    from_pr: (String, i64),
+    /// The commit that fixed the defect, as 40 lowercase hex digits.
+    #[arg(long, value_name = "SHA")]
+    fix: String,
+    /// Identifier of the case and name of its file without `.yaml`.
+    #[arg(long, value_name = "ID")]
+    id: String,
+    /// Base commit of the reviewed diff.
+    #[arg(long, value_name = "SHA")]
+    base_sha: String,
+    /// Head commit of the reviewed diff.
+    #[arg(long, value_name = "SHA")]
+    head_sha: String,
+    /// Base branch the reviewer worktree starts from.
+    #[arg(long, value_name = "BRANCH")]
+    base_branch: String,
+    /// Fixture branch that holds the head; required when the pull request ref moved on.
+    #[arg(long, value_name = "BRANCH")]
+    head_branch: Option<String>,
+    /// File to keep, as the reviewed head names it; repeat it to keep several files.
+    #[arg(long = "path", value_name = "PATH")]
+    paths: Vec<String>,
+    /// Range that replaces the one computed for a file, as `PATH:FIRST-LAST`.
+    #[arg(long = "lines", value_name = "PATH:FIRST-LAST", value_parser = path_lines)]
+    lines: Vec<(String, (i64, i64))>,
+}
+
+/// Reads `owner/name#number`.
+fn pull_request_ref(text: &str) -> Result<(String, i64), String> {
+    let invalid = || "must be a lowercase owner/name#number".to_owned();
+    let (repository, number) = text.split_once('#').ok_or_else(invalid)?;
+    let number: i64 = number.parse().map_err(|_| invalid())?;
+    if repository_valid(repository) && number >= 1 {
+        Ok((repository.to_owned(), number))
+    } else {
+        Err(invalid())
+    }
+}
+
+/// Reads `PATH:FIRST-LAST` with `1 <= FIRST <= LAST`.
+fn path_lines(text: &str) -> Result<(String, (i64, i64)), String> {
+    let invalid = || "must be PATH:FIRST-LAST with 1 <= FIRST <= LAST".to_owned();
+    let (path, range) = text.rsplit_once(':').ok_or_else(invalid)?;
+    let (first, last) = range.split_once('-').ok_or_else(invalid)?;
+    let (first, last): (i64, i64) = match (first.parse(), last.parse()) {
+        (Ok(first), Ok(last)) if (1..=last).contains(&first) => (first, last),
+        _ => return Err(invalid()),
+    };
+    Ok((path.to_owned(), (first, last)))
 }
 
 /// The options of `eval validate`.
@@ -228,7 +296,228 @@ pub(crate) async fn run(
             })
         }
         EvalCommand::Run(arguments) => run_suite(config_path, env_file_path, &arguments).await,
+        EvalCommand::Add(arguments) => add_case(config_path, env_file_path, &arguments).await,
     }
+}
+
+/// Loads the configuration file and its required `eval` section.
+fn load_eval(
+    config_path: Option<PathBuf>,
+    env_file_path: Option<PathBuf>,
+) -> Result<(Config, EvalConfig), Error> {
+    let environment = std::env::var_os(CONFIG_ENV);
+    let path = config_file::resolve_path(config_path.as_deref(), environment.as_deref())?;
+    let env_file = env_file_path.as_deref().map(EnvFile::read).transpose()?;
+    let loaded = config_file::load(&path, env_file.as_ref())?;
+    let eval = (loaded.eval).ok_or_else(|| Error::config("configuration_missing", "eval", None))?;
+    Ok((loaded.config, eval))
+}
+
+/// Returns the credential that `eval` reads with, or `credential_not_covered`.
+fn eval_credential(config: &Config, eval: &EvalConfig) -> Result<Credential, Error> {
+    (config.credentials.iter())
+        .find(|credential| credential.name == eval.credential)
+        .cloned()
+        .ok_or_else(|| Error::workflow("credential_not_covered", true, None))
+}
+
+/// Returns the GitHub reader of an eval: the real integrations, which can notify nowhere.
+fn reading_external(config: &Config) -> Result<External, Error> {
+    // The wrapper never notifies; with no backend configured nothing could.
+    let mut config = config.clone();
+    config.notify = NotifySettings {
+        backends: Vec::new(),
+        action: Vec::new(),
+        digest: Vec::new(),
+        log: Vec::new(),
+        events: BTreeMap::new(),
+        queue: Vec::new(),
+    };
+    External::new(config)
+}
+
+/// The fixture branch that a case with a moved pull request ref needs.
+#[derive(Debug, Serialize)]
+struct FixtureBranch {
+    /// Branch name under `refs/heads/`.
+    name: String,
+    /// The commands that create it from the reviewed head; they are run by the operator.
+    commands: Vec<String>,
+}
+
+/// What `eval add` prints.
+#[derive(Debug, Serialize)]
+struct AddedCase {
+    /// Always `true`.
+    ok: bool,
+    /// Path of the written case file.
+    file: String,
+    /// Identifier of the case.
+    id: String,
+    /// `defect`: the case expects blocking findings.
+    kind: &'static str,
+    /// The text of the case file.
+    yaml: String,
+    /// Files of the fix that gave no expected finding.
+    skipped: Vec<Skipped>,
+    /// The branch to push before the case can run; `None` when the pull request ref serves.
+    fixture_branch: Option<FixtureBranch>,
+}
+
+/// Refuses an argument of `eval add` that no case could hold.
+fn check_add_arguments(
+    arguments: &AddArguments,
+    config: &Config,
+    eval: &EvalConfig,
+) -> Result<(), Error> {
+    let invalid = |message: &str| command_invalid(Some(message.to_owned().into()));
+    let shas = [
+        ("--fix", &arguments.fix),
+        ("--base-sha", &arguments.base_sha),
+        ("--head-sha", &arguments.head_sha),
+    ];
+    if let Some((flag, _)) = shas.iter().find(|(_, sha)| !sha_valid(sha)) {
+        return Err(invalid(&format!("{flag} must be 40 lowercase hex digits")));
+    }
+    if !identifier_valid(&arguments.id) {
+        return Err(invalid("--id must be 1 to 64 of a-z, 0-9, `.`, `_`, `-`"));
+    }
+    if !branch_valid(&arguments.base_branch) {
+        return Err(invalid("--base-branch is not a branch name"));
+    }
+    let Some(branch) = &arguments.head_branch else {
+        return Ok(());
+    };
+    if !head_branch_valid(branch) {
+        return Err(invalid(
+            "--head-branch is not a branch name that git accepts",
+        ));
+    }
+    let prefixes = [&config.session_branch_prefix, &eval.session_branch_prefix];
+    if prefixes
+        .iter()
+        .any(|prefix| branch.starts_with(prefix.as_str()))
+    {
+        return Err(Error::workflow("eval_head_ref_reserved", true, None));
+    }
+    Ok(())
+}
+
+/// Builds the case of a fixed defect from GitHub, writes it and prints it.
+async fn add_case(
+    config_path: Option<PathBuf>,
+    env_file_path: Option<PathBuf>,
+    arguments: &AddArguments,
+) -> Result<(), Error> {
+    let (config, eval) = load_eval(config_path, env_file_path)?;
+    check_add_arguments(arguments, &config, &eval)?;
+    let (repository, number) = (&arguments.from_pr.0, arguments.from_pr.1);
+    let credential = eval_credential(&config, &eval)?;
+    let covered = config
+        .credentials
+        .reviewing(&credential.name, repository, &credential.login);
+    covered?;
+    let existing = read_cases(&arguments.cases)?;
+    let github = reading_external(&config)?;
+    let cancel = CancellationToken::new();
+    cancel_on_signal(cancel.clone())?;
+    let state = github
+        .read_pull_request_state(&cancel, &credential, repository, number)
+        .await?;
+    if state.head_sha.is_empty() {
+        return Err(Error::workflow(
+            "eval_add_pull_request_not_found",
+            true,
+            None,
+        ));
+    }
+    if state.head_sha != arguments.head_sha && arguments.head_branch.is_none() {
+        return Err(Error::workflow("eval_add_head_branch_required", true, None));
+    }
+    let commit = github
+        .read_commit(&cancel, &credential, repository, &arguments.fix)
+        .await?;
+    let range = github
+        .read_range_files(
+            &cancel,
+            &credential,
+            repository,
+            &arguments.base_sha,
+            &arguments.head_sha,
+        )
+        .await?;
+    let lines: BTreeMap<String, (i64, i64)> = arguments.lines.iter().cloned().collect();
+    let select = FixSelection {
+        paths: &arguments.paths,
+        lines: &lines,
+    };
+    let (ranges, skipped) = fix_ranges(&commit.files, &range.commentable, &select)?;
+    // A line range of the fix's parent is the reviewed head's only where the file is the same.
+    let mut drifted = Vec::new();
+    for found in ranges.iter().filter(|found| !found.overridden) {
+        let (at_head, at_parent) = (&arguments.head_sha, &commit.parent);
+        let first = (at_head.as_str(), found.path.as_str());
+        let second = (at_parent.as_str(), found.path.as_str());
+        let ids = github
+            .read_blob_ids(&cancel, &credential, repository, first, second)
+            .await?;
+        if !matches!(&ids, [Some(head), Some(parent)] if head == parent) {
+            drifted.push(found.path.as_str());
+        }
+    }
+    if !drifted.is_empty() {
+        let cause = format!("{}; give the ranges as --lines", drifted.join(", "));
+        return Err(Error::workflow(
+            "eval_add_fix_drift",
+            true,
+            Some(cause.into()),
+        ));
+    }
+    let description = fix_description(repository, &arguments.fix, &commit.subject);
+    let expected = ranges.into_iter().map(|found| Expected {
+        path: found.path,
+        first_line: found.first_line,
+        last_line: found.last_line,
+        description: description.clone(),
+    });
+    let head_ref = (arguments.head_branch.as_ref()).map_or_else(
+        || format!("refs/pull/{number}/head"),
+        |name| format!("refs/heads/{name}"),
+    );
+    let case = Case {
+        id: arguments.id.clone(),
+        repository: repository.clone(),
+        pull_request: number,
+        base_branch: arguments.base_branch.clone(),
+        head_ref,
+        base_sha: arguments.base_sha.clone(),
+        head_sha: arguments.head_sha.clone(),
+        pipelines: Vec::new(),
+        title: clean_title(&state.title),
+        expect: Expect::Blocking(expected.collect()),
+    };
+    let source = format!("{repository}#{number}, fixed by {}", arguments.fix);
+    let yaml = write_case(&arguments.cases, &existing, &case, &source)?;
+    let fixture_branch = arguments.head_branch.as_ref().map(|name| FixtureBranch {
+        name: name.clone(),
+        commands: vec![
+            format!("git fetch origin {}", arguments.head_sha),
+            format!("git push origin {}:refs/heads/{name}", arguments.head_sha),
+        ],
+    });
+    print_json(&AddedCase {
+        ok: true,
+        file: arguments
+            .cases
+            .join(format!("{}.yaml", case.id))
+            .display()
+            .to_string(),
+        id: case.id,
+        kind: "defect",
+        yaml,
+        skipped,
+        fixture_branch,
+    })
 }
 
 /// Reads the cases, or prints every error and returns `eval_cases_invalid`.
@@ -256,14 +545,7 @@ async fn run_suite(
     env_file_path: Option<PathBuf>,
     arguments: &RunArguments,
 ) -> Result<(), Error> {
-    let environment = std::env::var_os(CONFIG_ENV);
-    let path = config_file::resolve_path(config_path.as_deref(), environment.as_deref())?;
-    let env_file = env_file_path.as_deref().map(EnvFile::read).transpose()?;
-    let loaded = config_file::load(&path, env_file.as_ref())?;
-    let config = loaded.config;
-    let eval: EvalConfig = loaded
-        .eval
-        .ok_or_else(|| Error::config("configuration_missing", "eval", None))?;
+    let (config, eval) = load_eval(config_path, env_file_path)?;
     let cases = read_cases(&arguments.cases)?;
     let policy = config
         .policy
@@ -309,10 +591,7 @@ async fn run_suite(
         let cause = "--git-binary must be an absolute path".into();
         return Err(command_invalid(Some(cause)));
     }
-    let credential = (config.credentials.iter())
-        .find(|credential| credential.name == eval.credential)
-        .cloned()
-        .ok_or_else(|| Error::workflow("credential_not_covered", true, None))?;
+    let credential = eval_credential(&config, &eval)?;
     for case in &selected {
         let covered =
             config
@@ -334,17 +613,7 @@ async fn run_suite(
         &directory.path().join("eval.db"),
         Box::new(OffsetDateTime::now_utc),
     )?);
-    // The wrapper never notifies; with no backend configured nothing could.
-    let mut inner_config = config.clone();
-    inner_config.notify = NotifySettings {
-        backends: Vec::new(),
-        action: Vec::new(),
-        digest: Vec::new(),
-        log: Vec::new(),
-        events: BTreeMap::new(),
-        queue: Vec::new(),
-    };
-    let inner = Arc::new(External::new(inner_config)?);
+    let inner = Arc::new(reading_external(&config)?);
     let cancel = CancellationToken::new();
     cancel_on_signal(cancel.clone())?;
     let counters = Arc::new(RunCounters::default());

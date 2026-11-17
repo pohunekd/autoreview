@@ -12,7 +12,7 @@ use autoreview_engine::integrations::RepositoryFile;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use super::{GitHub, response_invalid};
+use super::{GitHub, repository_variables, response_invalid};
 
 /// Query of the commit and of one file of it. `file` is `null` when the commit has no such path.
 const GRAPHQL_FILE: &str = concat!(
@@ -87,7 +87,63 @@ fn decode_file(output: &str, max_bytes: u64) -> Result<RepositoryFile, Error> {
     }
 }
 
+/// Query of the blob IDs of two files, each given as `<commit SHA>:<path>`.
+///
+/// An object that is no blob has no `oid` key.
+const GRAPHQL_BLOB_IDS: &str = concat!(
+    "query($owner: String!, $name: String!, $first: String!, $second: String!) {\n",
+    "  repository(owner: $owner, name: $name) {\n",
+    "    first: object(expression: $first) { ... on Blob { oid } }\n",
+    "    second: object(expression: $second) { ... on Blob { oid } }\n",
+    "  }\n",
+    "}",
+);
+
+/// Returns the `gh` arguments of the blob ID query; every variable is a raw string (`-f`).
+fn blob_ids_args(repository: &str, first: (&str, &str), second: (&str, &str)) -> Vec<String> {
+    let mut args = vec!["api".to_owned(), "graphql".to_owned()];
+    args.extend(["-f".to_owned(), format!("query={GRAPHQL_BLOB_IDS}")]);
+    args.extend(repository_variables(repository));
+    for (key, (sha, path)) in [("first", first), ("second", second)] {
+        args.extend(["-f".to_owned(), format!("{key}={sha}:{path}")]);
+    }
+    args
+}
+
+/// Decodes the blob ID query output; an object that is no blob has no ID.
+fn decode_blob_ids(output: &str) -> Result<[Option<String>; 2], Error> {
+    let response: Value =
+        serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let errors = response.get("errors").and_then(Value::as_array);
+    if errors.is_some_and(|errors| !errors.is_empty()) {
+        return Err(response_invalid(None));
+    }
+    let repository = response
+        .pointer("/data/repository")
+        .filter(|node| node.is_object())
+        .ok_or_else(|| response_invalid(None))?;
+    let id = |key: &str| {
+        let oid = repository.pointer(&format!("/{key}/oid"));
+        oid.and_then(Value::as_str).map(str::to_owned)
+    };
+    Ok([id("first"), id("second")])
+}
+
 impl GitHub {
+    /// Reads the blob IDs of two `(commit SHA, path)` pairs of `repository` with `credential`.
+    pub(crate) async fn blob_ids(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        first: (&str, &str),
+        second: (&str, &str),
+    ) -> Result<[Option<String>; 2], Error> {
+        let args = blob_ids_args(repository, first, second);
+        let output = self.github::<()>(cancel, credential, &args, None).await?;
+        decode_blob_ids(&output)
+    }
+
     /// Reads `path` of `repository` at the commit `sha` with `credential`.
     pub(crate) async fn read_repository_file(
         &self,
