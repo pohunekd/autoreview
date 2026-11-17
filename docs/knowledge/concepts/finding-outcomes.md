@@ -165,7 +165,9 @@ before it ended, and with the author's reactions to its comment. The
 pull request that is reopened after it ended keeps its earlier end in the list
 until it ends again with an `open` row. `autoreview report` counts the
 outcomes per reviewer, severity and repository; see the
-[review report](review-report.md).
+[review report](review-report.md). A `refuted` or `open_at_merge` row becomes an
+eval case with [`eval add --from-finding`](../../cli.md#autoreview-eval-add), from
+its `repository`, `number` and `finding_key`.
 
 ## Retention
 
