@@ -179,6 +179,45 @@ impl Store {
         Ok(store)
     }
 
+    /// Opens the existing database at the absolute `path` for reading only.
+    ///
+    /// It creates no database file or directory, stamps no version and runs no migration, so
+    /// it reads a database that `serve` has open. SQLite may still have to create the `-shm`
+    /// file beside it, which a user other than the service user cannot; that user reads a
+    /// `backup-db` copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `store_path_invalid` for a relative path, `store_unavailable` when the file is
+    /// missing or cannot be read, and `store_version_unsupported` for a newer schema.
+    pub fn open_read_only(path: &Path) -> Result<Self, Error> {
+        if !path.is_absolute() {
+            return Err(store_error(
+                "store_path_invalid",
+                true,
+                "store path must be absolute",
+            ));
+        }
+        fs::metadata(path).map_err(|err| store_error("store_unavailable", true, err))?;
+        let connection = Self::open_connection(path, true)?;
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .map_err(|err| store_error("store_unavailable", true, err))?;
+        if version > STORE_SCHEMA_VERSION {
+            return Err(store_error(
+                "store_version_unsupported",
+                true,
+                format!("schema {version} is newer than {STORE_SCHEMA_VERSION}"),
+            ));
+        }
+        Ok(Self {
+            connection: Mutex::new(connection),
+            lock_path: discovery_lock_path(path),
+            discovery_mutex: tokio::sync::Mutex::new(()),
+            now: Box::new(OffsetDateTime::now_utc),
+        })
+    }
+
     /// Opens one connection and applies its pragmas in a fixed order.
     ///
     /// Read-only connections skip `journal_mode`, which writes to the file. The flags

@@ -38,7 +38,7 @@ pub const RESULT_SUCCESS: &str = "success";
 pub const RESULT_FAILURE: &str = "failure";
 
 /// Columns of every review read, in the order the row reader expects.
-const REVIEW_COLUMNS: &str = "workflow_id, review_key, input, status, result, failure, \
+pub(super) const REVIEW_COLUMNS: &str = "workflow_id, review_key, input, status, result, failure, \
      released, cleanup_pending, approval, approval_deadline, outcome, created_at, updated_at, \
      completed_at";
 
@@ -533,7 +533,7 @@ fn decode_flag(value: i64, workflow_id: &str, column: &str) -> Result<bool, Erro
 }
 
 /// Runs a review select and decodes every row in query order.
-fn collect_reviews(
+pub(super) fn collect_reviews(
     connection: &Connection,
     sql: &str,
     params: &[&dyn ToSql],

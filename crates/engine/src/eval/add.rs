@@ -11,14 +11,21 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::case::{CASE_VERSION, Case, Expect, parse_case};
+use super::case::{CASE_VERSION, Case, Expect, Expected, parse_case};
 use super::case::{MAX_DESCRIPTION_CHARS, MAX_RANGE_LINES, MAX_TITLE_CHARS};
 use crate::error::Error;
 use crate::integrations::{CommentableLines, CommitFile};
 use crate::protocol::reason::is_neutralized;
+use crate::store::FindingOutcome;
 
 /// Permission bits of a written case file.
 const CASE_FILE_MODE: u32 = 0o644;
+
+/// Outcomes of a finding that a case can be made from.
+const CASE_OUTCOMES: [&str; 2] = ["refuted", "open_at_merge"];
+
+/// Outcomes of a sibling finding that leave the head clean.
+const CLEAN_OUTCOMES: [&str; 2] = ["refuted", "not_blocking"];
 
 /// Leading digits of the fix commit in a description.
 const DESCRIPTION_SHA_CHARS: usize = 12;
@@ -238,6 +245,86 @@ pub fn fix_description(repository: &str, fix_sha: &str, subject: &str) -> String
     text.chars().take(MAX_DESCRIPTION_CHARS).collect()
 }
 
+/// What an operator judges a published finding to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// The finding is wrong: a review of the head must block nothing.
+    Wrong,
+    /// The finding is right: a review must block on its lines.
+    Right,
+}
+
+/// Returns what a review must do about a published finding, from the operator's verdict.
+///
+/// `head_rows` are the rows of the head that `finding` was published on; `lines` and
+/// `description` are the operator's, which `Right` needs and `Wrong` refuses; `commentable`
+/// is the reviewed range and is read for `Right` only.
+///
+/// # Errors
+///
+/// Returns `eval_add_outcome_unsupported` for an outcome other than `refuted` and
+/// `open_at_merge`, `eval_add_verdict_input_invalid` for a `lines` or `description` the
+/// verdict does not take or lacks, `eval_add_head_has_other_blocking` when `Wrong` meets
+/// another blocking finding of the head, `eval_add_no_reviewable_path` for a path with no
+/// added line in the range, and `eval_add_range_too_wide` for 200 lines or more.
+pub fn finding_expect(
+    finding: &FindingOutcome,
+    head_rows: &[FindingOutcome],
+    verdict: Verdict,
+    lines: &[(String, (i64, i64))],
+    description: Option<&str>,
+    commentable: &CommentableLines,
+) -> Result<Expect, Error> {
+    if !CASE_OUTCOMES.contains(&finding.outcome.as_str()) {
+        let detail = format!("{} is {}", finding.finding_key, finding.outcome);
+        return Err(refused("eval_add_outcome_unsupported", detail));
+    }
+    let text: Option<String> = description.map(|text| {
+        cleaned(text)
+            .trim()
+            .chars()
+            .take(MAX_DESCRIPTION_CHARS)
+            .collect()
+    });
+    match (verdict, lines, text) {
+        (Verdict::Wrong, [], None) => {
+            let others = head_rows.iter().filter(|row| {
+                row.finding_key != finding.finding_key
+                    && row.blocking
+                    && !CLEAN_OUTCOMES.contains(&row.outcome.as_str())
+            });
+            let keys: Vec<&str> = others.map(|row| row.finding_key.as_str()).collect();
+            if keys.is_empty() {
+                return Ok(Expect::Clean);
+            }
+            let detail = format!("{}; write the case by hand", keys.join(", "));
+            Err(refused("eval_add_head_has_other_blocking", detail))
+        }
+        (Verdict::Right, [(path, (first, last))], Some(description))
+            if *path == finding.path && !description.is_empty() =>
+        {
+            if commentable.get(path).is_none_or(Vec::is_empty) {
+                return Err(refused("eval_add_no_reviewable_path", path.as_str()));
+            }
+            if last - first >= MAX_RANGE_LINES {
+                let detail = format!("{path}: {first}-{last}; the range is 200 lines or more");
+                return Err(refused("eval_add_range_too_wide", detail));
+            }
+            Ok(Expect::Blocking(vec![Expected {
+                path: path.clone(),
+                first_line: *first,
+                last_line: *last,
+                description,
+            }]))
+        }
+        _ => {
+            let detail = "right needs --description and one --lines of the finding's path; \
+                          wrong takes neither";
+            Err(refused("eval_add_verdict_input_invalid", detail))
+        }
+    }
+}
+
 /// Returns the text of a case file; every string is a double-quoted scalar.
 ///
 /// `source` is one comment line that names where the case comes from.
@@ -343,10 +430,24 @@ pub fn write_case(
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{FixSelection, clean_title, fix_description, fix_ranges, write_case};
+    use super::{FixSelection, Verdict, clean_title, finding_expect, fix_description};
+    use super::{fix_ranges, write_case};
     use crate::error::error_code;
     use crate::eval::case::{Case, Expect, Expected, load_cases};
     use crate::integrations::{CommentableLines, CommitFile};
+    use crate::store::FindingOutcome;
+
+    /// A table row of `finding_expect`: name, path and outcome of the finding, its siblings as
+    /// `(outcome, blocking)`, the verdict, `--lines`, `--description` and the result.
+    type Judged<'a> = (
+        &'a str,
+        (&'a str, &'a str),
+        &'a [(&'a str, bool)],
+        Verdict,
+        &'a [(&'a str, i64, i64)],
+        Option<&'a str>,
+        &'a str,
+    );
 
     /// A table row: name, fix files, `--path`, `--lines` and the expected outcome.
     type Row<'a> = (
@@ -457,6 +558,72 @@ mod tests {
         assert_eq!(long.chars().count(), 500);
         let plain = fix_description("acme/widgets", &"a".repeat(40), "Fix\u{202e} the race\r");
         assert_eq!(plain, "Fixed by aaaaaaaaaaaa (acme/widgets): Fix the race");
+    }
+
+    /// Each row is a published finding with the rows of its head, the operator's verdict,
+    /// `--lines` and `--description`, and the case or the refusal that comes out.
+    #[test]
+    #[rustfmt::skip]
+    fn a_verdict_on_a_finding_becomes_a_case_or_a_refusal() {
+        let row = |key: &str, path: &str, outcome: &str, blocking: bool| FindingOutcome {
+            finding_key: key.to_owned(),
+            path: path.to_owned(),
+            outcome: outcome.to_owned(),
+            blocking,
+            ..FindingOutcome::default()
+        };
+        let mut commentable = CommentableLines::new();
+        commentable.insert("a.rs".to_owned(), vec![1]);
+        commentable.insert("d.rs".to_owned(), Vec::new());
+        let (w, r, text) = (Verdict::Wrong, Verdict::Right, Some("Lock released.\u{202e}"));
+        let (a, d) = (("a.rs", "refuted"), ("d.rs", "open_at_merge"));
+        let merged = ("a.rs", "open_at_merge");
+        let bad = "err eval_add_verdict_input_invalid";
+        let other = "err eval_add_head_has_other_blocking";
+        let (five, wide) = ([("a.rs", 5, 9)], "err eval_add_range_too_wide");
+        let rows: Vec<Judged<'_>> = vec![
+            ("wrong", a, &[], w, &[], None, "clean"),
+            ("wrong, the finding is no sibling of itself", merged, &[], w, &[], None, "clean"),
+            ("wrong, siblings that leave the head clean", a,
+                &[("refuted", true), ("not_blocking", true), ("open", false)],
+                w, &[], None, "clean"),
+            ("wrong, a sibling that is open", a, &[("open", true)], w, &[], None, other),
+            ("wrong, a sibling that is fixed", a, &[("fixed", true)], w, &[], None, other),
+            ("fixed finding", ("a.rs", "fixed"), &[], w, &[], None,
+                "err eval_add_outcome_unsupported"),
+            ("wrong with --lines", a, &[], w, &five, None, bad),
+            ("wrong with --description", a, &[], w, &[], text, bad),
+            ("right", a, &[], r, &five, text, "blocking 5-9"),
+            ("right without --lines", a, &[], r, &[], text, bad),
+            ("right without --description", a, &[], r, &five, None, bad),
+            ("right, description empty once cleaned", a, &[], r, &five, Some("\u{202e}"), bad),
+            ("right, --lines of another path", a, &[], r, &[("b.rs", 1, 2)], text, bad),
+            ("right, path without an added line", d, &[], r, &[("d.rs", 1, 2)], text,
+                "err eval_add_no_reviewable_path"),
+            ("right, 200 lines", a, &[], r, &[("a.rs", 1, 200)], text, "blocking 1-200"),
+            ("right, 201 lines", a, &[], r, &[("a.rs", 1, 201)], text, wide),
+        ];
+        for (name, (path, outcome), siblings, verdict, lines, description, want) in rows {
+            let finding = row("t:O001", path, outcome, true);
+            let mut head_rows = vec![finding.clone()];
+            for (at, (outcome, blocking)) in siblings.iter().enumerate() {
+                head_rows.push(row(&format!("s:O00{at}"), "z.rs", outcome, *blocking));
+            }
+            let lines: Vec<(String, (i64, i64))> =
+                lines.iter().map(|(p, f, l)| ((*p).to_owned(), (*f, *l))).collect();
+            let expect = finding_expect(
+                &finding, &head_rows, verdict, &lines, description, &commentable,
+            );
+            let got = match expect {
+                Ok(Expect::Clean) => "clean".to_owned(),
+                Ok(Expect::Blocking(found)) => {
+                    assert_eq!(found[0].description, "Lock released.", "{name}");
+                    format!("blocking {}-{}", found[0].first_line, found[0].last_line)
+                }
+                Err(error) => format!("err {}", error_code(&error)),
+            };
+            assert_eq!(got, want, "{name}");
+        }
     }
 
     /// A case built from plain values is written beside another case, loads, and a second run
