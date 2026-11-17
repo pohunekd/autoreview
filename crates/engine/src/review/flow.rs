@@ -118,6 +118,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             verifier: None,
             discussion: Discussion::default(),
             linked: None,
+            rules: None,
             guard: None,
             approved: false,
             retries: AtomicI64::new(0),
@@ -157,19 +158,17 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
         if review.input.rule.pipeline.repository_review_rules == RepositoryReviewRules::Read
             && !review.input.adopts_handoff()
         {
-            match review.review_rules().await {
+            let outcome = match review.review_rules().await {
+                Ok(outcome) => outcome,
+                Err(err) => return review.fail(err).await,
+            };
+            if !outcome.invalid_code.is_empty() {
                 // The policy has no event for a degraded review that goes on, so the notice
                 // uses `review_stopped`, at that event's level.
-                Ok(outcome) if !outcome.invalid_code.is_empty() => {
-                    let message =
-                        review_rules_ignored_message(&review.input, &outcome.invalid_code);
-                    review
-                        .notify("review_rules_ignored", Event::ReviewStopped, &message)
-                        .await?;
-                }
-                Ok(_) => {}
-                Err(err) => return review.fail(err).await,
+                let message = review_rules_ignored_message(&review.input, &outcome.invalid_code);
+                (review.notify("review_rules_ignored", Event::ReviewStopped, &message)).await?;
             }
+            review.rules = Some(outcome);
         }
         for reviewer in review.input.reviewers.clone() {
             let prompt = match new_nonce().and_then(|nonce| {
@@ -178,7 +177,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
                     &review.input,
                     &reviewer,
                     &review.discussion,
-                    review.linked.as_ref(),
+                    review.sections(),
                     &nonce,
                     None,
                 )

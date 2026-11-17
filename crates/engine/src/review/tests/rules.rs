@@ -2,7 +2,9 @@
 
 // Rust guideline compliant 2026-11-17
 
-use crate::integrations::ChangedFile;
+use serde_json::Value;
+
+use crate::integrations::{ChangedFile, SessionRequest};
 use crate::model::PullRequest;
 use crate::protocol::fixtures::sha;
 use crate::store::ReviewFilter;
@@ -15,6 +17,16 @@ fn pull_request(repository: &str, base: &str) -> PullRequest {
         base_sha: sha(base),
         ..integration_pull_request(repository, &sha("a"))
     }
+}
+
+/// Returns the prompt text of the reviewer request started for `pr`.
+fn prompt_of(started: &[SessionRequest], pr: &PullRequest) -> String {
+    let request = (started.iter())
+        .find(|request| request.pull_request.key() == pr.key())
+        .map(|request| request.prompt.as_str())
+        .unwrap_or_default();
+    let parsed: Value = serde_json::from_str(request).expect("a Claude request is JSON");
+    parsed["prompt"].as_str().unwrap_or_default().to_owned()
 }
 
 /// Returns the failure codes of the completed reviews of `pr`, oldest first; a success is empty.
@@ -53,6 +65,15 @@ async fn the_base_review_rules_are_read_and_an_unusable_file_fails_the_review() 
         [format!("rules/valid@{}:REVIEW.md", valid.base_sha)]
     );
     assert_eq!(failures(&h, &valid), [String::new()]);
+    // D1: the reviewer request carries the base rules on one line, and nothing of the head file.
+    let (_, _, started, _) = h.fake.snapshot();
+    let prompt = prompt_of(&started, &valid);
+    let line = r#"{"skip":["docs/**"],"ci_tools":[],"text":"Be strict."}"#;
+    assert!(
+        prompt.contains("Repository review rules (untrusted JSON") && prompt.contains(line),
+        "prompt = {prompt}"
+    );
+    assert!(!prompt.contains("skp"), "prompt = {prompt}");
 
     let cases = [
         (
