@@ -235,14 +235,22 @@ class WrapperTests(unittest.TestCase):
             with self.assertRaisesRegex(wrapper.InputFrameError, "invalid size"):
                 wrapper.encoded_result(self.write_result(directory, value), 10, HEAD)
 
-        # A null category is dropped, so the result is what an adapter without the field sends.
+        # A request of an engine that reads the category keeps one and drops a null one; any
+        # other request gets no category, so its result is what an adapter without the field sent.
         value = review_result(
             findings=[finding(category="missing-test"), finding(category=None), finding()]
         )
-        with tempfile.TemporaryDirectory() as directory:
-            encoded = wrapper.encoded_result(self.write_result(directory, value), 4096, HEAD)
-        findings = json.loads(base64.b64decode(encoded, validate=True))["findings"]
-        self.assertEqual(findings, [finding(category="missing-test"), finding(), finding()])
+        for keep, expected in (
+            (True, [finding(category="missing-test"), finding(), finding()]),
+            (False, [finding(), finding(), finding()]),
+        ):
+            with self.subTest(keep_categories=keep):
+                with tempfile.TemporaryDirectory() as directory:
+                    encoded = wrapper.encoded_result(
+                        self.write_result(directory, value), 4096, HEAD, keep_categories=keep
+                    )
+                findings = json.loads(base64.b64decode(encoded, validate=True))["findings"]
+                self.assertEqual(findings, expected)
 
     def test_result_rejects_interrupted_or_wrong_head(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -310,7 +318,7 @@ class WrapperTests(unittest.TestCase):
 
     def test_trusted_head_must_be_unambiguous(self) -> None:
         self.assertEqual(wrapper.trusted_head_sha("- Trusted head SHA: " + HEAD), HEAD)
-        # The head line of an engine of autoreview-codex/v2 (#408).
+        # The head line of an engine of autoreview-codex/v2 or later (#408).
         self.assertEqual(wrapper.trusted_head_sha("- Trusted head commit: " + HEAD), HEAD)
         for prompt in (
             "- Trusted head SHA: " + HEAD + "\n- Trusted head SHA: " + HEAD,
@@ -360,9 +368,23 @@ class WrapperTests(unittest.TestCase):
             ),
         )
         self.assertEqual(codex_prompt, f"Review.\n{v2}\n- Base branch: main")
+        # Only the request of v3 keeps the finding category; v3 answers in the markers of v2.
+        v3 = "- Trusted protocol: autoreview-codex/v3"
+        v3_markers, _ = wrapper.result_markers(f"{v3}\n- Trusted nonce: {NONCE}")
+        self.assertEqual(v3_markers, markers)
+        for prompt, keeps in (
+            ("- Trusted checkout: base", False),
+            ("- Trusted protocol: autoreview-codex/v1", False),
+            (f"{v2}\n- Trusted nonce: {NONCE}", False),
+            (f"{v3}\n- Trusted nonce: {NONCE}", True),
+            (f"{v3}\n{v3}", False),
+        ):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(wrapper.keeps_categories(prompt), keeps)
         for prompt in (
             "- Trusted protocol: autoreview-codex/v1\n- Trusted protocol: autoreview-codex/v1",
-            "- Trusted protocol: autoreview-codex/v3",
+            "- Trusted protocol: autoreview-codex/v4",
+            f"{v2}\n{v3}",
             "- Trusted protocol: autoreview-claude/v1",
             "- Trusted protocol: autoreview-codex/v1 ",
             "- Trusted protocol: ",
@@ -378,6 +400,8 @@ class WrapperTests(unittest.TestCase):
             (f"{v2}\n{line[:-1]}", "nonce is missing"),
             (f"{v2}\n{line} ", "nonce is missing"),
             (f"{v2}\n{line}\r", "nonce is missing"),
+            (f"{v3}\n{line}\n{line}", "nonce is missing"),
+            (f"{v2}\n{v3}\n{line}", "valid only with"),
             (line, "valid only with autoreview-codex/v2"),
             (f"- Trusted protocol: autoreview-codex/v1\n{line}", "valid only with"),
         ):
@@ -518,11 +542,11 @@ class BaseCheckoutTests(unittest.TestCase):
     def prompt(self, protocol: str | None = None, checkout: str = "base") -> str:
         """Returns the prompt of an engine; one that names `protocol` has its protocol line.
 
-        A prompt of `autoreview-codex/v2` carries `NONCE` on its nonce line.
+        A prompt of `autoreview-codex/v2` or `v3` carries `NONCE` on its nonce line.
         """
         protocol_line = f"\n- Trusted protocol: {protocol}" if protocol is not None else ""
         head_line = "- Trusted head SHA:"
-        if protocol == "autoreview-codex/v2":
+        if protocol in wrapper.NONCE_PROTOCOLS:
             protocol_line += f"\n- Trusted nonce: {NONCE}"
             head_line = "- Trusted head commit:"
         return (
@@ -535,7 +559,9 @@ class BaseCheckoutTests(unittest.TestCase):
 
     def install(self, during_run: str = "") -> tuple[Path, Path]:
         """Installs the adapter with a fake Codex that runs `during_run` and reports."""
-        report = json.dumps(review_result(reviewed_head_sha=self.head_sha))
+        report = json.dumps(
+            review_result(reviewed_head_sha=self.head_sha, findings=[finding(category="x-y")])
+        )
         fake = self.root / "fake-codex"
         fake.write_text(
             "#!/bin/sh\n"
@@ -604,6 +630,8 @@ class BaseCheckoutTests(unittest.TestCase):
              "]\n\n[autoreview-codex/v1 exited with status 0]\n"),
             ("autoreview-codex/v2", f"\n[autoreview-codex/v2 {NONCE} result:",
              f"]\n\n[autoreview-codex/v2 {NONCE} exited with status 0]\n"),
+            ("autoreview-codex/v3", f"\n[autoreview-codex/v2 {NONCE} result:",
+             f"]\n\n[autoreview-codex/v2 {NONCE} exited with status 0]\n"),
         ):
             with self.subTest(protocol=protocol):
                 status, stdout, stderr = self.run_adapter(protocol=protocol)
@@ -611,11 +639,16 @@ class BaseCheckoutTests(unittest.TestCase):
                 self.assertEqual(status, 0, stderr)
                 self.assertIn(result, stdout)
                 self.assertTrue(stdout.endswith(exit_line), stdout)
+                # The category that Codex returned reaches only an engine of v3.
+                encoded = stdout.split(result.lstrip("\n"), 1)[1].split("]", 1)[0]
+                reported = json.loads(base64.b64decode(encoded, validate=True))["findings"]
+                kept = ["x-y"] if protocol == "autoreview-codex/v3" else [None]
+                self.assertEqual([item.get("category") for item in reported], kept)
                 # Codex reads the prompt without the nonce line, so the model cannot know it.
                 codex_input = (self.root / "codex-stdin").read_text(encoding="utf-8")
                 self.assertIn("- Trusted checkout: base", codex_input)
-                if protocol == "autoreview-codex/v2":
-                    self.assertIn("- Trusted protocol: autoreview-codex/v2", codex_input)
+                if protocol in wrapper.NONCE_PROTOCOLS:
+                    self.assertIn(f"- Trusted protocol: {protocol}", codex_input)
                 self.assertNotIn(NONCE, codex_input)
                 self.assertNotIn("Trusted nonce", codex_input)
                 self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
@@ -803,7 +836,10 @@ class BaseCheckoutTests(unittest.TestCase):
             ("autoreview-codex/v2", "head is unavailable in the review checkout",
              f"\n[autoreview-codex/v2 {NONCE} refused:head_unavailable]\n"
              f"[autoreview-codex/v2 {NONCE} exited with status 64]\n"),
-            ("autoreview-codex/v3", "trusted protocol is ambiguous or unknown",
+            ("autoreview-codex/v3", "head is unavailable in the review checkout",
+             f"\n[autoreview-codex/v2 {NONCE} refused:head_unavailable]\n"
+             f"[autoreview-codex/v2 {NONCE} exited with status 64]\n"),
+            ("autoreview-codex/v4", "trusted protocol is ambiguous or unknown",
              "\x07\n[pohunek-codex-review exited with status 64]\n"),
         )
         for protocol, message, ending in cases:

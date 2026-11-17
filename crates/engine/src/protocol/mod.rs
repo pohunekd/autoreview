@@ -399,7 +399,7 @@ mod tests {
             &input,
             &Discussion::default(),
             &codex(),
-            "- Trusted protocol: autoreview-codex/v2",
+            "- Trusted protocol: autoreview-codex/v3",
             &codex_output(&pr, json!([]), 0),
         )
         .expect_err("an output of a request without a nonce is refused");

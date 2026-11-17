@@ -20,9 +20,10 @@ pub(crate) const CLAUDE_REQUEST_PROTOCOL: &str = "autoreview-claude/v1";
 
 /// Protocol name on the trusted protocol line of a codex-envelope prompt.
 ///
-/// The adapter answers with the markers of this name bound to the request's nonce; an adapter
-/// that does not know the name refuses the request before Codex runs.
-const CODEX_REQUEST_PROTOCOL: &str = "autoreview-codex/v2";
+/// The adapter answers with the nonce markers of `autoreview-codex/v2`, bound to the request's
+/// nonce, and keeps the `category` of a finding; an adapter that does not know the name refuses
+/// the request before Codex runs.
+const CODEX_REQUEST_PROTOCOL: &str = "autoreview-codex/v3";
 
 /// The schema that a claude-structured reviewer must satisfy.
 ///
@@ -517,5 +518,8 @@ mod tests {
         let head = format!("\n- Trusted head commit: {}\n", pr.head_sha);
         assert!(prompt.contains(&head), "prompt = {prompt}");
         assert!(!prompt.contains("- Trusted head SHA:"), "prompt = {prompt}");
+        // The request names the protocol that keeps the finding `category`.
+        let protocol = "\n- Trusted protocol: autoreview-codex/v3\n";
+        assert!(prompt.contains(protocol), "prompt = {prompt}");
     }
 }
