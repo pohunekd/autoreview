@@ -532,8 +532,15 @@ self_test() {
     check "timeout with a space" refused "$(seconds '45 ')"
     check "empty timeout" refused "$(seconds '')"
     # check_notifier stops the run, so it runs in a subshell; its message is not checked.
+    # Only status 1 is a refusal.
     notifier_state() {
-        if (check_notifier) 2>/dev/null; then echo ok; else echo refused; fi
+        local status=0
+        (check_notifier) 2>/dev/null || status=$?
+        case $status in
+            0) echo ok ;;
+            1) echo refused ;;
+            *) echo "error $status" ;;
+        esac
     }
     check "notifier none" ok "$(notifier=none notifier_state)"
     check "notifier webhook" ok "$(notifier=webhook notifier_state)"
@@ -558,6 +565,8 @@ self_test() {
         "$(notifier=none webhook_format=json notifier_state)"
     check "webhook format with the matrix notifier" refused \
         "$(notifier=matrix webhook_format=json notifier_state)"
+    check "notifier check that is missing" "error 127" \
+        "$(unset -f check_notifier; notifier=none notifier_state)"
     notifier_flags() {
         local -a command=()
         add_notifier_flags
@@ -650,6 +659,44 @@ self_test() {
     check "no Codex notice after 0.4.0" "" "$(codex_notice 0.4.0 two || echo error)"
     check "no Codex notice after a newer release" "" "$(codex_notice 0.10.0 two || echo error)"
     check "no Codex notice without a Codex profile" "" "$(codex_notice 0.3.0 || echo error)"
+    # scripts/macos-check reads the log: block of the config.yaml on stdin; only status 1 is a
+    # refusal. log_block_values gives it the lines of its arguments.
+    log_read() {
+        local status=0 output
+        output=$(sh "${BASH_SOURCE[0]%/*}/macos-check" log-block) || status=$?
+        case $status in
+            0) printf '%s\n' "${output//$'\n'/ }" ;;
+            1) echo refused ;;
+            *) echo "error $status" ;;
+        esac
+    }
+    log_block_values() {
+        printf '%s\n' "$@" | log_read
+    }
+    check "log block with a plain directory" "/h/logs 1048576 1" "$(log_block_values \
+        'log:' '  directory: /h/logs' '  max_file_bytes: 1048576' '  kept_files: 1')"
+    check "log block with a quoted directory" "/h/logs 1048576 1" "$(log_block_values \
+        'log:' '  directory: "/h/logs"' '  max_file_bytes: 1048576' '  kept_files: 1')"
+    check "log block between other keys" "/h/logs 1048576 1" "$(log_block_values \
+        'version: 1' '' 'log:' '  directory: /h/logs' '  max_file_bytes: 1048576' \
+        '  kept_files: 1' '' 'store:' '  path: /x')"
+    check "log block with escapes in the directory" '/h/a "b"\c 1048576 1' \
+        "$(log_block_values 'log:' '  directory: "/h/a \"b\"\\c"' '  max_file_bytes: 1048576' \
+            '  kept_files: 1')"
+    check "log block in a comment" refused "$(log_block_values \
+        '# log:' '#   directory: /h/logs' '#   max_file_bytes: 1048576' '#   kept_files: 1')"
+    check "log block with the keys in another order" refused "$(log_block_values \
+        'log:' '  max_file_bytes: 1048576' '  directory: /h/logs' '  kept_files: 1')"
+    check "log block without kept_files" refused "$(log_block_values \
+        'log:' '  directory: /h/logs' '  max_file_bytes: 1048576')"
+    check "log block with a relative directory" refused "$(log_block_values \
+        'log:' '  directory: logs' '  max_file_bytes: 1048576' '  kept_files: 1')"
+    check "log block with a comment after the directory" refused "$(log_block_values \
+        'log:' '  directory: /h/logs # old' '  max_file_bytes: 1048576' '  kept_files: 1')"
+    check "log block with a size that is not a number" refused "$(log_block_values \
+        'log:' '  directory: /h/logs' '  max_file_bytes: big' '  kept_files: 1')"
+    check "log block indented deeper" refused "$(log_block_values \
+        'log:' '    directory: /h/logs' '  max_file_bytes: 1048576' '  kept_files: 1')"
     if [ "$failures" -ne 0 ]; then
         echo "self-test: $failures of $checks checks failed"
         return 1
