@@ -157,11 +157,14 @@ and not in others is `flaky`.
   code through git, but repository guidance and the surrounding code come from the
   current base branch, so an old case can score differently as that branch moves.
 - A session that the review host keeps after a trial is listed in `sessions_left`
-  of the report; remove it by hand.
+  of the report; remove it by hand, or with
+  [`eval prune`](../../cli.md#autoreview-eval-prune).
 - A branch on a review host that is not the machine of the run, or that a session,
   worktree or hook keeps, is left and listed in `branches_left`.
 - A killed eval run (SIGKILL) leaves its sessions and branches on the review host
-  until they are deleted by hand.
+  until [`eval prune`](../../cli.md#autoreview-eval-prune) removes them. Stop every
+  eval run against the host first, on this machine and on others; the command
+  cannot tell a live run from a dead one.
 - Decisions (approve, request changes) are not evaluated: the rule of the pipeline
   is run with comment outcomes, no human review signals and no text guard.
 

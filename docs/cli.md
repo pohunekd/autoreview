@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, report, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches, guard scan, eval validate, eval add and eval run - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, report, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches, guard scan, eval validate, eval add, eval run and eval prune - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -581,6 +581,83 @@ the run), `eval_verifier_failed` (the verifier did not finish, so the claims
 would publish unchecked), `shutdown` (the run was cancelled before the trial
 started) or the code the review failed with.
 
+### `autoreview eval prune`
+
+```
+autoreview eval prune --git-binary <PATH> [--host <HOST>] [--yes]
+```
+
+Lists the sessions and branches that a killed `eval run` left on the review hosts
+and, with `--yes`, removes the sessions and deletes the branches; without `--yes`
+nothing changes. It needs the [`eval` section](configuration.md#eval) and a
+`--config` of its own, takes `--env-file` like `eval run`, and reads no store. Run
+it as `prune-branches` is run: on the machine that holds the review host's
+repositories, as the user who owns them.
+
+Stop every eval run against these hosts, on this machine and on others, before
+`--yes`. Nothing records a running eval, and a removed session fails the trial that
+uses it.
+
+- `--git-binary`: the absolute path of `git`.
+- `--host`: a host of `pohunek.hosts` or of a `route_overrides` entry; every such
+  host when absent.
+- `--yes`: removes the sessions and deletes the branches.
+
+For each host the command:
+
+1. Lists the sessions and keeps the eval ones: the name starts with
+   `eval.session_name_prefix`, the branch with `eval.session_branch_prefix`, the
+   rest of both is the same token, and the branch holds a workflow ID. A service
+   session or a person's session with a look-alike name fails one of these checks.
+   If the eval prefixes equal the production ones and the eval file does not
+   repeat the production `session` section, the checks cannot tell the two apart;
+   read the dry run, which lists every selected session with its `state`, before
+   `--yes`.
+2. With `--yes`, removes each selected session with `pohunek session rm` and
+   confirms that it is gone. An unconfirmed removal is an error, and children that
+   the session spawned stay unless they pass this selection themselves.
+3. Plans the branches under `eval.session_branch_prefix` of the host's local
+   repositories with the [verdicts](#autoreview-prune-branches) of
+   `prune-branches`. No review owns an eval branch and no age limit applies, so a
+   well-formed branch that no session, worktree or hook keeps is `delete`. A dry
+   run takes the selected sessions as removed, so it shows what `--yes` deletes; a
+   session whose removal failed keeps its branch `session_live`. The dry run also
+   ignores a worktree that has a selected session's branch checked out, because
+   removing the session removes its worktree. A worktree of a person on such a
+   branch therefore shows `delete` in the dry run, while `--yes` keeps the
+   branch as `checked_out`: the error is on the safe side, and the branch stays.
+
+```json
+{"delete": true, "hosts": [
+  {"host": "review-a",
+   "sessions": [{"id": "s-1", "name": "eval-review-prr-v2-<digest>-opus-run1",
+     "branch": "autoreview/eval/prr-v2-<digest>-opus-run1",
+     "state": "running", "removed": true}],
+   "repositories": [{"path": "/srv/repos/example", "branches": [
+     {"branch": "autoreview/eval/prr-v2-<digest>-opus-run1", "commit": "<sha>",
+      "verdict": "delete", "deleted": true}]}]},
+  {"host": "review-b", "branches_skipped": "host_not_local", "sessions": [],
+   "repositories": []}]}
+```
+
+`delete`, `host` and `repositories` are those of `prune-branches`. A failed
+removal has `"error"` with the error code of the failed pohunek call, or
+`session_removal_timed_out` past `session.timeout_seconds`. `skipped` has the
+shape of the one of `prune-branches` but holds only the error code of a failed
+session list: nothing was done on that host.
+`branches_skipped` holds `host_not_local` or an error code for a host whose
+sessions were handled but whose branches were not checked. pohunek has no command
+that lists or deletes the branches of another machine, so the branches of a
+non-local host stay; a host with `branches_skipped` is not clean.
+
+The document is printed in every case once the hosts were read. The command then
+exits with status 1 and logs `command failed` with `eval_prune_incomplete`, without
+a second object on stdout, when a removal or a deletion failed, or when the host
+that `--host` names has `skipped`, `branches_skipped` or a repository in `error`.
+Without `--host`, those keep exit status 0. A relative `--git-binary` or an
+unknown `--host` is `command_invalid`, and a file without an `eval` section is
+`configuration_missing: eval`.
+
 ## Service
 
 ### `autoreview serve`
@@ -823,6 +900,8 @@ Only local review hosts are pruned. pohunek has no command that lists or deletes
 branches of another machine, so run the command on the machine that holds both the store
 and the review host's repositories, as the user of the service. A host whose repositories
 are on another machine is reported as skipped with `host_not_local`, and its branches stay.
+The branches and sessions of an `eval run` use other prefixes;
+[`eval prune`](#autoreview-eval-prune) removes the ones that a killed run left.
 
 - `--git-binary`: the absolute path of `git`.
 - `--host`: a host of `pohunek.hosts` or of a `route_overrides` entry (also an `untrusted`
@@ -916,6 +995,7 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `backup_path_invalid`, `backup_path_exists`, `backup_failed` | `backup-db` target problems |
 | `host_not_local`, `git_command_failed`, `repository_hook_configured` | `prune-branches` skipped a host whose repositories are not on this machine, a git call failed (also for a repository owned by another user), or a repository configuration names a `reference-transaction` hook |
 | `branch_prune_incomplete` | `prune-branches` printed its document and exits with status 1: a deletion failed, or the `--host` host or one of its repositories was skipped |
+| `eval_prune_incomplete`, `session_removal_timed_out` | `eval prune` printed its document and exits with status 1: a session removal or a deletion failed, or the `--host` host was not checked; a session removal ran past `session.timeout_seconds` (in the document) |
 | `stats_range_invalid` | `--since` or `--until` of `stats` or `report` (`since`, `until` of `review_stats`) is not a `YYYY-MM-DD` day or is after today (UTC), `--until` comes without `--since`, or before it |
 | `stats_range_too_long` | The `stats` or `report` range covers more than 366 days |
 | `pipeline_not_configured` | `--pipeline` of `report` names a pipeline that no rule of the policy runs |

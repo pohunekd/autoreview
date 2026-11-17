@@ -73,6 +73,10 @@ A failed deletion, or a `--host` host or repository that is skipped, ends the co
 status 1 and `branch_prune_incomplete`. The branches it did not delete stay; run it again
 once the cause is fixed.
 
+The sessions and branches of an eval run that was killed have their own prefixes, which
+this command does not touch.
+[`autoreview eval prune`](../../cli.md#autoreview-eval-prune) removes them.
+
 ## Related pages
 
 - [Troubleshooting](troubleshooting.md#session-start-failures)

@@ -165,8 +165,8 @@ notify:
 #   header_timeout_seconds: 10
 #   max_connections: 4
 
-# Optional: what `autoreview eval run` needs; every key is required when the
-# section is present. Run an eval from its own config file, whose credential is
+# Optional: what `autoreview eval run` and `eval prune` need; every key is required
+# when the section is present. Run an eval from its own config file, whose credential is
 # read-only and whose `session` prefixes equal the production ones, because the
 # eval prefixes are checked against them. See docs/knowledge/guides/eval-suite.md.
 # eval:
