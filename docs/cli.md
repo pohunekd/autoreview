@@ -623,9 +623,11 @@ For each host the command:
    run takes the selected sessions as removed, so it shows what `--yes` deletes; a
    session whose removal failed keeps its branch `session_live`. The dry run also
    ignores a worktree that has a selected session's branch checked out, because
-   removing the session removes its worktree. A worktree of a person on such a
-   branch therefore shows `delete` in the dry run, while `--yes` keeps the
-   branch as `checked_out`: the error is on the safe side, and the branch stays.
+   removing the session removes its worktree. So a session or worktree that is
+   not an eval session on a selected eval branch shows `delete` in the dry run,
+   while `--yes` reads the sessions again and keeps the branch (`session_live` or
+   `checked_out`): the error is on the safe side, because `--yes` deletes less
+   than the dry run shows.
 
 ```json
 {"delete": true, "hosts": [
