@@ -5,6 +5,7 @@
 mod config_file;
 mod env_file;
 mod error_response;
+mod eval_cli;
 mod guard_scan;
 mod init;
 mod logging;
@@ -112,6 +113,9 @@ enum Invocation {
     /// Runs the text guard over a corpus of pull request texts, offline.
     #[command(subcommand)]
     Guard(guard_scan::GuardCommand),
+    /// Checks eval case files of known pull requests, offline.
+    #[command(subcommand)]
+    Eval(eval_cli::EvalCommand),
     /// A command that loads the configuration first.
     #[command(flatten)]
     Configured(Command),
@@ -286,6 +290,10 @@ async fn main() -> ExitCode {
                 ..
             }) => guard_scan::run(config.as_deref(), &command).and_then(|done| print_json(&done)),
             Ok(Cli {
+                command: Invocation::Eval(command),
+                ..
+            }) => eval_cli::run(&command),
+            Ok(Cli {
                 config,
                 env_file,
                 command: Invocation::Configured(command),
@@ -321,7 +329,7 @@ fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
     if cli.env_file.is_some() && !matches!(cli.command, Invocation::Configured(_)) {
         return Err(Cli::command().error(
             ErrorKind::ArgumentConflict,
-            format!("{ENV_FILE_FLAG} is not an option of init, profiles and guard"),
+            format!("{ENV_FILE_FLAG} is not an option of init, profiles, guard and eval validate"),
         ));
     }
     Ok(cli)
@@ -343,7 +351,8 @@ fn print_display(display: &clap::Error) -> Result<(), Error> {
 fn report(error: &Error) {
     let code = error_code(error);
     // `prune-branches` printed its document; one object on stdout stays the rule.
-    let printed = code == prune_branches::BRANCH_PRUNE_INCOMPLETE;
+    let printed =
+        code == prune_branches::BRANCH_PRUNE_INCOMPLETE || code == eval_cli::EVAL_CASES_INVALID;
     let response = error_response(error);
     // A failed write leaves only the log line; there is nowhere else to report it.
     if let Some(text) = go_json(&response).ok().filter(|_| !printed) {

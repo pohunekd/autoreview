@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, report, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches and guard scan - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, report, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches, guard scan and eval validate - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -384,6 +384,53 @@ least one signal of the hidden-text class (every signal except
 `bidi_control_in_patch`, `chat_template_token` and `lexicon_phrase`),
 `truncated` those whose text was left out, and `signals` the pull requests per
 signal code found.
+
+### `autoreview eval validate`
+
+```
+autoreview eval validate --cases <DIR>
+```
+
+Checks the case files of an eval suite, offline: it reads no configuration,
+makes no network call and writes nothing, so it runs in CI without secrets. Each
+case is one `<id>.yaml` file in `DIR` (not searched recursively); a `.yml` file,
+a file without an extension and a symbolic link named like a case are errors, and
+a file with another extension or a name that starts with a dot is ignored. It prints `{"ok": true, "cases": 3, "defect": 2, "clean": 1}`, or, with
+exit code 1, `{"ok": false, "errors": [...]}` where each error names the `file`,
+the `code` and the `key` at fault, for every file at once.
+
+| Code | Meaning |
+|---|---|
+| `eval_case_unreadable`, `eval_case_extension`, `eval_case_too_large` | The directory or a file cannot be read or is a symbolic link, a file is named `.yml` or has no extension, or a file is over 64 KiB |
+| `eval_case_yaml_invalid`, `eval_case_key_unknown`, `eval_case_version_unsupported` | The file is not YAML of the case shape (a wrong type, a missing or repeated key), has a key the format does not name, or its `version` is not 1 |
+| `eval_case_id_invalid`, `eval_case_id_mismatch`, `eval_case_identity_duplicate` | The `id` is not 1 to 64 of `a-z`, `0-9`, `.`, `_`, `-`, differs from the file name, or two cases have the same `repository`, `pull_request` and `head_sha` |
+| `eval_case_repository_invalid`, `eval_case_pull_request_invalid`, `eval_case_base_branch_invalid`, `eval_case_head_ref_invalid`, `eval_case_sha_invalid`, `eval_case_sha_equal` | A repository, pull request number, base branch, head ref or SHA is malformed, a `head_ref` is neither `refs/pull/<pull_request>/head` nor `refs/heads/<branch>`, or `base_sha` equals `head_sha` |
+| `eval_case_pipelines_invalid`, `eval_case_title_invalid` | `pipelines` is empty or repeats or malforms a name, or `title` is empty, over 200 characters or has a control character |
+| `eval_case_expect_invalid`, `eval_case_finding_path_invalid`, `eval_case_finding_lines_invalid`, `eval_case_finding_description_invalid`, `eval_case_finding_duplicate` | `expect` is missing or lists no or more than 20 findings, or a finding has a path that is not a relative repository path, lines that are not `[first, last]` with `1 <= first <= last` within 200 lines, a description that is empty, over 500 characters or has a control character, or repeats another finding |
+| `eval_cases_invalid` | The exit code 1 of `eval validate`; its document is the stdout object |
+
+A case file looks like this; `expect` is `clean` or a `blocking` list. `head_ref`
+names the ref that a review session fetches `head_sha` from; it is the pull
+request ref unless the case sets a branch, which lets a case review a commit that
+the pull request ref no longer points at:
+
+```yaml
+version: 1
+id: widgets-cache-race
+repository: acme/widgets
+pull_request: 214
+base_branch: main
+head_ref: refs/heads/eval-cases/cache-race   # optional: refs/pull/214/head when left out
+base_sha: 0123456789abcdef0123456789abcdef01234567
+head_sha: 89abcdef0123456789abcdef0123456789abcdef
+pipelines: [default]        # optional: the pipelines that run the case
+title: Cache race           # optional: the pull request title the reviewers see
+expect:
+  blocking:
+    - path: src/cache.rs
+      lines: [40, 52]       # 1-based, inclusive, right side of the head
+      description: Lock released before the entry is inserted.
+```
 
 ## Service
 
