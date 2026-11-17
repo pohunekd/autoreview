@@ -63,10 +63,10 @@ QUEUE_HOURS=(8 9 10 11 12 13 14 15 16 17 18 19 20)
 AGENT_GONE_WAIT_SECONDS=$((AGENT_EXIT_TIMEOUT_SECONDS + 5))
 AGENT_GONE_POLL_SECONDS=0.2
 LAUNCHCTL_EINPROGRESS=36
-# The rotation limits of the newsyslog line that setup prints for the agent logs:
-# the old files kept, and the size in KiB at which a log is rotated.
-LOG_ROTATE_COUNT=5
-LOG_ROTATE_KIB=10240
+# The limits of the log: block that setup writes to config.yaml on macOS: the size in
+# bytes at which autoreview rotates a log file, and the rotated files it keeps.
+LOG_MAX_FILE_BYTES=10485760
+LOG_KEPT_FILES=5
 # The reviewer adapters need Python 3.11 or newer.
 PYTHON_MIN_VERSION="3.11.0"
 POHUNEK_REPOSITORY="zajca/pohunek"
@@ -614,8 +614,14 @@ self_test() {
     check "agent restart delay" 10 "$(fact ThrottleInterval "$service")"
     check "agent stop budget" 90 "$(fact ExitTimeOut "$service")"
     check "agent umask 0077" 63 "$(fact Umask "$service")"
-    check "agent log" "'/h/.local/state/autoreview/logs/autoreview.log'" \
+    check "agent error log" "'/h/.local/state/autoreview/logs/autoreview.stderr.log'" \
         "$(fact StandardErrorPath "$service")"
+    check "agent output log" "'/h/.local/state/autoreview/logs/autoreview.stderr.log'" \
+        "$(fact StandardOutPath "$service")"
+    check "queue error log" "'/h/.local/state/autoreview/logs/autoreview-queue.stderr.log'" \
+        "$(fact StandardErrorPath "$queue")"
+    check "queue output log" "'/h/.local/state/autoreview/logs/autoreview-queue.stderr.log'" \
+        "$(fact StandardOutPath "$queue")"
     check "agent has no schedule" "" "$(fact hours "$service")"
     check "queue arguments" "/h/.local/bin/autoreview --config /h/autoreview/config.yaml \
 --env-file /h/.config/autoreview/autoreview.env review-queue" "$(fact arguments "$queue")"
@@ -697,6 +703,24 @@ self_test() {
         'log:' '  directory: /h/logs' '  max_file_bytes: big' '  kept_files: 1')"
     check "log block indented deeper" refused "$(log_block_values \
         'log:' '    directory: /h/logs' '  max_file_bytes: 1048576' '  kept_files: 1')"
+    expected=$'log:\n  directory: "/h/.local/state/autoreview/logs"\n  max_file_bytes: 10485760'
+    expected+=$'\n  kept_files: 5'
+    check "log block of the sample layout" "$expected" \
+        "$(log_block /h/.local/state/autoreview/logs)"
+    check "log block of the sample layout, read back" \
+        "/h/.local/state/autoreview/logs 10485760 5" \
+        "$(log_block /h/.local/state/autoreview/logs | log_read)"
+    check "log block of a directory with a quote and a backslash" \
+        '  directory: "/h/a \"b\"\\c d"' "$(log_block '/h/a "b"\c d' | sed -n 2p)"
+    check "log block of that directory, read back" '/h/a "b"\c d 10485760 5' \
+        "$(log_block '/h/a "b"\c d' | log_read)"
+    log_section() {
+        if printf '%s\n' "$@" | config_has_log; then echo present; else echo absent; fi
+    }
+    check "config without a log section" absent \
+        "$(log_section 'version: 1' '# log:' '#   kept_files: 5')"
+    check "config with a log section" present \
+        "$(log_section 'version: 1' 'log:' '  kept_files: 5')"
     if [ "$failures" -ne 0 ]; then
         echo "self-test: $failures of $checks checks failed"
         return 1
@@ -1368,8 +1392,40 @@ check_local_host() {
         || fail 1 "the pohunek host $1 is not this machine; name its pohunek host, or local"
 }
 
+# Prints the top-level log: block of config.yaml for the log directory $1, in the three
+# lines that `scripts/macos-check log-block` reads. The directory is double-quoted, with
+# `\` and `"` escaped.
+log_block() {
+    local directory=${1//\\/\\\\}
+    directory=${directory//\"/\\\"}
+    printf 'log:\n  directory: "%s"\n  max_file_bytes: %s\n  kept_files: %s\n' \
+        "$directory" "$LOG_MAX_FILE_BYTES" "$LOG_KEPT_FILES"
+}
+
+# Reports whether the config.yaml on stdin has a top-level log: key.
+config_has_log() {
+    grep -Eq '^log:'
+}
+
+# Stops a run on macOS with a config.yaml that has no log: section. launchd keeps the output
+# files of an agent open, so only the rotation of autoreview itself bounds the log.
+require_log_block() {
+    {
+        echo "setup: $dir/config.yaml has no log: section. launchd keeps the output files of an"
+        echo "agent open, so without it the log is never rotated. Add these lines at the end of"
+        echo "the file:"
+        echo
+        log_block "$log_dir"
+        echo
+    } >&2
+    fail 3 "missing the log: section in $dir/config.yaml; add it, then run $(rerun_command)"
+}
+
 step_config() {
     if [ -e "$dir/config.yaml" ]; then
+        if [ "$os" = Darwin ] && ! config_has_log <"$dir/config.yaml"; then
+            require_log_block
+        fi
         in_place "configuration $dir/config.yaml"
         return
     fi
@@ -1397,7 +1453,9 @@ step_config() {
     # Without the flag, init on macOS writes no pohunek.runtime_dir: pohunek's default applies.
     [ -z "$runtime_dir" ] || command+=(--pohunek-runtime-dir "$runtime_dir")
     add_notifier_flags
-    approve "configuration" "umask 077" "$(printf '%q ' "${command[@]}")"
+    local -a steps=("umask 077" "$(printf '%q ' "${command[@]}")")
+    [ "$os" != Darwin ] || steps+=("append the log: block of $log_dir to $dir/config.yaml")
+    approve "configuration" "${steps[@]}"
     # $dir holds the store too. The umask keeps it 0700 also when the installed
     # release's init creates it with the mode of the umask.
     if ! output=$(umask 077 && "${command[@]}"); then
@@ -1405,6 +1463,11 @@ step_config() {
         fail 8 "autoreview init failed: $(error_code_of "$output")"
     fi
     printf '%s\n' "$output"
+    # init writes no log: section; the file ends with a newline, so the block follows it.
+    if [ "$os" = Darwin ]; then
+        { echo; log_block "$log_dir"; } >>"$dir/config.yaml" \
+            || fail 8 "appending the log: block to $dir/config.yaml failed"
+    fi
     created_config=1
 }
 
@@ -1711,8 +1774,9 @@ agent_environment() {
     done
 }
 
-# Prints the agent plist of label $1 that runs `autoreview $2` and logs to $3: the review
-# service ($4 = service) restarts after a failure, the queue ($4 = queue) runs at QUEUE_HOURS.
+# Prints the agent plist of label $1 that runs `autoreview $2`: the review service ($4 =
+# service) restarts after a failure, the queue ($4 = queue) runs at QUEUE_HOURS. launchd sends
+# the output of the agent to $3, which only takes what the log file of the log: section cannot.
 agent_plist() {
     local label=$1 subcommand=$2 log=$3 kind=$4 argument hour
     printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
@@ -1751,8 +1815,8 @@ agent_plist() {
 render_agents() {
     agent_labels=("$AGENT_LABEL" "$QUEUE_LABEL")
     agent_names=("$AGENT_LABEL.plist" "$QUEUE_LABEL.plist")
-    agent_texts=("$(agent_plist "$AGENT_LABEL" serve "$log_dir/autoreview.log" service)
-" "$(agent_plist "$QUEUE_LABEL" review-queue "$log_dir/autoreview-queue.log" queue)
+    agent_texts=("$(agent_plist "$AGENT_LABEL" serve "$log_dir/autoreview.stderr.log" service)
+" "$(agent_plist "$QUEUE_LABEL" review-queue "$log_dir/autoreview-queue.stderr.log" queue)
 ")
 }
 
@@ -2120,13 +2184,9 @@ step_agents() {
     done
     echo "The agents run while $user_name is logged in: launchd starts them at login and stops"
     echo "them at logout, as it does the pohunek daemon. A Mac that reviews unattended needs"
-    echo "automatic login. launchd does not rotate the logs; to rotate them, add these lines"
-    echo "to /etc/newsyslog.d/autoreview.conf as root (the review agent keeps writing to a"
-    echo "rotated log until it restarts):"
-    for name in autoreview autoreview-queue; do
-        printf '  %s %s:staff 600 %s %s * N\n' "$log_dir/$name.log" "$user_name" \
-            "$LOG_ROTATE_COUNT" "$LOG_ROTATE_KIB"
-    done
+    echo "automatic login. autoreview writes and rotates its own logs in $log_dir from the"
+    echo "log: section of $dir/config.yaml; launchd only keeps the small *.stderr.log files"
+    echo "there, for what the log files could not take."
     echo "To remove the agents: launchctl bootout $agent_domain/<label> and delete"
     echo "$unit_dir/<label>.plist, for $AGENT_LABEL and $QUEUE_LABEL."
 }
@@ -2174,7 +2234,13 @@ print_plan() {
         return
     fi
     if [ -e "$dir/config.yaml" ]; then
-        plan "configuration $dir/config.yaml" "in place, skipped"
+        if [ "$os" = Darwin ] && ! config_has_log <"$dir/config.yaml"; then
+            plan "configuration $dir/config.yaml" "stops: no log: section, setup prints it"
+        else
+            plan "configuration $dir/config.yaml" "in place, skipped"
+        fi
+    elif [ "$os" = Darwin ]; then
+        plan "configuration $dir/config.yaml (autoreview init, then its log: block)" "will run"
     else
         plan "configuration $dir/config.yaml (autoreview init)" "will run"
     fi
