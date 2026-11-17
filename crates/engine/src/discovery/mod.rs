@@ -26,6 +26,7 @@ pub(crate) mod plan;
 pub(crate) mod poll;
 pub(crate) mod records;
 pub(crate) mod route;
+pub(crate) mod signal_checks;
 
 /// Error code of an engine whose configuration lacks a usable policy.
 const CONFIGURATION_INVALID: &str = "configuration_invalid";

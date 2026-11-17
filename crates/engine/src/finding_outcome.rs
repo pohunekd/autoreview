@@ -7,10 +7,10 @@ use time::OffsetDateTime;
 
 use crate::engine::{Clock, Engine};
 use crate::error::error_code;
-use crate::integrations::{GitHubReview, Integrations};
+use crate::integrations::{GitHubReview, Integrations, PullRequestSignals};
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN, prior_key};
 use crate::model::{Artifact, Decision, PublishResult, ReviewInput};
-use crate::store::signals::SignalIds;
+use crate::store::signals::{SignalIds, SignalRow, SignalUpdate};
 use crate::store::{
     FindingCategory, FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Settlement,
 };
@@ -136,6 +136,53 @@ fn signal_ids(
     ids
 }
 
+/// GitHub state of a review that a person or a branch protection rule dismissed.
+const REVIEW_DISMISSED: &str = "DISMISSED";
+
+/// Returns what one signal read changes for `rows`, the findings of its pull request.
+///
+/// An open finding of a review that requested changes becomes `dismissed` when GitHub reports
+/// that review dismissed, whatever the head: GitHub dismisses stale approvals on a push, never
+/// a request for changes. A finding's reactions are those of the pull request author to the one
+/// thread of its review whose comment its heading opens, sorted; without exactly one such
+/// thread the stored ones stay. A review the read does not name changes nothing.
+pub(crate) fn decide_signals(
+    rows: &[SignalRow],
+    signals: &PullRequestSignals,
+) -> Vec<SignalUpdate> {
+    let mut updates = Vec::new();
+    for row in rows {
+        let state = signals.reviews.get(&row.review_id);
+        let dismissed = row.outcome == OUTCOME_OPEN
+            && row.requested_changes
+            && state.is_some_and(|state| state == REVIEW_DISMISSED);
+        let mut threads = (signals.threads.iter()).filter(|thread| {
+            thread.review_id == row.review_id && heads_comment(&thread.body, &row.finding_id)
+        });
+        let reactions = match (threads.next(), threads.next()) {
+            (Some(thread), None) if !signals.author.is_empty() => {
+                let own = (thread.reactions.iter())
+                    .filter(|reaction| reaction.login.eq_ignore_ascii_case(&signals.author));
+                let mut own: Vec<String> = own.map(|reaction| reaction.content.clone()).collect();
+                own.sort();
+                own.dedup();
+                own
+            }
+            _ => row.author_reactions.clone(),
+        };
+        if dismissed || reactions != row.author_reactions {
+            updates.push(SignalUpdate {
+                finding_key: row.finding_key.clone(),
+                review_id: row.review_id,
+                finding_id: row.finding_id.clone(),
+                dismissed,
+                reactions,
+            });
+        }
+    }
+    updates
+}
+
 /// Reports whether finding `id` of `artifact` publishes a prior finding again.
 fn republished(artifact: &Artifact, id: &str) -> bool {
     (artifact.prior_results)
@@ -256,9 +303,127 @@ mod tests {
     use crate::store::Settlement;
     use crate::verify::{VERDICT_REOPENED, VERDICT_UPHELD};
 
-    use super::{settlements, signal_ids};
-    use crate::integrations::{GitHubReview, InlineComment};
+    use super::{decide_signals, settlements, signal_ids};
+    use crate::integrations::{
+        CommentReaction, GitHubReview, InlineComment, PullRequestSignals, ThreadComment,
+    };
     use crate::model::{Decision, PublishResult};
+    use crate::store::signals::{SignalRow, SignalUpdate};
+
+    /// A signal read dismisses an open finding only for a dismissed request for changes, and
+    /// keeps the reactions of the pull request author to the one thread that its heading opens.
+    #[test]
+    fn a_signal_read_dismisses_open_findings_and_keeps_the_authors_reactions() {
+        let row = |outcome: &str, requested: bool, reactions: &[&str]| SignalRow {
+            finding_key: "a:O001".to_owned(),
+            outcome: outcome.to_owned(),
+            review_id: 7,
+            finding_id: "O001".to_owned(),
+            requested_changes: requested,
+            author_reactions: reactions.iter().map(|text| (*text).to_owned()).collect(),
+        };
+        let reaction = |login: &str, content: &str| CommentReaction {
+            login: login.to_owned(),
+            content: content.to_owned(),
+        };
+        let thread = |review: i64, heading: &str, reactions: &[CommentReaction]| ThreadComment {
+            review_id: review,
+            body: format!("**{heading} — Bug** (confidence: high)\n\nBody."),
+            reactions: reactions.to_vec(),
+        };
+        let read = |state: &str, threads: &[ThreadComment]| PullRequestSignals {
+            author: "Dev".to_owned(),
+            reviews: [(7, state.to_owned())].into(),
+            threads: threads.to_vec(),
+        };
+        let update = |dismissed: bool, reactions: &[&str]| SignalUpdate {
+            finding_key: "a:O001".to_owned(),
+            review_id: 7,
+            finding_id: "O001".to_owned(),
+            dismissed,
+            reactions: reactions.iter().map(|text| (*text).to_owned()).collect(),
+        };
+        let (gone, standing) = (read("DISMISSED", &[]), read("CHANGES_REQUESTED", &[]));
+        let both = [
+            reaction("dev", "-1"),
+            reaction("other", "+1"),
+            reaction("DEV", "eyes"),
+            reaction("dev", "-1"),
+        ];
+        let own = [thread(7, "O001 BLOCKER", &both)];
+        let cases = [
+            (
+                "dismissed request",
+                row("open", true, &[]),
+                gone.clone(),
+                vec![update(true, &[])],
+            ),
+            (
+                "comment-only review",
+                row("open", false, &[]),
+                gone.clone(),
+                vec![],
+            ),
+            ("decided finding", row("fixed", true, &[]), gone, vec![]),
+            (
+                "request still standing",
+                row("open", true, &[]),
+                standing,
+                vec![],
+            ),
+            (
+                "unknown review",
+                row("open", true, &[]),
+                PullRequestSignals {
+                    reviews: [(8, "DISMISSED".to_owned())].into(),
+                    ..PullRequestSignals::default()
+                },
+                vec![],
+            ),
+            (
+                "author and other reactions",
+                row("open", true, &[]),
+                read("CHANGES_REQUESTED", &own),
+                vec![update(false, &["-1", "eyes"])],
+            ),
+            (
+                "removed reaction",
+                row("open", true, &["-1"]),
+                read(
+                    "CHANGES_REQUESTED",
+                    &[thread(7, "O001 HIGH", &[reaction("other", "+1")])],
+                ),
+                vec![update(false, &[])],
+            ),
+            (
+                "thread of another review or finding",
+                row("open", true, &["-1"]),
+                read(
+                    "CHANGES_REQUESTED",
+                    &[thread(8, "O001 HIGH", &[]), thread(7, "O010 HIGH", &[])],
+                ),
+                vec![],
+            ),
+            (
+                "two threads for one finding",
+                row("open", true, &["-1"]),
+                read("CHANGES_REQUESTED", &[own[0].clone(), own[0].clone()]),
+                vec![],
+            ),
+            (
+                "reaction and dismissal",
+                row("open", true, &[]),
+                read(
+                    "DISMISSED",
+                    &[thread(7, "O001 HIGH", &[reaction("dev", "confused")])],
+                ),
+                vec![update(true, &["confused"])],
+            ),
+        ];
+        for (name, row, signals, want) in cases {
+            assert_eq!(decide_signals(&[row], &signals), want, "{name}");
+        }
+    }
 
     /// A finding keeps its ID only for the inline comment its heading opens, whatever the
     /// severity says; a longer ID that starts the same does not match.
