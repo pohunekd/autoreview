@@ -3,7 +3,7 @@
 #
 # usage: scripts/changelog check
 #        scripts/changelog fold <version> [--date YYYY-MM-DD]
-#        scripts/changelog notes <version>
+#        scripts/changelog notes <version> [--post]
 
 set -eu
 

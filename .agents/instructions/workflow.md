@@ -113,11 +113,34 @@ It never creates a tag and never publishes.
    `git push origin vX.Y.Z`. The workflow refuses a tag that is not `v` plus
    the workspace version, a tree whose `scripts/setup` has another
    `AUTOREVIEW_VERSION`, and a version without a section in `CHANGELOG.md`.
-5. Wait for the `Release` run. It builds one archive per target, attests the
+5. Write the release post while the `Release` run builds. Print the skeleton
+   from the tagged tree into a file outside the checkout:
+   `scripts/changelog notes X.Y.Z --post > <post-file>`. It holds the markers,
+   the parts to write (each carries `TODO(release-post)`) and
+   `### Full changelog` with the folded section, its kind headings one level
+   down; leave that section as it is. Replace the placeholders: two or three
+   sentences on what the release is about, `### What's new` with bold one-line
+   highlights, `### Upgrading`. Each highlight says what a user can now do and
+   why, in plain words, naming only the commands, flags and settings a user
+   types; no crate, module, job or test names, no issue numbers. Two to five
+   highlights for a minor release, one or two for a patch. Every breaking entry
+   and every action an operator must take (a new config key, a profile
+   reinstall) goes under `Upgrading`; write "Nothing to do" when that is true.
+   The owner approves the full text. Before step 6 edits the release, each
+   check prints the value after it:
+
+   ```bash
+   grep -c 'TODO(release-post)' <post-file>                   # 0
+   grep -cx '<!-- pohunek-changelog:start -->' <post-file>    # 1
+   grep -cx '<!-- pohunek-changelog:end -->' <post-file>      # 1
+   ```
+6. Wait for the `Release` run. It builds one archive per target, attests the
    archives and their `.sha256` files, and creates a draft release whose body
-   is the `CHANGELOG.md` section. Check the draft (three archives: the two musl
-   targets and `aarch64-apple-darwin`, three `.sha256` files, the notes). On a
-   Mac, fetch the darwin archive of the run, the bytes of the draft asset:
+   is the `CHANGELOG.md` section. Replace the body with the approved post:
+   `gh release edit vX.Y.Z --notes-file <post-file>`. Check the draft (three
+   archives: the two musl targets and `aarch64-apple-darwin`, three `.sha256`
+   files, the post). On a Mac, fetch the darwin archive of the run, the bytes
+   of the draft asset:
    `gh run download <run-id> --repo pohunekd/autoreview -n archive-aarch64-apple-darwin -D <dir>`,
    then run `scripts/macos-check archive <dir>/autoreview-X.Y.Z-aarch64-apple-darwin.tar.gz`.
    Publish the draft when every line says `ok`.

@@ -49,6 +49,7 @@ carries `no-changelog`.
 ```bash
 scripts/changelog check                       # validate every fragment (CI runs it)
 scripts/changelog notes X.Y.Z                 # the release block for a folded version
+scripts/changelog notes X.Y.Z --post          # the same as a release post skeleton
 scripts/changelog fold X.Y.Z [--date YYYY-MM-DD]   # release preparation only
 ```
 
