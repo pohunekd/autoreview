@@ -12,6 +12,7 @@ mod guard;
 mod human_review;
 mod parse;
 mod query;
+mod review_rules;
 mod types;
 
 pub use author_limit::{AuthorLimit, OverLimit};
@@ -22,6 +23,7 @@ pub use authors::{
 pub use guard::{GuardField, OnSuspect, RuleGuard};
 pub use human_review::{HumanReview, match_glob};
 pub use parse::{load, parse};
+pub use review_rules::{ReviewRules, ReviewRulesError, parse_review_rules};
 pub use types::{
     Checkout, EVENTS, Event, IntentCheck, Level, OPTIONAL_EVENTS, OnClean, OnFindings, OnNotes,
     Pipeline, Policy, Protocol, REPUBLISHED_PREFIX, RepositoryReviewRules, Reviewer, Rule, Trigger,

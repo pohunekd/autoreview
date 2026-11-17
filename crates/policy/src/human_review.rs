@@ -207,7 +207,7 @@ fn is_author_class(value: &str) -> bool {
 
 /// Reports whether glob is a slash-separated relative pattern whose segments are path patterns or
 /// **.
-fn valid_glob(glob: &str) -> bool {
+pub(crate) fn valid_glob(glob: &str) -> bool {
     if glob.is_empty()
         || glob.len() > MAX_GLOB_BYTES
         || glob.starts_with('/')
@@ -240,32 +240,39 @@ pub fn match_glob(glob: &str, name: &str) -> bool {
     match_segments(&pattern, &target)
 }
 
+/// Matches the segments of a path against the segments of a glob in O(pattern x path) steps.
+///
+/// Only the last `**` needs a backtrack point: a later `**` makes every earlier split redundant.
 fn match_segments(pattern: &[&str], name: &[&str]) -> bool {
-    let mut pattern = pattern;
-    let mut name = name;
-    while !pattern.is_empty() {
-        let first = pattern[0];
-        if first == "**" {
-            let rest = &pattern[1..];
-            for skip in 0..=name.len() {
-                if match_segments(rest, &name[skip..]) {
-                    return true;
-                }
+    let (mut p, mut n) = (0, 0);
+    // Pattern index after the last `**` and the path index that `**` has consumed up to.
+    let mut backtrack: Option<(usize, usize)> = None;
+    loop {
+        if p < pattern.len() && pattern[p] == "**" {
+            p += 1;
+            backtrack = Some((p, n));
+            continue;
+        }
+        if p < pattern.len()
+            && n < name.len()
+            && matches!(path_match(pattern[p], name[n]), Ok(true))
+        {
+            p += 1;
+            n += 1;
+            continue;
+        }
+        if p == pattern.len() && n == name.len() {
+            return true;
+        }
+        match backtrack {
+            Some((after, consumed)) if consumed < name.len() => {
+                backtrack = Some((after, consumed + 1));
+                p = after;
+                n = consumed + 1;
             }
-            return false;
-        }
-        if name.is_empty() {
-            return false;
-        }
-        let head = name[0];
-        match path_match(first, head) {
-            Ok(true) => {}
             _ => return false,
         }
-        pattern = &pattern[1..];
-        name = &name[1..];
     }
-    name.is_empty()
 }
 
 /// Matches name against pattern with glob rules. The error is BadPattern when the
@@ -490,10 +497,32 @@ mod tests {
             ("src/*.go", "src/sub/a.go", false),
             ("**/*Test.php", "a/b/OwnerTest.php", true),
             ("**", "anything/at/all", true),
+            ("a/**", "a", true),
+            ("a/**/b", "a/b", true),
+            ("a/**/b", "a/x/y/b", true),
+            ("a/**/b", "a/x/y/c", false),
+            ("**/b", "a/b/b", true),
+            ("**/b", "b/a", false),
+            ("**/x/**/y", "x/q/y/x", false),
+            ("**/x/**/y", "p/x/q/x/y", true),
+            ("a/**/**", "a", true),
+            ("**/**/a", "b/a", true),
+            ("a/*/**", "a", false),
         ];
+        let mut cases: Vec<(String, String, bool)> = cases
+            .into_iter()
+            .map(|(glob, name, want)| (glob.to_owned(), name.to_owned(), want))
+            .collect();
+        // Many `**` segments against a long path that cannot match: the match is quadratic.
+        cases.push((format!("{}z", "**/".repeat(80)), "a/".repeat(2000), false));
+        cases.push((
+            format!("{}z", "**/".repeat(80)),
+            format!("{}z", "a/".repeat(2000)),
+            true,
+        ));
         for (glob, name, want) in cases {
             assert_eq!(
-                match_glob(glob, name),
+                match_glob(&glob, &name),
                 want,
                 "match_glob({glob:?}, {name:?})"
             );
