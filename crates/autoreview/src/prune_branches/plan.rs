@@ -61,6 +61,8 @@ pub(crate) struct Rules<'a> {
     pub(crate) owners: &'a Owners,
     /// The branch of every pohunek session of the host.
     pub(crate) sessions: &'a BTreeSet<String>,
+    /// The only branches to list; `None` lists every branch under the prefix.
+    pub(crate) only: Option<&'a BTreeSet<&'a str>>,
     /// `--older-than-days` as a duration; `None` lists every age.
     pub(crate) older_than: Option<Duration>,
     /// `store.review_retention_seconds`, the least age of a review the store no longer holds.
@@ -131,7 +133,9 @@ pub(crate) fn plan(refs: &str, worktrees: &str, rules: &Rules<'_>) -> Vec<Branch
         let Some(branch) = refname.strip_prefix(HEADS) else {
             continue;
         };
-        if !branch.starts_with(rules.prefix) {
+        if !branch.starts_with(rules.prefix)
+            || rules.only.is_some_and(|names| !names.contains(branch))
+        {
             continue;
         }
         plans.push(BranchPlan {

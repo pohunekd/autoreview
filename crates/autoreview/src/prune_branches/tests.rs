@@ -125,10 +125,22 @@ fn plan_keeps_every_branch_a_review_session_or_worktree_needs() {
             prefix: PREFIX,
             owners: &owners,
             sessions: &sessions,
+            only: None,
             older_than: days.map(|days| Duration::from_secs(days * DAY)),
             retention: Duration::from_secs(30 * DAY),
             now: time("2026-11-14T12:00:00Z"),
         };
+        // An eval run lists only the branches it created.
+        let only = std::collections::BTreeSet::from([names[0].as_str()]);
+        let named = plan(
+            &refs,
+            &worktrees,
+            &Rules {
+                only: Some(&only),
+                ..rules
+            },
+        );
+        assert_eq!(named.len(), 1, "older than {days:?} days");
         let plans = plan(&refs, &worktrees, &rules);
         let got: Vec<(&str, Verdict)> = plans
             .iter()

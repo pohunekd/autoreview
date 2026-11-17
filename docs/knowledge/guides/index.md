@@ -109,3 +109,5 @@ Two dimensions are not in a policy: the GitHub account (the `login` of the crede
   retry reviews.
 - [Enable the text guard](text-guard.md) turns on the prompt-injection guard
   of a rule after shadow mode and a corpus measurement.
+- [Regression-test a review configuration](eval-suite.md) checks a prompt,
+  model or policy change against known pull requests with `autoreview eval`.

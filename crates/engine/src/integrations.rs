@@ -81,6 +81,15 @@ pub struct ChangedFiles {
     pub truncated: bool,
 }
 
+/// The files changed between two commits, with the lines that accept an inline comment.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RangeFiles {
+    /// The changed files, in listing order; never cut short.
+    pub changed: ChangedFiles,
+    /// RIGHT-side commentable lines of each changed file.
+    pub commentable: CommentableLines,
+}
+
 /// What a read of one repository file at a commit found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepositoryFile {
@@ -395,6 +404,20 @@ pub trait Integrations {
         pull_request: &PullRequest,
     ) -> impl Future<Output = Result<LinkedIssues, Error>> + Send;
 
+    /// Reads the files that `head` changes against `base`, as the three-dot compare shows them.
+    ///
+    /// It reads with `credential`'s token. An answer without a file list, a comparison that
+    /// GitHub cuts short, or a changed file whose patch GitHub leaves out, is an error, never
+    /// a shorter answer.
+    fn read_range_files(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        base: &str,
+        head: &str,
+    ) -> impl Future<Output = Result<RangeFiles, Error>> + Send;
+
     /// Reads the file `path` of `repository` at the commit `sha`.
     ///
     /// It reads with `credential`'s token. A file over `max_bytes` bytes is `TooLarge` and its
@@ -590,6 +613,12 @@ pub struct SessionRequest {
     /// Not serialized: it follows the host's capability at each start attempt.
     #[serde(skip)]
     pub fetch_head: bool,
+    /// The ref the session fetches the head from instead of the pull request ref.
+    ///
+    /// Not serialized: only an eval sets it, to review a head that the pull request ref no
+    /// longer points at.
+    #[serde(skip)]
+    pub fetch_ref: Option<String>,
 }
 
 autoreview_go_compat::object_only_serde!(SessionRequest);
@@ -617,10 +646,13 @@ impl SessionRequest {
         }
     }
 
-    /// Returns the ref of the pull request head on the GitHub remote.
+    /// Returns the ref of the pull request head on the GitHub remote, or the `fetch_ref`
+    /// override.
     #[must_use]
     pub fn head_ref(&self) -> String {
-        format!("refs/pull/{}/head", self.pull_request.number)
+        self.fetch_ref
+            .clone()
+            .unwrap_or_else(|| format!("refs/pull/{}/head", self.pull_request.number))
     }
 
     /// Reports whether the session starts without the checkout's own hooks.

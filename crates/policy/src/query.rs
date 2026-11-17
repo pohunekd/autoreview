@@ -150,6 +150,14 @@ impl Policy {
         names
     }
 
+    /// Returns the first rule, in file order, whose own pipeline is called `name`.
+    ///
+    /// The pipeline of an untrusted section is not searched.
+    #[must_use]
+    pub fn rule_for_pipeline(&self, name: &str) -> Option<&Rule> {
+        self.rules.iter().find(|rule| rule.pipeline.name == name)
+    }
+
     /// Returns the distinct match patterns of review-requested rules, sorted.
     ///
     /// The review request search covers only these repositories.

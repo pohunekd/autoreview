@@ -1,0 +1,19 @@
+# Defect case. The review of pohunekd/autoreview PR 508 at head 8615dad published the marker
+# "autoreview-review:v1 head=8615dad683e4775931552a5a72d78f314c70c714 high=0 medium=1 low=2"
+# with a confirmed MEDIUM at scripts/check-docs:138, and a later commit of the pull request
+# fixed it. The branch eval-cases/check-docs-text-block points at that head, because the
+# pull request ref no longer does (see docs/knowledge/guides/eval-suite.md).
+version: 1
+id: check-docs-text-block
+repository: pohunekd/autoreview
+pull_request: 508
+base_branch: main
+head_ref: refs/heads/eval-cases/check-docs-text-block
+base_sha: c89bb8c8fda3a2e3c189f26baabd4dccd4aa2a93
+head_sha: 8615dad683e4775931552a5a72d78f314c70c714
+title: Check that the pages pohunek.dev publishes exist
+expect:
+  blocking:
+    - path: scripts/check-docs
+      lines: [134, 139]
+      description: The check accepts a text block that is empty or holds only whitespace.

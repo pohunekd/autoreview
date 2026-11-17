@@ -11,8 +11,8 @@ use autoreview_engine::Error;
 use autoreview_engine::config::{Config, Credential};
 use autoreview_engine::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, GuardTexts, HeadCheckoutHooks, Integrations,
-    PullRequestSignals, PullRequestState, ReadiedDraft, RepositoryFile, ReviewRequestList,
-    SessionRequest, TokenAnswer,
+    PullRequestSignals, PullRequestState, RangeFiles, ReadiedDraft, RepositoryFile,
+    ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use autoreview_engine::model::{
     CandidateList, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
@@ -265,6 +265,19 @@ impl Integrations for External {
     ) -> Result<ChangedFiles, Error> {
         self.github
             .changed_files(cancel, credential, pull_request)
+            .await
+    }
+
+    async fn read_range_files(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<RangeFiles, Error> {
+        self.github
+            .range_files(cancel, credential, repository, base, head)
             .await
     }
 

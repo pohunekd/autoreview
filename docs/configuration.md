@@ -18,7 +18,7 @@ polls, its limits, where it keeps state and where notifications go. What gets
 reviewed and how is in [policy.yaml](policy.md).
 
 **Every key is required**, except `publish.marker`, `pohunek.runtime_dir` on macOS
-and the optional sections `pohunek.host_state`, `mcp`, `metrics`, `log` and `guards`.
+and the optional sections `pohunek.host_state`, `mcp`, `metrics`, `eval`, `log` and `guards`.
 autoreview has no built-in defaults: a missing key stops the service at startup
 with an error that names it.
 [`examples/config.yaml`](../examples/config.yaml) holds every key with a
@@ -613,6 +613,42 @@ authentication in front of it when a scraper on another host reads it; see the
 [threat model](knowledge/safety/threat-model.md). The endpoint is bound before
 the engine lock, so a second `serve` with the same section fails with
 `metrics_listen_failed`; see [`autoreview serve`](cli.md#autoreview-serve).
+
+## eval
+
+Optional; only `autoreview eval run` reads it. When the section is present,
+every command validates it at load and every key is required; an `eval:` key
+without a value is refused with `configuration_missing: eval.credential`. Run
+an eval from its own config file: `eval.credential` must name an entry of
+`github.credentials` with a read-only token, and the credential check of a
+configuration refuses a credential that no policy rule serves, so the eval file
+holds a policy that covers the case repositories and that credential.
+
+The eval prefixes are checked against `session.name_prefix` and
+`session.branch_prefix` of the same file, so set both to the values of the
+production file; the check cannot see a production prefix that the eval file
+does not repeat.
+
+| Key | Meaning |
+|---|---|
+| `credential` | Name of an entry of `github.credentials`, a read-only credential that every request of an eval uses |
+| `session_name_prefix` | Prefix of the eval reviewer session names; it must not start with, or be the start of, `session.name_prefix` |
+| `session_branch_prefix` | Prefix of the eval reviewer branches, usable in a git ref name; it must not start with, or be the start of, `session.branch_prefix`, so `prune-branches` never deletes an eval branch |
+| `max_concurrent_trials` | Most trials that run at once, from 1 to `limits.max_concurrent_reviews` |
+| `max_trials` | Most trials (cases times repeats) of one run; a larger run is refused before any session starts |
+| `max_sessions` | Most reviewer and verifier sessions of one run, retries included |
+| `trial_timeout_seconds` | Longest time of one trial, from 1 to 86400 |
+
+```yaml
+eval:
+  credential: eval-readonly
+  session_name_prefix: eval-review-
+  session_branch_prefix: autoreview/eval/
+  max_concurrent_trials: 2
+  max_trials: 60
+  max_sessions: 240
+  trial_timeout_seconds: 2700
+```
 
 ## log
 

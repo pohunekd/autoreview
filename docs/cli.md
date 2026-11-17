@@ -409,7 +409,7 @@ file, and for `eval_case_key_unknown` it is the name of the unknown key alone.
 | `eval_case_unreadable`, `eval_case_extension`, `eval_case_too_large` | The directory or a file cannot be read, or an entry is a symbolic link or not a regular file, a file is named `.yml` or has no extension, or a file is over 64 KiB |
 | `eval_case_yaml_invalid`, `eval_case_key_unknown`, `eval_case_version_unsupported` | The file is not YAML of the case shape (a wrong type, a missing or repeated key), has a key the format does not name, or its `version` is not 1 |
 | `eval_case_id_invalid`, `eval_case_id_mismatch`, `eval_case_identity_duplicate` | The `id` is not 1 to 64 of `a-z`, `0-9`, `.`, `_`, `-`, differs from the file name, or two cases have the same `repository`, `pull_request` and `head_sha` |
-| `eval_case_repository_invalid`, `eval_case_pull_request_invalid`, `eval_case_base_branch_invalid`, `eval_case_head_ref_invalid`, `eval_case_sha_invalid`, `eval_case_sha_equal` | A repository, pull request number, base branch, head ref or SHA is malformed, a `head_ref` is neither `refs/pull/<pull_request>/head` nor `refs/heads/<branch>` (a branch has no empty part, no part that starts with `.` or ends with `.lock`, and does not start with `-`), or `base_sha` equals `head_sha` |
+| `eval_case_repository_invalid`, `eval_case_pull_request_invalid`, `eval_case_base_branch_invalid`, `eval_case_head_ref_invalid`, `eval_case_sha_invalid`, `eval_case_sha_equal` | A repository, pull request number, base branch, head ref or SHA is malformed, a `head_ref` is neither `refs/pull/<pull_request>/head` nor `refs/heads/<branch>` (a branch has no empty part, no part that starts with `.` or ends with `.lock`, does not start with `-`, does not end with `.`, and is not `HEAD`), or `base_sha` equals `head_sha` |
 | `eval_case_pipelines_invalid`, `eval_case_title_invalid` | `pipelines` is empty or repeats or malforms a name, or `title`, when set, is empty, over 200 characters or has a control character |
 | `eval_case_expect_invalid`, `eval_case_finding_path_invalid`, `eval_case_finding_lines_invalid`, `eval_case_finding_description_invalid`, `eval_case_finding_duplicate` | `expect` is missing or lists no or more than 20 findings, or a finding has a path that is not a relative repository path of at most 4096 bytes, lines that are not `[first, last]` with `1 <= first <= last` within 200 lines, a description that is empty, over 500 characters or has a control character, or repeats another finding |
 | `eval_cases_invalid` | The exit code 1 of `eval validate`; its document is the stdout object |
@@ -436,6 +436,50 @@ expect:
       lines: [40, 52]       # 1-based, inclusive, right side of the head
       description: Lock released before the entry is inserted.
 ```
+
+### `autoreview eval run`
+
+```
+autoreview eval run --cases <DIR> --pipeline <NAME> --git-binary <PATH> [--repeat <N>]
+  [--min-recall <RATIO>] [--max-false-blocking <RATIO>]
+```
+
+Reviews every case with the real reviewers and verifier of the pipeline `NAME`
+and prints a JSON report; it never publishes, notifies or reads the production
+store. It needs the [`eval` section](configuration.md#eval) and a `--config` of
+its own, and it takes `--env-file` like the other configured commands.
+
+An expected finding is caught when a finding that blocks has the same path and
+a reported line inside the expected range. The report gives, before and after
+the verifier, the recall over the defect cases and the false blocking rate over
+the clean cases, counted over the completed trials. `--min-recall` and
+`--max-false-blocking` apply to the rates after verification. A case whose
+`pipelines` list leaves the pipeline out is reported as skipped. A pipeline with
+`checkout: head` is refused, because nothing pins its checkout to the case's
+head.
+
+After the sessions are removed, the run deletes the review branches it started
+under `eval.session_branch_prefix` with the git program `--git-binary` (an
+absolute path), the way `prune-branches` does and only those branches. The
+report lists them as `branches_deleted` and `branches_left`; a branch on a host
+that is not this machine, or that a session, worktree or hook keeps, is left.
+Every session a trial started is removed once more when the trial ends, a
+completed trial included; one the host keeps is listed in `sessions_left` and
+does not change the exit code.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | The report was printed and every threshold given is met |
+| 1 | The run did not start: an invalid case (`eval_cases_invalid`), `eval_pipeline_unknown`, `eval_no_cases`, `eval_repeat_invalid`, `eval_too_many_trials`, `eval_threshold_no_data` (a threshold without a case of its class), `eval_checkout_unsupported`, `eval_head_ref_reserved` (a `head_ref` branch under a review branch prefix), `credential_not_covered` or a configuration error |
+| 2 | A threshold is not met (`eval_threshold_not_met`) |
+| 3 | A trial could not be measured or panicked (`eval_trial_panicked`), a threshold has no completed trial, or the run was cancelled with Ctrl-C and printed its partial report without a verdict on the thresholds (`eval_trials_failed`) |
+
+A failed trial enters no rate and carries its error code in the report:
+`eval_trial_timeout`, `eval_trial_panicked` (the trial task panicked; the other
+trials are stopped and every session is removed), `eval_session_budget_exhausted` (more than
+`eval.max_sessions` session starts in the run), `eval_verifier_failed` (the
+verifier did not finish, so the claims would publish unchecked), `shutdown` (the
+run was cancelled before the trial started) or the code the review failed with.
 
 ## Service
 

@@ -11,7 +11,7 @@ use std::ops::ControlFlow;
 
 use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
-use autoreview_engine::integrations::{ChangedFile, ChangedFiles, CommentableLines};
+use autoreview_engine::integrations::{ChangedFile, ChangedFiles, CommentableLines, RangeFiles};
 use autoreview_engine::model::PullRequest;
 use autoreview_guard::FieldKind;
 use serde::{Deserialize, Serialize};
@@ -267,6 +267,57 @@ fn decode_files_page(output: &str) -> Result<Vec<ChangedFileRecord>, Error> {
     Ok(autoreview_go_compat::null_entries::zero_entries(entries))
 }
 
+/// Most files the compare endpoint lists for one comparison.
+const COMPARE_FILES_CAP: usize = 300;
+
+/// The part of the compare endpoint's answer that the eval reads.
+#[derive(Debug, Default, Deserialize)]
+struct CompareResponse {
+    /// The changed files; GitHub sends them on the first page only.
+    #[serde(default)]
+    files: Vec<Option<ChangedFileRecord>>,
+}
+
+/// Decodes the answer of the compare endpoint into the changed files and commentable lines.
+fn decode_range(output: &str) -> Result<RangeFiles, Error> {
+    let response: CompareResponse =
+        serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let records = autoreview_go_compat::null_entries::zero_entries(response.files);
+    // A range that changes nothing is no case; a missing list would read as an empty diff.
+    if records.is_empty() {
+        return Err(response_invalid(None));
+    }
+    if records.len() >= COMPARE_FILES_CAP {
+        return Err(Error::workflow("github_search_limit_exceeded", true, None));
+    }
+    let (mut range, mut seen) = (RangeFiles::default(), BTreeSet::new());
+    for file in &records {
+        if !valid_changed_path(&file.filename) || !seen.insert(file.filename.clone()) {
+            return Err(response_invalid(None));
+        }
+        if file.patch.is_empty() && file.additions > 0 {
+            return Err(Error::workflow("github_patch_omitted", true, None));
+        }
+        let previous_path = match (file.status.as_str(), file.previous_filename.as_deref()) {
+            ("renamed", Some(previous)) if valid_changed_path(previous) => {
+                Some(previous.to_owned())
+            }
+            ("renamed", _) | (_, Some(_)) => return Err(response_invalid(None)),
+            (_, None) => None,
+        };
+        range.changed.files.push(ChangedFile {
+            path: file.filename.clone(),
+            status: file.status.clone(),
+            additions: file.additions,
+            deletions: file.deletions,
+            previous_path,
+        });
+        let lines = commentable_lines_from_patch(&file.patch)?;
+        range.commentable.insert(file.filename.clone(), lines);
+    }
+    Ok(range)
+}
+
 /// Returns the argv of one page of the changed-files API.
 fn files_args(repository: &str, number: i64, page: i64) -> Vec<String> {
     vec![
@@ -380,6 +431,29 @@ impl GitHub {
         })
     }
 
+    /// Returns the files that `head` changes against `base`, with their commentable lines.
+    ///
+    /// The compare endpoint lists at most [`COMPARE_FILES_CAP`] files, on its first page only,
+    /// so a listing that reaches the cap is refused, and so are an answer without files and a
+    /// file with added lines and no patch: each would turn a finding into a silent miss.
+    pub(crate) async fn range_files(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<RangeFiles, Error> {
+        let arguments = vec![
+            "api".to_owned(),
+            format!("repos/{repository}/compare/{base}...{head}?per_page=1"),
+        ];
+        let output = self
+            .github::<()>(cancel, credential, &arguments, None)
+            .await?;
+        decode_range(&output)
+    }
+
     /// Adds the patch of every changed file to `read`, for the text guard, until the bound.
     ///
     /// A file with added lines whose patch GitHub omits, as it does for a large diff, and a
@@ -467,6 +541,36 @@ at end of file",
             .expect("a deleted file parses");
         assert!(deleted.is_empty());
         assert!(super::commentable_lines_from_patch("@@ broken @@").is_err());
+    }
+
+    /// The compare answer maps to files and commentable lines; a cut-short or patchless answer
+    /// is refused instead of read as a shorter one.
+    #[test]
+    fn compare_answer_is_read_whole_or_refused() {
+        let file = |name: &str, patch: &str, additions: i64| {
+            serde_json::json!({"filename": name, "status": "modified", "patch": patch,
+                "additions": additions, "deletions": 0})
+            .to_string()
+        };
+        let one = format!(
+            "{{\"files\": [{}]}}",
+            file("src/a.rs", "@@ -1,1 +1,2 @@\n a\n+b", 1)
+        );
+        let range = super::decode_range(&one).expect("a complete answer is read");
+        assert_eq!(range.commentable["src/a.rs"], vec![2]);
+        assert_eq!(range.changed.files.len(), 1);
+        let patchless = format!("{{\"files\": [{}]}}", file("a.bin", "", 3));
+        assert!(super::decode_range(&patchless).is_err());
+        for without_files in ["{}", "{\"files\": []}", "{\"files\": null}"] {
+            let error = super::decode_range(without_files).expect_err("an empty diff is refused");
+            let code = autoreview_engine::error::error_code(&error);
+            assert_eq!(code, "github_response_invalid", "{without_files}");
+        }
+        let cap = (0..super::COMPARE_FILES_CAP)
+            .map(|index| file(&format!("f{index}"), "", 0))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(super::decode_range(&format!("{{\"files\": [{cap}]}}")).is_err());
     }
 
     #[test]

@@ -1,0 +1,12 @@
+# Clean case. The review of pohunekd/autoreview PR 525 at head 47c0267 published the marker
+# "autoreview-review:v1 head=47c0267bf9bae2bf3e975c69a18c37c6afa6270c high=0 medium=0 low=0",
+# and that head is the tip of refs/pull/525/head, the head of the merged pull request.
+version: 1
+id: unknown-hook-event
+repository: pohunekd/autoreview
+pull_request: 525
+base_branch: main
+base_sha: b30b45ce8e65d22b7009e37d7c6c97020ffe69aa
+head_sha: 47c0267bf9bae2bf3e975c69a18c37c6afa6270c
+title: Refuse a head checkout on any unknown host hook event
+expect: clean

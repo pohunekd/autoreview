@@ -26,7 +26,7 @@ use crate::config::Credential;
 use crate::error::{BoxError, Error, WORKFLOW_FAILED};
 use crate::integrations::{
     ChangedFile, ChangedFiles, CommentReaction, CommentableLines, GitHubReview, GuardText,
-    GuardTexts, HeadCheckoutHooks, Integrations, PullRequestSignals, PullRequestState,
+    GuardTexts, HeadCheckoutHooks, Integrations, PullRequestSignals, PullRequestState, RangeFiles,
     ReadiedDraft, RepositoryFile, ReviewRequest, ReviewRequestList, SessionRequest, ThreadComment,
     TokenAnswer,
 };
@@ -164,6 +164,8 @@ pub(crate) struct FakeState {
     pub(crate) fetch_ref_hosts: BTreeSet<String>,
     /// Number of the next capability reads that fail as a transient `pohunek_request_failed`.
     pub(crate) fetch_ref_failures: usize,
+    /// Whether every session removal fails, so a session stays open.
+    pub(crate) keeping_sessions: bool,
     /// The hook report of every host; `None` reports the switch and no host script.
     pub(crate) head_checkout_hooks: Option<HeadCheckoutHooks>,
     /// Number of the next hook reports that fail as a transient `pohunek_request_failed`.
@@ -586,6 +588,9 @@ impl Integrations for FakeIntegration {
             )));
         }
         let mut state = self.lock();
+        if state.keeping_sessions {
+            return ready(Err(Error::workflow(WORKFLOW_FAILED, false, None)));
+        }
         state.sessions.remove(&session.session_id);
         ready(Ok(()))
     }
@@ -613,6 +618,26 @@ impl Integrations for FakeIntegration {
         let result = ChangedFiles {
             files: state.changed.clone(),
             truncated: state.changed_truncated,
+        };
+        drop(state);
+        ready(Ok(result))
+    }
+
+    fn read_range_files(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        _repository: &str,
+        _base: &str,
+        _head: &str,
+    ) -> impl Future<Output = Result<RangeFiles, Error>> + Send {
+        let state = self.lock();
+        let result = RangeFiles {
+            changed: ChangedFiles {
+                files: state.changed.clone(),
+                truncated: false,
+            },
+            commentable: state.commentable.clone(),
         };
         drop(state);
         ready(Ok(result))
