@@ -59,13 +59,6 @@ MARKERS = Markers(
     refusal_format="[autoreview-codex/v1 refused:{}]",
     reason_format="[autoreview-codex/v1 reason:{}]",
 )
-# An older engine reads only these markers, and its prompt has no trusted protocol line.
-LEGACY_MARKERS = Markers(
-    result_prefix="[pohunek-codex-review-result-v1:",
-    exit_line_format="[pohunek-codex-review exited with status {}]",
-    refusal_format="[pohunek-codex-review-refused-v1:{}]",
-    reason_format="[pohunek-codex-review-reason-v1:{}]",
-)
 REFUSAL_HEAD_UNAVAILABLE = "head_unavailable"
 REFUSAL_REPOSITORY_SKILLS = "repository_skills"
 # Codex 0.167.0 loads the skills in `.agents/skills` and `.codex/skills` of every directory
@@ -626,9 +619,8 @@ def nonce_markers(nonce: str) -> Markers:
 def result_markers(prompt: str) -> tuple[Markers, str]:
     """Returns the markers that the trusted protocol line names, and the prompt for Codex.
 
-    A prompt without the line comes from an older engine, which reads only the legacy markers.
-    Under `NONCE_PROTOCOLS` the one nonce line binds the markers to the request; it is removed
-    from the prompt, so the model never reads the nonce.
+    A prompt without the line is refused. Under `NONCE_PROTOCOLS` the one nonce line binds the
+    markers to the request; it is removed from the prompt, so the model never reads the nonce.
     """
     protocols = TRUSTED_PROTOCOL_PATTERN.findall(prompt)
     nonces = TRUSTED_NONCE_PATTERN.findall(prompt)
@@ -640,10 +632,8 @@ def result_markers(prompt: str) -> tuple[Markers, str]:
         return nonce_markers(nonces[0]), "\n".join(lines)
     if nonces:
         raise InputFrameError(f"trusted nonce is valid only with {PROTOCOL_V2} or {PROTOCOL_V3}")
-    if not protocols:
-        return LEGACY_MARKERS, prompt
     if protocols != [PROTOCOL]:
-        raise InputFrameError("trusted protocol is ambiguous or unknown")
+        raise InputFrameError("trusted protocol is missing, ambiguous or unknown")
     return MARKERS, prompt
 
 
@@ -1013,7 +1003,8 @@ def main() -> NoReturn:
     try:
         markers, prompt = result_markers(prompt)
     except InputFrameError as error:
-        refuse(error, maximum_retention_seconds, after_run=False, markers=LEGACY_MARKERS)
+        # No trusted protocol line or nonce is known, so the refusal answers without a nonce.
+        refuse(error, maximum_retention_seconds, after_run=False, markers=MARKERS)
     try:
         expected_head_sha, checkout_sha = verify_review_checkout(prompt)
     except InputFrameError as error:
