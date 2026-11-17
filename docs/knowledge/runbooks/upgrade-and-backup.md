@@ -192,8 +192,9 @@ Roll back only with a backup taken before the upgrade:
    `store.outcome_retention_seconds` for a release before finding outcomes, or
    `schedule.outcome_check_interval_seconds` for a release before the outcomes at
    merge and close, or `pohunek.head_checkout_host_hooks` for a release before
-   head checkouts without the repository's hooks, or `guidance` for a release
-   before guidance suggestions. On a converted
+   head checkouts without the repository's hooks, or `guidance` and
+   `notify.routes.guidance_suggested` for a release before guidance
+   suggestions. On a converted
    deployment, remove the matching `HERMES_PR_REVIEW_*` variable too, or run
    the old release's `scripts/env-to-config`, which refuses it as unknown.
    Do the same for the policy: restore the policy of the old version, or remove
