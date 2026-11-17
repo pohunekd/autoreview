@@ -39,6 +39,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::env_file::EnvFile;
+use crate::prune_branches::eval::{self as prune_eval, EvalPruneArguments};
 use crate::prune_branches::{RunBranch, delete_run_branches};
 use crate::{CONFIG_ENV, cancel_on_signal, command_invalid, config_file, print_json};
 
@@ -50,6 +51,9 @@ const THRESHOLD_NOT_MET: &str = "eval_threshold_not_met";
 
 /// Error code of a run with a trial that could not be measured; its report is the stdout object.
 const TRIALS_FAILED: &str = "eval_trials_failed";
+
+/// Error code of an `eval prune` that left work undone; its document is the stdout object.
+pub(crate) const EVAL_PRUNE_INCOMPLETE: &str = "eval_prune_incomplete";
 
 /// Exit code of a run whose gate is not met.
 const EXIT_THRESHOLD: u8 = 2;
@@ -74,6 +78,9 @@ pub(crate) enum EvalCommand {
     /// Writes a new case from the commit that fixed a defect a review let through, or from a
     /// finding judged wrong or right, and prints it.
     Add(Box<AddArguments>),
+    /// Removes the sessions and deletes the branches that a killed `eval run` left on the review
+    /// hosts; without `--yes` it only lists them.
+    Prune(EvalPruneArguments),
 }
 
 /// The options of `eval add`.
@@ -292,7 +299,7 @@ fn panicked_trial(repeat: i64, sessions: u32) -> TrialReport {
 /// Returns the exit code of an error that `eval` already printed its document for.
 pub(crate) fn exit_code(code: &str) -> Option<u8> {
     match code {
-        EVAL_CASES_INVALID => Some(1),
+        EVAL_CASES_INVALID | EVAL_PRUNE_INCOMPLETE => Some(1),
         THRESHOLD_NOT_MET => Some(EXIT_THRESHOLD),
         TRIALS_FAILED => Some(EXIT_TRIALS_FAILED),
         _ => None,
@@ -304,7 +311,8 @@ pub(crate) fn exit_code(code: &str) -> Option<u8> {
 /// # Errors
 ///
 /// Returns `command_invalid` for `--config` with `eval validate`, the code of a printed
-/// document (`eval_cases_invalid`, `eval_threshold_not_met`, `eval_trials_failed`), a
+/// document (`eval_cases_invalid`, `eval_prune_incomplete`, `eval_threshold_not_met`,
+/// `eval_trials_failed`), a
 /// configuration error, or the error that stopped the run.
 pub(crate) async fn run(
     config_path: Option<PathBuf>,
@@ -329,7 +337,25 @@ pub(crate) async fn run(
         }
         EvalCommand::Run(arguments) => run_suite(config_path, env_file_path, &arguments).await,
         EvalCommand::Add(arguments) => add_case(config_path, env_file_path, &arguments).await,
+        EvalCommand::Prune(arguments) => {
+            prune_leftovers(config_path, env_file_path, &arguments).await
+        }
     }
+}
+
+/// Lists, and with `--yes` removes, the sessions and branches of the eval prefixes, and prints
+/// what it found.
+async fn prune_leftovers(
+    config_path: Option<PathBuf>,
+    env_file_path: Option<PathBuf>,
+    arguments: &EvalPruneArguments,
+) -> Result<(), Error> {
+    let (config, eval) = load_eval(config_path, env_file_path)?;
+    let cancel = CancellationToken::new();
+    cancel_on_signal(cancel.clone())?;
+    let result = prune_eval::run(&config, &eval, arguments, &cancel).await?;
+    print_json(&result)?;
+    result.status()
 }
 
 /// Loads the configuration file and its required `eval` section.
@@ -354,7 +380,7 @@ fn eval_credential(config: &Config, eval: &EvalConfig) -> Result<Credential, Err
 }
 
 /// Returns the GitHub reader of an eval: the real integrations, which can notify nowhere.
-fn reading_external(config: &Config) -> Result<External, Error> {
+pub(crate) fn reading_external(config: &Config) -> Result<External, Error> {
     // The wrapper never notifies; with no backend configured nothing could.
     let mut config = config.clone();
     config.notify = NotifySettings {

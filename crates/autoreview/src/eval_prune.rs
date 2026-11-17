@@ -2,11 +2,6 @@
 
 // Rust guideline compliant 2026-11-14
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the eval prune command")
-)]
-
 #[cfg(test)]
 mod tests;
 

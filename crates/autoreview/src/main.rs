@@ -332,7 +332,11 @@ fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
     let reads_secrets = matches!(
         cli.command,
         Invocation::Configured(_)
-            | Invocation::Eval(eval_cli::EvalCommand::Run(_) | eval_cli::EvalCommand::Add(_))
+            | Invocation::Eval(
+                eval_cli::EvalCommand::Run(_)
+                    | eval_cli::EvalCommand::Add(_)
+                    | eval_cli::EvalCommand::Prune(_)
+            )
     );
     if cli.env_file.is_some() && !reads_secrets {
         return Err(Cli::command().error(
