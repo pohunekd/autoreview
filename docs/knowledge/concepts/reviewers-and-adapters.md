@@ -102,8 +102,7 @@ rollback of the engine to a release that sends these names needs no reinstall.
   `review_nonce_mismatch`, which gets a fresh session.
 - An adapter from an earlier release does not know `autoreview-codex/v3`: it
   stops the run with status 64 and the exit line of its own name, before Codex
-  runs, and the engine stops the review at once with `review_adapter_outdated`.
-  Run
+  runs, and every run of the review ends in `review_nonce_mismatch`. Run
   `autoreview profiles install` for every Codex profile before the engine is
   updated. An adapter from release 0.3.0 or earlier reads no protocol line, but
   it finds no `- Trusted head SHA:` line either, so it stops the run the same
@@ -401,8 +400,8 @@ install --agent codex` refuses such a host, a Mac for example, with
   can read the output before it removes the session.
   The engine reads the output as finished once its last line, read up to the
   current end of the output, is an exit line of `autoreview-codex/v1` or `v2`,
-  or the one of an adapter that predates the protocol line, which is
-  `review_adapter_outdated`; an exit
+  or the one of an adapter that predates the protocol line, which ends the run
+  with `review_nonce_mismatch`; an exit
   line that the Codex transcript quotes before the end does not finish it, and
   one without the request's nonce at the end ends the run with
   `review_nonce_mismatch`.

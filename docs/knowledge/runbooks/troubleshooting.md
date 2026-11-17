@@ -514,7 +514,15 @@ list):
   when it refuses a request without a usable `- Trusted protocol:` line. A Codex
   run that an engine restart left behind, or a model that printed an exit line
   as the last line while it paused, ends only that run: the reviewer gets a
-  fresh session.
+  fresh session. Every run of a profile whose adapter predates the protocol line
+  ends so, and the review fails after the fresh sessions: its session output
+  ends with the adapter's own exit line after
+  `codex-adapter: trusted nonce is valid only with autoreview-codex/v2`
+  (release 0.4.0 to 0.6.0) or
+  `codex-adapter: trusted pull request head is missing or ambiguous` (release
+  0.3.0 or earlier). Run
+  [`autoreview profiles install`](../../cli.md#autoreview-profiles-install) for
+  the profile, then `autoreview retry`.
 - `review_wrapper_invalid`: a Claude result line could not be read, or reports
   an exit code other than 0, output on stderr, or another protocol or mode (see
   [Claude Code failed](#claude-code-failed)).
@@ -540,12 +548,7 @@ list):
   another checkout than the pipeline's, or is in mode `text`, or names the
   result protocol of an adapter from before `autoreview-claude/v1`. A Claude
   adapter of 0.3.0 or earlier is such an adapter: it answers every request in
-  mode `text` with the refusal `checkout_invalid`. So is a Codex adapter that
-  predates the protocol line: it ends its output with an exit line of its own
-  after `codex-adapter: trusted nonce is valid only with autoreview-codex/v2`
-  (release 0.4.0 to 0.6.0) or
-  `codex-adapter: trusted pull request head is missing or ambiguous` (release
-  0.3.0 or earlier). It comes from an adapter older
+  mode `text` with the refusal `checkout_invalid`. It comes from an adapter older
   than the one in `adapters/codex/` or `adapters/claude/`, so the review stops
   without a fresh session. Write the profile with `autoreview profiles install`
   on the review host (with `--replace` when the command did not write it), then
