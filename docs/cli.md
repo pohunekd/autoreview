@@ -2,7 +2,7 @@
 type: Reference
 id: reference/cli
 title: CLI reference
-description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, report, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches, guard scan and eval validate - with arguments and JSON output.
+description: Every autoreview command - init, serve, mcp, validate, poll, candidates, reviews, review, awaiting, stats, report, findings list, approve, resolve, retry, review-queue, backup-db, prune-branches, guard scan, eval validate, eval add and eval run - with arguments and JSON output.
 source_kind: manual
 intents: [setup, debug, help]
 ---
@@ -436,6 +436,67 @@ expect:
       lines: [40, 52]       # 1-based, inclusive, right side of the head
       description: Lock released before the entry is inserted.
 ```
+
+### `autoreview eval add`
+
+```
+autoreview eval add --cases <DIR> --from-pr <OWNER/NAME#N> --fix <SHA> --id <ID>
+  --base-sha <SHA> --head-sha <SHA> --base-branch <BRANCH> [--head-branch <BRANCH>]
+  [--path <PATH>]... [--lines <PATH:FIRST-LAST>]...
+```
+
+Writes the case of a defect that a review let through, from the commit that fixed
+it, as `DIR/<id>.yaml`, and prints it. It needs the [`eval` section](configuration.md#eval)
+and a `--config` of its own, and takes `--env-file` like `eval run`. It only reads
+GitHub, with `eval.credential`: it opens no store, starts no session and never
+edits or overwrites a file. `--base-sha` and `--head-sha` (40 lowercase hex digits)
+name the diff the review saw, `--fix` the fixing commit, `--base-branch` the
+branch the reviewer worktree starts from, and `--id` the case name (the rules of
+the case `id`). The title is the pull request's current title, cleaned and cut to
+200 characters.
+
+The expected lines are the lines of the fix commit's parent that the fix changed,
+because the defect is in what the fix removed or rewrote:
+
+- A file gives an expected finding only when the fix modifies or removes it and
+  the reviewed range has an added line in it, since a reviewer can only block on
+  such a file. Any other file is listed in `skipped` with the reason
+  `added_by_fix`, `no_patch` (a binary file or a change without lines),
+  `not_selected` or `not_in_review_range`.
+- One range per file covers its first to its last changed line, so one defect is
+  one finding. With more than one such file, `--path` names each file to keep. A
+  range of 200 lines or more is refused; give it with `--lines`.
+- Those lines are the reviewed head's only where the file is byte-identical at the
+  head and at the fix's parent. Otherwise the command refuses (`eval_add_fix_drift`)
+  and the operator gives the range with `--lines`, which replaces the computed
+  range and skips that check for the file. A path is the file's name at the
+  reviewed head, so a file that the fix renames keeps its old name.
+- The description is `Fixed by <12 digits of --fix> (<repository>): <first line of
+  the commit message>`, without control, format and line separator characters.
+
+When the pull request ref no longer points at `--head-sha`, `--head-branch`
+is required (a branch name that `eval run` accepts, outside both reserved
+prefixes), the case reads `refs/heads/<branch>`, and the output lists the two
+git commands that create the branch from the head. The command never creates it.
+
+The directory is loaded first, and an invalid case there stops the command with
+the `eval_cases_invalid` document of `eval validate`. The text is parsed back and
+must equal the intended case before it is written.
+
+It prints `{"ok": true, "file": ..., "id": ..., "kind": "defect", "yaml": ...,
+"skipped": [{"path": ..., "reason": ...}], "fixture_branch": null}`; with
+`--head-branch`, `fixture_branch` is `{"name": ..., "commands": [...]}`. Any error
+is exit code 1.
+
+| Code | Meaning |
+|---|---|
+| `eval_add_pull_request_not_found`, `eval_add_head_branch_required`, `eval_head_ref_reserved` | GitHub returned no pull request, the pull request ref differs from `--head-sha` and no `--head-branch` is given, or the branch is under a review branch prefix |
+| `eval_add_fix_not_single_parent`, `github_patch_omitted`, `github_search_limit_exceeded` | The fix is a merge or root commit, GitHub left out the patch of a file with changed lines, or the fix lists 300 files or more |
+| `eval_add_path_unknown`, `eval_add_no_reviewable_path`, `eval_add_path_required` | A `--path` or `--lines` path is not a file of the fix, no file of the fix qualifies, or several qualify and no `--path` is given |
+| `eval_add_range_too_wide`, `eval_add_fix_drift` | A range is 200 lines or more, or a file differs at the head and at the fix's parent; both name `--lines` |
+| `eval_add_case_exists`, `eval_add_file_exists` | A case of the directory has the same repository, pull request and head, or the file exists; the cause names the file |
+| `eval_add_case_invalid`, `eval_add_write_failed` | The text does not parse back to the intended case (it names the first error), or the file cannot be written |
+| `eval_cases_invalid`, `credential_not_covered`, `command_invalid` | The directory holds an invalid case, the eval credential does not cover the repository, or an argument is malformed |
 
 ### `autoreview eval run`
 

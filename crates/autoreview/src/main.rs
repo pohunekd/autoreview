@@ -113,7 +113,7 @@ enum Invocation {
     /// Runs the text guard over a corpus of pull request texts, offline.
     #[command(subcommand)]
     Guard(guard_scan::GuardCommand),
-    /// Checks eval case files of known pull requests, offline.
+    /// Checks, adds and runs eval cases of known pull requests.
     #[command(subcommand)]
     Eval(eval_cli::EvalCommand),
     /// A command that loads the configuration first.
@@ -330,7 +330,8 @@ fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
     let cli = Cli::try_parse_from(arguments)?;
     let reads_secrets = matches!(
         cli.command,
-        Invocation::Configured(_) | Invocation::Eval(eval_cli::EvalCommand::Run(_))
+        Invocation::Configured(_)
+            | Invocation::Eval(eval_cli::EvalCommand::Run(_) | eval_cli::EvalCommand::Add(_))
     );
     if cli.env_file.is_some() && !reads_secrets {
         return Err(Cli::command().error(

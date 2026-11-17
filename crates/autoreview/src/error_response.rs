@@ -38,7 +38,10 @@ autoreview profiles install --host HOST --agent claude|codex --name NAME --model
 --maximum-retention-seconds SECONDS] --pohunek-timeout-seconds SECONDS [--replace]; \
 autoreview guard scan --lexicon PATH --max-input-bytes BYTES --threshold SCORE --fields LIST \
 CORPUS; autoreview eval validate --cases DIR; autoreview eval run --cases DIR --pipeline NAME \
---git-binary PATH [--repeat N] [--min-recall RATIO] [--max-false-blocking RATIO]";
+--git-binary PATH [--repeat N] [--min-recall RATIO] [--max-false-blocking RATIO]; \
+autoreview eval add --cases DIR --from-pr OWNER/NAME#N --fix SHA --id ID --base-sha SHA \
+--head-sha SHA --base-branch BRANCH [--head-branch BRANCH] [--path PATH] \
+[--lines PATH:FIRST-LAST]";
 
 /// The JSON a caller reads from a failed command. It carries stable codes, never raw causes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
