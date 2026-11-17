@@ -9,13 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{BoxError, Error};
-use crate::messages::excerpt;
-use crate::model::finding::category_valid;
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
 use crate::protocol::reason::trailing_reason;
 use crate::protocol::request::checkout_name;
 use crate::protocol::validate::{
-    review_adapter_outdated, review_head_unavailable, reviewer_output_invalid,
+    finding_category, review_adapter_outdated, review_head_unavailable, reviewer_output_invalid,
 };
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
@@ -42,9 +40,6 @@ const EXIT_REFUSED: i64 = 64;
 
 /// HTTP status of the API error that ends a run on a rate or usage limit.
 const STATUS_TOO_MANY_REQUESTS: i64 = 429;
-
-/// Characters of a refused category that the warning shows. A fixed size, not a tunable.
-const CATEGORY_LOG_CHARACTERS: i64 = 80;
 
 /// Protocol name of the wrapper.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,26 +218,6 @@ pub(crate) fn parse_claude_output(
         findings: result_findings,
         ..ReviewerResult::default()
     })
-}
-
-/// Returns the category of finding `id`, or an empty one when the reviewer gave none.
-///
-/// A value that is not a category slug does not refuse the review: the finding is kept without
-/// a category and one warning names the review and the value.
-fn finding_category(pr: &PullRequest, id: &str, category: Option<&str>) -> String {
-    let Some(category) = category else {
-        return String::new();
-    };
-    if category_valid(category) {
-        return category.to_owned();
-    }
-    tracing::warn!(
-        review_id = %pr.review_id(),
-        finding = id,
-        category = %excerpt(category, CATEGORY_LOG_CHARACTERS),
-        "finding category refused"
-    );
-    String::new()
 }
 
 /// Reads the schema-enforced structured output of a finished Claude session on `checkout`.
