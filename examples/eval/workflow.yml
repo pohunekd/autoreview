@@ -1,0 +1,54 @@
+# Template, not installed: runs the eval suite on a self-hosted runner. Reviewers are pohunek
+# sessions with local agent profiles, so a GitHub-hosted runner cannot run them. The runner
+# belongs to a runner group that only this repository and this workflow file on the default
+# branch may use, and has autoreview, pohunek, the agent profiles and a config file of its
+# own (docs/knowledge/guides/eval-suite.md). Without that group any workflow of a fork pull
+# request could run code on the host.
+name: autoreview-eval
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+  push:
+    branches: [main]
+    paths: ["prompts/**", "policy.yaml"]
+  # A pull request that edits a prompt changes what an agent session does on the runner. With
+  # this trigger, keep `environment: autoreview-eval` below (required reviewers) and the
+  # same-repository condition of the job. Never use pull_request_target.
+  # pull_request:
+  #   paths: ["prompts/**", "policy.yaml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autoreview-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Required with the pull_request trigger; it also holds the token as an environment secret.
+    environment: autoreview-eval
+    runs-on: [self-hosted, autoreview-eval]
+    timeout-minutes: 120
+    env:
+      # `policy_file` of this config must point at the policy of the checked-out workspace,
+      # or a push that edits the policy or the prompts tests the installed copy.
+      AUTOREVIEW_CONFIG: /etc/autoreview-eval/config.yaml
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Validate the cases
+        run: autoreview eval validate --cases examples/eval/cases
+      - name: Run the suite
+        env:
+          AUTOREVIEW_EVAL_GITHUB_TOKEN: ${{ secrets.AUTOREVIEW_EVAL_GITHUB_TOKEN }}
+        run: >
+          autoreview eval run --cases examples/eval/cases --pipeline default --repeat 3
+          --git-binary /usr/bin/git --min-recall 0.6 --max-false-blocking 0.2 > report.json
+      - name: Summarize
+        if: always()
+        run: |
+          jq -r '"recall \(.totals.defect.recall_after.value) false blocking \(.totals.clean.rate_after.value) failed \(.totals.failed_trials)"' report.json >> "$GITHUB_STEP_SUMMARY"

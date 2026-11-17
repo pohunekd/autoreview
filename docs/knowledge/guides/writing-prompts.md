@@ -177,5 +177,8 @@ the old rule. Run the test on a pull request that already has a real diff, so
 the prompt has something to check. For a verifier change, use a pull request
 that already has at least one blocking finding.
 
+To check a prompt change against many known pull requests at once, see
+[regression-test a review configuration](eval-suite.md).
+
 For the review flow itself, see [how it works](../concepts/how-it-works.md).
 For the policy keys, see the [policy reference](../../policy.md).

@@ -172,6 +172,7 @@ reviewer, severity and repository over a range of days.
 | [Approve from chat](knowledge/guides/hermes-approval.md) | A chat agent approves a waiting review through the MCP server |
 | [MCP server](knowledge/guides/mcp-server.md) | Reviews as MCP tools for any agent |
 | [Enable the text guard](knowledge/guides/text-guard.md) | Shadow mode and corpus measurement for the prompt-injection guard |
+| [Regression-test a review configuration](knowledge/guides/eval-suite.md) | `autoreview eval` checks a prompt, model or policy change against known pull requests |
 
 | Operate | |
 |---|---|
