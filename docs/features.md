@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Features
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 Šafář review (the `autoreview` service and command) is a small service that
 reviews GitHub pull requests with coding agents you already run. It finds pull
@@ -121,9 +121,9 @@ reviewer, severity and repository over a range of days.
   runtime packages installed.
 - The GitHub CLI and one token, of your own account or a machine user, or one
   token per owner or repository. [GitHub identity](knowledge/concepts/github-identity.md)
-- Linux with systemd, or, from 0.6.0 on (#513), macOS 14
-  or newer on Apple Silicon with launchd, where reviewers run Claude Code only:
-  the Codex adapter needs Linux. A container image is not available (#40).
+- Linux with systemd, or, from 0.6.0 on (#513), macOS 14 or newer on Apple
+  Silicon with launchd, where reviewers run Claude Code only: the Codex adapter
+  needs Linux. A container image is not available (#40).
 
 ## Documentation map
 

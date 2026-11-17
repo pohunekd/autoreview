@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Combining patterns
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 The recipes layer the [scenario guides](index.md) in one `policy.yaml`. Each
 shows only the parts that change; the top-level keys are as in the

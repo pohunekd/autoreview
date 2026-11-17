@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Quickstart
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 This guide takes one repository from nothing to a review comment posted by
 autoreview. It uses one reviewer and comments only, so nothing is approved

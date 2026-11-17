@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Regression-test a review configuration
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 An eval reviews known pull requests with the real reviewers and verifier of one
 pipeline, publishes nothing, and counts how many of the expected blocking

@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Secrets
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 autoreview has two kinds of secrets: the GitHub token of the
 [credential](../concepts/github-identity.md) and the Matrix token of the
@@ -61,13 +61,12 @@ The review agents are started by the pohunek daemon, not by autoreview, and run
 with the daemon's environment, which autoreview does not control. Keep secrets
 out of the daemon's environment and out of the pohunek profile.
 
-On macOS (from 0.6.0 on, #513), the launchd agents that
-`scripts/setup` writes for autoreview carry no secret either. Their
-`EnvironmentVariables` hold only `PATH`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
-`XDG_STATE_HOME`, plus `XDG_CACHE_HOME` and `XDG_RUNTIME_DIR` when they are
-set. The secrets reach the service through `--env-file`, which must be yours
-with mode 0600. `scripts/macos-check service` refuses an agent that holds any
-other variable.
+On macOS (from 0.6.0 on, #513), the launchd agents that `scripts/setup` writes
+for autoreview carry no secret either. Their `EnvironmentVariables` hold only
+`PATH`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and `XDG_STATE_HOME`, plus
+`XDG_CACHE_HOME` and `XDG_RUNTIME_DIR` when they are set. The secrets reach the
+service through `--env-file`, which must be yours with mode 0600.
+`scripts/macos-check service` refuses an agent that holds any other variable.
 
 ## Blast radius of a token
 

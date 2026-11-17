@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Getting started
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release and `scripts/setup`. The script installs the autoreview release
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release and `scripts/setup`. The script installs the autoreview release
 > named by `AUTOREVIEW_VERSION` in the script, which must know
 > `init --notifier` (0.7.0 or later). A
 > part that is not available names its open issue. On a Mac the script needs a

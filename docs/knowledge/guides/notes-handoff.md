@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Notes hand-off
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 A review can be clean of blocking findings and still have useful notes. With
 `on_notes: comment`, a review whose findings are all notes is not sent to a

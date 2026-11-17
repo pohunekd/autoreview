@@ -9,8 +9,8 @@ intents: [debug, help, update]
 
 # State and recovery
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 autoreview keeps all of its state in one SQLite file, `store.path` in
 [config.yaml](../../configuration.md#store). A restart does not lose a review in
@@ -293,8 +293,10 @@ review is repaired or removed. The `error` field of the log line names the
 review's workflow ID. Such a review is a defect or a damaged store to report
 (see the [CLI error codes](../../cli.md#error-codes)). The same rows stop
 `autoreview report` when its range reaches the review; `autoreview stats --since`
-stops only for the review row and the plan, and reads no slot, verification,
-combined artifact or `request_id` row (see [`autoreview stats`](../../stats.md)).
+stops for the review row and the plan, and for a step run that ended in its
+range with a column that does not read as its type or a `finished_at` that is
+not an RFC 3339 time. It reads no slot, verification, combined artifact or
+`request_id` row (see [`autoreview stats`](../../stats.md)).
 A `request_id` row is read as a key and never decoded.
 
 The two reads for the request time scan whole tables: `reviews` has no index on

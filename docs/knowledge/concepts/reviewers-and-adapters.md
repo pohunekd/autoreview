@@ -9,8 +9,8 @@ intents: [setup, help]
 
 # Reviewers and adapters
 
-> **Status: after 0.6.0.** This page describes autoreview on `main` after the
-> 0.6.0 release. A part that is not available names its open issue.
+> **Status: after 0.7.0.** This page describes autoreview on `main` after the
+> 0.7.0 release. A part that is not available names its open issue.
 
 A **reviewer** is one coding agent run in its own pohunek session. The agent
 reads the pull request in a worktree, writes findings, and returns them in a
@@ -66,11 +66,11 @@ reviewed head SHA. A report without `prior_findings`, or with a finding without
 Between the engine and an adapter the protocols are named `autoreview-claude/v1`
 and `autoreview-codex/v3`. The Claude adapter answers in the name of the request
 it got; the Codex adapter answers a `v3` request in the `autoreview-codex/v2`
-markers, which carry the nonce of the request. The engine reads the legacy Claude result name too, so a review that an
-earlier engine started still finishes; a later release removes the legacy
-names (#393). Claude and Codex profiles must be installed from this release
-before the engine is updated (see below); a rollback of the engine needs no
-reinstall.
+markers, which carry the nonce of the request. The engine reads the legacy
+Claude result name too, so a review that an earlier engine started still
+finishes; a later release removes the legacy names (#393). Claude and Codex
+profiles must be installed from this release before the engine is updated
+(see below); a rollback of the engine needs no reinstall.
 
 - `autoreview-claude/v1` is the `protocol` field of the request and of the
   result line, and the engine sends every Claude request under it. The adapter
@@ -342,9 +342,9 @@ are in [wire names](#wire-names).
 The adapter for `codex-envelope` lives in `adapters/codex/` and uses only the
 Python standard library (Python 3.11 or newer). It runs only on Linux: it needs
 `PR_SET_CHILD_SUBREAPER` to end the processes that a run leaves, and exits with
-status 64 on a host without it; from 0.6.0 on (#513),
-`autoreview profiles install --agent codex` refuses such a host, a Mac for
-example, with `profile_agent_unsupported`. It has two parts:
+status 64 on a host without it; from 0.6.0 on (#513), `autoreview profiles
+install --agent codex` refuses such a host, a Mac for example, with
+`profile_agent_unsupported`. It has two parts:
 
 - `codex-adapter` is the program a profile starts. It runs under `python3 -I`.
   Before it reads the request it sets the fixed terminal title
