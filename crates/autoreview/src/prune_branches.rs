@@ -19,8 +19,8 @@ use autoreview_engine::config::Config;
 use autoreview_engine::store::{ReviewFilter, Store};
 use autoreview_engine::{Error, error_code};
 use autoreview_external::{
-    branch_refs, config_entries, delete_ref, host_is_local, project_roots, session_branches,
-    worktrees,
+    SessionSummary, branch_refs, config_entries, delete_ref, host_is_local, project_roots,
+    session_branches, worktrees,
 };
 use clap::Args;
 use serde::Serialize;
@@ -28,6 +28,7 @@ use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use crate::command_invalid;
+use crate::eval_prune::live_session_branches;
 use plan::{BranchPlan, HEADS, Owners, Rules, Verdict};
 
 /// Error of a repository whose configuration names a hook that a deletion would run.
@@ -124,7 +125,7 @@ struct HostReport {
 
 /// The branches under the prefix of one repository.
 #[derive(Debug, Serialize)]
-struct RepositoryReport {
+pub(crate) struct RepositoryReport {
     /// Repository root, as `pohunek project list` reports it.
     path: String,
     /// Error code of a git call that failed; the repository is then skipped.
@@ -458,6 +459,50 @@ async fn delete_host_branches(
         }
     }
     (deleted, kept)
+}
+
+/// Plans the eval branches of one review host and, when `delete` is set, deletes the `delete`
+/// ones, or returns why the host is skipped.
+///
+/// The git listing comes before the session read, as in `prune-branches`. `selected` are the
+/// eval sessions found on the host; [`live_session_branches`] decides which of their branches
+/// still count as a live session. No review owns an eval branch and no age limit applies, so
+/// every well-formed branch under `prefix` that no live session, worktree or hook keeps is
+/// `delete`.
+#[expect(dead_code, reason = "called by the eval prune command")]
+pub(crate) async fn prune_eval_host(
+    config: &Config,
+    cancel: &CancellationToken,
+    git: &str,
+    host: &str,
+    prefix: &str,
+    selected: &[&SessionSummary],
+    delete: bool,
+) -> Result<Vec<RepositoryReport>, String> {
+    let listings = list_host(config, cancel, git, host).await?;
+    let read = session_branches(config, cancel, host)
+        .await
+        .map_err(|error| {
+            tracing::warn!(host, error = %error, "eval prune host skipped: sessions unknown");
+            error_code(&error).to_owned()
+        })?;
+    let sessions = live_session_branches(read, selected, delete);
+    let owners = Owners::default();
+    let rules = Rules {
+        prefix,
+        owners: &owners,
+        sessions: &sessions,
+        only: None,
+        older_than: None,
+        retention: config.review_retention,
+        now: OffsetDateTime::now_utc(),
+    };
+    let mut repositories = Vec::new();
+    for listing in listings {
+        let report = prune_repository(config, cancel, git, host, listing, &rules, delete).await;
+        repositories.push(report);
+    }
+    Ok(repositories)
 }
 
 /// Returns `pohunek.hosts`, then each other host that a route override names, without repeats.

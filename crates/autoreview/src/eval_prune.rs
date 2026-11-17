@@ -10,6 +10,8 @@
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
+
 use autoreview_external::SessionSummary;
 
 use crate::prune_branches::plan::workflow_id;
@@ -28,6 +30,25 @@ pub(crate) fn select_eval_sessions<'a>(
         .iter()
         .filter(|session| is_eval_session(session, name_prefix, branch_prefix))
         .collect()
+}
+
+/// Returns the branches that keep a branch `session_live` when the eval branches are planned.
+///
+/// `read` is a read of the host's session branches. A dry run (`delete` unset) reads before any
+/// removal, so the branches of `selected` leave the set: the plan shows the verdicts that
+/// `--yes` produces. With `delete`, `read` follows the removals and stays as read, so the
+/// branch of a session whose removal failed keeps its `session_live` verdict.
+pub(crate) fn live_session_branches(
+    mut read: BTreeSet<String>,
+    selected: &[&SessionSummary],
+    delete: bool,
+) -> BTreeSet<String> {
+    if !delete {
+        for session in selected {
+            read.remove(&session.branch);
+        }
+    }
+    read
 }
 
 /// Reports whether `session` has the name, branch and workflow ID of an eval session start.
