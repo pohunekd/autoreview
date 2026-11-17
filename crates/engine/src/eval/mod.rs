@@ -4,5 +4,7 @@
 
 pub mod case;
 pub mod config;
+pub mod integration;
 pub mod matching;
 pub mod report;
+pub mod trial;

@@ -613,6 +613,12 @@ pub struct SessionRequest {
     /// Not serialized: it follows the host's capability at each start attempt.
     #[serde(skip)]
     pub fetch_head: bool,
+    /// The ref the session fetches the head from instead of the pull request ref.
+    ///
+    /// Not serialized: only an eval sets it, to review a head that the pull request ref no
+    /// longer points at.
+    #[serde(skip)]
+    pub fetch_ref: Option<String>,
 }
 
 autoreview_go_compat::object_only_serde!(SessionRequest);
@@ -640,10 +646,13 @@ impl SessionRequest {
         }
     }
 
-    /// Returns the ref of the pull request head on the GitHub remote.
+    /// Returns the ref of the pull request head on the GitHub remote, or the `fetch_ref`
+    /// override.
     #[must_use]
     pub fn head_ref(&self) -> String {
-        format!("refs/pull/{}/head", self.pull_request.number)
+        self.fetch_ref
+            .clone()
+            .unwrap_or_else(|| format!("refs/pull/{}/head", self.pull_request.number))
     }
 
     /// Reports whether the session starts without the checkout's own hooks.
