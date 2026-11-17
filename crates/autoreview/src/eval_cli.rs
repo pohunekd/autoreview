@@ -10,7 +10,8 @@ use std::time::Instant;
 
 use autoreview_engine::config::{Config, Credential, NotifySettings};
 use autoreview_engine::eval::add::{
-    FixSelection, Skipped, clean_title, fix_description, fix_ranges, write_case,
+    FixSelection, Skipped, Verdict, clean_title, finding_expect, fix_description, fix_ranges,
+    write_case,
 };
 use autoreview_engine::eval::case::{
     Case, CaseError, Expect, Expected, head_branch_valid, identifier_valid, load_cases,
@@ -24,7 +25,9 @@ use autoreview_engine::eval::report::{
 use autoreview_engine::eval::trial::{eval_pull_request, eval_rule};
 use autoreview_engine::integrations::Integrations;
 use autoreview_engine::model::{branch_valid, repository_valid, sha_valid};
-use autoreview_engine::store::Store;
+use autoreview_engine::store::{
+    RESULT_SUCCESS, REVIEW_COMPLETED, ReviewFilter, Store, StoredReview,
+};
 use autoreview_engine::{Engine, Error, SystemClock};
 use autoreview_external::External;
 use autoreview_policy::Checkout;
@@ -68,8 +71,9 @@ pub(crate) enum EvalCommand {
     /// Reviews every case with the real reviewers and verifier, publishes nothing, and prints
     /// the report.
     Run(RunArguments),
-    /// Writes a new case from the commit that fixed a defect a review let through, and prints it.
-    Add(AddArguments),
+    /// Writes a new case from the commit that fixed a defect a review let through, or from a
+    /// finding judged wrong or right, and prints it.
+    Add(Box<AddArguments>),
 }
 
 /// The options of `eval add`.
@@ -79,28 +83,46 @@ pub(crate) struct AddArguments {
     #[arg(long, value_name = "DIR")]
     cases: PathBuf,
     /// The pull request that was reviewed, as `owner/name#number`.
-    #[arg(long, value_name = "OWNER/NAME#N", value_parser = pull_request_ref)]
-    from_pr: (String, i64),
+    #[arg(
+        long, value_name = "OWNER/NAME#N", value_parser = pull_request_ref,
+        requires = "fix", required_unless_present = "from_finding", conflicts_with = "from_finding"
+    )]
+    from_pr: Option<(String, i64)>,
     /// The commit that fixed the defect, as 40 lowercase hex digits.
-    #[arg(long, value_name = "SHA")]
-    fix: String,
+    #[arg(long, value_name = "SHA", requires = "from_pr")]
+    fix: Option<String>,
+    /// A published finding, as `owner/name#number:finding_key` of `findings list`.
+    #[arg(
+        long, value_name = "OWNER/NAME#N:KEY", value_parser = finding_ref,
+        requires_all = ["verdict", "store"]
+    )]
+    from_finding: Option<(String, i64, String)>,
+    /// What the finding was: `wrong` makes a clean case, `right` a defect case.
+    #[arg(long, value_parser = ["wrong", "right"], requires = "from_finding")]
+    verdict: Option<String>,
+    /// What is wrong, for `--verdict right`.
+    #[arg(long, value_name = "TEXT", requires = "from_finding")]
+    description: Option<String>,
+    /// Absolute path of the store to read the finding or the review from, read-only.
+    #[arg(long, value_name = "ABS_PATH")]
+    store: Option<PathBuf>,
     /// Identifier of the case and name of its file without `.yaml`.
     #[arg(long, value_name = "ID")]
     id: String,
-    /// Base commit of the reviewed diff.
+    /// Base commit of the reviewed diff; refused beside a stored review.
     #[arg(long, value_name = "SHA")]
-    base_sha: String,
-    /// Head commit of the reviewed diff.
-    #[arg(long, value_name = "SHA")]
-    head_sha: String,
-    /// Base branch the reviewer worktree starts from.
+    base_sha: Option<String>,
+    /// Head commit of the reviewed diff; with `--store` it picks the stored review.
+    #[arg(long, value_name = "SHA", conflicts_with = "from_finding")]
+    head_sha: Option<String>,
+    /// Base branch the reviewer worktree starts from; refused beside a stored review.
     #[arg(long, value_name = "BRANCH")]
-    base_branch: String,
+    base_branch: Option<String>,
     /// Fixture branch that holds the head; required when the pull request ref moved on.
     #[arg(long, value_name = "BRANCH")]
     head_branch: Option<String>,
     /// File to keep, as the reviewed head names it; repeat it to keep several files.
-    #[arg(long = "path", value_name = "PATH")]
+    #[arg(long = "path", value_name = "PATH", conflicts_with = "from_finding")]
     paths: Vec<String>,
     /// Range that replaces the one computed for a file, as `PATH:FIRST-LAST`.
     #[arg(long = "lines", value_name = "PATH:FIRST-LAST", value_parser = path_lines)]
@@ -117,6 +139,16 @@ fn pull_request_ref(text: &str) -> Result<(String, i64), String> {
     } else {
         Err(invalid())
     }
+}
+
+/// Reads `owner/name#number:finding_key`; the key is what follows the first colon.
+fn finding_ref(text: &str) -> Result<(String, i64, String), String> {
+    let (pull_request, key) = text
+        .split_once(':')
+        .filter(|(_, key)| !key.is_empty())
+        .ok_or_else(|| "must be owner/name#number:finding_key".to_owned())?;
+    let (repository, number) = pull_request_ref(pull_request)?;
+    Ok((repository, number, key.to_owned()))
 }
 
 /// Reads `PATH:FIRST-LAST` with `1 <= FIRST <= LAST`.
@@ -354,7 +386,7 @@ struct AddedCase {
     file: String,
     /// Identifier of the case.
     id: String,
-    /// `defect`: the case expects blocking findings.
+    /// `defect` when the case expects blocking findings, `clean` when it expects none.
     kind: &'static str,
     /// The text of the case file.
     yaml: String,
@@ -376,14 +408,35 @@ fn check_add_arguments(
         ("--base-sha", &arguments.base_sha),
         ("--head-sha", &arguments.head_sha),
     ];
-    if let Some((flag, _)) = shas.iter().find(|(_, sha)| !sha_valid(sha)) {
+    let bad_sha = |sha: &Option<String>| sha.as_deref().is_some_and(|sha| !sha_valid(sha));
+    if let Some((flag, _)) = shas.iter().find(|(_, sha)| bad_sha(sha)) {
         return Err(invalid(&format!("{flag} must be 40 lowercase hex digits")));
     }
     if !identifier_valid(&arguments.id) {
         return Err(invalid("--id must be 1 to 64 of a-z, 0-9, `.`, `_`, `-`"));
     }
-    if !branch_valid(&arguments.base_branch) {
+    let bad_branch = arguments
+        .base_branch
+        .as_deref()
+        .is_some_and(|name| !branch_valid(name));
+    if bad_branch {
         return Err(invalid("--base-branch is not a branch name"));
+    }
+    let ranges: BTreeMap<&str, (i64, i64)> = (arguments.lines.iter())
+        .map(|(path, range)| (path.as_str(), *range))
+        .collect();
+    if ranges.len() != arguments.lines.len() {
+        return Err(invalid("--lines is given twice for one path"));
+    }
+    let explicit = (
+        &arguments.base_sha,
+        &arguments.head_sha,
+        &arguments.base_branch,
+    );
+    if arguments.store.is_none() && !matches!(explicit, (Some(_), Some(_), Some(_))) {
+        return Err(invalid(
+            "without --store, give --base-sha, --head-sha and --base-branch",
+        ));
     }
     let Some(branch) = &arguments.head_branch else {
         return Ok(());
@@ -393,17 +446,96 @@ fn check_add_arguments(
             "--head-branch is not a branch name that git accepts",
         ));
     }
-    let prefixes = [&config.session_branch_prefix, &eval.session_branch_prefix];
-    if prefixes
-        .iter()
-        .any(|prefix| branch.starts_with(prefix.as_str()))
-    {
+    if branch_reserved(config, eval, branch) {
         return Err(Error::workflow("eval_head_ref_reserved", true, None));
     }
     Ok(())
 }
 
-/// Builds the case of a fixed defect from GitHub, writes it and prints it.
+/// Reports whether `branch` is under a review branch prefix of the session or the eval section.
+fn branch_reserved(config: &Config, eval: &EvalConfig, branch: &str) -> bool {
+    let prefixes = [&config.session_branch_prefix, &eval.session_branch_prefix];
+    (prefixes.iter()).any(|prefix| branch.starts_with(prefix.as_str()))
+}
+
+/// The pull request, diff and title that a case pins.
+struct Pinned {
+    /// Repository as `owner/name`.
+    repository: String,
+    /// Pull request number.
+    number: i64,
+    /// Base commit of the diff.
+    base_sha: String,
+    /// Head commit of the diff.
+    head_sha: String,
+    /// Branch the reviewer worktree starts from.
+    base_branch: String,
+    /// Cleaned title of the pull request.
+    title: String,
+}
+
+/// Returns the newest completed successful review of the pull request, or the one at `head_sha`.
+fn stored_review(
+    store: &Store,
+    repository: &str,
+    number: i64,
+    head_sha: Option<&str>,
+) -> Result<Option<StoredReview>, Error> {
+    let filter = ReviewFilter::ReviewKey(format!("{repository}#{number}"));
+    let reviews = store.list_reviews(&filter, i64::MAX)?;
+    Ok(reviews.into_iter().find(|review| {
+        review.status == REVIEW_COMPLETED
+            && review.result == RESULT_SUCCESS
+            && head_sha.is_none_or(|sha| review.input.pull_request.head_sha == sha)
+    }))
+}
+
+/// Returns base commit, head commit, base branch and title from the stored review, or from
+/// `--base-sha`, `head` and `--base-branch`; a stored review and `--base-*` exclude each other.
+fn reviewed_diff(
+    review: Option<&StoredReview>,
+    arguments: &AddArguments,
+    head: Option<&str>,
+) -> Result<(String, String, String, String), Error> {
+    let base = (
+        arguments.base_sha.as_deref(),
+        arguments.base_branch.as_deref(),
+    );
+    if let Some(review) = review {
+        let pull = &review.input.pull_request;
+        if base.0.is_some() || base.1.is_some() || head.is_some_and(|sha| sha != pull.head_sha) {
+            let cause = "the stored review gives the base; --head-sha must be its head";
+            return Err(command_invalid(Some(cause.into())));
+        }
+        let (base_sha, head_sha) = (pull.base_sha.clone(), pull.head_sha.clone());
+        return Ok((
+            base_sha,
+            head_sha,
+            pull.base_branch.clone(),
+            pull.title.clone(),
+        ));
+    }
+    let (Some(base_sha), Some(head), Some(base_branch)) = (base.0, head, base.1) else {
+        let cause = if arguments.from_finding.is_some() {
+            "no stored review; give --base-sha and --base-branch"
+        } else {
+            "no stored review; give --base-sha, --head-sha and --base-branch"
+        };
+        return Err(Error::workflow(
+            "eval_add_review_not_found",
+            true,
+            Some(cause.into()),
+        ));
+    };
+    Ok((
+        base_sha.to_owned(),
+        head.to_owned(),
+        base_branch.to_owned(),
+        String::new(),
+    ))
+}
+
+/// Builds the case of a fixed defect or a judged finding, writes it and prints it.
 async fn add_case(
     config_path: Option<PathBuf>,
     env_file_path: Option<PathBuf>,
@@ -411,7 +543,35 @@ async fn add_case(
 ) -> Result<(), Error> {
     let (config, eval) = load_eval(config_path, env_file_path)?;
     check_add_arguments(arguments, &config, &eval)?;
-    let (repository, number) = (&arguments.from_pr.0, arguments.from_pr.1);
+    let store = (arguments.store.as_deref())
+        .map(Store::open_read_only)
+        .transpose()?;
+    let (repository, number) = match (&arguments.from_pr, &arguments.from_finding) {
+        (Some((repository, number)), _) | (None, Some((repository, number, _))) => {
+            (repository, *number)
+        }
+        (None, None) => return Err(command_invalid(None)),
+    };
+    let found = match (&arguments.from_finding, &store) {
+        (Some((_, _, key)), Some(store)) => {
+            let source = store.finding_source(repository, number, key)?;
+            Some(source.ok_or_else(|| Error::workflow("eval_add_finding_not_found", true, None))?)
+        }
+        _ => None,
+    };
+    let review = match (&found, &store) {
+        (Some(source), _) => source.review.clone(),
+        (None, Some(store)) => {
+            stored_review(store, repository, number, arguments.head_sha.as_deref())?
+        }
+        (None, None) => None,
+    };
+    let row_head = found
+        .as_ref()
+        .map(|source| source.finding.head_sha.as_str());
+    let head = row_head.or(arguments.head_sha.as_deref());
+    let diff = reviewed_diff(review.as_ref(), arguments, head)?;
+    let (base_sha, head_sha, base_branch, title) = diff;
     let credential = eval_credential(&config, &eval)?;
     let covered = config
         .credentials
@@ -431,21 +591,53 @@ async fn add_case(
             None,
         ));
     }
-    if state.head_sha != arguments.head_sha && arguments.head_branch.is_none() {
+    if state.head_sha != head_sha && arguments.head_branch.is_none() {
         return Err(Error::workflow("eval_add_head_branch_required", true, None));
     }
+    let title = clean_title(if title.is_empty() {
+        &state.title
+    } else {
+        &title
+    });
+    let pinned = Pinned {
+        repository: repository.clone(),
+        number,
+        base_sha,
+        head_sha,
+        base_branch,
+        title,
+    };
+    let read_range = || {
+        let (base, head) = (&pinned.base_sha, &pinned.head_sha);
+        github.read_range_files(&cancel, &credential, repository, base, head)
+    };
+    if let (Some(source), Some(name)) = (&found, arguments.verdict.as_deref()) {
+        let verdict = if name == "right" {
+            Verdict::Right
+        } else {
+            Verdict::Wrong
+        };
+        let commentable = match verdict {
+            Verdict::Right => read_range().await?.commentable,
+            Verdict::Wrong => Default::default(),
+        };
+        let (finding, lines) = (&source.finding, &arguments.lines);
+        let description = arguments.description.as_deref();
+        let rows = &source.pull_rows;
+        let expect = finding_expect(finding, rows, verdict, lines, description, &commentable)?;
+        let text = format!(
+            "{repository}#{number}, finding {}, outcome {}, verdict {name}",
+            finding.finding_key, finding.outcome
+        );
+        return finish(arguments, pinned, expect, Vec::new(), &text, &existing);
+    }
+    let Some(fix) = &arguments.fix else {
+        return Err(command_invalid(None));
+    };
     let commit = github
-        .read_commit(&cancel, &credential, repository, &arguments.fix)
+        .read_commit(&cancel, &credential, repository, fix)
         .await?;
-    let range = github
-        .read_range_files(
-            &cancel,
-            &credential,
-            repository,
-            &arguments.base_sha,
-            &arguments.head_sha,
-        )
-        .await?;
+    let range = read_range().await?;
     let lines: BTreeMap<String, (i64, i64)> = arguments.lines.iter().cloned().collect();
     let select = FixSelection {
         paths: &arguments.paths,
@@ -455,7 +647,7 @@ async fn add_case(
     // A line range of the fix's parent is the reviewed head's only where the file is the same.
     let mut drifted = Vec::new();
     for found in ranges.iter().filter(|found| !found.overridden) {
-        let (at_head, at_parent) = (&arguments.head_sha, &commit.parent);
+        let (at_head, at_parent) = (&pinned.head_sha, &commit.parent);
         let first = (at_head.as_str(), found.path.as_str());
         let second = (at_parent.as_str(), found.path.as_str());
         let ids = github
@@ -473,36 +665,54 @@ async fn add_case(
             Some(cause.into()),
         ));
     }
-    let description = fix_description(repository, &arguments.fix, &commit.subject);
+    let description = fix_description(repository, fix, &commit.subject);
     let expected = ranges.into_iter().map(|found| Expected {
         path: found.path,
         first_line: found.first_line,
         last_line: found.last_line,
         description: description.clone(),
     });
+    let expect = Expect::Blocking(expected.collect());
+    let source = format!("{repository}#{number}, fixed by {fix}");
+    finish(arguments, pinned, expect, skipped, &source, &existing)
+}
+
+/// Writes the case and prints it with the fixture branch it needs.
+fn finish(
+    arguments: &AddArguments,
+    pinned: Pinned,
+    expect: Expect,
+    skipped: Vec<Skipped>,
+    source: &str,
+    existing: &[Case],
+) -> Result<(), Error> {
     let head_ref = (arguments.head_branch.as_ref()).map_or_else(
-        || format!("refs/pull/{number}/head"),
+        || format!("refs/pull/{}/head", pinned.number),
         |name| format!("refs/heads/{name}"),
     );
+    let kind = if matches!(expect, Expect::Clean) {
+        "clean"
+    } else {
+        "defect"
+    };
     let case = Case {
         id: arguments.id.clone(),
-        repository: repository.clone(),
-        pull_request: number,
-        base_branch: arguments.base_branch.clone(),
+        repository: pinned.repository,
+        pull_request: pinned.number,
+        base_branch: pinned.base_branch,
         head_ref,
-        base_sha: arguments.base_sha.clone(),
-        head_sha: arguments.head_sha.clone(),
+        base_sha: pinned.base_sha,
+        head_sha: pinned.head_sha.clone(),
         pipelines: Vec::new(),
-        title: clean_title(&state.title),
-        expect: Expect::Blocking(expected.collect()),
+        title: pinned.title,
+        expect,
     };
-    let source = format!("{repository}#{number}, fixed by {}", arguments.fix);
-    let yaml = write_case(&arguments.cases, &existing, &case, &source)?;
+    let yaml = write_case(&arguments.cases, existing, &case, source)?;
     let fixture_branch = arguments.head_branch.as_ref().map(|name| FixtureBranch {
         name: name.clone(),
         commands: vec![
-            format!("git fetch origin {}", arguments.head_sha),
-            format!("git push origin {}:refs/heads/{name}", arguments.head_sha),
+            format!("git fetch origin {}", pinned.head_sha),
+            format!("git push origin {}:refs/heads/{name}", pinned.head_sha),
         ],
     });
     print_json(&AddedCase {
@@ -513,7 +723,7 @@ async fn add_case(
             .display()
             .to_string(),
         id: case.id,
-        kind: "defect",
+        kind,
         yaml,
         skipped,
         fixture_branch,
@@ -575,15 +785,9 @@ async fn run_suite(
     if rule.pipeline.checkout != Checkout::Base {
         return Err(Error::workflow("eval_checkout_unsupported", true, None));
     }
-    let prefixes = [&config.session_branch_prefix, &eval.session_branch_prefix];
-    let reserved = |branch: &str| {
-        prefixes
-            .iter()
-            .any(|prefix| branch.starts_with(prefix.as_str()))
-    };
     if (selected.iter())
         .filter_map(|case| case.head_ref.strip_prefix("refs/heads/"))
-        .any(reserved)
+        .any(|branch| branch_reserved(&config, &eval, branch))
     {
         return Err(Error::workflow("eval_head_ref_reserved", true, None));
     }

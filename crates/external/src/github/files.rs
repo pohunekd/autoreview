@@ -345,15 +345,15 @@ struct CommitResponse {
     /// The commit message.
     #[serde(default)]
     commit: CommitBody,
-    /// The changed files; GitHub sends 300 of them on the first page.
-    #[serde(default)]
-    files: Vec<Option<ChangedFileRecord>>,
+    /// The changed files; GitHub sends 300 of them on the first page. Missing or null is refused.
+    files: Option<Vec<Option<ChangedFileRecord>>>,
 }
 
 /// Decodes the answer of the commit endpoint.
 ///
-/// A commit without exactly one parent, a listing that reaches [`COMPARE_FILES_CAP`] files and
-/// a changed file with changed lines and no patch are refused: each would hide a defect line.
+/// A commit without exactly one parent, an answer without a `files` list, a listing that reaches
+/// [`COMPARE_FILES_CAP`] files and a changed file with changed lines and no patch are refused:
+/// each would hide a defect line.
 /// A file without lines in its patch, such as a binary file, is kept with an empty patch.
 fn decode_commit(output: &str) -> Result<CommitRead, Error> {
     let response: CommitResponse =
@@ -365,7 +365,10 @@ fn decode_commit(output: &str) -> Result<CommitRead, Error> {
             None,
         ));
     };
-    let records = autoreview_go_compat::null_entries::zero_entries(response.files);
+    let Some(listed) = response.files else {
+        return Err(response_invalid(None));
+    };
+    let records = autoreview_go_compat::null_entries::zero_entries(listed);
     if !sha_valid(&parent.sha) {
         return Err(response_invalid(None));
     }
@@ -721,6 +724,12 @@ at end of file",
                 "github_patch_omitted",
             ),
             ("300 files", answer(1, cap), "github_search_limit_exceeded"),
+            (
+                "no files key",
+                serde_json::json!({"parents": [{"sha": parent}], "commit": {"message": "m"}})
+                    .to_string(),
+                "github_response_invalid",
+            ),
         ];
         for (name, output, code) in rows {
             let error = super::decode_commit(&output).expect_err(name);

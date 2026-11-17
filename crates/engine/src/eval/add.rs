@@ -9,16 +9,24 @@ use std::io::{ErrorKind, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
+use autoreview_go_compat::go_time::parse_rfc3339;
 use serde::Serialize;
 
-use super::case::{CASE_VERSION, Case, Expect, parse_case};
+use super::case::{CASE_VERSION, Case, Expect, Expected, parse_case};
 use super::case::{MAX_DESCRIPTION_CHARS, MAX_RANGE_LINES, MAX_TITLE_CHARS};
 use crate::error::Error;
 use crate::integrations::{CommentableLines, CommitFile};
 use crate::protocol::reason::is_neutralized;
+use crate::store::{FindingOutcome, OUTCOME_FIXED};
 
 /// Permission bits of a written case file.
 const CASE_FILE_MODE: u32 = 0o644;
+
+/// Outcomes of a finding that a case can be made from.
+const CASE_OUTCOMES: [&str; 2] = ["refuted", "open_at_merge"];
+
+/// Outcomes of a sibling finding that leave the head clean.
+const CLEAN_OUTCOMES: [&str; 2] = ["refuted", "not_blocking"];
 
 /// Leading digits of the fix commit in a description.
 const DESCRIPTION_SHA_CHARS: usize = 12;
@@ -141,16 +149,29 @@ fn old_side_groups(patch: &str) -> Result<Vec<(i64, i64)>, Error> {
 ///
 /// # Errors
 ///
-/// Returns `eval_add_path_unknown` for a selected path that the fix does not change,
-/// `eval_add_range_too_wide` for a range of `MAX_RANGE_LINES` lines or more,
-/// `eval_add_no_reviewable_path` when no file is left, `eval_add_path_required` when several
-/// are left and the operator selected none, and `github_response_invalid` for a malformed patch.
+/// Returns `eval_add_path_unknown` for a selected path that the fix does not change
+/// or for a `--lines` path that ends up skipped, `eval_add_range_too_wide` for a range of
+/// more than `MAX_RANGE_LINES` lines, `eval_add_path_unsafe` for a path with a control or format
+/// character, `eval_add_no_reviewable_path` when no file is left, `eval_add_path_required` when
+/// several are left and the operator selected none, and `github_response_invalid` for a
+/// malformed patch.
 pub fn fix_ranges(
     files: &[CommitFile],
     commentable: &CommentableLines,
     select: &FixSelection<'_>,
 ) -> Result<(Vec<FixRange>, Vec<Skipped>), Error> {
     let old_path = |file: &CommitFile| file.previous_path.as_ref().unwrap_or(&file.path).clone();
+    for file in files {
+        let paths = [Some(&file.path), file.previous_path.as_ref()];
+        if paths
+            .into_iter()
+            .flatten()
+            .any(|p| p.chars().any(is_neutralized))
+        {
+            let detail = "a path of the fix has a control or format character";
+            return Err(refused("eval_add_path_unsafe", detail));
+        }
+    }
     for name in select.paths.iter().chain(select.lines.keys()) {
         if !files.iter().any(|file| old_path(file) == *name) {
             return Err(refused("eval_add_path_unknown", name.as_str()));
@@ -196,6 +217,16 @@ pub fn fix_ranges(
             overridden,
         });
     }
+    if let Some(name) = select
+        .lines
+        .keys()
+        .find(|n| !ranges.iter().any(|r| r.path == **n))
+    {
+        return Err(refused(
+            "eval_add_path_unknown",
+            format!("{name} is skipped"),
+        ));
+    }
     let names = |paths: Vec<&str>| paths.join(", ");
     match ranges.len() {
         0 => {
@@ -236,6 +267,117 @@ pub fn fix_description(repository: &str, fix_sha: &str, subject: &str) -> String
     let sha: String = fix_sha.chars().take(DESCRIPTION_SHA_CHARS).collect();
     let text = format!("Fixed by {sha} ({repository}): {}", cleaned(subject).trim());
     text.chars().take(MAX_DESCRIPTION_CHARS).collect()
+}
+
+/// What an operator judges a published finding to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// The finding is wrong: a review of the head must block nothing.
+    Wrong,
+    /// The finding is right: a review must block on its lines.
+    Right,
+}
+
+/// Reports whether `row` is a blocking finding that still stood when the head of `finding`
+/// was reviewed.
+///
+/// A row of that head counts unless it is `refuted` or `not_blocking`. A row of another head
+/// counts too, except one published after `finding` and one that was `fixed` by the head of
+/// `finding` (at it, or before `finding` was published); only `fixed` shows the defect left
+/// the code. A time that does not parse counts the row.
+fn stood_with(row: &FindingOutcome, finding: &FindingOutcome) -> bool {
+    let blocking = row.blocking && !CLEAN_OUTCOMES.contains(&row.outcome.as_str());
+    if row.finding_key == finding.finding_key || !blocking {
+        return false;
+    }
+    if row.head_sha == finding.head_sha {
+        return true;
+    }
+    let time = |text: &str| parse_rfc3339(text).ok();
+    let (row_published, published) = (time(&row.published_at), time(&finding.published_at));
+    let later = row_published
+        .zip(published)
+        .is_some_and(|(row, own)| row > own);
+    let fixed_before = row.outcome == OUTCOME_FIXED
+        && (row.outcome_head_sha == finding.head_sha
+            || time(&row.updated_at)
+                .zip(published)
+                .is_some_and(|(updated, own)| updated < own));
+    !later && !fixed_before
+}
+
+/// Returns what a review must do about a published finding, from the operator's verdict.
+///
+/// `pull_rows` are the rows of the finding's pull request at every head; `lines` and
+/// `description` are the operator's, which `Right` needs and `Wrong` refuses; `commentable`
+/// is the reviewed range and is read for `Right` only.
+///
+/// # Errors
+///
+/// Returns `eval_add_outcome_unsupported` for an outcome other than `refuted` and
+/// `open_at_merge`, `eval_add_path_unsafe` for a finding path with a control or format
+/// character, `eval_add_verdict_input_invalid` for a `lines` or `description` the verdict
+/// does not take or lacks, `eval_add_head_has_other_blocking` when `Wrong` meets another
+/// blocking finding that stood at the head, `eval_add_no_reviewable_path` for a path with no
+/// added line in the range, and `eval_add_range_too_wide` for more than `MAX_RANGE_LINES`
+/// lines.
+pub fn finding_expect(
+    finding: &FindingOutcome,
+    pull_rows: &[FindingOutcome],
+    verdict: Verdict,
+    lines: &[(String, (i64, i64))],
+    description: Option<&str>,
+    commentable: &CommentableLines,
+) -> Result<Expect, Error> {
+    if !CASE_OUTCOMES.contains(&finding.outcome.as_str()) {
+        let detail = format!("{} is {}", finding.finding_key, finding.outcome);
+        return Err(refused("eval_add_outcome_unsupported", detail));
+    }
+    if finding.path.chars().any(is_neutralized) {
+        let detail = "the path of the finding has a control or format character";
+        return Err(refused("eval_add_path_unsafe", detail));
+    }
+    let text: Option<String> = description.map(|text| {
+        cleaned(text)
+            .trim()
+            .chars()
+            .take(MAX_DESCRIPTION_CHARS)
+            .collect()
+    });
+    match (verdict, lines, text) {
+        (Verdict::Wrong, [], None) => {
+            let others = pull_rows.iter().filter(|row| stood_with(row, finding));
+            let keys: Vec<&str> = others.map(|row| row.finding_key.as_str()).collect();
+            if keys.is_empty() {
+                return Ok(Expect::Clean);
+            }
+            let detail = format!("{}; write the case by hand", keys.join(", "));
+            Err(refused("eval_add_head_has_other_blocking", detail))
+        }
+        (Verdict::Right, [(path, (first, last))], Some(description))
+            if *path == finding.path && !description.is_empty() =>
+        {
+            if commentable.get(path).is_none_or(Vec::is_empty) {
+                return Err(refused("eval_add_no_reviewable_path", path.as_str()));
+            }
+            if last - first >= MAX_RANGE_LINES {
+                let detail =
+                    format!("{path}: {first}-{last}; the range is over {MAX_RANGE_LINES} lines");
+                return Err(refused("eval_add_range_too_wide", detail));
+            }
+            Ok(Expect::Blocking(vec![Expected {
+                path: path.clone(),
+                first_line: *first,
+                last_line: *last,
+                description,
+            }]))
+        }
+        _ => {
+            let detail = "right needs --description and one --lines of the finding's path; \
+                          wrong takes neither";
+            Err(refused("eval_add_verdict_input_invalid", detail))
+        }
+    }
 }
 
 /// Returns the text of a case file; every string is a double-quoted scalar.
@@ -329,11 +471,15 @@ pub fn write_case(
         .write_all(text.as_bytes())
         .and_then(|()| handle.sync_all())
     {
-        drop(fs::remove_file(&path));
+        let left = match fs::remove_file(&path) {
+            Ok(()) => String::new(),
+            Err(removal) => format!("; the partial file {file} stays: {removal}"),
+        };
+        let cause = format!("{error}{left}");
         return Err(Error::workflow(
             "eval_add_write_failed",
             false,
-            Some(Box::new(error)),
+            Some(cause.into()),
         ));
     }
     Ok(text)
@@ -343,10 +489,28 @@ pub fn write_case(
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{FixSelection, clean_title, fix_description, fix_ranges, write_case};
+    use super::{FixSelection, Verdict, clean_title, finding_expect, fix_description};
+    use super::{fix_ranges, write_case};
     use crate::error::error_code;
     use crate::eval::case::{Case, Expect, Expected, load_cases};
     use crate::integrations::{CommentableLines, CommitFile};
+    use crate::store::FindingOutcome;
+
+    /// A table row of `finding_expect`: name, path and outcome of the finding, its siblings as
+    /// `(outcome, blocking)`, the verdict, `--lines`, `--description` and the result. An
+    /// outcome ends in `@earlier` for a sibling of an earlier head that is decided later,
+    /// `@decided` for one decided at a head reviewed before the finding's, `@here` for one
+    /// decided at the finding's own head, and `@later` for one published after the finding;
+    /// any other sibling is of the finding's head.
+    type Judged<'a> = (
+        &'a str,
+        (&'a str, &'a str),
+        &'a [(&'a str, bool)],
+        Verdict,
+        &'a [(&'a str, i64, i64)],
+        Option<&'a str>,
+        &'a str,
+    );
 
     /// A table row: name, fix files, `--path`, `--lines` and the expected outcome.
     type Row<'a> = (
@@ -441,6 +605,10 @@ mod tests {
             ("one file selected", ab, &["b.rs"], &[], "b.rs 5-5; a.rs !not_selected"),
             ("--lines replaces", vec![a.clone()], &[], &[("a.rs", 7, 9)], "a.rs 7-9 given"),
             ("--lines unknown path", vec![b], &[], &[("c.rs", 1, 2)], "err eval_add_path_unknown"),
+            ("--lines of a skipped file", vec![a.clone(), m("outside.rs")], &[],
+                &[("outside.rs", 1, 2)], "err eval_add_path_unknown"),
+            ("path with a bidi character", vec![m("a\u{202e}.rs")], &[], &[],
+                "err eval_add_path_unsafe"),
         ];
         for (name, files, paths, lines, want) in rows {
             assert_eq!(run(&files, paths, lines), want, "{name}");
@@ -457,6 +625,105 @@ mod tests {
         assert_eq!(long.chars().count(), 500);
         let plain = fix_description("acme/widgets", &"a".repeat(40), "Fix\u{202e} the race\r");
         assert_eq!(plain, "Fixed by aaaaaaaaaaaa (acme/widgets): Fix the race");
+    }
+
+    /// Each row is a published finding with the rows of its head, the operator's verdict,
+    /// `--lines` and `--description`, and the case or the refusal that comes out.
+    #[test]
+    #[rustfmt::skip]
+    fn a_verdict_on_a_finding_becomes_a_case_or_a_refusal() {
+        let row = |key: &str, path: &str, outcome: &str, blocking: bool| FindingOutcome {
+            finding_key: key.to_owned(),
+            path: path.to_owned(),
+            outcome: outcome.to_owned(),
+            blocking,
+            ..FindingOutcome::default()
+        };
+        let mut commentable = CommentableLines::new();
+        commentable.insert("a.rs".to_owned(), vec![1]);
+        commentable.insert("d.rs".to_owned(), Vec::new());
+        let (w, r, text) = (Verdict::Wrong, Verdict::Right, Some("Lock released.\u{202e}"));
+        let (a, d) = (("a.rs", "refuted"), ("d.rs", "open_at_merge"));
+        let merged = ("a.rs", "open_at_merge");
+        let bad = "err eval_add_verdict_input_invalid";
+        let other = "err eval_add_head_has_other_blocking";
+        let (five, wide) = ([("a.rs", 5, 9)], "err eval_add_range_too_wide");
+        let rows: Vec<Judged<'_>> = vec![
+            ("wrong", a, &[], w, &[], None, "clean"),
+            ("wrong, the finding is no sibling of itself", merged, &[], w, &[], None, "clean"),
+            ("wrong, siblings that leave the head clean", a,
+                &[("refuted", true), ("not_blocking", true), ("open", false)],
+                w, &[], None, "clean"),
+            ("wrong, a sibling that is open", a, &[("open", true)], w, &[], None, other),
+            ("wrong, a sibling that is fixed", a, &[("fixed", true)], w, &[], None, other),
+            ("wrong, a sibling of an earlier head that is open", a, &[("open@earlier", true)],
+                w, &[], None, other),
+            ("wrong, a sibling of an earlier head that is fixed later", a,
+                &[("fixed@earlier", true)], w, &[], None, other),
+            ("wrong, a sibling fixed before this head", a, &[("fixed@decided", true)],
+                w, &[], None, "clean"),
+            ("wrong, a sibling answered before this head", a, &[("answered@decided", true)],
+                w, &[], None, other),
+            ("wrong, a sibling of an earlier head fixed at this head", a,
+                &[("fixed@here", true)], w, &[], None, "clean"),
+            ("wrong, a sibling published after the finding", a, &[("open@later", true)],
+                w, &[], None, "clean"),
+            ("fixed finding", ("a.rs", "fixed"), &[], w, &[], None,
+                "err eval_add_outcome_unsupported"),
+            ("wrong, path with a bidi character", ("a\u{202e}.rs", "refuted"), &[], w, &[], None,
+                "err eval_add_path_unsafe"),
+            ("wrong with --lines", a, &[], w, &five, None, bad),
+            ("wrong with --description", a, &[], w, &[], text, bad),
+            ("right", a, &[], r, &five, text, "blocking 5-9"),
+            ("right without --lines", a, &[], r, &[], text, bad),
+            ("right without --description", a, &[], r, &five, None, bad),
+            ("right, description empty once cleaned", a, &[], r, &five, Some("\u{202e}"), bad),
+            ("right, --lines of another path", a, &[], r, &[("b.rs", 1, 2)], text, bad),
+            ("right, path without an added line", d, &[], r, &[("d.rs", 1, 2)], text,
+                "err eval_add_no_reviewable_path"),
+            ("right, 200 lines", a, &[], r, &[("a.rs", 1, 200)], text, "blocking 1-200"),
+            ("right, 201 lines", a, &[], r, &[("a.rs", 1, 201)], text, wide),
+        ];
+        for (name, (path, outcome), siblings, verdict, lines, description, want) in rows {
+            let finding = FindingOutcome {
+                head_sha: "h2".to_owned(),
+                published_at: "2026-01-02T00:00:00Z".to_owned(),
+                ..row("t:O001", path, outcome, true)
+            };
+            let mut pull_rows = vec![finding.clone()];
+            for (at, (spec, blocking)) in siblings.iter().enumerate() {
+                let (outcome, when) = spec.split_once('@').unwrap_or((spec, "same"));
+                let (head, published, updated, decided) = match when {
+                    "earlier" => ("h1", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z", "h3"),
+                    "decided" => ("h1", "2026-01-01T00:00:00Z", "2026-01-01T12:00:00Z", "h1b"),
+                    "here" => ("h1", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z", "h2"),
+                    "later" => ("h3", "2026-01-03T00:00:00Z", "2026-01-03T00:00:00Z", ""),
+                    _ => ("h2", "2026-01-02T00:00:00Z", "2026-01-02T00:00:01Z", "h2"),
+                };
+                let decided = if outcome == "open" { "" } else { decided };
+                pull_rows.push(FindingOutcome {
+                    head_sha: head.to_owned(),
+                    published_at: published.to_owned(),
+                    updated_at: updated.to_owned(),
+                    outcome_head_sha: decided.to_owned(),
+                    ..row(&format!("s:O00{at}"), "z.rs", outcome, *blocking)
+                });
+            }
+            let lines: Vec<(String, (i64, i64))> =
+                lines.iter().map(|(p, f, l)| ((*p).to_owned(), (*f, *l))).collect();
+            let expect = finding_expect(
+                &finding, &pull_rows, verdict, &lines, description, &commentable,
+            );
+            let got = match expect {
+                Ok(Expect::Clean) => "clean".to_owned(),
+                Ok(Expect::Blocking(found)) => {
+                    assert_eq!(found[0].description, "Lock released.", "{name}");
+                    format!("blocking {}-{}", found[0].first_line, found[0].last_line)
+                }
+                Err(error) => format!("err {}", error_code(&error)),
+            };
+            assert_eq!(got, want, "{name}");
+        }
     }
 
     /// A case built from plain values is written beside another case, loads, and a second run

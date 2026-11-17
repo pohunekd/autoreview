@@ -6,12 +6,12 @@
 // Rust guideline compliant 2026-06-26
 
 use autoreview_go_compat::go_time::format_rfc3339_nano;
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, Row, TransactionBehavior, params};
 use serde::Serialize;
 use time::OffsetDateTime;
 
-use super::reviews::{time_key, unavailable};
-use super::{Store, guidance, outcome_checks, signals};
+use super::reviews::{REVIEW_COLUMNS, StoredReview, collect_reviews, time_key, unavailable};
+use super::{Store, guidance, outcome_checks, signals, store_error};
 use crate::Error;
 
 /// The DDL of the outcomes, run after `ROLLUP_SCHEMA`; a store that predates it gains it.
@@ -119,6 +119,17 @@ pub struct ListedOutcome {
     /// Reactions of the pull request author to the inline comment of the finding, sorted, as
     /// GitHub's REST API names them; empty without reactions or without a signal read.
     pub author_reactions: Vec<String>,
+}
+
+/// What `eval add` reads about one finding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FindingSource {
+    /// The finding's row.
+    pub finding: FindingOutcome,
+    /// Every row of the finding's pull request, at every head, the finding's own included.
+    pub pull_rows: Vec<FindingOutcome>,
+    /// The review that published the finding first; `None` once retention pruned it.
+    pub review: Option<StoredReview>,
 }
 
 /// What a published review decided about one earlier finding of its pull request.
@@ -298,6 +309,60 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
     }
 
+    /// Reads one finding, the other rows of its pull request and its review in one read
+    /// transaction.
+    ///
+    /// Returns `None` when the pull request has no row with `finding_key`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `eval_add_store_unreadable` when the store has no outcome table,
+    /// `store_unavailable` for any other SQLite failure, and the errors of the review read.
+    pub fn finding_source(
+        &self,
+        repository: &str,
+        number: i64,
+        finding_key: &str,
+    ) -> Result<Option<FindingSource>, Error> {
+        let unreadable = |e: rusqlite::Error| {
+            let missing = matches!(
+                &e,
+                rusqlite::Error::SqliteFailure(_, Some(message))
+                    if message.starts_with("no such table")
+            );
+            if missing {
+                store_error("eval_add_store_unreadable", true, e)
+            } else {
+                unavailable(e)
+            }
+        };
+        let mut connection = self.lock_connection()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)
+            .map_err(unavailable)?;
+        let sql = format!(
+            "SELECT {OUTCOME_COLUMNS} FROM finding_outcomes \
+             WHERE repository = ?1 AND number = ?2 ORDER BY published_at, finding_key"
+        );
+        let mut statement = transaction.prepare(&sql).map_err(unreadable)?;
+        let rows = statement
+            .query_map(params![repository, number], read_row)
+            .map_err(unreadable)?;
+        let pull_rows = rows.collect::<Result<Vec<_>, _>>().map_err(unreadable)?;
+        drop(statement);
+        let Some(finding) = pull_rows.iter().find(|row| row.finding_key == finding_key) else {
+            return Ok(None);
+        };
+        let sql = format!("SELECT {REVIEW_COLUMNS} FROM reviews WHERE workflow_id = ?1");
+        let review = collect_reviews(&transaction, &sql, &[&finding.workflow_id])?.pop();
+        transaction.commit().map_err(unavailable)?;
+        Ok(Some(FindingSource {
+            finding: finding.clone(),
+            pull_rows,
+            review,
+        }))
+    }
+
     /// Deletes the outcomes last written before `cutoff` and returns how many it deleted.
     ///
     /// The state reads of their pull requests last made before `cutoff`, their categories and
@@ -457,7 +522,56 @@ mod tests {
     use time::OffsetDateTime;
 
     use super::{FindingOutcome, OUTCOME_OPEN, Settlement};
+    use crate::error::error_code;
     use crate::store::Store;
+
+    /// The read-only open reads a row, refuses a write, leaves the file as it was and refuses
+    /// a newer schema or a missing file. It guards the promise of `eval add --store` that the
+    /// production file is never written; no policy category covers it.
+    #[test]
+    fn the_read_only_open_reads_and_never_writes() {
+        let dir = tempfile::TempDir::new().expect("create the store directory");
+        let path = dir.path().join("state.db");
+        let store = Store::open(&path, Box::new(OffsetDateTime::now_utc)).expect("open the store");
+        let row = FindingOutcome {
+            repository: "acme/repo".to_owned(),
+            number: 1,
+            finding_key: "a:O001".to_owned(),
+            outcome: OUTCOME_OPEN.to_owned(),
+            published_at: "2026-01-02T03:04:05Z".to_owned(),
+            ..FindingOutcome::default()
+        };
+        store
+            .record_outcomes("acme/repo", 1, "a", &[], std::slice::from_ref(&row))
+            .expect("record the row");
+        store.close().expect("close the store");
+        let stat = || std::fs::metadata(&path).map(|m| (m.len(), m.modified().ok()));
+        let before = stat().expect("stat the file");
+        let reader = Store::open_read_only(&path).expect("open read only");
+        let source = reader
+            .finding_source("acme/repo", 1, "a:O001")
+            .expect("read the row");
+        assert_eq!(source.expect("the row exists").pull_rows.len(), 1);
+        let other = FindingOutcome {
+            finding_key: "a:O002".to_owned(),
+            ..row
+        };
+        let written = reader.record_outcomes("acme/repo", 1, "a", &[], &[other]);
+        assert!(written.is_err(), "a write through the read-only connection");
+        reader.close().expect("close the reader");
+        assert_eq!(stat().expect("stat the file"), before);
+        let connection = rusqlite::Connection::open(&path).expect("open the file");
+        connection
+            .pragma_update(None, "user_version", 2)
+            .expect("stamp a newer schema");
+        drop(connection);
+        let newer = Store::open_read_only(&path)
+            .err()
+            .expect("a newer schema is refused");
+        assert_eq!(error_code(&newer), "store_version_unsupported");
+        let missing = dir.path().join("missing.db");
+        assert!(Store::open_read_only(&missing).is_err() && !missing.exists());
+    }
 
     #[test]
     fn a_move_onto_a_key_an_open_row_keeps_untracks_the_moving_row() {

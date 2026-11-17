@@ -12,6 +12,9 @@ autoreview --config eval-config.yaml eval run --cases examples/eval/cases --pipe
 autoreview --config eval-config.yaml eval add --cases examples/eval/cases \
   --from-pr acme/widgets#214 --fix <fix-sha> --id widgets-cache-race \
   --base-sha <base-sha> --head-sha <head-sha> --base-branch main
+autoreview --config eval-config.yaml eval add --cases examples/eval/cases \
+  --from-finding acme/widgets#214:0123456789ab:O003 --verdict wrong --id widgets-false-lock \
+  --store /var/lib/autoreview/autoreview.db
 ```
 
 The comment at the top of each case file names the review that proves it. The defect case

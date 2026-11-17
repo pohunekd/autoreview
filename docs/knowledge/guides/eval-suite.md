@@ -2,7 +2,7 @@
 type: Guide
 id: guide/eval-suite
 title: Regression-test a review configuration
-description: Check a change to a prompt, model, reviewer profile or policy against known pull requests with autoreview eval - the case files and fixture branches, turning a missed defect into a case with eval add, a config file of its own with a read-only credential, recall and false blocking thresholds, repeats, cost bounds, the runner precondition and the limits of the run.
+description: Check a change to a prompt, model, reviewer profile or policy against known pull requests with autoreview eval - the case files and fixture branches, turning a missed defect or a judged finding into a case with eval add, a config file of its own with a read-only credential, recall and false blocking thresholds, repeats, cost bounds, the runner precondition and the limits of the run.
 source_kind: manual
 intents: [setup, help]
 ---
@@ -77,7 +77,34 @@ It writes `widgets-cache-race.yaml` and prints it. Read the printed ranges and
   and run the two `git` commands that the output prints, with your own credentials;
   until the branch exists, the case fails at the fetch.
 
-Then run `eval validate` on the directory and `eval run` on the new case.
+Then run `eval validate` on the directory and `eval run` on the new case. With
+`--store` (below) the base and head come from the stored review, and
+`--base-sha`, `--head-sha` and `--base-branch` can be left out.
+
+## Turn a judged finding into a case
+
+A finding that was wrong, or right but never acted on, is worth keeping too. Find
+its key in `findings list`, then let `eval add` read the store, read-only:
+
+```
+autoreview findings list --repo acme/widgets --since 2026-11-01 \
+  | jq -r 'select(.outcome == "refuted") | "\(.repository)#\(.number):\(.finding_key)"'
+autoreview --config eval-config.yaml eval add --cases examples/eval/cases \
+  --from-finding acme/widgets#214:0123456789ab:O003 --verdict wrong \
+  --id widgets-false-lock --store /var/lib/autoreview/autoreview.db
+```
+
+- `--verdict wrong` writes a clean case for the whole head, so it is refused while
+  another blocking finding stood at that head, one carried from an earlier push
+  included unless it was fixed by then; write that case by hand.
+- `--verdict right` needs your own `--lines PATH:FIRST-LAST` and `--description`:
+  the stored line is where anchoring put the finding, not where the defect is. As
+  for a fix, the path needs an added line in the pull request.
+- `--store` is the production database, opened read-only while `serve` runs: no
+  database file or directory is created and no engine or discovery lock is
+  taken. Without `serve`, SQLite leaves `-wal` and `-shm` files beside it. Never
+  use SQLite's `immutable` mode on it, and as any user other than the service
+  user, point `--store` at a `backup-db` copy.
 
 ## Set up the run
 
