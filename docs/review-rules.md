@@ -146,7 +146,8 @@ A rule that does not approve clean reviews is not affected.
 |---|---|---|
 | `review_rules_too_large` | The base file is over `limits.max_review_rules_bytes` | The review fails |
 | `review_rules_invalid` | Binary, not UTF-8 (most lossy decodes are detected, not all), truncated, or a front matter error | The review fails |
-| `review_rules_unreadable` | The commit or the file could not be read | A transient failure is retried inside the review step (`schedule.step_retry_seconds`), then the review fails; the scheduler does not retry it, so retry the pull request once the cause is gone |
+| `review_rules_unreadable` | The read failed for a permanent cause, such as a base commit the repository does not have | The review fails and is not retried automatically |
+| `github_request_failed` | The read failed for a transient cause | Retried inside the review step (`schedule.step_retry_seconds`), then the review fails with this code and the scheduler retries it like any other GitHub read |
 
 A broken file is never ignored silently. The cause names the key or the line and
 goes to the service log (the warning `REVIEW.md of the base commit is unusable`
@@ -160,8 +161,8 @@ too large or invalid, that pull request, which may be the fix, is reviewed
 without rules, the summary says the base `REVIEW.md` is invalid, names the code
 and says that no rules were applied, and one `review_stopped` notice names the
 code, although the review goes on (the policy has no event for a degraded review,
-so route `review_stopped` accordingly). `review_rules_unreadable` always fails the
-review.
+so route `review_stopped` accordingly). A failed read always fails the review,
+also for a pull request that changes `REVIEW.md`.
 
 ## Rollback
 

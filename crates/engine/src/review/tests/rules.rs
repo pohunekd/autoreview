@@ -152,6 +152,20 @@ async fn the_base_review_rules_are_read_and_an_unusable_file_fails_the_review() 
         failures(&h, &unreadable),
         ["review_rules_unreadable".to_owned()]
     );
+
+    // A transient failure keeps its own code, which the scheduler retries.
+    let transient = pull_request("rules/flaky", "b");
+    h.fake.lock().file_failure = Some(("github_request_failed".to_owned(), false));
+    h.fake
+        .open(transient.clone(), h.rule(&transient.repository));
+    h.poll_until("the transient read failure", || {
+        !failures(&h, &transient).is_empty()
+    })
+    .await;
+    assert_eq!(
+        failures(&h, &transient),
+        ["github_request_failed".to_owned()]
+    );
 }
 
 /// D2: a blocking finding in a `skip` path is published as a note with the reason and never

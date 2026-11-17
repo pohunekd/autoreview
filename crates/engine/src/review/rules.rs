@@ -35,7 +35,10 @@ fn unusable(file: RepositoryFile) -> Result<Option<ReviewRules>, (&'static str, 
     }
 }
 
-/// Wraps the error of a failed read as `review_rules_unreadable`, keeping its permanence.
+/// Returns the failure of a read: a permanent error becomes `review_rules_unreadable`.
+///
+/// Any other error keeps its own code, so the scheduler retries a transient one
+/// (`github_request_failed`) and a shutdown stays a shutdown.
 fn unreadable(error: Error) -> Error {
     let permanent = matches!(
         &error,
@@ -44,7 +47,11 @@ fn unreadable(error: Error) -> Error {
             ..
         }
     );
-    Error::workflow(RULES_UNREADABLE, permanent, Some(Box::new(error)))
+    if permanent {
+        Error::workflow(RULES_UNREADABLE, true, Some(Box::new(error)))
+    } else {
+        error
+    }
 }
 
 impl<I: Integrations, C: Clock> Review<'_, I, C> {
