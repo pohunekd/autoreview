@@ -11,8 +11,10 @@ use std::ops::ControlFlow;
 
 use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
-use autoreview_engine::integrations::{ChangedFile, ChangedFiles, CommentableLines, RangeFiles};
-use autoreview_engine::model::PullRequest;
+use autoreview_engine::integrations::{
+    ChangedFile, ChangedFiles, CommentableLines, CommitFile, CommitRead, RangeFiles,
+};
+use autoreview_engine::model::{PullRequest, repository_valid, sha_valid};
 use autoreview_guard::FieldKind;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -318,6 +320,86 @@ fn decode_range(output: &str) -> Result<RangeFiles, Error> {
     Ok(range)
 }
 
+/// One parent of the commit endpoint's answer.
+#[derive(Debug, Default, Deserialize)]
+struct ParentRecord {
+    /// Full SHA of the parent commit.
+    #[serde(default)]
+    sha: String,
+}
+
+/// The `commit` object of the commit endpoint's answer.
+#[derive(Debug, Default, Deserialize)]
+struct CommitBody {
+    /// The whole commit message.
+    #[serde(default)]
+    message: String,
+}
+
+/// The part of the commit endpoint's answer that the eval reads.
+#[derive(Debug, Default, Deserialize)]
+struct CommitResponse {
+    /// The parents of the commit.
+    #[serde(default)]
+    parents: Vec<ParentRecord>,
+    /// The commit message.
+    #[serde(default)]
+    commit: CommitBody,
+    /// The changed files; GitHub sends 300 of them on the first page.
+    #[serde(default)]
+    files: Vec<Option<ChangedFileRecord>>,
+}
+
+/// Decodes the answer of the commit endpoint.
+///
+/// A commit without exactly one parent, a listing that reaches [`COMPARE_FILES_CAP`] files and
+/// a changed file with changed lines and no patch are refused: each would hide a defect line.
+/// A file without lines in its patch, such as a binary file, is kept with an empty patch.
+fn decode_commit(output: &str) -> Result<CommitRead, Error> {
+    let response: CommitResponse =
+        serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
+    let [parent] = response.parents.as_slice() else {
+        return Err(Error::workflow(
+            "eval_add_fix_not_single_parent",
+            true,
+            None,
+        ));
+    };
+    let records = autoreview_go_compat::null_entries::zero_entries(response.files);
+    if !sha_valid(&parent.sha) {
+        return Err(response_invalid(None));
+    }
+    if records.len() >= COMPARE_FILES_CAP {
+        return Err(Error::workflow("github_search_limit_exceeded", true, None));
+    }
+    let (mut files, mut seen) = (Vec::new(), BTreeSet::new());
+    for file in records {
+        if !valid_changed_path(&file.filename) || !seen.insert(file.filename.clone()) {
+            return Err(response_invalid(None));
+        }
+        if file.patch.is_empty() && (file.additions > 0 || file.deletions > 0) {
+            return Err(Error::workflow("github_patch_omitted", true, None));
+        }
+        let previous_path = match (file.status.as_str(), file.previous_filename) {
+            ("renamed", Some(previous)) if valid_changed_path(&previous) => Some(previous),
+            ("renamed", _) | (_, Some(_)) => return Err(response_invalid(None)),
+            (_, None) => None,
+        };
+        files.push(CommitFile {
+            path: file.filename,
+            status: file.status,
+            previous_path,
+            patch: file.patch,
+        });
+    }
+    let subject = response.commit.message.lines().next().unwrap_or_default();
+    Ok(CommitRead {
+        parent: parent.sha.clone(),
+        subject: subject.trim().to_owned(),
+        files,
+    })
+}
+
 /// Returns the argv of one page of the changed-files API.
 fn files_args(repository: &str, number: i64, page: i64) -> Vec<String> {
     vec![
@@ -454,6 +536,28 @@ impl GitHub {
         decode_range(&output)
     }
 
+    /// Returns the commit `sha` with its one parent, its subject and the files it changes.
+    ///
+    /// The commit endpoint lists at most [`COMPARE_FILES_CAP`] files on its first page, so a
+    /// listing that reaches the cap is refused; see [`decode_commit`].
+    pub(crate) async fn commit(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        sha: &str,
+    ) -> Result<CommitRead, Error> {
+        if !repository_valid(repository) || !sha_valid(sha) {
+            return Err(Error::workflow("github_request_invalid", true, None));
+        }
+        let arguments = vec![
+            "api".to_owned(),
+            format!("repos/{repository}/commits/{sha}"),
+        ];
+        let output = (self.github::<()>(cancel, credential, &arguments, None)).await?;
+        decode_commit(&output)
+    }
+
     /// Adds the patch of every changed file to `read`, for the text guard, until the bound.
     ///
     /// A file with added lines whose patch GitHub omits, as it does for a large diff, and a
@@ -571,6 +675,57 @@ at end of file",
             .collect::<Vec<_>>()
             .join(",");
         assert!(super::decode_range(&format!("{{\"files\": [{cap}]}}")).is_err());
+    }
+
+    /// The commit answer maps to one parent, a subject and files; a merge commit, a cut-short
+    /// listing and a patchless change of lines are refused, and a binary file is kept.
+    #[test]
+    fn commit_answer_is_read_whole_or_refused() {
+        let parent = "1".repeat(40);
+        let file = |name: &str, patch: &str, additions: i64, deletions: i64| {
+            serde_json::json!({"filename": name, "status": "modified", "patch": patch,
+                "additions": additions, "deletions": deletions})
+        };
+        let answer = |parents: usize, files: Vec<serde_json::Value>| {
+            let parents = vec![serde_json::json!({"sha": parent}); parents];
+            let message = "Fix the race\n\nBody";
+            serde_json::json!({"parents": parents, "commit": {"message": message}, "files": files})
+                .to_string()
+        };
+        let edit = file("a.rs", "@@ -1,1 +1,1 @@\n-a\n+b", 1, 1);
+        let read = super::decode_commit(&answer(1, vec![edit.clone(), file("a.png", "", 0, 0)]))
+            .expect("a complete answer is read");
+        assert_eq!(
+            (read.subject.as_str(), read.parent.as_str()),
+            ("Fix the race", &*parent)
+        );
+        assert_eq!(read.files.len(), 2);
+        assert!(read.files[1].patch.is_empty());
+        let cap = (0..super::COMPARE_FILES_CAP)
+            .map(|index| file(&format!("f{index}"), "", 0, 0))
+            .collect();
+        let rows = [
+            (
+                "merge commit",
+                answer(2, vec![edit.clone()]),
+                "eval_add_fix_not_single_parent",
+            ),
+            (
+                "root commit",
+                answer(0, vec![edit]),
+                "eval_add_fix_not_single_parent",
+            ),
+            (
+                "deletion",
+                answer(1, vec![file("a.rs", "", 0, 3)]),
+                "github_patch_omitted",
+            ),
+            ("300 files", answer(1, cap), "github_search_limit_exceeded"),
+        ];
+        for (name, output, code) in rows {
+            let error = super::decode_commit(&output).expect_err(name);
+            assert_eq!(autoreview_engine::error::error_code(&error), code, "{name}");
+        }
     }
 
     #[test]

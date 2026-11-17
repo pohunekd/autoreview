@@ -18,8 +18,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Credential;
 use crate::error::Error;
 use crate::integrations::{
-    ChangedFiles, CommentableLines, GitHubReview, GuardTexts, HeadCheckoutHooks, Integrations,
-    PullRequestSignals, PullRequestState, RangeFiles, ReadiedDraft, RepositoryFile,
+    ChangedFiles, CommentableLines, CommitRead, GitHubReview, GuardTexts, HeadCheckoutHooks,
+    Integrations, PullRequestSignals, PullRequestState, RangeFiles, ReadiedDraft, RepositoryFile,
     ReviewRequestList, SessionRequest, TokenAnswer,
 };
 use crate::model::{
@@ -398,6 +398,27 @@ impl<I: Integrations + Send + Sync> Integrations for EvalIntegration<I> {
         self.inner
             .read_range_files(cancel, credential, repository, base, head)
             .await
+    }
+
+    async fn read_commit(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        _repository: &str,
+        _sha: &str,
+    ) -> Result<CommitRead, Error> {
+        refused()
+    }
+
+    async fn read_blob_ids(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        _repository: &str,
+        _first: (&str, &str),
+        _second: (&str, &str),
+    ) -> Result<[Option<String>; 2], Error> {
+        refused()
     }
 
     async fn read_repository_file(

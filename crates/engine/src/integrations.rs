@@ -442,6 +442,32 @@ pub trait Integrations {
         head: &str,
     ) -> impl Future<Output = Result<RangeFiles, Error>> + Send;
 
+    /// Reads the commit `sha` of `repository`: its one parent, its subject and its changed files.
+    ///
+    /// It reads with `credential`'s token. A commit without exactly one parent
+    /// (`eval_add_fix_not_single_parent`), a listing that GitHub cuts short, and a changed file
+    /// whose patch GitHub leaves out are errors, never a shorter answer.
+    fn read_commit(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        sha: &str,
+    ) -> impl Future<Output = Result<CommitRead, Error>> + Send;
+
+    /// Reads the blob IDs of two files of `repository`, each given as `(commit SHA, path)`.
+    ///
+    /// It reads with `credential`'s token. An ID is `None` when the path is no file at that
+    /// commit, such as a directory or a missing path; the read has no byte limit.
+    fn read_blob_ids(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        first: (&str, &str),
+        second: (&str, &str),
+    ) -> impl Future<Output = Result<[Option<String>; 2], Error>> + Send;
+
     /// Reads the file `path` of `repository` at the commit `sha`.
     ///
     /// It reads with `credential`'s token. A file over `max_bytes` bytes is `TooLarge` and its
