@@ -11,6 +11,7 @@ mod plan;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -215,6 +216,7 @@ pub(crate) async fn run(
             prefix: &config.session_branch_prefix,
             owners: &owners,
             sessions: &sessions,
+            only: None,
             older_than,
             retention: config.review_retention,
             now,
@@ -351,6 +353,111 @@ async fn prune_repository(
         error: String::new(),
         branches,
     }
+}
+
+/// A review branch on one review host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct RunBranch {
+    /// The host as `pohunek.hosts` names it.
+    host: String,
+    /// Branch name without `refs/heads/`.
+    branch: String,
+}
+
+/// What became of the review branches that an eval run started.
+#[derive(Debug, Default)]
+pub(crate) struct RunCleanup {
+    /// The branches deleted from their host.
+    pub(crate) deleted: Vec<RunBranch>,
+    /// The branches that stay: their host is not local or cannot be read, a session, a
+    /// worktree or a hook keeps them, or the deletion failed.
+    pub(crate) left: Vec<RunBranch>,
+}
+
+/// Deletes the review branches that an eval run started, and no other branch.
+///
+/// `branches` holds the host and name of every session start of the run, under `prefix`. The
+/// listing, the verdicts and the deletion are those of `prune-branches`, limited to these
+/// names and without a store: no review of another process owns a branch of this run.
+pub(crate) async fn delete_run_branches(
+    config: &Config,
+    cancel: &CancellationToken,
+    git: &str,
+    prefix: &str,
+    branches: &BTreeSet<(String, String)>,
+) -> RunCleanup {
+    let mut cleanup = RunCleanup::default();
+    let hosts: BTreeSet<&str> = branches.iter().map(|(host, _)| host.as_str()).collect();
+    for host in hosts {
+        let names: BTreeSet<&str> = (branches.iter())
+            .filter(|(owner, _)| owner == host)
+            .map(|(_, name)| name.as_str())
+            .collect();
+        let outcome = delete_host_branches(config, cancel, git, prefix, host, &names).await;
+        let (deleted, kept) = outcome;
+        for name in names {
+            let branch = RunBranch {
+                host: host.to_owned(),
+                branch: name.to_owned(),
+            };
+            if deleted.contains(name) {
+                cleanup.deleted.push(branch);
+            } else if kept.as_ref().is_none_or(|kept| kept.contains(name)) {
+                cleanup.left.push(branch);
+            }
+        }
+    }
+    cleanup
+}
+
+/// Deletes the `names` that exist on `host` and returns the deleted ones and the ones that stay.
+///
+/// The second set is `None` when the branches of the host cannot all be known: the host is not
+/// local, or a call or a repository failed.
+async fn delete_host_branches(
+    config: &Config,
+    cancel: &CancellationToken,
+    git: &str,
+    prefix: &str,
+    host: &str,
+    names: &BTreeSet<&str>,
+) -> (BTreeSet<String>, Option<BTreeSet<String>>) {
+    let mut deleted = BTreeSet::new();
+    let Ok(listings) = list_host(config, cancel, git, host).await else {
+        return (deleted, None);
+    };
+    let sessions = match session_branches(config, cancel, host).await {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::warn!(host, error = %error, "eval branches kept: sessions unknown");
+            return (deleted, None);
+        }
+    };
+    let owners = Owners::default();
+    let rules = Rules {
+        prefix,
+        owners: &owners,
+        sessions: &sessions,
+        only: Some(names),
+        older_than: None,
+        retention: config.review_retention,
+        now: OffsetDateTime::now_utc(),
+    };
+    let mut kept = Some(BTreeSet::new());
+    for listing in listings {
+        let report = prune_repository(config, cancel, git, host, listing, &rules, true).await;
+        if !report.error.is_empty() {
+            kept = None;
+        }
+        for branch in report.branches {
+            if branch.deleted {
+                deleted.insert(branch.branch);
+            } else if let Some(kept) = kept.as_mut() {
+                kept.insert(branch.branch);
+            }
+        }
+    }
+    (deleted, kept)
 }
 
 /// Returns `pohunek.hosts`, then each other host that a route override names, without repeats.

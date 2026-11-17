@@ -291,9 +291,9 @@ async fn main() -> ExitCode {
             }) => guard_scan::run(config.as_deref(), &command).and_then(|done| print_json(&done)),
             Ok(Cli {
                 config,
+                env_file,
                 command: Invocation::Eval(command),
-                ..
-            }) => eval_cli::run(config.as_deref(), &command),
+            }) => eval_cli::run(config, env_file, command).await,
             Ok(Cli {
                 config,
                 env_file,
@@ -308,7 +308,7 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             report(&error);
-            ExitCode::FAILURE
+            eval_cli::exit_code(error_code(&error)).map_or(ExitCode::FAILURE, ExitCode::from)
         }
     }
 }
@@ -328,7 +328,11 @@ fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
         ));
     }
     let cli = Cli::try_parse_from(arguments)?;
-    if cli.env_file.is_some() && !matches!(cli.command, Invocation::Configured(_)) {
+    let reads_secrets = matches!(
+        cli.command,
+        Invocation::Configured(_) | Invocation::Eval(eval_cli::EvalCommand::Run(_))
+    );
+    if cli.env_file.is_some() && !reads_secrets {
         return Err(Cli::command().error(
             ErrorKind::ArgumentConflict,
             format!("{ENV_FILE_FLAG} is not an option of init, profiles, guard and eval validate"),
@@ -356,7 +360,7 @@ fn report(error: &Error) {
     // `prune-branches` and `eval validate` printed their document; one object on stdout stays
     // the rule.
     let printed =
-        code == prune_branches::BRANCH_PRUNE_INCOMPLETE || code == eval_cli::EVAL_CASES_INVALID;
+        code == prune_branches::BRANCH_PRUNE_INCOMPLETE || eval_cli::exit_code(code).is_some();
     let response = error_response(error);
     // A failed write leaves only the log line; there is nowhere else to report it.
     if let Some(text) = go_json(&response).ok().filter(|_| !printed) {
@@ -386,6 +390,7 @@ async fn run(
         config,
         mcp,
         metrics,
+        eval: _,
         log,
     } = config_file::load(&path, env_file.as_ref())?;
     if let (Some(settings), Some(file_name)) = (&log, log_file_name(&command)) {

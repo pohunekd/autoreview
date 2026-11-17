@@ -437,6 +437,46 @@ expect:
       description: Lock released before the entry is inserted.
 ```
 
+### `autoreview eval run`
+
+```
+autoreview eval run --cases <DIR> --pipeline <NAME> --git-binary <PATH> [--repeat <N>]
+  [--min-recall <RATIO>] [--max-false-blocking <RATIO>]
+```
+
+Reviews every case with the real reviewers and verifier of the pipeline `NAME`
+and prints a JSON report; it never publishes, notifies or reads the production
+store. It needs the [`eval` section](configuration.md#eval) and a `--config` of
+its own, and it takes `--env-file` like the other configured commands.
+
+An expected finding is caught when a finding that blocks has the same path and
+a reported line inside the expected range. The report gives, before and after
+the verifier, the recall over the defect cases and the false blocking rate over
+the clean cases, counted over the completed trials. `--min-recall` and
+`--max-false-blocking` apply to the rates after verification. A case whose
+`pipelines` list leaves the pipeline out is reported as skipped. A pipeline with
+`checkout: head` is refused, because nothing pins its checkout to the case's
+head.
+
+After the sessions are removed, the run deletes the review branches it started
+under `eval.session_branch_prefix` with the git program `--git-binary` (an
+absolute path), the way `prune-branches` does and only those branches. The
+report lists them as `branches_deleted` and `branches_left`; a branch on a host
+that is not this machine, or that a session, worktree or hook keeps, is left.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | The report was printed and every threshold given is met |
+| 1 | The run did not start: an invalid case (`eval_cases_invalid`), `eval_pipeline_unknown`, `eval_no_cases`, `eval_repeat_invalid`, `eval_too_many_trials`, `eval_threshold_no_data` (a threshold without a case of its class), `eval_checkout_unsupported`, `eval_head_ref_reserved` (a `head_ref` branch under a review branch prefix), `credential_not_covered` or a configuration error |
+| 2 | A threshold is not met (`eval_threshold_not_met`) |
+| 3 | A trial could not be measured, a threshold has no completed trial, or the run was cancelled with Ctrl-C and printed its partial report without a verdict on the thresholds (`eval_trials_failed`) |
+
+A failed trial enters no rate and carries its error code in the report:
+`eval_trial_timeout`, `eval_session_budget_exhausted` (more than
+`eval.max_sessions` session starts in the run), `eval_verifier_failed` (the
+verifier did not finish, so the claims would publish unchecked), `shutdown` (the
+run was cancelled before the trial started) or the code the review failed with.
+
 ## Service
 
 ### `autoreview serve`

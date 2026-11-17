@@ -720,6 +720,8 @@ pub(crate) struct Loaded {
     pub(crate) mcp: Option<McpConfig>,
     /// The `metrics` section, when the file has one.
     pub(crate) metrics: Option<MetricsConfig>,
+    /// The `eval` section, when the file has one.
+    pub(crate) eval: Option<EvalConfig>,
     /// The `log` section, when the file has one.
     pub(crate) log: Option<LogSettings>,
 }
@@ -744,13 +746,13 @@ pub(crate) fn load(path: &Path, env_file: Option<&EnvFile>) -> Result<Loaded, Er
     let file = parse_file(&text)?;
     let mcp = mcp_section(&file)?;
     let metrics = metrics_section(&file)?;
-    // An invalid `eval` section stops every command at load, like the other sections.
-    eval_section(&file, &config)?;
+    let eval = eval_section(&file, &config)?;
     let log = log_section(&file)?;
     Ok(Loaded {
         config,
         mcp,
         metrics,
+        eval,
         log,
     })
 }
