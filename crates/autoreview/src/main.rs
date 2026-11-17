@@ -5,6 +5,7 @@
 mod config_file;
 mod env_file;
 mod error_response;
+mod eval_cli;
 mod guard_scan;
 mod init;
 mod logging;
@@ -112,6 +113,9 @@ enum Invocation {
     /// Runs the text guard over a corpus of pull request texts, offline.
     #[command(subcommand)]
     Guard(guard_scan::GuardCommand),
+    /// Checks eval case files of known pull requests, offline.
+    #[command(subcommand)]
+    Eval(eval_cli::EvalCommand),
     /// A command that loads the configuration first.
     #[command(flatten)]
     Configured(Command),
@@ -287,6 +291,11 @@ async fn main() -> ExitCode {
             }) => guard_scan::run(config.as_deref(), &command).and_then(|done| print_json(&done)),
             Ok(Cli {
                 config,
+                command: Invocation::Eval(command),
+                ..
+            }) => eval_cli::run(config.as_deref(), &command),
+            Ok(Cli {
+                config,
                 env_file,
                 command: Invocation::Configured(command),
             }) => run(config, env_file, command).await,
@@ -309,7 +318,8 @@ async fn main() -> ExitCode {
 /// # Errors
 ///
 /// Returns the clap error; a `--` argument is an `UnknownArgument` error, and `--env-file`
-/// with `init`, `profiles` or `guard`, which read no secret, an `ArgumentConflict` error.
+/// with `init`, `profiles`, `guard` or `eval validate`, which read no secret, an
+/// `ArgumentConflict` error.
 fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
     if arguments.iter().skip(1).any(|argument| argument == ESCAPE) {
         return Err(Cli::command().error(
@@ -321,7 +331,7 @@ fn parse(arguments: Vec<OsString>) -> Result<Cli, clap::Error> {
     if cli.env_file.is_some() && !matches!(cli.command, Invocation::Configured(_)) {
         return Err(Cli::command().error(
             ErrorKind::ArgumentConflict,
-            format!("{ENV_FILE_FLAG} is not an option of init, profiles and guard"),
+            format!("{ENV_FILE_FLAG} is not an option of init, profiles, guard and eval validate"),
         ));
     }
     Ok(cli)
@@ -339,11 +349,14 @@ fn print_display(display: &clap::Error) -> Result<(), Error> {
 
 /// Prints the JSON error object of `error` on stdout and logs the failure.
 ///
-/// A `branch_prune_incomplete` failure is only logged: its document is the stdout object.
+/// A `branch_prune_incomplete` or `eval_cases_invalid` failure is only logged: its document is
+/// the stdout object.
 fn report(error: &Error) {
     let code = error_code(error);
-    // `prune-branches` printed its document; one object on stdout stays the rule.
-    let printed = code == prune_branches::BRANCH_PRUNE_INCOMPLETE;
+    // `prune-branches` and `eval validate` printed their document; one object on stdout stays
+    // the rule.
+    let printed =
+        code == prune_branches::BRANCH_PRUNE_INCOMPLETE || code == eval_cli::EVAL_CASES_INVALID;
     let response = error_response(error);
     // A failed write leaves only the log line; there is nowhere else to report it.
     if let Some(text) = go_json(&response).ok().filter(|_| !printed) {

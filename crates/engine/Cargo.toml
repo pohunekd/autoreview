@@ -19,6 +19,7 @@ http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
 serde = { workspace = true }
+serde-saphyr = { workspace = true }
 rusqlite = { workspace = true }
 rmcp = { workspace = true }
 rustix = { workspace = true }
