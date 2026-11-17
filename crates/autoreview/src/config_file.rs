@@ -20,6 +20,7 @@ use autoreview_engine::config::{
     HostStateChoice, HostStateRules, MatrixBackend, NotifyBackend, NotifySettings, RouteOverride,
     TextGuard, WebhookBackend, WebhookFormat, signature_text,
 };
+use autoreview_engine::eval::config::EvalConfig;
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::publish::MarkerName;
@@ -231,6 +232,10 @@ pub(crate) struct FileConfig {
     /// as a section without keys, so its first key is reported missing.
     #[serde(default, deserialize_with = "present_section")]
     metrics: Option<MetricsFile>,
+    /// The `eval` section; only `autoreview eval run` needs it. A null section reads as a
+    /// section without keys, so `eval.credential` is reported missing.
+    #[serde(default, deserialize_with = "present_section")]
+    eval: Option<EvalFile>,
     /// The `guards` section; a policy rule with a guard needs it. A null section reads as a
     /// section without keys, so `guards.text` is reported missing.
     #[serde(default, deserialize_with = "present_section")]
@@ -311,6 +316,26 @@ struct MetricsFile {
     header_timeout_seconds: Option<Value>,
     /// Most connections served at once.
     max_connections: Option<Value>,
+}
+
+/// The `eval` section.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvalFile {
+    /// Name of the read-only credential of eval requests.
+    credential: Option<Value>,
+    /// Prefix of the session names of eval reviewers.
+    session_name_prefix: Option<Value>,
+    /// Prefix of the branches of eval reviewer sessions.
+    session_branch_prefix: Option<Value>,
+    /// Most trials that run at once.
+    max_concurrent_trials: Option<Value>,
+    /// Most trials of one run.
+    max_trials: Option<Value>,
+    /// Most sessions of one run.
+    max_sessions: Option<Value>,
+    /// Longest time of one trial, in seconds.
+    trial_timeout_seconds: Option<Value>,
 }
 
 /// The `mcp` section.
@@ -719,6 +744,8 @@ pub(crate) fn load(path: &Path, env_file: Option<&EnvFile>) -> Result<Loaded, Er
     let file = parse_file(&text)?;
     let mcp = mcp_section(&file)?;
     let metrics = metrics_section(&file)?;
+    // An invalid `eval` section stops every command at load, like the other sections.
+    eval_section(&file, &config)?;
     let log = log_section(&file)?;
     Ok(Loaded {
         config,
@@ -726,6 +753,93 @@ pub(crate) fn load(path: &Path, env_file: Option<&EnvFile>) -> Result<Loaded, Er
         metrics,
         log,
     })
+}
+
+/// Reads the `eval` section; `None` when the configuration has no `eval` key.
+///
+/// # Errors
+///
+/// Returns `configuration_missing` for an absent key of the section (`eval.credential` for a
+/// null section) and `configuration_invalid` for a credential that `github.credentials` does
+/// not hold, a prefix that equals or nests with the review prefix of the same file, or a count
+/// out of its limit.
+pub(crate) fn eval_section(
+    file: &FileConfig,
+    config: &Config,
+) -> Result<Option<EvalConfig>, Error> {
+    let Some(eval) = &file.eval else {
+        return Ok(None);
+    };
+    let credential = text(&eval.credential, "eval.credential")?;
+    if !config
+        .credentials
+        .iter()
+        .any(|known| known.name == credential)
+    {
+        let message = "must name an entry of github.credentials";
+        return Err(invalid("eval.credential", message));
+    }
+    let name_key = "eval.session_name_prefix";
+    let session_name_prefix = text(&eval.session_name_prefix, name_key)?;
+    if session_name_prefix.is_empty() || session_name_prefix.chars().any(char::is_control) {
+        return Err(invalid(
+            name_key,
+            "must be text without a control character",
+        ));
+    }
+    let branch_key = "eval.session_branch_prefix";
+    let session_branch_prefix = text(&eval.session_branch_prefix, branch_key)?;
+    if !ref_prefix_valid(&session_branch_prefix) {
+        return Err(invalid(branch_key, "must be usable in a git ref name"));
+    }
+    if nested(&session_name_prefix, &config.session_name_prefix) {
+        let message = "must not start with or be the start of session.name_prefix";
+        return Err(invalid(name_key, message));
+    }
+    if nested(&session_branch_prefix, &config.session_branch_prefix) {
+        let message = "must not start with or be the start of session.branch_prefix";
+        return Err(invalid(branch_key, message));
+    }
+    let concurrent_key = "eval.max_concurrent_trials";
+    let concurrent = count(&eval.max_concurrent_trials, concurrent_key)?;
+    if i64::try_from(concurrent).is_ok_and(|trials| trials > config.max_concurrent_reviews) {
+        let message = "must not exceed limits.max_concurrent_reviews";
+        return Err(invalid(concurrent_key, message));
+    }
+    Ok(Some(EvalConfig {
+        credential,
+        session_name_prefix,
+        session_branch_prefix,
+        max_concurrent_trials: concurrent,
+        max_trials: count(&eval.max_trials, "eval.max_trials")?,
+        max_sessions: count(&eval.max_sessions, "eval.max_sessions")?,
+        trial_timeout: bounded_units(
+            &eval.trial_timeout_seconds,
+            "eval.trial_timeout_seconds",
+            MAX_EVAL_TRIAL_SECONDS,
+            "must be at most 86400 seconds",
+            1,
+        )?,
+    }))
+}
+
+/// Longest `eval.trial_timeout_seconds`: one day.
+const MAX_EVAL_TRIAL_SECONDS: u32 = 86_400;
+
+/// Reports whether one prefix is the other or starts with it.
+fn nested(first: &str, second: &str) -> bool {
+    first.starts_with(second) || second.starts_with(first)
+}
+
+/// Reports whether `prefix` can start a git ref name.
+fn ref_prefix_valid(prefix: &str) -> bool {
+    !prefix.is_empty()
+        && !prefix.starts_with(['-', '/'])
+        && !prefix.contains("..")
+        && !prefix.contains("@{")
+        && !prefix
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c))
 }
 
 /// Reads the `log` section; `None` when the configuration has no `log` key.
@@ -3649,6 +3763,65 @@ pub(crate) mod tests {
             parse_file(&unknown).is_err(),
             "the section refuses a key it does not know"
         );
+    }
+
+    #[test]
+    fn eval_section_is_optional_and_every_key_is_required() {
+        let section = concat!(
+            "eval:\n  credential: default\n  session_name_prefix: eval-review-\n",
+            "  session_branch_prefix: autoreview/eval/\n  max_concurrent_trials: 1\n",
+            "  max_trials: 60\n  max_sessions: 240\n  trial_timeout_seconds: 2700\n",
+        );
+        let config = parse(EXAMPLE, secret, example_policy).expect("the example loads");
+        let load = |text: &str| eval_section(&parse_file(text).expect("valid YAML"), &config);
+        assert!(load(EXAMPLE).expect("no section").is_none());
+        let loaded = load(&format!("{EXAMPLE}{section}"))
+            .expect("valid")
+            .expect("present");
+        assert_eq!(
+            (loaded.max_trials, loaded.trial_timeout.as_secs()),
+            (60, 2700)
+        );
+        let refused = |text: String| load(&format!("{EXAMPLE}{text}")).expect_err("refused");
+        let keys = section
+            .lines()
+            .skip(1)
+            .filter_map(|line| line.trim().split_once(':'));
+        for (key, _) in keys {
+            let without: Vec<&str> = (section.lines())
+                .filter(|line| !line.trim_start().starts_with(&format!("{key}:")))
+                .collect();
+            let error = refused(without.join("\n")).to_string();
+            assert!(
+                error.starts_with(&format!("configuration_missing: eval.{key}")),
+                "{error}"
+            );
+        }
+        let null_section = refused("eval:\n".to_owned()).to_string();
+        assert!(null_section.starts_with("configuration_missing: eval.credential"));
+        // Each row names the key that the replaced text makes invalid.
+        let rows = [
+            ("credential: default", "credential: nobody", "credential"),
+            ("max_trials: 60", "max_trials: 0", "max_trials"),
+            ("eval-review-", "github-review-", "session_name_prefix"),
+            (
+                "autoreview/eval/",
+                "autoreview/review/",
+                "session_branch_prefix",
+            ),
+            (
+                "autoreview/eval/",
+                "autoreview/../",
+                "session_branch_prefix",
+            ),
+            ("trials: 1", "trials: 100000", "max_concurrent_trials"),
+            ("seconds: 2700", "seconds: 100000", "trial_timeout_seconds"),
+        ];
+        for (old, new, key) in rows {
+            let error = refused(section.replacen(old, new, 1)).to_string();
+            let expected = format!("configuration_invalid: eval.{key}: ");
+            assert!(error.starts_with(&expected), "{old}: {error}");
+        }
     }
 
     #[test]
