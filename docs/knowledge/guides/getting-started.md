@@ -332,8 +332,8 @@ A third run with the same `--dir` on the finished setup prints every step as
 - After an upgrade of autoreview, run `autoreview profiles install` with the
   same flags for each profile, and `--pohunek-timeout-seconds`, which 0.3.0 and
   earlier did not take; the script keeps a profile it wrote and does not know
-  the flags of an earlier run. When it upgrades an autoreview older than 0.4.0,
-  whose Codex adapters 0.4.0 refuses (`review_nonce_mismatch`), it names each
+  the flags of an earlier run. When it upgrades an autoreview older than 0.7.0,
+  whose Codex adapters 0.7.0 refuses (`review_nonce_mismatch`), it names each
   Codex profile it kept and prints the command with placeholders for the flags.
 - A directory made by an earlier setup run may have mode 0755 and its store
   0644, which lets other local users read the review history. From 0.5.0 on,

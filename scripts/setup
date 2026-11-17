@@ -38,7 +38,7 @@ POHUNEK_MIN_VERSION="0.41.0"
 AUTOREVIEW_VERSION="0.7.0"
 # The first release that refuses the Codex adapter of every earlier release
 # (review_nonce_mismatch); a Codex profile written before it needs a reinstall.
-CODEX_ADAPTER_RELEASE="0.4.0"
+CODEX_ADAPTER_RELEASE="0.7.0"
 # pohunek's login service needs systemd 255 or newer.
 SYSTEMD_MIN_VERSION=255
 # The oldest macOS major release that the darwin archives of pohunek and
