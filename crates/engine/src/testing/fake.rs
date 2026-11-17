@@ -170,6 +170,8 @@ pub(crate) struct FakeState {
     pub(crate) fetch_ref_failures: usize,
     /// Whether every session removal fails, so a session stays open.
     pub(crate) keeping_sessions: bool,
+    /// Whether a session lookup finds the live session that carries the request's name.
+    pub(crate) finding_sessions: bool,
     /// The hook report of every host; `None` reports the switch and no host script.
     pub(crate) head_checkout_hooks: Option<HeadCheckoutHooks>,
     /// Number of the next hook reports that fail as a transient `pohunek_request_failed`.
@@ -540,9 +542,22 @@ impl Integrations for FakeIntegration {
     fn find_session(
         &self,
         _cancel: &CancellationToken,
-        _request: &SessionRequest,
+        request: &SessionRequest,
     ) -> impl Future<Output = Result<Option<SessionIdentity>, Error>> + Send {
-        ready(Ok(None))
+        let state = self.lock();
+        let found = state
+            .sessions
+            .iter()
+            .find(|(_, live)| state.finding_sessions && live.name() == request.name())
+            .map(|(id, _)| SessionIdentity {
+                host: request.route.host.clone(),
+                session_id: id.clone(),
+                worker_instance_id: "worker".to_string(),
+                runtime_generation: "1".to_string(),
+                reviewer_id: request.reviewer.id.clone(),
+            });
+        drop(state);
+        ready(Ok(found))
     }
 
     fn session_output(

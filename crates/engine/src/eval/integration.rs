@@ -140,7 +140,9 @@ impl<I: Integrations + Send + Sync> EvalIntegration<I> {
     ///
     /// It uses a token that is not cancelled and gives each call at most `limit`. A session
     /// that is gone already is a no-op and is not listed; one that stays is logged and listed
-    /// in [`RunCounters::sessions_left`] until a later call removes it.
+    /// in [`RunCounters::sessions_left`] until a later call removes it. A session that a lookup
+    /// finds for a pending request is recorded by its identity, so a later call removes it
+    /// without the lookup.
     pub async fn remove_sessions(&self, limit: Duration) {
         let fresh = CancellationToken::new();
         let (mut sessions, pending) = {
@@ -150,8 +152,21 @@ impl<I: Integrations + Send + Sync> EvalIntegration<I> {
         for request in &pending {
             let lookup = self.inner.find_session(&fresh, request);
             match tokio::time::timeout(limit, lookup).await {
-                Ok(Ok(Some(found))) if !sessions.contains(&found) => sessions.push(found),
-                Ok(Ok(_)) => {}
+                Ok(Ok(Some(found))) => {
+                    {
+                        let mut recorded = self.recorded();
+                        recorded
+                            .pending
+                            .retain(|queued| queued.name() != request.name());
+                        if !recorded.sessions.contains(&found) {
+                            recorded.sessions.push(found.clone());
+                        }
+                    }
+                    if !sessions.contains(&found) {
+                        sessions.push(found);
+                    }
+                }
+                Ok(Ok(None)) => {}
                 _ => tracing::warn!(session = %request.name(), "eval session lookup failed"),
             }
         }
