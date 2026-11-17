@@ -11,7 +11,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 
 use super::reviews::{time_key, unavailable};
-use super::{Store, guidance, outcome_checks};
+use super::{Store, guidance, outcome_checks, signals};
 use crate::Error;
 
 /// The DDL of the outcomes, run after `ROLLUP_SCHEMA`; a store that predates it gains it.
@@ -292,7 +292,7 @@ impl Store {
     /// Deletes the outcomes last written before `cutoff` and returns how many it deleted.
     ///
     /// The state reads of their pull requests last made before `cutoff`, their categories and
-    /// the guidance suggestions made before `cutoff` go in the same transaction.
+    /// signals, and the guidance suggestions made before `cutoff` go in the same transaction.
     ///
     /// # Errors
     ///
@@ -312,6 +312,7 @@ impl Store {
                 .map_err(unavailable)?;
             outcome_checks::prune(transaction, &cutoff)?;
             guidance::prune(transaction, &cutoff)?;
+            signals::prune(transaction)?;
             Ok(i64::try_from(rows).unwrap_or(i64::MAX))
         })
     }
