@@ -42,7 +42,7 @@ CORPUS; autoreview eval validate --cases DIR; autoreview eval run --cases DIR --
 autoreview eval add --cases DIR --id ID (--from-pr OWNER/NAME#N --fix SHA | --from-finding \
 OWNER/NAME#N:KEY --verdict wrong|right [--description TEXT]) [--store ABS_PATH] \
 [--base-sha SHA] [--head-sha SHA] [--base-branch BRANCH] [--head-branch BRANCH] [--path PATH] \
-[--lines PATH:FIRST-LAST]";
+[--lines PATH:FIRST-LAST]; autoreview eval prune --git-binary PATH [--host HOST] [--yes]";
 
 /// The JSON a caller reads from a failed command. It carries stable codes, never raw causes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

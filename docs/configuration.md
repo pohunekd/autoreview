@@ -616,7 +616,8 @@ the engine lock, so a second `serve` with the same section fails with
 
 ## eval
 
-Optional; only `autoreview eval run` and `autoreview eval add` read it. When the
+Optional; only `autoreview eval run`, `autoreview eval add` and
+`autoreview eval prune` read it. When the
 section is present, every command validates it at load and every key is
 required; an `eval:` key without a value is refused with
 `configuration_missing: eval.credential`. Run an eval from its own config file:

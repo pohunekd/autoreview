@@ -2,11 +2,6 @@
 
 // Rust guideline compliant 2026-11-14
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the eval prune command")
-)]
-
 #[cfg(test)]
 mod tests;
 
@@ -48,9 +43,9 @@ pub(crate) struct SessionSets {
 /// takes the branches of `selected` out of the live set and frees them, and the plan shows the
 /// verdicts that `--yes` produces. With `delete`, `read` follows the removals and stays as read
 /// and nothing is freed: the branch of a session whose removal failed keeps `session_live`, and
-/// a worktree that outlives its session keeps `checked_out`. Known asymmetry: a person's
-/// worktree on a selected eval branch plans `delete` in the dry run, and `--yes` keeps the
-/// branch `checked_out`, the safe direction.
+/// a worktree that outlives its session keeps `checked_out`. Known asymmetry: a session or
+/// worktree that is not an eval session on a selected eval branch plans `delete` in the dry
+/// run, and `--yes` keeps the branch (`session_live` or `checked_out`), the safe direction.
 pub(crate) fn eval_session_sets(
     mut read: BTreeSet<String>,
     selected: &[&SessionSummary],

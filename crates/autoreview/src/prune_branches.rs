@@ -6,6 +6,7 @@
 
 // Rust guideline compliant 2026-11-14
 
+pub(crate) mod eval;
 pub(crate) mod plan;
 
 #[cfg(test)]
@@ -473,7 +474,6 @@ async fn delete_host_branches(
 /// still count as a live session or a checked-out worktree. No review owns an eval branch and
 /// no age limit applies, so every well-formed branch under `prefix` that no live session,
 /// worktree or hook keeps is `delete`.
-#[expect(dead_code, reason = "called by the eval prune command")]
 pub(crate) async fn prune_eval_host(
     config: &Config,
     cancel: &CancellationToken,
