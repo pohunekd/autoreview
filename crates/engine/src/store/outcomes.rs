@@ -11,7 +11,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 
 use super::reviews::{time_key, unavailable};
-use super::{Store, guidance, outcome_checks};
+use super::{Store, guidance, outcome_checks, signals};
 use crate::Error;
 
 /// The DDL of the outcomes, run after `ROLLUP_SCHEMA`; a store that predates it gains it.
@@ -95,8 +95,8 @@ pub struct FindingOutcome {
     pub line: i64,
     /// Whether the finding held the merge back when it was published.
     pub blocking: bool,
-    /// The outcome: `open`, `refuted`, `not_blocking`, `fixed`, `answered`, `open_at_merge`
-    /// or `open_at_close`.
+    /// The outcome: `open`, `refuted`, `not_blocking`, `fixed`, `answered`, `dismissed`,
+    /// `open_at_merge` or `open_at_close`.
     pub outcome: String,
     /// Head SHA that the outcome was decided at; empty while the outcome is `open`.
     pub outcome_head_sha: String,
@@ -116,6 +116,9 @@ pub struct ListedOutcome {
     pub ended: String,
     /// Head SHA that the pull request ended on; empty while `ended` is empty.
     pub end_head_sha: String,
+    /// Reactions of the pull request author to the inline comment of the finding, sorted, as
+    /// GitHub's REST API names them; empty without reactions or without a signal read.
+    pub author_reactions: Vec<String>,
 }
 
 /// What a published review decided about one earlier finding of its pull request.
@@ -238,7 +241,11 @@ impl Store {
         // `USING` merges `repository` and `number`, so the outcome columns stay unqualified.
         let mut statement = connection
             .prepare(&format!(
-                "SELECT {OUTCOME_COLUMNS}, COALESCE(ended, ''), COALESCE(end_head_sha, '') \
+                "SELECT {OUTCOME_COLUMNS}, COALESCE(ended, ''), COALESCE(end_head_sha, ''), \
+                 COALESCE((SELECT s.author_reactions FROM finding_signals s \
+                 WHERE s.repository = finding_outcomes.repository \
+                 AND s.number = finding_outcomes.number \
+                 AND s.finding_key = finding_outcomes.finding_key), '') \
                  FROM finding_outcomes \
                  LEFT JOIN finding_outcome_pull_requests USING (repository, number) \
                  WHERE repository = ?1 AND {} >= {} \
@@ -250,10 +257,12 @@ impl Store {
             .map_err(unavailable)?;
         let rows = statement
             .query_map(params![repository, since], |row| {
+                let reactions: String = row.get(21)?;
                 Ok(ListedOutcome {
                     finding: read_row(row)?,
                     ended: row.get(19)?,
                     end_head_sha: row.get(20)?,
+                    author_reactions: signals::split_reactions(&reactions),
                 })
             })
             .map_err(unavailable)?;
@@ -292,7 +301,7 @@ impl Store {
     /// Deletes the outcomes last written before `cutoff` and returns how many it deleted.
     ///
     /// The state reads of their pull requests last made before `cutoff`, their categories and
-    /// the guidance suggestions made before `cutoff` go in the same transaction.
+    /// signals, and the guidance suggestions made before `cutoff` go in the same transaction.
     ///
     /// # Errors
     ///
@@ -312,6 +321,7 @@ impl Store {
                 .map_err(unavailable)?;
             outcome_checks::prune(transaction, &cutoff)?;
             guidance::prune(transaction, &cutoff)?;
+            signals::prune(transaction)?;
             Ok(i64::try_from(rows).unwrap_or(i64::MAX))
         })
     }

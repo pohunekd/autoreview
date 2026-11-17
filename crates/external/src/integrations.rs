@@ -11,7 +11,8 @@ use autoreview_engine::Error;
 use autoreview_engine::config::{Config, Credential};
 use autoreview_engine::integrations::{
     ChangedFiles, CommentableLines, GitHubReview, GuardTexts, HeadCheckoutHooks, Integrations,
-    PullRequestState, ReadiedDraft, ReviewRequestList, SessionRequest, TokenAnswer,
+    PullRequestSignals, PullRequestState, ReadiedDraft, ReviewRequestList, SessionRequest,
+    TokenAnswer,
 };
 use autoreview_engine::model::{
     CandidateList, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
@@ -350,6 +351,18 @@ impl Integrations for External {
     ) -> Result<Option<PublishResult>, Error> {
         self.github
             .published_review(cancel, credential, pull_request, review)
+            .await
+    }
+
+    async fn read_pull_request_signals(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        number: i64,
+    ) -> Result<PullRequestSignals, Error> {
+        self.github
+            .pull_request_signals(cancel, credential, repository, number)
             .await
     }
 

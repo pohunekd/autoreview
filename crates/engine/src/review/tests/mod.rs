@@ -6,3 +6,4 @@ mod approval;
 mod core;
 mod intent;
 mod memory;
+mod signals;

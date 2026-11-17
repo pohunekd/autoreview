@@ -393,6 +393,7 @@ pub(crate) mod tests {
             published_retention: Duration::from_secs(7 * 24 * 60 * 60),
             outcome_retention: Duration::from_secs(365 * 24 * 60 * 60),
             outcome_check_interval: Duration::from_secs(60 * 60),
+            signal_check_interval: None,
             excerpt_characters: 1000,
             terminal_cols: 120,
             terminal_rows: 100,

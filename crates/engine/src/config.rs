@@ -339,6 +339,10 @@ pub struct Config {
     pub outcome_retention: Duration,
     /// Shortest time between two state reads of a pull request whose findings are open.
     pub outcome_check_interval: Duration,
+    /// Shortest time between two signal reads of a pull request whose findings are open.
+    ///
+    /// `None` makes no signal read: no review id, comment id or reaction is read or stored.
+    pub signal_check_interval: Option<Duration>,
     /// Longest excerpt of a review in a Matrix message, in characters.
     pub excerpt_characters: i64,
     /// Width of the pohunek terminal of a review session, in columns.
@@ -609,7 +613,7 @@ impl Config {
     }
 
     /// Returns all durations that have a range check.
-    fn durations(&self) -> [Duration; 19] {
+    fn durations(&self) -> [Duration; 20] {
         [
             self.gh_timeout,
             self.pohunek_timeout,
@@ -630,6 +634,7 @@ impl Config {
             self.published_retention,
             self.outcome_retention,
             self.outcome_check_interval,
+            self.signal_check_interval.unwrap_or_default(),
         ]
     }
 
@@ -1248,6 +1253,7 @@ mod tests {
             published_retention: Duration::from_secs(7 * 24 * 60 * 60),
             outcome_retention: Duration::from_secs(365 * 24 * 60 * 60),
             outcome_check_interval: Duration::from_secs(60 * 60),
+            signal_check_interval: None,
             excerpt_characters: 1000,
             terminal_cols: 120,
             terminal_rows: 100,

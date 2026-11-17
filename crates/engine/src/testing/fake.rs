@@ -25,14 +25,14 @@ use tokio_util::sync::CancellationToken;
 use crate::config::Credential;
 use crate::error::{BoxError, Error, WORKFLOW_FAILED};
 use crate::integrations::{
-    ChangedFile, ChangedFiles, CommentableLines, GitHubReview, GuardText, GuardTexts,
-    HeadCheckoutHooks, Integrations, PullRequestState, ReadiedDraft, ReviewRequest,
-    ReviewRequestList, SessionRequest, TokenAnswer,
+    ChangedFile, ChangedFiles, CommentReaction, CommentableLines, GitHubReview, GuardText,
+    GuardTexts, HeadCheckoutHooks, Integrations, PullRequestSignals, PullRequestState,
+    ReadiedDraft, ReviewRequest, ReviewRequestList, SessionRequest, ThreadComment, TokenAnswer,
 };
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
-    Candidate, CandidateList, Discussion, HostCapacity, LinkedIssues, PriorFinding, ProjectRoute,
-    PublishResult, PullRequest, RejectedCandidate, SessionIdentity,
+    Candidate, CandidateList, Decision, Discussion, HostCapacity, LinkedIssues, PriorFinding,
+    ProjectRoute, PublishResult, PullRequest, RejectedCandidate, SessionIdentity,
 };
 use crate::notify::Notification;
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
@@ -121,6 +121,14 @@ pub(crate) struct FakeState {
     pub(crate) dismissed: BTreeSet<usize>,
     /// Number of lookups of a published review without a post.
     pub(crate) lookups: usize,
+    /// Pull request of each review in `published`, as `repository#number`, in the same order.
+    pub(crate) published_keys: Vec<String>,
+    /// Every signal read, as `repository#number`, in order.
+    pub(crate) signal_reads: Vec<String>,
+    /// Pull requests whose signal read fails transiently, by `repository#number`.
+    pub(crate) failing_signal_reads: BTreeSet<String>,
+    /// Reactions to each inline comment, by review ID and the index of the comment in it.
+    pub(crate) reactions: BTreeMap<(i64, usize), Vec<CommentReaction>>,
     /// Pull requests whose review request a posted review answered, by `repository#number`.
     pub(crate) answered: BTreeSet<String>,
     /// Every notification that was sent.
@@ -689,6 +697,7 @@ impl Integrations for FakeIntegration {
             } else {
                 state.published.push(review.clone());
                 state.published_heads.push(pull_request.head_sha.clone());
+                state.published_keys.push(pull_request.key());
                 state.publisher_logins.push(credential.login.clone());
                 state.answered.insert(pull_request.key());
                 PublishResult {
@@ -728,6 +737,53 @@ impl Integrations for FakeIntegration {
                 })
         };
         ready(Ok(result))
+    }
+
+    fn read_pull_request_signals(
+        &self,
+        _cancel: &CancellationToken,
+        _credential: &Credential,
+        repository: &str,
+        number: i64,
+    ) -> impl Future<Output = Result<PullRequestSignals, Error>> + Send {
+        // Every review of the pull request, dismissed as `dismiss` marks it, and the inline
+        // comments that each review posted as threads, with their reactions.
+        let key = format!("{repository}#{number}");
+        let result = {
+            let mut state = self.lock();
+            state.signal_reads.push(key.clone());
+            if state.failing_signal_reads.contains(&key) {
+                return ready(Err(transient_error()));
+            }
+            let mut signals = PullRequestSignals::default();
+            if let Some(pr) = state.current.get(&key) {
+                signals.author = pr.author.clone();
+            }
+            for (index, review) in state.published.iter().enumerate() {
+                if state.published_keys.get(index) != Some(&key) {
+                    continue;
+                }
+                let review_id = i64::try_from(index + 1).unwrap_or(i64::MAX);
+                let current = match review.decision {
+                    Decision::Approve => "APPROVED",
+                    Decision::RequestChanges => "CHANGES_REQUESTED",
+                    _ => "COMMENTED",
+                };
+                let dismissed = state.dismissed.contains(&index);
+                let shown = if dismissed { "DISMISSED" } else { current };
+                signals.reviews.insert(review_id, shown.to_owned());
+                for (position, comment) in review.comments.iter().enumerate() {
+                    let reactions = state.reactions.get(&(review_id, position));
+                    signals.threads.push(ThreadComment {
+                        review_id,
+                        body: comment.body.clone(),
+                        reactions: reactions.cloned().unwrap_or_default(),
+                    });
+                }
+            }
+            Ok(signals)
+        };
+        ready(result)
     }
 
     fn list_review_requests(

@@ -13,6 +13,7 @@ mod issues;
 mod permission;
 mod pull_request;
 mod reviews;
+mod signals;
 mod token;
 
 use std::collections::BTreeSet;

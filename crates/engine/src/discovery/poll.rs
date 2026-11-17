@@ -103,13 +103,16 @@ pub(crate) struct Pass {
     pub(crate) result: PollResult,
     /// Notifications of the pass, sent after the discovery lock is released.
     pub(crate) notices: Vec<Notice>,
+    /// Credentials whose search failed in the pass, by name, with the error code.
+    pub(crate) failed: BTreeMap<String, String>,
 }
 
 impl<I: Integrations, C: Clock> Engine<I, C> {
     /// Plans every candidate under the discovery lock and queues the reviews that are due.
     ///
     /// The notifications of the pass are sent after the lock is released; a failed one is
-    /// logged and does not fail the poll.
+    /// logged and does not fail the poll. The signal reads of finding outcomes follow them,
+    /// also without the lock, and never fail the poll.
     ///
     /// # Errors
     ///
@@ -117,6 +120,7 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     pub async fn poll(&self, cancel: &CancellationToken) -> Result<PollResult, Error> {
         let pass = self.with_discovery(|| self.poll_pass(cancel, None)).await?;
         self.send_notices(cancel, pass.notices).await;
+        self.check_signals(cancel, &pass.failed).await;
         Ok(pass.result)
     }
 
@@ -484,7 +488,11 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             }
             self.store.save_discovery(transaction, &state)
         })?;
-        Ok(Pass { result, notices })
+        Ok(Pass {
+            result,
+            notices,
+            failed: listed.failed_credentials,
+        })
     }
 
     /// Returns the notice of a failed review that the scheduler reports.

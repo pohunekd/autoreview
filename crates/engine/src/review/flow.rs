@@ -727,6 +727,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             artifact,
             published_at.0,
         );
+        (self.engine).record_signal_ids(&self.input, &rendered.review, &result, artifact);
         self.suggest_guidance(&current.repository).await?;
         let blocking = blocking_count(&self.input, artifact);
         let event: Event = publication_event(plan, blocking);

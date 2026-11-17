@@ -28,6 +28,7 @@ pub mod outcomes;
 pub mod recurrence;
 pub mod reviews;
 pub mod rollup;
+pub mod signals;
 pub mod steps;
 
 pub use discovery::{
@@ -226,8 +227,8 @@ impl Store {
 
     /// Creates the schema and stamps the version, after refusing a newer database.
     ///
-    /// Adds the step runs, rollup, finding outcome and guidance tables without a new version, so
-    /// earlier releases still open the file.
+    /// Adds the step runs, rollup, finding outcome, guidance and signal tables without a new
+    /// version, so earlier releases still open the file.
     fn migrate(&self) -> Result<(), Error> {
         let connection = self.lock_connection()?;
         let version: i64 = connection
@@ -257,6 +258,9 @@ impl Store {
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .execute_batch(guidance::GUIDANCE_SCHEMA)
+            .map_err(|err| store_error("store_unavailable", true, err))?;
+        connection
+            .execute_batch(signals::SIGNALS_SCHEMA)
             .map_err(|err| store_error("store_unavailable", true, err))?;
         connection
             .pragma_update(None, "user_version", STORE_SCHEMA_VERSION)

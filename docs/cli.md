@@ -484,11 +484,12 @@ status 0.
 | `reviewer_id`, `pipeline`, `rule` | The reviewer (the first one of a merged finding), the pipeline and the rule `match` |
 | `severity`, `confidence`, `path`, `line` | As published |
 | `blocking` | `true` when the finding held the merge back when it was published |
-| `outcome` | `open`, `refuted`, `not_blocking`, `fixed`, `answered`, `open_at_merge` or `open_at_close` |
+| `outcome` | `open`, `refuted`, `not_blocking`, `fixed`, `answered`, `dismissed`, `open_at_merge` or `open_at_close` |
 | `outcome_head_sha` | The head the outcome was decided at; empty while `open` |
 | `published_at`, `updated_at` | When the finding was published and when its row last changed, RFC 3339 in UTC |
 | `ended` | `merged` or `closed` once a state read saw the pull request end, empty before; only a pull request with an `open` row is read, so `ended` stays empty for one whose rows were all decided before it ended; a reopened pull request keeps its earlier end until it ends again with an `open` row, which only a review after the reopen adds |
 | `end_head_sha` | The head the pull request ended on; empty while `ended` is empty |
+| `author_reactions` | A JSON list: the sorted reactions of the pull request author to the finding's inline comment as GitHub's REST API names them, such as `["+1"]`; empty when no signal read stored any, and a set stored before `schedule.signal_check_interval_seconds` was removed stays listed; see [signals from GitHub](knowledge/concepts/finding-outcomes.md#signals-from-github) |
 
 The fields always come in this order. A row holds no title or body of a finding.
 A `--repo` that is not a lowercase `owner/name` is `repository_not_allowed`, a
