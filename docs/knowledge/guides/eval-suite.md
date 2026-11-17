@@ -96,7 +96,7 @@ autoreview --config eval-config.yaml eval add --cases examples/eval/cases \
 
 - `--verdict wrong` writes a clean case for the whole head, so it is refused while
   another blocking finding stood at that head, one carried from an earlier push
-  included; write that case by hand.
+  included unless it was fixed by then; write that case by hand.
 - `--verdict right` needs your own `--lines PATH:FIRST-LAST` and `--description`:
   the stored line is where anchoring put the finding, not where the defect is. As
   for a fix, the path needs an added line in the pull request.

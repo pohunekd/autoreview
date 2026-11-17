@@ -17,7 +17,7 @@ use super::case::{MAX_DESCRIPTION_CHARS, MAX_RANGE_LINES, MAX_TITLE_CHARS};
 use crate::error::Error;
 use crate::integrations::{CommentableLines, CommitFile};
 use crate::protocol::reason::is_neutralized;
-use crate::store::{FindingOutcome, OUTCOME_OPEN};
+use crate::store::{FindingOutcome, OUTCOME_FIXED};
 
 /// Permission bits of a written case file.
 const CASE_FILE_MODE: u32 = 0o644;
@@ -282,8 +282,9 @@ pub enum Verdict {
 /// was reviewed.
 ///
 /// A row of that head counts unless it is `refuted` or `not_blocking`. A row of another head
-/// counts too, except one published after `finding` and one whose outcome was decided at
-/// another head before `finding` was published. A time that does not parse counts the row.
+/// counts too, except one published after `finding` and one that was `fixed` by the head of
+/// `finding` (at it, or before `finding` was published); only `fixed` shows the defect left
+/// the code. A time that does not parse counts the row.
 fn stood_with(row: &FindingOutcome, finding: &FindingOutcome) -> bool {
     let blocking = row.blocking && !CLEAN_OUTCOMES.contains(&row.outcome.as_str());
     if row.finding_key == finding.finding_key || !blocking {
@@ -297,12 +298,12 @@ fn stood_with(row: &FindingOutcome, finding: &FindingOutcome) -> bool {
     let later = row_published
         .zip(published)
         .is_some_and(|(row, own)| row > own);
-    let decided_before = row.outcome != OUTCOME_OPEN
-        && row.outcome_head_sha != finding.head_sha
-        && time(&row.updated_at)
-            .zip(published)
-            .is_some_and(|(updated, own)| updated < own);
-    !later && !decided_before
+    let fixed_before = row.outcome == OUTCOME_FIXED
+        && (row.outcome_head_sha == finding.head_sha
+            || time(&row.updated_at)
+                .zip(published)
+                .is_some_and(|(updated, own)| updated < own));
+    !later && !fixed_before
 }
 
 /// Returns what a review must do about a published finding, from the operator's verdict.
@@ -498,8 +499,9 @@ mod tests {
     /// A table row of `finding_expect`: name, path and outcome of the finding, its siblings as
     /// `(outcome, blocking)`, the verdict, `--lines`, `--description` and the result. An
     /// outcome ends in `@earlier` for a sibling of an earlier head that is decided later,
-    /// `@decided` for one decided at a head reviewed before the finding's, and `@later` for
-    /// one published after the finding; any other sibling is of the finding's head.
+    /// `@decided` for one decided at a head reviewed before the finding's, `@here` for one
+    /// decided at the finding's own head, and `@later` for one published after the finding;
+    /// any other sibling is of the finding's head.
     type Judged<'a> = (
         &'a str,
         (&'a str, &'a str),
@@ -658,8 +660,12 @@ mod tests {
                 w, &[], None, other),
             ("wrong, a sibling of an earlier head that is fixed later", a,
                 &[("fixed@earlier", true)], w, &[], None, other),
-            ("wrong, a sibling decided before this head", a, &[("fixed@decided", true)],
+            ("wrong, a sibling fixed before this head", a, &[("fixed@decided", true)],
                 w, &[], None, "clean"),
+            ("wrong, a sibling answered before this head", a, &[("answered@decided", true)],
+                w, &[], None, other),
+            ("wrong, a sibling of an earlier head fixed at this head", a,
+                &[("fixed@here", true)], w, &[], None, "clean"),
             ("wrong, a sibling published after the finding", a, &[("open@later", true)],
                 w, &[], None, "clean"),
             ("fixed finding", ("a.rs", "fixed"), &[], w, &[], None,
@@ -690,6 +696,7 @@ mod tests {
                 let (head, published, updated, decided) = match when {
                     "earlier" => ("h1", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z", "h3"),
                     "decided" => ("h1", "2026-01-01T00:00:00Z", "2026-01-01T12:00:00Z", "h1b"),
+                    "here" => ("h1", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z", "h2"),
                     "later" => ("h3", "2026-01-03T00:00:00Z", "2026-01-03T00:00:00Z", ""),
                     _ => ("h2", "2026-01-02T00:00:00Z", "2026-01-02T00:00:01Z", "h2"),
                 };

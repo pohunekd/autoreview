@@ -501,10 +501,10 @@ pruned the review, `--base-sha` and `--base-branch` give the base.
 
 - `--verdict wrong` writes `expect: clean` for the whole head, so it is refused
   while another blocking finding stood at that head: one published at it, or one
-  published at an earlier head whose outcome was not decided at a head reviewed
-  before it, unless it is `refuted` or `not_blocking`. The error lists the keys,
-  and that case is written by hand. It takes neither `--lines` nor
-  `--description`.
+  published at an earlier head, unless it is `refuted` or `not_blocking`. Of an
+  earlier head, only a finding that was `fixed` by this head is left out, and so
+  is one published after it. The error lists the keys, and that case is written
+  by hand. It takes neither `--lines` nor `--description`.
 - `--verdict right` writes one expected finding in the finding's path. It needs
   `--description` and one `--lines` of that path, because the stored line is where
   anchoring put the finding, not where the defect is. The path needs an added line
