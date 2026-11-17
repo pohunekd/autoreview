@@ -21,9 +21,11 @@ use super::sessions::session_list_arguments;
 use super::{decode_ok, decode_strict, pohunek_call, response_invalid};
 
 /// Prefixes of the line that older Codex adapters print with their run status: the one of
-/// `autoreview-codex/v1`, then the legacy one.
+/// `autoreview-codex/v1`, then the one of the adapters that predate the protocol line.
 ///
-/// The engine refuses their output, but reads it to the end to say why.
+/// The engine refuses their output, but reads it to the end to say why. The last prefix ends
+/// the output of an adapter that predates the protocol line, so that the run does not wait
+/// for the session timeout and the engine reads it as a nonce mismatch.
 const CODEX_EXIT_PREFIXES: [&[u8]; 2] = [
     b"[autoreview-codex/v1 exited with status ",
     b"[pohunek-codex-review exited with status ",

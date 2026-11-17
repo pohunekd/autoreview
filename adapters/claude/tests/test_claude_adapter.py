@@ -32,11 +32,6 @@ UNSIGNED = ["-c", "commit.gpgsign=false"]
 CHILD_PATH = f"{Path(sys.executable).parent}:/usr/bin:/bin"
 # The structured output that the fake Claude Code prints.
 CLAUDE_STDOUT = '{"type":"result","subtype":"success"}'
-# Each request protocol name with the result protocol name that answers it.
-PROTOCOL_NAMES = (
-    ("autoreview-claude/v1", "autoreview-claude/v1"),
-    ("claude-otel-noninteractive/request-v1", "claude-otel-noninteractive/v2"),
-)
 
 
 def load_module(name: str, path: Path):
@@ -97,42 +92,45 @@ class InputFrameTests(unittest.TestCase):
         self.assertEqual(envelope["checked_checkout"], "base")
 
     def test_parses_a_structured_request_and_canonicalizes_its_schema(self) -> None:
-        # A request of either name is answered in the result name of that request (#24).
-        for request_protocol, result_protocol in PROTOCOL_NAMES:
-            with self.subTest(protocol=request_protocol):
-                request = json.dumps(
-                    {
-                        "protocol": request_protocol,
-                        "prompt": "Review the pull request.",
-                        "json_schema": {
-                            "required": ["ok"],
-                            "properties": {"ok": {"type": "boolean"}},
-                            "type": "object",
-                        },
-                    }
-                )
+        request = json.dumps(
+            {
+                "protocol": "autoreview-claude/v1",
+                "prompt": "Review the pull request.",
+                "json_schema": {
+                    "required": ["ok"],
+                    "properties": {"ok": {"type": "boolean"}},
+                    "type": "object",
+                },
+            }
+        )
 
-                prompt, schema, mode, protocol = wrapper.parse_request(request, 4096)
+        prompt, schema, mode, protocol = wrapper.parse_request(request, 4096)
 
-                self.assertEqual(prompt, "Review the pull request.")
-                self.assertEqual(mode, "structured")
-                self.assertEqual(protocol, result_protocol)
-                self.assertEqual(
-                    schema,
-                    '{"properties":{"ok":{"type":"boolean"}},"required":["ok"],"type":"object"}',
-                )
+        self.assertEqual(prompt, "Review the pull request.")
+        self.assertEqual(mode, "structured")
+        self.assertEqual(protocol, "autoreview-claude/v1")
+        self.assertEqual(
+            schema,
+            '{"properties":{"ok":{"type":"boolean"}},"required":["ok"],"type":"object"}',
+        )
 
     def test_preserves_plain_and_unrelated_json_prompts(self) -> None:
         for prompt in ("Review this code.", '{"protocol":"another-system/v1"}'):
             self.assertEqual(
                 wrapper.parse_request(prompt, 4096),
-                (prompt, None, "text", "claude-otel-noninteractive/v2"),
+                (prompt, None, "text", "autoreview-claude/v1"),
             )
 
     def test_rejects_a_malformed_claimed_request_protocol(self) -> None:
         schema = {"type": "object"}
-        # A result name or an unknown version is not a request name (#24).
+        # A result name, an unknown version or the legacy request name is not a request name
+        # (#24, #393).
         for request in (
+            {
+                "protocol": "claude-otel-noninteractive/request-v1",
+                "prompt": "x",
+                "json_schema": schema,
+            },
             {"protocol": "autoreview-claude/v1", "prompt": "missing schema"},
             {"protocol": "autoreview-claude/v2", "prompt": "x", "json_schema": schema},
             {"protocol": "claude-otel-noninteractive/v2", "prompt": "x", "json_schema": schema},
@@ -276,14 +274,12 @@ class BaseCheckoutTests(unittest.TestCase):
         sidecar.chmod(0o600)
         return script, fake
 
-    def run_adapter(
-        self, prompt: str, during_run: str = "", protocol: str = "autoreview-claude/v1"
-    ) -> tuple[dict, str]:
+    def run_adapter(self, prompt: str, during_run: str = "") -> tuple[dict, str]:
         """Runs the adapter on a structured request; returns its result line and stderr."""
         script, fake = self.install(during_run)
         request = json.dumps(
             {
-                "protocol": protocol,
+                "protocol": "autoreview-claude/v1",
                 "prompt": prompt,
                 "json_schema": {"type": "object"},
             }
@@ -342,44 +338,38 @@ class BaseCheckoutTests(unittest.TestCase):
         self.fetch_head()
         refs = self.git(self.checkout, "for-each-ref")
 
-        for request_protocol, result_protocol in PROTOCOL_NAMES:
-            with self.subTest(protocol=request_protocol):
-                result, stderr = self.run_adapter(self.prompt(), protocol=request_protocol)
+        result, stderr = self.run_adapter(self.prompt())
 
-                self.assertEqual(result["protocol"], result_protocol)
-                self.assertEqual(result["exit_code"], 0, result)
-                self.assertNotIn("refusal", result)
-                self.assertEqual(result["checked_checkout"], "base")
-                self.assertEqual(
-                    base64.b64decode(result["stdout_base64"]).decode(), CLAUDE_STDOUT
-                )
-                self.assertEqual(stderr, "")
-                self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
-                self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
-                self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
+        self.assertEqual(result["protocol"], "autoreview-claude/v1")
+        self.assertEqual(result["exit_code"], 0, result)
+        self.assertNotIn("refusal", result)
+        self.assertEqual(result["checked_checkout"], "base")
+        self.assertEqual(base64.b64decode(result["stdout_base64"]).decode(), CLAUDE_STDOUT)
+        self.assertEqual(stderr, "")
+        self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), self.tip_sha)
+        self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
+        self.assertEqual(self.git(self.checkout, "for-each-ref"), refs)
 
     def test_base_checkout_without_the_head_is_refused_before_claude_runs(self) -> None:
-        for request_protocol, result_protocol in PROTOCOL_NAMES:
-            with self.subTest(protocol=request_protocol):
-                result, stderr = self.run_adapter(self.prompt(), protocol=request_protocol)
+        result, stderr = self.run_adapter(self.prompt())
 
-                self.assertEqual(
-                    result,
-                    {
-                        "protocol": result_protocol,
-                        "mode": "structured",
-                        "exit_code": wrapper.EXIT_USAGE,
-                        "stdout_base64": "",
-                        "stderr_base64": base64.b64encode(
-                            b"claude-adapter: trusted pull request head is unavailable in the "
-                            b"review checkout\n"
-                        ).decode("ascii"),
-                        "refusal": "head_unavailable",
-                    },
-                )
-                # The refusal is the only output: pohunek reads stderr from the same terminal.
-                self.assertEqual(stderr, "")
-                self.assertFalse(self.claude_ran())
+        self.assertEqual(
+            result,
+            {
+                "protocol": "autoreview-claude/v1",
+                "mode": "structured",
+                "exit_code": wrapper.EXIT_USAGE,
+                "stdout_base64": "",
+                "stderr_base64": base64.b64encode(
+                    b"claude-adapter: trusted pull request head is unavailable in the "
+                    b"review checkout\n"
+                ).decode("ascii"),
+                "refusal": "head_unavailable",
+            },
+        )
+        # The refusal is the only output: pohunek reads stderr from the same terminal.
+        self.assertEqual(stderr, "")
+        self.assertFalse(self.claude_ran())
 
     def test_base_checkout_refuses_any_other_head(self) -> None:
         moved = "git checkout --quiet --detach HEAD~1"

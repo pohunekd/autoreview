@@ -67,7 +67,7 @@ one line.
 | `review_output_timeout` | Reviewer did not finish within `session.timeout_seconds` | [Reviewer output](#reviewer-output) |
 | `review_output_invalid`, `review_output_too_large`, `review_result_invalid` | Reviewer output was unusable, too large or broke a limit | [Reviewer output](#reviewer-output) |
 | `review_adapter_outdated` | A Codex profile runs an adapter that sends no blocking flag or verdicts, or a Claude profile one that does not name the checkout it checked or runs the request as a plain prompt | [Reviewer output](#reviewer-output) |
-| `review_nonce_mismatch` | A Codex output did not end with the exit line of the request's nonce: the profile runs an adapter from an earlier release, or the engine restarted during the run | [Reviewer output](#reviewer-output) |
+| `review_nonce_mismatch` | A Codex output did not end with the exit line of the request's nonce: the adapter refused the request, or the engine restarted during the run | [Reviewer output](#reviewer-output) |
 | `codex-adapter: ...` in the session output, exit status 64, `review_result_invalid` | The Codex adapter refused the worktree it was started in | [Codex checkout refused](#codex-checkout-refused) |
 | `review_result_invalid: Codex exited without a result: ...` in the log | The Codex program itself failed, for example on a model the account does not support, or the adapter refused what a Codex run left | [Codex program failed](#codex-program-failed) |
 | `review_result_invalid: Claude adapter refused the run: claude-adapter: ...` in the log | The Claude adapter refused the worktree, before or after Claude Code ran | [Codex checkout refused](#codex-checkout-refused) |
@@ -509,17 +509,20 @@ list):
   itself fails (see [Codex program failed](#codex-program-failed)). A Claude
   adapter refusal other than a missing head is `review_result_invalid` too.
 - `review_nonce_mismatch`: a Codex output did not end with the exit line that
-  carries the nonce of the request. Every run of a profile whose adapter comes
-  from an earlier release ends so: its session output ends with
-  `[pohunek-codex-review exited with status 64]` after
-  `codex-adapter: trusted nonce is valid only with autoreview-codex/v2` for an
-  adapter from release 0.4.0 to 0.6.0, or, for an adapter from release 0.3.0 or
-  earlier, after
-  `codex-adapter: trusted pull request head is missing or ambiguous`. Run
+  carries the nonce of the request, for example the
+  `[autoreview-codex/v1 exited with status 64]` line that the adapter prints
+  when it refuses a request without a usable `- Trusted protocol:` line. A Codex
+  run that an engine restart left behind, or a model that printed an exit line
+  as the last line while it paused, ends only that run: the reviewer gets a
+  fresh session. Every run of a profile whose adapter predates the protocol line
+  ends so, and the review fails after the fresh sessions: its session output
+  ends with the adapter's own exit line after
+  `codex-adapter: trusted nonce is valid only with autoreview-codex/v2`
+  (release 0.4.0 to 0.6.0) or
+  `codex-adapter: trusted pull request head is missing or ambiguous` (release
+  0.3.0 or earlier). Run
   [`autoreview profiles install`](../../cli.md#autoreview-profiles-install) for
-  the profile, then `autoreview retry`. A Codex run that an engine restart left
-  behind, or a model that printed an exit line as the last line while it paused,
-  ends only that run: the reviewer gets a fresh session.
+  the profile, then `autoreview retry`.
 - `review_wrapper_invalid`: a Claude result line could not be read, or reports
   an exit code other than 0, output on stderr, or another protocol or mode (see
   [Claude Code failed](#claude-code-failed)).
@@ -541,10 +544,11 @@ list):
   a fresh session, and the scheduler does not retry it.
 - `review_adapter_outdated`: a Codex report has no `prior_findings` list or a
   finding without `blocking`, or a Claude result line of protocol
-  `autoreview-claude/v1` (or legacy) without a `refusal` has no `checked_checkout`
-  or names another checkout than the pipeline's, or one of either name is in
-  mode `text`, which a Claude adapter of 0.3.0 or earlier writes for every
-  request, with the refusal `checkout_invalid`. It comes from an adapter older
+  `autoreview-claude/v1` without a `refusal` has no `checked_checkout` or names
+  another checkout than the pipeline's, or is in mode `text`, or names the
+  result protocol of an adapter from before `autoreview-claude/v1`. A Claude
+  adapter of 0.3.0 or earlier is such an adapter: it answers every request in
+  mode `text` with the refusal `checkout_invalid`. It comes from an adapter older
   than the one in `adapters/codex/` or `adapters/claude/`, so the review stops
   without a fresh session. Write the profile with `autoreview profiles install`
   on the review host (with `--replace` when the command did not write it), then
