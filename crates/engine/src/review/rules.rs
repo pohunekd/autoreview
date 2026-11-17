@@ -102,7 +102,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             )
             .await
             .map_err(unreadable)?;
-        let changed = self.changed_files(pull_request).await.map_err(unreadable)?;
+        let changed = self.changed_files(pull_request).await?;
         let changed_by_pull_request = changed.files.iter().any(|file| {
             file.path == REVIEW_RULES_PATH
                 || file.previous_path.as_deref() == Some(REVIEW_RULES_PATH)

@@ -96,6 +96,8 @@ pub(crate) struct FakeState {
     pub(crate) commentable: CommentableLines,
     /// Changed files that the fake returns.
     pub(crate) changed: Vec<ChangedFile>,
+    /// Whether the changed-files listing that the fake returns stops before its end.
+    pub(crate) changed_truncated: bool,
     /// Discussion that the fake returns.
     pub(crate) discussion: Discussion,
     /// Prior findings of each discussion read, in order.
@@ -607,10 +609,12 @@ impl Integrations for FakeIntegration {
         _credential: &Credential,
         _pull_request: &PullRequest,
     ) -> impl Future<Output = Result<ChangedFiles, Error>> + Send {
+        let state = self.lock();
         let result = ChangedFiles {
-            files: self.lock().changed.clone(),
-            truncated: false,
+            files: state.changed.clone(),
+            truncated: state.changed_truncated,
         };
+        drop(state);
         ready(Ok(result))
     }
 

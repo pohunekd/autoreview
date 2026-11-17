@@ -131,14 +131,18 @@ says so:
   rules; the version in this pull request is not applied until it is merged."
 
 The change is detected from the pull request's changed files (the path or the
-source of a rename); a listing that GitHub cuts short may miss it.
+source of a rename). A listing that is cut short (more than 3000 changed files) is
+held as well, with the signal `changed files exceed the listing limit`, because
+`REVIEW.md` could lie past its end.
 
 On a rule that approves clean reviews, such a pull request is never approved
 without a person: it counts as a human review signal (`changes REVIEW.md`), also
 when the rule has no `human_review` section, so the review waits for the user as
 for a match of `human_review.paths`. Otherwise an author whose clean pull
 requests are approved could add `skip: ["**"]` and have the engine approve it.
-A rule that does not approve clean reviews is not affected.
+A rule that does not approve clean reviews is not affected. The hold applies only
+while the pipeline reads `REVIEW.md`: check the base `REVIEW.md` of each
+repository before switching a pipeline from `ignore` to `read`.
 
 ## Errors
 

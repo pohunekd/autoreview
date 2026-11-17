@@ -153,6 +153,20 @@ async fn the_base_review_rules_are_read_and_an_unusable_file_fails_the_review() 
         ["review_rules_unreadable".to_owned()]
     );
 
+    // A listing cut short without REVIEW.md in it: REVIEW.md could lie past its end, so the
+    // clean review waits for a person.
+    let cut = pull_request("rules/cut", "b");
+    h.fake.lock().file_failure = None;
+    h.fake.lock().changed_truncated = true;
+    h.fake.open(cut.clone(), h.rule(&cut.repository));
+    h.poll_until("the approval request of the cut listing", || {
+        h.fake
+            .has_note(Level::Action, "changed files exceed the listing limit")
+    })
+    .await;
+    assert_eq!(h.publications(), 2, "the review of the cut listing is held");
+    h.fake.lock().changed_truncated = false;
+
     // A transient failure keeps its own code, which the scheduler retries.
     let transient = pull_request("rules/flaky", "b");
     h.fake.lock().file_failure = Some(("github_request_failed".to_owned(), false));

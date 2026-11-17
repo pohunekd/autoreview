@@ -503,12 +503,13 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         current: &PullRequest,
         artifact: &Artifact,
     ) -> Result<Vec<String>, Error> {
+        let reads_rules = self.rules.is_some();
         let rules_changed =
             (self.rules.as_ref()).is_some_and(|rules| rules.changed_by_pull_request);
         let configured = HumanReview::default();
         let signals = match self.input.rule.human_review.as_ref() {
             Some(signals) => signals,
-            None if rules_changed => &configured,
+            None if reads_rules => &configured,
             None => return Ok(Vec::new()),
         };
         let blocking = blocking_count(&self.input, artifact);
@@ -520,14 +521,28 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
             usize::try_from(self.engine.config.excerpt_characters).unwrap_or_default();
         let notes = i64::try_from(self.input.split_findings(&artifact.findings).1.len())
             .unwrap_or(i64::MAX);
-        let listing = if signals.needs_changed_files() {
-            self.changed_files(current).await?
+        // A pipeline that read the rules shares the stored listing, whose cut-short end is a
+        // signal too: a pull request could push `REVIEW.md` past the end. Any other pipeline
+        // lists the files inside the step, and only when a signal reads them.
+        let stored = if reads_rules {
+            Some(self.changed_files(current).await?)
         } else {
-            ChangedFiles::default()
+            None
         };
         self.once::<Vec<String>, _>(STEP_HUMAN_REVIEW, || {
-            let listing = &listing;
+            let stored = stored.as_ref();
+            let integration = &*self.engine.integration;
+            let (cancel, credential) = (&self.cancel, self.credential());
             async move {
+                let listing = match stored {
+                    Some(listing) => listing.clone(),
+                    None if signals.needs_changed_files() => {
+                        integration
+                            .list_changed_files(cancel, credential?, current)
+                            .await?
+                    }
+                    None => ChangedFiles::default(),
+                };
                 let facts = HumanReviewFacts {
                     labels: &current.labels,
                     author: &current.author,
