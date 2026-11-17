@@ -22,15 +22,8 @@ SUBMIT = b"\r"
 EXIT_USAGE = 64
 REQUEST_PROTOCOL = "autoreview-claude/v1"
 RESULT_PROTOCOL = "autoreview-claude/v1"
-# Names that an older engine sends and reads. A result answers in the name of its request,
-# so an engine that reads only the legacy result name keeps reading this adapter.
-LEGACY_REQUEST_PROTOCOL = "claude-otel-noninteractive/request-v1"
-LEGACY_RESULT_PROTOCOL = "claude-otel-noninteractive/v2"
-RESULT_PROTOCOLS = {
-    REQUEST_PROTOCOL: RESULT_PROTOCOL,
-    LEGACY_REQUEST_PROTOCOL: LEGACY_RESULT_PROTOCOL,
-}
-# A JSON prompt whose protocol starts with one of these claims to be a request.
+# A JSON prompt whose protocol starts with one of these claims to be a request. One whose name
+# is not `REQUEST_PROTOCOL` is refused, never run as a plain prompt.
 CLAIMED_PROTOCOL_PREFIXES = ("autoreview-claude/", "claude-otel-noninteractive/")
 PROGRAM_NAME = "claude-adapter"
 # The renderer writes the Claude Code path into this file next to the wrapper.
@@ -165,9 +158,9 @@ def parse_request(
 ) -> tuple[str, str | None, str, str]:
     """Returns the prompt, the canonical schema, the mode and the result protocol name.
 
-    A plain prompt is answered in the legacy result name, which every engine reads.
+    A plain prompt is answered in mode `text`.
     """
-    plain = (raw_prompt, None, "text", LEGACY_RESULT_PROTOCOL)
+    plain = (raw_prompt, None, "text", RESULT_PROTOCOL)
     try:
         value = json.loads(raw_prompt)
     except json.JSONDecodeError:
@@ -178,7 +171,7 @@ def parse_request(
     protocol = value.get("protocol")
     if not isinstance(protocol, str) or not protocol.startswith(CLAIMED_PROTOCOL_PREFIXES):
         return plain
-    if protocol not in RESULT_PROTOCOLS or set(value) != {
+    if protocol != REQUEST_PROTOCOL or set(value) != {
         "protocol",
         "prompt",
         "json_schema",
@@ -196,7 +189,7 @@ def parse_request(
     )
     if len(canonical_schema.encode("utf-8")) > maximum_bytes:
         raise InputFrameError("JSON schema exceeds the configured byte limit")
-    return prompt, canonical_schema, "structured", RESULT_PROTOCOLS[protocol]
+    return prompt, canonical_schema, "structured", RESULT_PROTOCOL
 
 
 def result_envelope(
