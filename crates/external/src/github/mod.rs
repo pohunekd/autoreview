@@ -6,6 +6,7 @@
 // Rust guideline compliant 2026-06-26
 
 mod candidates;
+mod contents;
 mod discussion;
 mod files;
 mod guard;
