@@ -655,11 +655,12 @@ eval:
 ## log
 
 Optional. Without it autoreview logs to stderr only: the journal under systemd,
-the launchd output file on macOS. With it, `serve`, `review-queue` and `mcp`
-write their log lines to a file of their own in `directory` and rotate it by
-size. When the section is present, every command validates it at load, so a
-broken section stops `validate` too, and every key is required; a `log:` key
-without a value is refused with `configuration_missing: log.directory`.
+the launchd output file on macOS. launchd cannot rotate that file, so
+`scripts/setup` on a Mac writes this section. With it, `serve`, `review-queue`
+and `mcp` write their log lines to a file of their own in `directory` and rotate
+it by size. When the section is present, every command validates it at load,
+so a broken section stops `validate` too, and every key is required; a `log:`
+key without a value is refused with `configuration_missing: log.directory`.
 
 | Key | Meaning |
 |---|---|
