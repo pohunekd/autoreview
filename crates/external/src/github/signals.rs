@@ -222,7 +222,7 @@ fn absorb_page(signals: &mut PullRequestSignals, output: &str) -> Result<NextPag
         let Some(comment) = thread.comments.nodes.into_iter().flatten().next() else {
             continue;
         };
-        if next_cursor(&comment.reactions.page_info)?.is_some() {
+        if comment.reactions.page_info.has_next_page {
             return Err(Error::workflow("github_search_limit_exceeded", true, None));
         }
         // A comment of no review is not one that a review of the engine published.
@@ -381,11 +381,12 @@ mod tests {
             .map(|reaction| (reaction.login.as_str(), reaction.content.as_str()))
             .collect();
         assert_eq!(reactions, [("dev", "-1"), ("", "confused")]);
+        let refused_reactions = CAPTURED_PAGE.replace(
+            r#""hasNextPage":false},"nodes":[{"content""#,
+            r#""hasNextPage":true},"nodes":[{"content""#,
+        );
         let refused = [
-            CAPTURED_PAGE.replace(
-                r#""hasNextPage":false},"nodes":[{"content""#,
-                r#""hasNextPage":true,"endCursor":"x"},"nodes":[{"content""#,
-            ),
+            refused_reactions.clone(),
             CAPTURED_PAGE.replace(r#"{"fullDatabaseId":12,"state""#, r#"{"state""#),
             CAPTURED_PAGE.replace(
                 r#"{"fullDatabaseId":"4000000001"},"reactions""#,
@@ -400,6 +401,10 @@ mod tests {
             let mut signals = PullRequestSignals::default();
             assert!(absorb_page(&mut signals, &output).is_err(), "{output}");
         }
+        // More reactions than one page carries is refused with its own code.
+        let mut signals = PullRequestSignals::default();
+        let error = absorb_page(&mut signals, &refused_reactions).expect_err("refused");
+        assert_eq!(error.to_string(), "github_search_limit_exceeded");
     }
 
     /// With two pages of reviews and three of threads the read takes three requests, and the

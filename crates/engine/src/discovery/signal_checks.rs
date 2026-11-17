@@ -23,7 +23,8 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// read again after the interval. A store failure is logged. A cancellation ends the loop.
     ///
     /// It runs after the discovery pass is saved and its notices are sent, without the discovery
-    /// lock: no review decision waits for it, and the writes only hold for the review they read.
+    /// lock: no review decision reads it, the reads can hold back the next work tick by their
+    /// duration, and the writes only hold for the review they read.
     pub(super) async fn check_signals(
         &self,
         cancel: &CancellationToken,

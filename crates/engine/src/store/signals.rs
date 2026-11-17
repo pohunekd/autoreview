@@ -234,10 +234,10 @@ impl Store {
 
     /// Stores the GitHub IDs of the findings that one published review carries.
     ///
-    /// Each entry goes to the outcome rows tracked by its key, so a finding that publishes an
-    /// earlier one again moves that row to the newest review, and a key that no row tracks gets
-    /// nothing. A row keeps its reactions while its review stays the same. Everything runs in
-    /// one transaction.
+    /// Each entry goes to the `open` outcome rows tracked by its key, so a finding that publishes
+    /// an earlier one again moves that row to the newest review, and a key that no open row
+    /// tracks gets nothing: a decided row keeps the review and reactions it has. A row keeps its
+    /// reactions while its review stays the same. Everything runs in one transaction.
     ///
     /// # Errors
     ///
@@ -258,6 +258,7 @@ impl Store {
                          SELECT repository, number, finding_key, ?4, ?5, ?6, ?7, '', '' \
                          FROM finding_outcomes \
                          WHERE repository = ?1 AND number = ?2 AND tracked_key = ?3 \
+                         AND outcome = ?8 \
                          ON CONFLICT (repository, number, finding_key) DO UPDATE SET \
                          author_reactions = CASE WHEN excluded.review_id = \
                          finding_signals.review_id THEN finding_signals.author_reactions \
@@ -272,7 +273,8 @@ impl Store {
                             entry.review_id,
                             entry.head_sha,
                             entry.finding_id,
-                            entry.requested_changes
+                            entry.requested_changes,
+                            OUTCOME_OPEN
                         ],
                     )
                     .map_err(unavailable)?;
@@ -361,6 +363,35 @@ mod tests {
         // A newer review that publishes the finding again, without a comment, owns the row.
         write(&[ids("a:O001", 8, "")]).expect("store");
         assert_eq!(stored(&store), [("a:O001".to_owned(), 8, String::new())]);
+        // A decided row keeps its key, but a later review that reuses the key does not take it.
+        let decide = SignalUpdate {
+            finding_key: "a:O001".to_owned(),
+            review_id: 8,
+            finding_id: String::new(),
+            dismissed: true,
+            reactions: vec!["+1".to_owned()],
+        };
+        assert_eq!(
+            store
+                .apply_signals("acme/widgets", 1, &[decide])
+                .expect("apply"),
+            1
+        );
+        write(&[ids("a:O001", 9, "O001")]).expect("store");
+        let rows = store.signal_rows("acme/widgets", 1).expect("read the rows");
+        let kept = rows.iter().map(|row| {
+            let reactions = row.author_reactions.clone();
+            (
+                row.outcome.as_str(),
+                row.review_id,
+                row.finding_id.as_str(),
+                reactions,
+            )
+        });
+        assert_eq!(
+            kept.collect::<Vec<_>>(),
+            [("dismissed", 8, "", vec!["+1".to_owned()])]
+        );
     }
 
     /// A write holds only for the review and finding ID that were read, a dismissal only for an

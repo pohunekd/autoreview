@@ -20,7 +20,7 @@ retries happen at which layer, and what is deleted over time.
 
 ## What the store contains
 
-The file holds seven kinds of data.
+The file holds eight kinds of data.
 
 | Data | What it is for |
 |---|---|

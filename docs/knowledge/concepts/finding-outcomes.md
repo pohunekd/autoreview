@@ -97,8 +97,8 @@ finding the GitHub ID of the review (from the publish answer), the head the
 review was made on, whether it requested changes, and the ID of the finding in
 that review (`O003`) when the finding has an inline comment. It makes no GitHub
 call for this. A finding that publishes an earlier one again moves the earlier
-row to the new review; a finding whose key another review already reused gets
-nothing.
+row to the new review; a finding whose key another review already reused, or
+whose row is already decided, gets nothing.
 
 A pull request is read at most once per interval, in the discovery poll after
 its pass is saved and its notices are sent, without the discovery lock, with
@@ -107,7 +107,8 @@ first comment of each review thread with its reactions (50 threads per page,
 at most 100 reactions per comment). A pull request is due while one of its
 `open` findings can produce a signal: its review requested changes, or it has
 an inline comment. The forced pass of `autoreview retry` makes no read. The
-read never writes to GitHub and never delays or changes a review. A pull
+read never writes to GitHub and never changes a review. The reads run in the
+poll step and can hold back the next work tick by their duration. A pull
 request is read even while it is still in the review search; one in a
 repository whose search failed in that poll is not. A read that fails, has more
 pages than `schedule.search_page_limit`, or has a comment with more than 100
