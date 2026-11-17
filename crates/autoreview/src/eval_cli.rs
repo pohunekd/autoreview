@@ -422,6 +422,12 @@ fn check_add_arguments(
     if bad_branch {
         return Err(invalid("--base-branch is not a branch name"));
     }
+    let ranges: BTreeMap<&str, (i64, i64)> = (arguments.lines.iter())
+        .map(|(path, range)| (path.as_str(), *range))
+        .collect();
+    if ranges.len() != arguments.lines.len() {
+        return Err(invalid("--lines is given twice for one path"));
+    }
     let explicit = (
         &arguments.base_sha,
         &arguments.head_sha,
@@ -510,7 +516,11 @@ fn reviewed_diff(
         ));
     }
     let (Some(base_sha), Some(head), Some(base_branch)) = (base.0, head, base.1) else {
-        let cause = "no stored review; give --base-sha, --head-sha and --base-branch";
+        let cause = if arguments.from_finding.is_some() {
+            "no stored review; give --base-sha and --base-branch"
+        } else {
+            "no stored review; give --base-sha, --head-sha and --base-branch"
+        };
         return Err(Error::workflow(
             "eval_add_review_not_found",
             true,
@@ -601,8 +611,8 @@ async fn add_case(
         let (base, head) = (&pinned.base_sha, &pinned.head_sha);
         github.read_range_files(&cancel, &credential, repository, base, head)
     };
-    if let (Some(source), Some(verdict)) = (&found, arguments.verdict.as_deref()) {
-        let verdict = if verdict == "right" {
+    if let (Some(source), Some(name)) = (&found, arguments.verdict.as_deref()) {
+        let verdict = if name == "right" {
             Verdict::Right
         } else {
             Verdict::Wrong
@@ -613,10 +623,10 @@ async fn add_case(
         };
         let (finding, lines) = (&source.finding, &arguments.lines);
         let description = arguments.description.as_deref();
-        let rows = &source.head_rows;
+        let rows = &source.pull_rows;
         let expect = finding_expect(finding, rows, verdict, lines, description, &commentable)?;
         let text = format!(
-            "{repository}#{number}, finding {}, outcome {}, verdict {verdict:?}",
+            "{repository}#{number}, finding {}, outcome {}, verdict {name}",
             finding.finding_key, finding.outcome
         );
         return finish(arguments, pinned, expect, Vec::new(), &text, &existing);
@@ -629,10 +639,6 @@ async fn add_case(
         .await?;
     let range = read_range().await?;
     let lines: BTreeMap<String, (i64, i64)> = arguments.lines.iter().cloned().collect();
-    if lines.len() != arguments.lines.len() {
-        let cause = "--lines is given twice for one path".into();
-        return Err(command_invalid(Some(cause)));
-    }
     let select = FixSelection {
         paths: &arguments.paths,
         lines: &lines,

@@ -465,12 +465,13 @@ one the stored review saw, else the pull request's current title, cleaned and cu
 to 200 characters.
 
 `--store` is the absolute path of the production database. It is opened read-only
-in one read transaction: no migration, no journal change, no file or directory
-created, no lock, so `serve` can run beside it. Never open it with SQLite's
-`immutable` option, which skips the locks and reads a live file wrongly. SQLite
-may have to create the `-shm` file next to the database, which only the service
-user can, so any other user reads a copy made with
-[`backup-db`](#autoreview-backup-db).
+in one read transaction: no migration, no journal change, no database file or
+directory created, and no engine or discovery lock, so `serve` can run beside
+it. Never open it with SQLite's `immutable` option, which skips the locks and
+reads a live file wrongly. When `serve` is not running, SQLite creates the `-wal`
+and `-shm` files next to the database and leaves them, with the owner and mode
+the process gives them; only the service user can create them there, so any
+other user reads a copy made with [`backup-db`](#autoreview-backup-db).
 
 The expected lines are the lines of the fix commit's parent that the fix changed,
 because the defect is in what the fix removed or rewrote:
@@ -499,9 +500,11 @@ is the finding's own, the base and title come from its review; when retention
 pruned the review, `--base-sha` and `--base-branch` give the base.
 
 - `--verdict wrong` writes `expect: clean` for the whole head, so it is refused
-  while another finding of that head is blocking and is not `refuted` or
-  `not_blocking`; the error lists the keys, and that case is written by hand. It
-  takes neither `--lines` nor `--description`.
+  while another blocking finding stood at that head: one published at it, or one
+  published at an earlier head whose outcome was not decided at a head reviewed
+  before it, unless it is `refuted` or `not_blocking`. The error lists the keys,
+  and that case is written by hand. It takes neither `--lines` nor
+  `--description`.
 - `--verdict right` writes one expected finding in the finding's path. It needs
   `--description` and one `--lines` of that path, because the stored line is where
   anchoring put the finding, not where the defect is. The path needs an added line
@@ -525,10 +528,10 @@ is exit code 1.
 |---|---|
 | `eval_add_pull_request_not_found`, `eval_add_head_branch_required`, `eval_head_ref_reserved` | GitHub returned no pull request, the pull request ref differs from `--head-sha` and no `--head-branch` is given, or the branch is under a review branch prefix |
 | `eval_add_fix_not_single_parent`, `github_patch_omitted`, `github_search_limit_exceeded` | The fix is a merge or root commit, GitHub left out the patch of a file with changed lines, or the fix or the reviewed range lists 300 files or more (the reviewed range raises the last two too) |
-| `eval_add_path_unknown`, `eval_add_no_reviewable_path`, `eval_add_path_required`, `eval_add_path_unsafe` | A `--path` or `--lines` path is not a file of the fix or ends up skipped, no file of the fix qualifies, several qualify and no `--path` is given, or a path of the fix has a control or format character |
+| `eval_add_path_unknown`, `eval_add_no_reviewable_path`, `eval_add_path_required`, `eval_add_path_unsafe` | A `--path` or `--lines` path is not a file of the fix or ends up skipped, no file of the fix qualifies, several qualify and no `--path` is given, or a path of the fix or of the finding has a control or format character |
 | `eval_add_range_too_wide`, `eval_add_fix_drift` | A range is over 200 lines, or a file differs at the head and at the fix's parent; both name `--lines` |
 | `eval_add_review_not_found`, `eval_add_finding_not_found`, `eval_add_outcome_unsupported` | The store has no usable review or finding for the arguments, or the finding's outcome is not `refuted` or `open_at_merge` |
-| `eval_add_verdict_input_invalid`, `eval_add_head_has_other_blocking`, `eval_add_store_unreadable` | `--lines` or `--description` does not fit the verdict, a clean case would count another blocking finding of the head as a false block (its keys are in the cause), or the store has no outcome table |
+| `eval_add_verdict_input_invalid`, `eval_add_head_has_other_blocking`, `eval_add_store_unreadable` | `--lines` or `--description` does not fit the verdict, a clean case would count another blocking finding that stood at the head as a false block (its keys are in the cause), or the store has no outcome table |
 | `eval_add_case_exists`, `eval_add_file_exists` | A case of the directory has the same repository, pull request and head, or the file exists; the cause names the file |
 | `eval_add_case_invalid`, `eval_add_write_failed` | The text does not parse back to the intended case (it names the first error), or the file cannot be written |
 | `eval_cases_invalid`, `credential_not_covered`, `command_invalid` | The directory holds an invalid case, the eval credential does not cover the repository, or an argument is malformed |

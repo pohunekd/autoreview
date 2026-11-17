@@ -95,13 +95,16 @@ autoreview --config eval-config.yaml eval add --cases examples/eval/cases \
 ```
 
 - `--verdict wrong` writes a clean case for the whole head, so it is refused while
-  another blocking finding of that head stands; write that case by hand.
+  another blocking finding stood at that head, one carried from an earlier push
+  included; write that case by hand.
 - `--verdict right` needs your own `--lines PATH:FIRST-LAST` and `--description`:
   the stored line is where anchoring put the finding, not where the defect is. As
   for a fix, the path needs an added line in the pull request.
-- `--store` is the production database, opened read-only while `serve` runs.
-  Never use SQLite's `immutable` mode on it, and as any user other than the
-  service user, point `--store` at a `backup-db` copy.
+- `--store` is the production database, opened read-only while `serve` runs: no
+  database file or directory is created and no engine or discovery lock is
+  taken. Without `serve`, SQLite leaves `-wal` and `-shm` files beside it. Never
+  use SQLite's `immutable` mode on it, and as any user other than the service
+  user, point `--store` at a `backup-db` copy.
 
 ## Set up the run
 

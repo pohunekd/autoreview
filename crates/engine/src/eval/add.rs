@@ -9,6 +9,7 @@ use std::io::{ErrorKind, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
+use autoreview_go_compat::go_time::parse_rfc3339;
 use serde::Serialize;
 
 use super::case::{CASE_VERSION, Case, Expect, Expected, parse_case};
@@ -16,7 +17,7 @@ use super::case::{MAX_DESCRIPTION_CHARS, MAX_RANGE_LINES, MAX_TITLE_CHARS};
 use crate::error::Error;
 use crate::integrations::{CommentableLines, CommitFile};
 use crate::protocol::reason::is_neutralized;
-use crate::store::FindingOutcome;
+use crate::store::{FindingOutcome, OUTCOME_OPEN};
 
 /// Permission bits of a written case file.
 const CASE_FILE_MODE: u32 = 0o644;
@@ -277,22 +278,51 @@ pub enum Verdict {
     Right,
 }
 
+/// Reports whether `row` is a blocking finding that still stood when the head of `finding`
+/// was reviewed.
+///
+/// A row of that head counts unless it is `refuted` or `not_blocking`. A row of another head
+/// counts too, except one published after `finding` and one whose outcome was decided at
+/// another head before `finding` was published. A time that does not parse counts the row.
+fn stood_with(row: &FindingOutcome, finding: &FindingOutcome) -> bool {
+    let blocking = row.blocking && !CLEAN_OUTCOMES.contains(&row.outcome.as_str());
+    if row.finding_key == finding.finding_key || !blocking {
+        return false;
+    }
+    if row.head_sha == finding.head_sha {
+        return true;
+    }
+    let time = |text: &str| parse_rfc3339(text).ok();
+    let (row_published, published) = (time(&row.published_at), time(&finding.published_at));
+    let later = row_published
+        .zip(published)
+        .is_some_and(|(row, own)| row > own);
+    let decided_before = row.outcome != OUTCOME_OPEN
+        && row.outcome_head_sha != finding.head_sha
+        && time(&row.updated_at)
+            .zip(published)
+            .is_some_and(|(updated, own)| updated < own);
+    !later && !decided_before
+}
+
 /// Returns what a review must do about a published finding, from the operator's verdict.
 ///
-/// `head_rows` are the rows of the head that `finding` was published on; `lines` and
+/// `pull_rows` are the rows of the finding's pull request at every head; `lines` and
 /// `description` are the operator's, which `Right` needs and `Wrong` refuses; `commentable`
 /// is the reviewed range and is read for `Right` only.
 ///
 /// # Errors
 ///
 /// Returns `eval_add_outcome_unsupported` for an outcome other than `refuted` and
-/// `open_at_merge`, `eval_add_verdict_input_invalid` for a `lines` or `description` the
-/// verdict does not take or lacks, `eval_add_head_has_other_blocking` when `Wrong` meets
-/// another blocking finding of the head, `eval_add_no_reviewable_path` for a path with no
-/// added line in the range, and `eval_add_range_too_wide` for more than 200 lines.
+/// `open_at_merge`, `eval_add_path_unsafe` for a finding path with a control or format
+/// character, `eval_add_verdict_input_invalid` for a `lines` or `description` the verdict
+/// does not take or lacks, `eval_add_head_has_other_blocking` when `Wrong` meets another
+/// blocking finding that stood at the head, `eval_add_no_reviewable_path` for a path with no
+/// added line in the range, and `eval_add_range_too_wide` for more than `MAX_RANGE_LINES`
+/// lines.
 pub fn finding_expect(
     finding: &FindingOutcome,
-    head_rows: &[FindingOutcome],
+    pull_rows: &[FindingOutcome],
     verdict: Verdict,
     lines: &[(String, (i64, i64))],
     description: Option<&str>,
@@ -301,6 +331,10 @@ pub fn finding_expect(
     if !CASE_OUTCOMES.contains(&finding.outcome.as_str()) {
         let detail = format!("{} is {}", finding.finding_key, finding.outcome);
         return Err(refused("eval_add_outcome_unsupported", detail));
+    }
+    if finding.path.chars().any(is_neutralized) {
+        let detail = "the path of the finding has a control or format character";
+        return Err(refused("eval_add_path_unsafe", detail));
     }
     let text: Option<String> = description.map(|text| {
         cleaned(text)
@@ -311,11 +345,7 @@ pub fn finding_expect(
     });
     match (verdict, lines, text) {
         (Verdict::Wrong, [], None) => {
-            let others = head_rows.iter().filter(|row| {
-                row.finding_key != finding.finding_key
-                    && row.blocking
-                    && !CLEAN_OUTCOMES.contains(&row.outcome.as_str())
-            });
+            let others = pull_rows.iter().filter(|row| stood_with(row, finding));
             let keys: Vec<&str> = others.map(|row| row.finding_key.as_str()).collect();
             if keys.is_empty() {
                 return Ok(Expect::Clean);
@@ -330,7 +360,8 @@ pub fn finding_expect(
                 return Err(refused("eval_add_no_reviewable_path", path.as_str()));
             }
             if last - first >= MAX_RANGE_LINES {
-                let detail = format!("{path}: {first}-{last}; the range is over 200 lines");
+                let detail =
+                    format!("{path}: {first}-{last}; the range is over {MAX_RANGE_LINES} lines");
                 return Err(refused("eval_add_range_too_wide", detail));
             }
             Ok(Expect::Blocking(vec![Expected {
@@ -465,7 +496,10 @@ mod tests {
     use crate::store::FindingOutcome;
 
     /// A table row of `finding_expect`: name, path and outcome of the finding, its siblings as
-    /// `(outcome, blocking)`, the verdict, `--lines`, `--description` and the result.
+    /// `(outcome, blocking)`, the verdict, `--lines`, `--description` and the result. An
+    /// outcome ends in `@earlier` for a sibling of an earlier head that is decided later,
+    /// `@decided` for one decided at a head reviewed before the finding's, and `@later` for
+    /// one published after the finding; any other sibling is of the finding's head.
     type Judged<'a> = (
         &'a str,
         (&'a str, &'a str),
@@ -620,8 +654,18 @@ mod tests {
                 w, &[], None, "clean"),
             ("wrong, a sibling that is open", a, &[("open", true)], w, &[], None, other),
             ("wrong, a sibling that is fixed", a, &[("fixed", true)], w, &[], None, other),
+            ("wrong, a sibling of an earlier head that is open", a, &[("open@earlier", true)],
+                w, &[], None, other),
+            ("wrong, a sibling of an earlier head that is fixed later", a,
+                &[("fixed@earlier", true)], w, &[], None, other),
+            ("wrong, a sibling decided before this head", a, &[("fixed@decided", true)],
+                w, &[], None, "clean"),
+            ("wrong, a sibling published after the finding", a, &[("open@later", true)],
+                w, &[], None, "clean"),
             ("fixed finding", ("a.rs", "fixed"), &[], w, &[], None,
                 "err eval_add_outcome_unsupported"),
+            ("wrong, path with a bidi character", ("a\u{202e}.rs", "refuted"), &[], w, &[], None,
+                "err eval_add_path_unsafe"),
             ("wrong with --lines", a, &[], w, &five, None, bad),
             ("wrong with --description", a, &[], w, &[], text, bad),
             ("right", a, &[], r, &five, text, "blocking 5-9"),
@@ -635,15 +679,33 @@ mod tests {
             ("right, 201 lines", a, &[], r, &[("a.rs", 1, 201)], text, wide),
         ];
         for (name, (path, outcome), siblings, verdict, lines, description, want) in rows {
-            let finding = row("t:O001", path, outcome, true);
-            let mut head_rows = vec![finding.clone()];
-            for (at, (outcome, blocking)) in siblings.iter().enumerate() {
-                head_rows.push(row(&format!("s:O00{at}"), "z.rs", outcome, *blocking));
+            let finding = FindingOutcome {
+                head_sha: "h2".to_owned(),
+                published_at: "2026-01-02T00:00:00Z".to_owned(),
+                ..row("t:O001", path, outcome, true)
+            };
+            let mut pull_rows = vec![finding.clone()];
+            for (at, (spec, blocking)) in siblings.iter().enumerate() {
+                let (outcome, when) = spec.split_once('@').unwrap_or((spec, "same"));
+                let (head, published, updated, decided) = match when {
+                    "earlier" => ("h1", "2026-01-01T00:00:00Z", "2026-01-03T00:00:00Z", "h3"),
+                    "decided" => ("h1", "2026-01-01T00:00:00Z", "2026-01-01T12:00:00Z", "h1b"),
+                    "later" => ("h3", "2026-01-03T00:00:00Z", "2026-01-03T00:00:00Z", ""),
+                    _ => ("h2", "2026-01-02T00:00:00Z", "2026-01-02T00:00:01Z", "h2"),
+                };
+                let decided = if outcome == "open" { "" } else { decided };
+                pull_rows.push(FindingOutcome {
+                    head_sha: head.to_owned(),
+                    published_at: published.to_owned(),
+                    updated_at: updated.to_owned(),
+                    outcome_head_sha: decided.to_owned(),
+                    ..row(&format!("s:O00{at}"), "z.rs", outcome, *blocking)
+                });
             }
             let lines: Vec<(String, (i64, i64))> =
                 lines.iter().map(|(p, f, l)| ((*p).to_owned(), (*f, *l))).collect();
             let expect = finding_expect(
-                &finding, &head_rows, verdict, &lines, description, &commentable,
+                &finding, &pull_rows, verdict, &lines, description, &commentable,
             );
             let got = match expect {
                 Ok(Expect::Clean) => "clean".to_owned(),

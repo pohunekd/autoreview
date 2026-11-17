@@ -181,10 +181,11 @@ impl Store {
 
     /// Opens the existing database at the absolute `path` for reading only.
     ///
-    /// It creates no database file or directory, stamps no version and runs no migration, so
-    /// it reads a database that `serve` has open. SQLite may still have to create the `-shm`
-    /// file beside it, which a user other than the service user cannot; that user reads a
-    /// `backup-db` copy.
+    /// It creates no database file or directory, stamps no version, runs no migration and
+    /// takes no engine or discovery lock, so it reads a database that `serve` has open. When
+    /// `serve` is not running, SQLite creates the `-wal` and `-shm` files beside the database
+    /// and leaves them, with the owner and mode the process gives them; a user other than the
+    /// service user cannot create them and reads a `backup-db` copy.
     ///
     /// # Errors
     ///

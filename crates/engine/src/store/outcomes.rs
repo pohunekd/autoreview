@@ -126,8 +126,8 @@ pub struct ListedOutcome {
 pub struct FindingSource {
     /// The finding's row.
     pub finding: FindingOutcome,
-    /// Every row of the head that the finding was published on, the finding's own included.
-    pub head_rows: Vec<FindingOutcome>,
+    /// Every row of the finding's pull request, at every head, the finding's own included.
+    pub pull_rows: Vec<FindingOutcome>,
     /// The review that published the finding first; `None` once retention pruned it.
     pub review: Option<StoredReview>,
 }
@@ -309,38 +309,48 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(unavailable)
     }
 
-    /// Reads one finding, the other rows of its head and its review in one read transaction.
+    /// Reads one finding, the other rows of its pull request and its review in one read
+    /// transaction.
     ///
     /// Returns `None` when the pull request has no row with `finding_key`.
     ///
     /// # Errors
     ///
-    /// Returns `eval_add_store_unreadable` when the outcome table cannot be read, and the
-    /// errors of the review read.
+    /// Returns `eval_add_store_unreadable` when the store has no outcome table,
+    /// `store_unavailable` for any other SQLite failure, and the errors of the review read.
     pub fn finding_source(
         &self,
         repository: &str,
         number: i64,
         finding_key: &str,
     ) -> Result<Option<FindingSource>, Error> {
-        let unreadable = |e: rusqlite::Error| store_error("eval_add_store_unreadable", true, e);
+        let unreadable = |e: rusqlite::Error| {
+            let missing = matches!(
+                &e,
+                rusqlite::Error::SqliteFailure(_, Some(message))
+                    if message.starts_with("no such table")
+            );
+            if missing {
+                store_error("eval_add_store_unreadable", true, e)
+            } else {
+                unavailable(e)
+            }
+        };
         let mut connection = self.lock_connection()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Deferred)
             .map_err(unavailable)?;
         let sql = format!(
             "SELECT {OUTCOME_COLUMNS} FROM finding_outcomes \
-             WHERE repository = ?1 AND number = ?2 AND head_sha = (SELECT head_sha \
-             FROM finding_outcomes WHERE repository = ?1 AND number = ?2 AND finding_key = ?3) \
-             ORDER BY finding_key"
+             WHERE repository = ?1 AND number = ?2 ORDER BY published_at, finding_key"
         );
         let mut statement = transaction.prepare(&sql).map_err(unreadable)?;
         let rows = statement
-            .query_map(params![repository, number, finding_key], read_row)
+            .query_map(params![repository, number], read_row)
             .map_err(unreadable)?;
-        let head_rows = rows.collect::<Result<Vec<_>, _>>().map_err(unreadable)?;
+        let pull_rows = rows.collect::<Result<Vec<_>, _>>().map_err(unreadable)?;
         drop(statement);
-        let Some(finding) = head_rows.iter().find(|row| row.finding_key == finding_key) else {
+        let Some(finding) = pull_rows.iter().find(|row| row.finding_key == finding_key) else {
             return Ok(None);
         };
         let sql = format!("SELECT {REVIEW_COLUMNS} FROM reviews WHERE workflow_id = ?1");
@@ -348,7 +358,7 @@ impl Store {
         transaction.commit().map_err(unavailable)?;
         Ok(Some(FindingSource {
             finding: finding.clone(),
-            head_rows,
+            pull_rows,
             review,
         }))
     }
@@ -541,7 +551,7 @@ mod tests {
         let source = reader
             .finding_source("acme/repo", 1, "a:O001")
             .expect("read the row");
-        assert_eq!(source.expect("the row exists").head_rows.len(), 1);
+        assert_eq!(source.expect("the row exists").pull_rows.len(), 1);
         let other = FindingOutcome {
             finding_key: "a:O002".to_owned(),
             ..row
