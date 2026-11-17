@@ -28,7 +28,7 @@ use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 use crate::command_invalid;
-use crate::eval_prune::live_session_branches;
+use crate::eval_prune::{SessionSets, eval_session_sets};
 use plan::{BranchPlan, HEADS, Owners, Rules, Verdict};
 
 /// Error of a repository whose configuration names a hook that a deletion would run.
@@ -213,10 +213,12 @@ pub(crate) async fn run(
                 continue;
             }
         };
+        let freed = BTreeSet::new();
         let rules = Rules {
             prefix: &config.session_branch_prefix,
             owners: &owners,
             sessions: &sessions,
+            freed: &freed,
             only: None,
             older_than,
             retention: config.review_retention,
@@ -435,10 +437,12 @@ async fn delete_host_branches(
         }
     };
     let owners = Owners::default();
+    let freed = BTreeSet::new();
     let rules = Rules {
         prefix,
         owners: &owners,
         sessions: &sessions,
+        freed: &freed,
         only: Some(names),
         older_than: None,
         retention: config.review_retention,
@@ -465,10 +469,10 @@ async fn delete_host_branches(
 /// ones, or returns why the host is skipped.
 ///
 /// The git listing comes before the session read, as in `prune-branches`. `selected` are the
-/// eval sessions found on the host; [`live_session_branches`] decides which of their branches
-/// still count as a live session. No review owns an eval branch and no age limit applies, so
-/// every well-formed branch under `prefix` that no live session, worktree or hook keeps is
-/// `delete`.
+/// eval sessions found on the host; [`eval_session_sets`] decides which of their branches
+/// still count as a live session or a checked-out worktree. No review owns an eval branch and
+/// no age limit applies, so every well-formed branch under `prefix` that no live session,
+/// worktree or hook keeps is `delete`.
 #[expect(dead_code, reason = "called by the eval prune command")]
 pub(crate) async fn prune_eval_host(
     config: &Config,
@@ -486,12 +490,13 @@ pub(crate) async fn prune_eval_host(
             tracing::warn!(host, error = %error, "eval prune host skipped: sessions unknown");
             error_code(&error).to_owned()
         })?;
-    let sessions = live_session_branches(read, selected, delete);
+    let SessionSets { live, freed } = eval_session_sets(read, selected, delete);
     let owners = Owners::default();
     let rules = Rules {
         prefix,
         owners: &owners,
-        sessions: &sessions,
+        sessions: &live,
+        freed: &freed,
         only: None,
         older_than: None,
         retention: config.review_retention,

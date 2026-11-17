@@ -32,23 +32,38 @@ pub(crate) fn select_eval_sessions<'a>(
         .collect()
 }
 
-/// Returns the branches that keep a branch `session_live` when the eval branches are planned.
+/// The session facts that the plan of the eval branches of one host uses.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SessionSets {
+    /// Branches that a session works on; they plan `session_live`.
+    pub(crate) live: BTreeSet<String>,
+    /// Branches whose worktree `--yes` removes before it plans; they plan without `checked_out`.
+    pub(crate) freed: BTreeSet<String>,
+}
+
+/// Returns the session sets that the eval branches are planned with.
 ///
 /// `read` is a read of the host's session branches. A dry run (`delete` unset) reads before any
-/// removal, so the branches of `selected` leave the set: the plan shows the verdicts that
-/// `--yes` produces. With `delete`, `read` follows the removals and stays as read, so the
-/// branch of a session whose removal failed keeps its `session_live` verdict.
-pub(crate) fn live_session_branches(
+/// removal, while `--yes` removes the selected sessions and their worktrees first. So a dry run
+/// takes the branches of `selected` out of the live set and frees them, and the plan shows the
+/// verdicts that `--yes` produces. With `delete`, `read` follows the removals and stays as read
+/// and nothing is freed: the branch of a session whose removal failed keeps `session_live`, and
+/// a worktree that outlives its session keeps `checked_out`. Known asymmetry: a person's
+/// worktree on a selected eval branch plans `delete` in the dry run, and `--yes` keeps the
+/// branch `checked_out`, the safe direction.
+pub(crate) fn eval_session_sets(
     mut read: BTreeSet<String>,
     selected: &[&SessionSummary],
     delete: bool,
-) -> BTreeSet<String> {
+) -> SessionSets {
+    let mut freed = BTreeSet::new();
     if !delete {
         for session in selected {
             read.remove(&session.branch);
+            freed.insert(session.branch.clone());
         }
     }
-    read
+    SessionSets { live: read, freed }
 }
 
 /// Reports whether `session` has the name, branch and workflow ID of an eval session start.

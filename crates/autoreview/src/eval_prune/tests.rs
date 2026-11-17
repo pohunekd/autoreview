@@ -1,9 +1,11 @@
-use std::collections::BTreeSet;
+use std::time::Duration;
 
 use autoreview_engine::model::WORKFLOW_ID_PREFIX;
 use autoreview_external::SessionSummary;
+use time::OffsetDateTime;
 
-use super::{live_session_branches, select_eval_sessions};
+use super::{SessionSets, eval_session_sets, select_eval_sessions};
+use crate::prune_branches::plan::{Owners, Rules, Verdict, plan};
 
 const NAME_PREFIX: &str = "eval-review-";
 
@@ -42,6 +44,12 @@ fn select_eval_sessions_keeps_only_sessions_that_an_eval_run_started() {
             "running",
         ),
         session(
+            "person-session",
+            &format!("fix-{one}"),
+            &format!("{BRANCH_PREFIX}{one}"),
+            "running",
+        ),
+        session(
             "nested-prefix",
             &format!("{NAME_PREFIX}sub/{one}"),
             &format!("{BRANCH_PREFIX}sub/{one}"),
@@ -77,20 +85,46 @@ fn select_eval_sessions_keeps_only_sessions_that_an_eval_run_started() {
     assert_eq!(ids, ["eval-running", "eval-failed"]);
 }
 
+/// Plans `branch` with the session sets of `eval_session_sets` and a worktree that has it
+/// checked out.
+fn planned(read: &[&str], selected: &[&SessionSummary], delete: bool, branch: &str) -> Verdict {
+    let read = read.iter().map(|branch| (*branch).to_owned()).collect();
+    let SessionSets { live, freed } = eval_session_sets(read, selected, delete);
+    let owners = Owners::default();
+    let rules = Rules {
+        prefix: BRANCH_PREFIX,
+        owners: &owners,
+        sessions: &live,
+        freed: &freed,
+        only: None,
+        older_than: None,
+        retention: Duration::ZERO,
+        now: OffsetDateTime::UNIX_EPOCH,
+    };
+    let refs = format!("refs/heads/{branch}\0{:040}\0\n", 0);
+    let worktrees = format!(
+        "worktree /work\0HEAD {:040}\0branch refs/heads/{branch}\0\0",
+        0
+    );
+    plan(&refs, &worktrees, &rules)[0].verdict
+}
+
 #[test]
-fn live_session_branches_predicts_the_removals_of_a_dry_run_only() {
-    let (one, two, other) = (token('1'), token('2'), "autoreview/eval/other".to_owned());
-    let eval = |id: &str, branch: &str| session(id, id, branch, "running");
-    let selected = [eval("one", &one), eval("two", &two)];
-    let selected: Vec<&SessionSummary> = selected.iter().collect();
+fn eval_session_sets_predict_the_removals_of_a_dry_run_only() {
+    let branch = format!("{BRANCH_PREFIX}{}", token('1'));
+    let eval = session("one", "one", &branch, "running");
+    let selected = [&eval];
 
-    // A dry run reads before any removal: both selected branches are predicted free.
-    let before = BTreeSet::from([one.clone(), two.clone(), other.clone()]);
-    let dry_run = live_session_branches(before, &selected, false);
-    assert_eq!(dry_run, BTreeSet::from([other.clone()]));
-
-    // After `--yes` the read still lists the session whose removal failed.
-    let after = BTreeSet::from([two.clone(), other.clone()]);
-    let removed = live_session_branches(after.clone(), &selected, true);
-    assert_eq!(removed, after);
+    // A dry run reads before the removal that frees the branch and its worktree.
+    assert_eq!(
+        planned(&[&branch], &selected, false, &branch),
+        Verdict::Delete
+    );
+    // With `--yes` the removal failed: the session and its worktree are still there.
+    assert_eq!(
+        planned(&[&branch], &selected, true, &branch),
+        Verdict::SessionLive
+    );
+    // With `--yes` the session is gone but a worktree outlived it.
+    assert_eq!(planned(&[], &selected, true, &branch), Verdict::CheckedOut);
 }

@@ -61,6 +61,9 @@ pub(crate) struct Rules<'a> {
     pub(crate) owners: &'a Owners,
     /// The branch of every pohunek session of the host.
     pub(crate) sessions: &'a BTreeSet<String>,
+    /// Branches whose session `--yes` removes before planning; a dry run plans them without
+    /// their worktree, so `checked_out` is ignored for them.
+    pub(crate) freed: &'a BTreeSet<String>,
     /// The only branches to list; `None` lists every branch under the prefix.
     pub(crate) only: Option<&'a BTreeSet<&'a str>>,
     /// `--older-than-days` as a duration; `None` lists every age.
@@ -164,7 +167,7 @@ fn verdict(branch: &str, checked_out: bool, rules: &Rules<'_>) -> Verdict {
     if rules.sessions.contains(branch) {
         return Verdict::SessionLive;
     }
-    if checked_out {
+    if checked_out && !rules.freed.contains(branch) {
         return Verdict::CheckedOut;
     }
     let Some(older_than) = rules.older_than else {
