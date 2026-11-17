@@ -132,6 +132,38 @@ pub struct GitHubReview {
 
 autoreview_go_compat::object_only_serde!(GitHubReview);
 
+/// One reaction to an inline comment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CommentReaction {
+    /// Login of the account that reacted.
+    pub login: String,
+    /// The reaction as GitHub's REST API names it: `+1`, `-1`, `laugh`, `hooray`, `confused`,
+    /// `heart`, `rocket` or `eyes`.
+    pub content: String,
+}
+
+/// The comment that starts one review thread, with its reactions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadComment {
+    /// GitHub ID of the review that the comment belongs to.
+    pub review_id: i64,
+    /// Body text of the comment.
+    pub body: String,
+    /// Reactions to the comment, all of them.
+    pub reactions: Vec<CommentReaction>,
+}
+
+/// What one read of a pull request says about its reviews and review threads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PullRequestSignals {
+    /// Login of the pull request author; empty for a deleted account.
+    pub author: String,
+    /// GitHub state of every review, such as `CHANGES_REQUESTED` or `DISMISSED`, by review ID.
+    pub reviews: BTreeMap<i64, String>,
+    /// The comment that starts each review thread.
+    pub threads: Vec<ThreadComment>,
+}
+
 /// What GitHub answered to `GET /user` with the token of one credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenAnswer {
@@ -395,6 +427,18 @@ pub trait Integrations {
         pull_request: &PullRequest,
         review: &GitHubReview,
     ) -> impl Future<Output = Result<Option<PublishResult>, Error>> + Send;
+
+    /// Reads the review states and the review threads of a pull request.
+    ///
+    /// It reads with `credential`'s token and never writes. A read that GitHub answers only in
+    /// part, or that passes the page limit, is an error, never a shorter answer.
+    fn read_pull_request_signals(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        repository: &str,
+        number: i64,
+    ) -> impl Future<Output = Result<PullRequestSignals, Error>> + Send;
 
     /// Sends `notification` to the backend called `backend`.
     ///
