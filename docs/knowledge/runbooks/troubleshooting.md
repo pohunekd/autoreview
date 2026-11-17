@@ -514,9 +514,9 @@ list):
   when it refuses a request without a usable `- Trusted protocol:` line. A Codex
   run that an engine restart left behind, or a model that printed an exit line
   as the last line while it paused, ends only that run: the reviewer gets a
-  fresh session. Every run of a profile whose adapter predates the protocol line
-  ends so, and the review fails after the fresh sessions: its session output
-  ends with the adapter's own exit line after
+  fresh session. Every run of a profile whose adapter is older than
+  `autoreview-codex/v3` ends so, and the review fails after the fresh sessions:
+  its session output ends with the adapter's own exit line after
   `codex-adapter: trusted nonce is valid only with autoreview-codex/v2`
   (release 0.4.0 to 0.6.0) or
   `codex-adapter: trusted pull request head is missing or ambiguous` (release
