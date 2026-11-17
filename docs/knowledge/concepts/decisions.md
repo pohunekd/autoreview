@@ -183,7 +183,9 @@ The rules below describe the complete behaviour of the hand-off.
   same head, the engine does not run the reviewers again. It adopts the stored
   result of the hand-off review. The result is the same code sampled again
   otherwise, so the engine uses the stored result. The review then enters the
-  approval wait, and `approval_requested` is raised.
+  approval wait, and `approval_requested` is raised. On a pipeline with
+  `repository_review_rules: read`, a hand-off stored without a rules outcome is
+  reviewed again instead (see [REVIEW.md](../../review-rules.md)).
 - **New head after a hand-off.** A new head is reviewed. The review then waits for
   approval, whatever its notes are. A second hand-off is never made in a row.
   After a hand-off, only a human approval may follow.

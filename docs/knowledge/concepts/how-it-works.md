@@ -71,8 +71,10 @@ review at once. The scheduler waits `schedule.debounce_seconds` of quiet time
 after the head it saw, so a burst of pushes is reviewed once.
 
 A head that a published review already covers is not reviewed again. After a
-notes hand-off, a renewed request for the same head adopts the stored result. A
-retarget to another base branch gets a full review of the same head (see
+notes hand-off, a renewed request for the same head adopts the stored result,
+except on a `read` pipeline for a hand-off stored without a rules outcome (see
+[REVIEW.md](../../review-rules.md)). A retarget to another base branch gets a
+full review of the same head (see
 [incremental reviews](incremental-reviews.md#full-or-incremental)).
 
 ## 2. Rule resolution and copy at dispatch

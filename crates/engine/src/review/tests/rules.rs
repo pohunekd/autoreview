@@ -191,12 +191,18 @@ async fn the_base_review_rules_are_read_and_an_unusable_file_fails_the_review() 
     let mut renewed = handed.clone();
     renewed.review_request_id = 99;
     rule.on_clean = OnClean::Approve;
+    let started = h.started_count();
     h.fake.open(renewed.clone(), rule);
     h.poll_until("the approval request of the adopted hand-off", || {
         (h.fake).has_note(Level::Action, "The author requested the review again")
     })
     .await;
     assert_eq!(h.publications(), 3, "the adopted hand-off is held");
+    assert_eq!(
+        h.started_count(),
+        started,
+        "the hand-off is adopted, not reviewed again"
+    );
     h.wait_for("the approval to be accepted", || {
         let Ok(resolved) = h.resolve(&renewed) else {
             return false;
@@ -227,12 +233,17 @@ async fn the_base_review_rules_are_read_and_an_unusable_file_fails_the_review() 
     renewed.review_request_id = 99;
     rule.on_clean = OnClean::Approve;
     rule.pipeline.repository_review_rules = RepositoryReviewRules::Read;
+    let started = h.started_count();
     h.fake.open(renewed.clone(), rule);
     h.poll_until("the approval request of the reviewed hand-off", || {
         (h.fake).has_note(Level::Action, "Review ID: rules/ignored")
     })
     .await;
     assert_eq!(h.publications(), 5, "the hand-off without rules is held");
+    assert!(
+        h.started_count() > started,
+        "the hand-off without rules is reviewed again"
+    );
     h.wait_for("the approval to be accepted", || {
         let Ok(resolved) = h.resolve(&renewed) else {
             return false;
