@@ -291,6 +291,21 @@ fn is_space_byte(byte: u8) -> bool {
     matches!(byte, b'\t' | b'\n' | 0x0C | b'\r' | b' ')
 }
 
+/// Returns the `gh api graphql` arguments that pass `repository` as the `owner` and `name`
+/// variables; a value without a `/` is the owner of an empty name.
+///
+/// Both are sent as raw strings (`-f`): a typed field (`-F`) would turn a repository named
+/// `true`, `null` or `123` into a boolean, null or number.
+fn repository_variables(repository: &str) -> [String; 4] {
+    let (owner, name) = repository.split_once('/').unwrap_or((repository, ""));
+    [
+        "-f".to_owned(),
+        format!("owner={owner}"),
+        "-f".to_owned(),
+        format!("name={name}"),
+    ]
+}
+
 /// Returns the `github_response_invalid` error, with `cause` when there is one.
 ///
 /// It is permanent: a response that does not decode does not change on a retry.
@@ -307,8 +322,24 @@ mod tests {
     use autoreview_engine::config::{Credential, Credentials};
     use autoreview_engine::error_code;
 
-    use super::GitHub;
+    use super::{GitHub, repository_variables};
     use crate::pohunek::local_environment;
+
+    /// Each row is a repository and the owner and name that `gh` receives as raw strings: a
+    /// name that reads as a JSON literal or a number must not be typed by `-F`.
+    #[test]
+    fn repository_variables_are_raw_strings() {
+        let rows = [
+            ("acme/widget", "owner=acme", "name=widget"),
+            ("true/123", "owner=true", "name=123"),
+            ("null/false", "owner=null", "name=false"),
+            ("acme", "owner=acme", "name="),
+        ];
+        for (repository, owner, name) in rows {
+            let got = repository_variables(repository);
+            assert_eq!(got, ["-f", owner, "-f", name], "{repository}");
+        }
+    }
 
     fn pairs(items: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         items

@@ -22,7 +22,7 @@ use autoreview_go_compat::null_default;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use super::{GitHub, response_invalid};
+use super::{GitHub, repository_variables, response_invalid};
 
 /// Query of one page of the discussion read (`graphQLDiscussion`).
 const GRAPHQL_DISCUSSION: &str = concat!(
@@ -418,22 +418,14 @@ impl<'a> DiscussionReader<'a> {
 ///
 /// The cursor is sent only when it is not empty.
 fn discussion_args(pull_request: &PullRequest, after: &str) -> Vec<String> {
-    let (owner, name) = match pull_request.repository.split_once('/') {
-        Some((owner, name)) => (owner, name),
-        None => (pull_request.repository.as_str(), ""),
-    };
     let mut args = vec![
         "api".to_owned(),
         "graphql".to_owned(),
         "-f".to_owned(),
         format!("query={GRAPHQL_DISCUSSION}"),
-        "-F".to_owned(),
-        format!("owner={owner}"),
-        "-F".to_owned(),
-        format!("name={name}"),
-        "-F".to_owned(),
-        format!("number={}", pull_request.number),
     ];
+    args.extend(repository_variables(&pull_request.repository));
+    args.extend(["-F".to_owned(), format!("number={}", pull_request.number)]);
     if !after.is_empty() {
         args.push("-f".to_owned());
         args.push(format!("after={after}"));

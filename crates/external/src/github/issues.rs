@@ -16,7 +16,7 @@ use autoreview_go_compat::null_default;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use super::{GitHub, response_invalid};
+use super::{GitHub, repository_variables, response_invalid};
 
 /// Query of the closing issue references of one pull request, without their text.
 ///
@@ -187,29 +187,17 @@ struct ClosingReferences {
     more: bool,
 }
 
-/// Returns the owner and name of `pull_request`'s repository.
-fn owner_and_name(pull_request: &PullRequest) -> (&str, &str) {
-    match pull_request.repository.split_once('/') {
-        Some((owner, name)) => (owner, name),
-        None => (pull_request.repository.as_str(), ""),
-    }
-}
-
 /// Returns the `gh` arguments of `query` on `pull_request`'s repository.
 ///
 /// The pull request number is sent only when `number` is set.
 fn query_args(pull_request: &PullRequest, query: &str, number: bool) -> Vec<String> {
-    let (owner, name) = owner_and_name(pull_request);
     let mut args = vec![
         "api".to_owned(),
         "graphql".to_owned(),
         "-f".to_owned(),
         format!("query={query}"),
-        "-F".to_owned(),
-        format!("owner={owner}"),
-        "-F".to_owned(),
-        format!("name={name}"),
     ];
+    args.extend(repository_variables(&pull_request.repository));
     if number {
         args.push("-F".to_owned());
         args.push(format!("number={}", pull_request.number));
