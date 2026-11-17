@@ -249,7 +249,7 @@ mod tests {
     use crate::eval::case::{Case, Expect, Expected};
     use crate::eval::integration::{EvalIntegration, RunCounters};
     use crate::eval::report::TrialStatus;
-    use crate::integrations::{ChangedFile, SessionRequest};
+    use crate::integrations::{ChangedFile, Integrations, SessionRequest};
     use crate::protocol::fixtures::sha;
     use crate::store::Store;
     use crate::testing::fake::{FakeIntegration, reviewer_output};
@@ -434,5 +434,47 @@ mod tests {
         assert_eq!(seventh.status, TrialStatus::Completed);
         let open = fake.snapshot().3;
         assert!(open > 0 && counters.sessions_left().len() == open);
+        // A later removal that succeeds takes the sessions out of the list again.
+        fake.lock().keeping_sessions = false;
+        engine
+            .integration
+            .remove_sessions(config.session_timeout)
+            .await;
+        assert!(counters.sessions_left().is_empty());
+        assert_eq!(fake.snapshot().3, 0);
+        // A session that only the lookup of a pending request finds is listed when its removal
+        // fails, and a later call takes it out of the list although the lookup finds nothing.
+        let request = fake.snapshot().2.remove(0);
+        fake.lock()
+            .start_failures
+            .push_back(("pohunek_request_failed".to_owned(), false));
+        let start = engine.integration.ensure_session(&cancel, &request).await;
+        assert!(start.is_err());
+        {
+            let mut state = fake.lock();
+            state.sessions.insert("s-lost".to_owned(), request);
+            state.finding_sessions = true;
+            state.keeping_sessions = true;
+        }
+        engine
+            .integration
+            .remove_sessions(config.session_timeout)
+            .await;
+        assert!(
+            counters
+                .sessions_left()
+                .iter()
+                .any(|(_, id)| id == "s-lost")
+        );
+        {
+            let mut state = fake.lock();
+            state.sessions.clear();
+            state.keeping_sessions = false;
+        }
+        engine
+            .integration
+            .remove_sessions(config.session_timeout)
+            .await;
+        assert!(counters.sessions_left().is_empty());
     }
 }
