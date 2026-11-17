@@ -44,15 +44,15 @@ is refused with `review_adapter_outdated`, without a fresh session. So is a
 result line in mode `text`, with or without a refusal: its adapter ran the
 request as a plain prompt (see [wire names](#wire-names)).
 
-A finding of a `claude-structured` result may carry an optional `category`: a
-slug of lowercase letters and digits joined by single hyphens, 1 to 40
-characters, such as `missing-test`. A result without it stays valid. A string
-that is not such a slug does not refuse the review: the finding is kept without
-a category and the engine logs one `finding category refused` warning that names
-the review and the value. A `category` that is not a string is refused like any
-other field of the wrong type. A `codex-envelope` report has no `category`. The
-engine uses the category only for the [`guidance`](../../configuration.md#guidance)
-suggestions.
+A finding of a `claude-structured` or `codex-envelope` result may carry an
+optional `category`: a slug of lowercase letters and digits joined by single
+hyphens, 1 to 40 characters, such as `missing-test`. A result without it stays
+valid. A string that is not such a slug does not refuse the review: the finding
+is kept without a category and the engine logs one `finding category refused`
+warning that names the review and the value (for a Codex report, the position of
+the finding in the report). A `category` that is not a string is refused like any
+other field of the wrong type. The engine uses the category only for the
+[`guidance`](../../configuration.md#guidance) suggestions.
 
 With `codex-envelope` the engine looks for one result frame at the end of the
 output and decodes it strictly. The frame must not be larger than
@@ -64,8 +64,9 @@ reviewed head SHA. A report without `prior_findings`, or with a finding without
 ### Wire names
 
 Between the engine and an adapter the protocols are named `autoreview-claude/v1`
-and `autoreview-codex/v2`. Each adapter answers in the name of the request it
-got. The engine reads the legacy Claude result name too, so a review that an
+and `autoreview-codex/v3`. The Claude adapter answers in the name of the request
+it got; the Codex adapter answers a `v3` request in the `autoreview-codex/v2`
+markers, which carry the nonce of the request. The engine reads the legacy Claude result name too, so a review that an
 earlier engine started still finishes; a later release removes the legacy
 names (#393). Claude and Codex profiles must be installed from this release
 before the engine is updated (see below); a rollback of the engine needs no
@@ -82,13 +83,14 @@ reinstall.
   `checkout_invalid`, as it finds no trusted line in the one-line request. The
   engine stops such a review with `review_adapter_outdated`, without a fresh
   session; run `autoreview profiles install` for the profile (#392).
-- `autoreview-codex/v2` is named in the trusted line
-  `- Trusted protocol: autoreview-codex/v2` of the request, followed by the line
+- `autoreview-codex/v3` is named in the trusted line
+  `- Trusted protocol: autoreview-codex/v3` of the request, followed by the line
   `- Trusted nonce: <nonce>`: 16 bytes from the engine host's random source in
   lowercase hex, fresh for every run. The head line of such a request is
   `- Trusted head commit:` instead of `- Trusted head SHA:`. The adapter
   removes the nonce line before Codex reads the prompt, so the model never sees
-  the nonce, and writes it into every marker:
+  the nonce, and writes it into every marker (the markers of `v3` carry the
+  name `autoreview-codex/v2`, the name of the nonce markers):
   `[autoreview-codex/v2 <nonce> result:<base64>]`,
   `[autoreview-codex/v2 <nonce> reason:<base64>]`,
   `[autoreview-codex/v2 <nonce> refused:head_unavailable]`,
@@ -98,7 +100,7 @@ reinstall.
   transcript prints, for example while the model pauses, never pass for the
   adapter's. An output that does not end with the exit line of that nonce is
   `review_nonce_mismatch`, which gets a fresh session.
-- An adapter from an earlier release does not know `autoreview-codex/v2`: it
+- An adapter from an earlier release does not know `autoreview-codex/v3`: it
   stops the run with status 64 and the legacy exit line, before Codex runs, and
   every run of the review ends in `review_nonce_mismatch`. Run
   `autoreview profiles install` for every Codex profile before the engine is
@@ -107,7 +109,11 @@ reinstall.
   way, with `trusted pull request head is missing or ambiguous`: no adapter
   release passes the nonce to Codex.
 - For an older engine the adapter still answers a request with
-  `- Trusted protocol: autoreview-codex/v1` in the markers
+  `- Trusted protocol: autoreview-codex/v2` in the same nonce markers as `v3`,
+  with every finding `category` removed, because an engine of `v2` refuses a
+  finding with a field it does not know; an engine rollback needs no profile
+  reinstall. A request with
+  `- Trusted protocol: autoreview-codex/v1` gets the markers
   `[autoreview-codex/v1 result:<base64>]` and so on, and a request without the
   line in the legacy markers `[pohunek-codex-review-result-v1:<base64>]`,
   `[pohunek-codex-review-reason-v1:<base64>]`,
@@ -115,8 +121,8 @@ reinstall.
   `[pohunek-codex-review-refused-v1:repository_skills]` and
   `[pohunek-codex-review exited with status N]`. A nonce line under either, a
   second protocol line or nonce line, a missing or malformed nonce under
-  `autoreview-codex/v2`, or another name stops the run with status 64 and the
-  legacy exit line.
+  `autoreview-codex/v2` or `v3`, or another name stops the run with status 64
+  and the legacy exit line.
 
 ## What the adapter enforces
 
@@ -439,7 +445,12 @@ example, with `profile_agent_unsupported`. It has two parts:
 
 The report has the fields `findings`, `summary`, `tests`, `status`,
 `reviewed_head_sha` and `prior_findings`. A finding has `severity`,
-`confidence`, `blocking`, `path`, `line`, `title` and `body`. A prior finding
+`confidence`, `blocking`, `path`, `line`, `title`, `body` and `category`. The
+output schema of Codex lists every property as required, so the adapter's
+schema makes `category` a string or `null`. The adapter removes a `null`
+one before it hands the report to the engine, and removes every category unless
+the request names `autoreview-codex/v3`, so an engine of an older name gets the
+report it always got. A prior finding
 verdict has `key`, `status` (`fixed`, `still_open` or `answered`), `note` and
 `relies_on`, as in the Claude result. The engine reads both fields and refuses
 a report without them (`review_adapter_outdated`).

@@ -7,11 +7,16 @@ use std::collections::BTreeSet;
 
 use crate::config::Config;
 use crate::error::{BoxError, Error, error_code};
+use crate::messages::excerpt;
+use crate::model::finding::category_valid;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
-use crate::model::{Discussion, Finding, PriorFinding, PriorVerdict, ReviewerResult};
+use crate::model::{Discussion, Finding, PriorFinding, PriorVerdict, PullRequest, ReviewerResult};
 
 /// Severities that a finding may carry, most severe first.
 const SEVERITIES: [&str; 5] = ["blocker", "critical", "high", "medium", "low"];
+
+/// Characters of a refused category that the warning shows. A fixed size, not a tunable.
+const CATEGORY_LOG_CHARACTERS: i64 = 80;
 
 /// Confidence levels that a finding may carry, most confident first.
 pub(crate) const CONFIDENCE_LEVELS: [&str; 3] = ["high", "medium", "low"];
@@ -36,6 +41,26 @@ pub(crate) fn sort_findings(findings: &mut [Finding]) {
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.line.cmp(&right.line))
     });
+}
+
+/// Returns the category of finding `id`, or an empty one when the reviewer gave none.
+///
+/// A value that is not a category slug does not refuse the review: the finding is kept without
+/// a category and one warning names the review and the value.
+pub(crate) fn finding_category(pr: &PullRequest, id: &str, category: Option<&str>) -> String {
+    let Some(category) = category else {
+        return String::new();
+    };
+    if category_valid(category) {
+        return category.to_owned();
+    }
+    tracing::warn!(
+        review_id = %pr.review_id(),
+        finding = id,
+        category = %excerpt(category, CATEGORY_LOG_CHARACTERS),
+        "finding category refused"
+    );
+    String::new()
 }
 
 /// Returns the position of `severity` in `SEVERITIES`, or 0 when it is not listed.

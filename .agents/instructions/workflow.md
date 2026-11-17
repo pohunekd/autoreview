@@ -98,7 +98,12 @@ It never creates a tag and never publishes.
    without it. Set `AUTOREVIEW_VERSION="X.Y.Z"` near the start of
    `scripts/setup` too: setup on the tag installs that release, and on a Mac
    the first release with the `aarch64-apple-darwin` archive is the first one
-   it can install.
+   it can install. When a fragment of the release is `breaking` because the
+   engine names a new Codex protocol, also set `CODEX_ADAPTER_RELEASE="X.Y.Z"`
+   in `scripts/setup` and the release named in the Codex sentence of
+   `docs/knowledge/guides/getting-started.md` ("After an upgrade of
+   autoreview"), so that an upgrade names every Codex profile that needs a
+   reinstall.
 2. Run `scripts/changelog fold X.Y.Z`. It moves every fragment into a new
    section of `CHANGELOG.md` and deletes the fragments. Run `scripts/gates`.
 3. Open the pull request with the label `no-changelog` and merge it when `ci`

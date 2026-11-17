@@ -43,9 +43,14 @@ PROGRAM_NAME = "codex-adapter"
 # engine does not retry. Right before the exit line of a failed Codex run, the reason marker
 # holds the base64 of the reason that `exit_reason` takes from Codex's stderr; empty when
 # stderr has no line. A refusal after the run puts the adapter's own message there, before
-# any head marker. Under `autoreview-codex/v2` every marker carries the request's nonce,
+# any head marker. Under `autoreview-codex/v2` and `v3` every marker carries the request's nonce,
 # which the model never sees, so a marker that the transcript prints cannot pass for one.
 PROTOCOL_V2 = "autoreview-codex/v2"
+# `PROTOCOL_V3` is `PROTOCOL_V2` plus the `category` of a finding, which only an engine that
+# names it knows: the engine of every older name refuses a finding with an unknown field.
+# Its markers are those of `PROTOCOL_V2`.
+PROTOCOL_V3 = "autoreview-codex/v3"
+NONCE_PROTOCOLS = (PROTOCOL_V2, PROTOCOL_V3)
 # An older engine sends this name and reads these markers, which carry no nonce.
 PROTOCOL = "autoreview-codex/v1"
 MARKERS = Markers(
@@ -130,9 +135,9 @@ DROPPED_ENVIRONMENT = frozenset(
 DROPPED_ENVIRONMENT_PREFIX = "AUTOREVIEW_"
 PRIOR_STATUSES = ("fixed", "still_open", "answered")
 PRIOR_VERDICT_KEYS = frozenset({"key", "status", "note", "relies_on"})
-# An engine of `autoreview-codex/v2` names the head line `- Trusted head commit:`, so that an
-# adapter of release 0.3.0 or earlier finds no head line and refuses before Codex sees the
-# nonce; an older engine names it `- Trusted head SHA:`. Exactly one of them is read.
+# An engine of `autoreview-codex/v2` or later names the head line `- Trusted head commit:`,
+# so that an adapter of release 0.3.0 or earlier finds no head line and refuses before Codex
+# sees the nonce; an older engine names it `- Trusted head SHA:`. Exactly one of them is read.
 TRUSTED_HEAD_PATTERN = re.compile(r"(?m)^- Trusted head (?:SHA|commit): ([0-9a-f]{40})$")
 TRUSTED_BASE_PATTERN = re.compile(r"(?m)^- Trusted base SHA: ([0-9a-f]{40})$")
 TRUSTED_CHECKOUT_PATTERN = re.compile(r"(?m)^- Trusted checkout: (.*)$")
@@ -167,6 +172,7 @@ RESULT_SCHEMA = {
                     "line",
                     "title",
                     "body",
+                    "category",
                 ],
                 "properties": {
                     "severity": {
@@ -182,6 +188,10 @@ RESULT_SCHEMA = {
                     "line": {"type": "integer", "minimum": 1},
                     "title": {"type": "string"},
                     "body": {"type": "string"},
+                    # Codex needs every property required, so an absent category is a null.
+                    # The engine checks the slug and drops an invalid one; the adapter removes
+                    # the key unless the request names `PROTOCOL_V3`.
+                    "category": {"type": ["string", "null"]},
                 },
             },
         },
@@ -617,24 +627,29 @@ def result_markers(prompt: str) -> tuple[Markers, str]:
     """Returns the markers that the trusted protocol line names, and the prompt for Codex.
 
     A prompt without the line comes from an older engine, which reads only the legacy markers.
-    Under `PROTOCOL_V2` the one nonce line binds the markers to the request; it is removed
+    Under `NONCE_PROTOCOLS` the one nonce line binds the markers to the request; it is removed
     from the prompt, so the model never reads the nonce.
     """
     protocols = TRUSTED_PROTOCOL_PATTERN.findall(prompt)
     nonces = TRUSTED_NONCE_PATTERN.findall(prompt)
-    if protocols == [PROTOCOL_V2]:
+    if len(protocols) == 1 and protocols[0] in NONCE_PROTOCOLS:
         if len(nonces) != 1 or not NONCE_PATTERN.fullmatch(nonces[0]):
             raise InputFrameError("trusted nonce is missing, ambiguous or invalid")
         nonce_line = NONCE_LINE_PREFIX + nonces[0]
         lines = [line for line in prompt.split("\n") if line != nonce_line]
         return nonce_markers(nonces[0]), "\n".join(lines)
     if nonces:
-        raise InputFrameError(f"trusted nonce is valid only with {PROTOCOL_V2}")
+        raise InputFrameError(f"trusted nonce is valid only with {PROTOCOL_V2} or {PROTOCOL_V3}")
     if not protocols:
         return LEGACY_MARKERS, prompt
     if protocols != [PROTOCOL]:
         raise InputFrameError("trusted protocol is ambiguous or unknown")
     return MARKERS, prompt
+
+
+def keeps_categories(prompt: str) -> bool:
+    """Tells whether the engine of the trusted protocol line reads a finding's `category`."""
+    return TRUSTED_PROTOCOL_PATTERN.findall(prompt) == [PROTOCOL_V3]
 
 
 def trusted_checkout(prompt: str) -> str:
@@ -878,7 +893,20 @@ def validate_blocking_and_prior_findings(value: dict) -> None:
         raise InputFrameError("Codex review result has invalid prior findings")
 
 
-def encoded_result(path: Path, maximum_bytes: int, expected_head_sha: str) -> str:
+def settle_categories(findings: list, keep: bool) -> None:
+    """Removes the `category` of each finding that the engine must not get.
+
+    A `null` one always goes, as the engine reads an absent key as none. Without `keep` every
+    category goes, so an engine of an older protocol gets the report it always got.
+    """
+    for finding in findings:
+        if not keep or finding.get("category", "") is None:
+            finding.pop("category", None)
+
+
+def encoded_result(
+    path: Path, maximum_bytes: int, expected_head_sha: str, *, keep_categories: bool = False
+) -> str:
     try:
         data = path.read_bytes()
     except OSError as error:
@@ -894,6 +922,7 @@ def encoded_result(path: Path, maximum_bytes: int, expected_head_sha: str) -> st
     if value.get("status") != "completed" or value.get("reviewed_head_sha") != expected_head_sha:
         raise InputFrameError("Codex did not complete a review of the trusted pull request head")
     validate_blocking_and_prior_findings(value)
+    settle_categories(value["findings"], keep_categories)
     compact = json.dumps(
         value, ensure_ascii=False, separators=(",", ":"), sort_keys=True
     ).encode("utf-8")
@@ -1017,7 +1046,12 @@ def main() -> NoReturn:
             )
         try:
             verify_review_checkout_after_run(prompt, checkout_sha)
-            result = encoded_result(result_path, maximum_result_bytes, expected_head_sha)
+            result = encoded_result(
+                result_path,
+                maximum_result_bytes,
+                expected_head_sha,
+                keep_categories=keeps_categories(prompt),
+            )
         except InputFrameError as error:
             refuse(error, maximum_retention_seconds, after_run=True, markers=markers)
         print(f"\n{markers.result_prefix}{result}]", flush=True)

@@ -9,8 +9,8 @@ use crate::error::{BoxError, Error};
 use crate::model::{Finding, PriorVerdict, PullRequest, ReviewerResult};
 use crate::protocol::reason::leading_reason;
 use crate::protocol::validate::{
-    count_over, review_adapter_outdated, review_head_skills_refused, review_head_unavailable,
-    sort_findings,
+    count_over, finding_category, review_adapter_outdated, review_head_skills_refused,
+    review_head_unavailable, sort_findings,
 };
 use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys};
 
@@ -144,6 +144,9 @@ pub(crate) struct CodexFinding {
     pub(crate) title: String,
     /// Body of the finding.
     pub(crate) body: String,
+    /// Category slug of the finding; absent or `null` means none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) category: Option<String>,
 }
 
 autoreview_go_compat::object_only_serde!(CodexFinding);
@@ -181,6 +184,7 @@ autoreview_go_compat::object_only_serde!(CodexVerdict);
 /// before them is untrusted and cannot know it.
 /// Source identifiers are assigned after the findings are sorted, as `C001`, `C002` and so on.
 /// A finding blocks when it flags itself as blocking at severity blocker, critical or high.
+/// A category that is not a slug is dropped with one warning and the finding is kept.
 ///
 /// # Errors
 ///
@@ -232,9 +236,14 @@ pub(crate) fn parse_codex_output(
     }
     let mut mapped: Vec<Finding> = findings
         .into_iter()
-        .map(|source| {
+        .enumerate()
+        .map(|(index, source)| {
             let non_blocking = source.non_blocking();
+            // The source ids come after the sort, so the warning names the report position.
+            let category =
+                finding_category(pr, &(index + 1).to_string(), source.category.as_deref());
             Finding {
+                category,
                 severity: source.severity,
                 confidence: source.confidence,
                 path: source.path,
@@ -456,7 +465,7 @@ mod tests {
     }
 
     // A Codex note does not block: a finding blocks only when it says so at a severity that
-    // holds the merge back (#23).
+    // holds the merge back (#23). The same report rows cover the optional `category`.
     #[test]
     fn codex_finding_blocks_only_when_it_says_so() {
         let pr = test_pull_request(3);
@@ -465,13 +474,17 @@ mod tests {
             json!({
                 "findings": [
                     {"severity": "high", "confidence": "high", "blocking": true,
-                     "path": "a.go", "line": 1, "title": "Bug", "body": "Details."},
+                     "path": "a.go", "line": 1, "title": "Bug", "body": "Details.",
+                     "category": "missing-test"},
                     {"severity": "low", "confidence": "high", "blocking": false,
-                     "path": "a.go", "line": 2, "title": "Note", "body": "Details."},
+                     "path": "a.go", "line": 2, "title": "Note", "body": "Details.",
+                     "category": null},
                     {"severity": "medium", "confidence": "high", "blocking": true,
-                     "path": "a.go", "line": 3, "title": "Below the floor", "body": "Details."},
+                     "path": "a.go", "line": 3, "title": "Below the floor", "body": "Details.",
+                     "category": "Missing Test"},
                     {"severity": "blocker", "confidence": "high", "blocking": true,
-                     "path": "a.go", "line": 4, "title": "Blocker", "body": "Details."},
+                     "path": "a.go", "line": 4, "title": "Blocker", "body": "Details.",
+                     "category": "a-category-slug-of-forty-one-characters-x"},
                     {"severity": "critical", "confidence": "high", "blocking": false,
                      "path": "a.go", "line": 5, "title": "Accepted", "body": "Details."}
                 ],
@@ -480,6 +493,23 @@ mod tests {
         );
         let result =
             parse_codex_output(&test_config(), &pr, NONCE, &output).expect("the report parses");
+        // A valid slug is kept; `null`, an absent key, a refused slug and a long one leave none.
+        let categories: Vec<&str> = result
+            .findings
+            .iter()
+            .map(|finding| finding.category.as_str())
+            .collect();
+        assert_eq!(categories, ["", "", "missing-test", "", ""]);
+        // A category that is not a string fails the decode like any other field of the wrong type.
+        let wrong_type = json!({
+            "findings": [{"severity": "high", "confidence": "high", "blocking": true,
+                          "path": "a.go", "line": 1, "title": "Bug", "body": "Details.",
+                          "category": 7}],
+            "prior_findings": []
+        });
+        let err = parse_codex_output(&test_config(), &pr, NONCE, &codex_report(&pr, wrong_type))
+            .expect_err("a category that is not a string is refused");
+        assert_eq!(error_code(&err), "review_result_invalid");
         let blocking: Vec<(&str, bool)> = result
             .findings
             .iter()
