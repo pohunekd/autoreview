@@ -38,8 +38,10 @@ autoreview stats [--since DATE [--until DATE]] [--json]
 - With `--since`, `stats` decodes the reviews that are not completed, those created or
   completed in the range, and every review of a pull request with a review completed in
   the range. One of them that does not decode stops it with `store_state_invalid` naming
-  the review, and so does the plan of a review published in the range. A reviewer slot, a
-  verification or a combined artifact that does not decode does not stop `stats`.
+  the review, and so does the plan of a review published in the range. So does a step
+  run that ended in the range with a column that does not read as its type or a
+  `finished_at` that is not an RFC 3339 time. A reviewer slot, a verification or a
+  combined artifact that does not decode does not stop `stats`.
 - `autoreview serve` can serve the same numbers to Prometheus; see
   [Prometheus metrics](#prometheus-metrics).
 - `autoreview report` turns the counts of a range into shares, beside the outcomes of

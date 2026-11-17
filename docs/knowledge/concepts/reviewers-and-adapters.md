@@ -400,11 +400,10 @@ install --agent codex` refuses such a host, a Mac for example, with
   can read the output before it removes the session.
   The engine reads the output as finished once its last line, read up to the
   current end of the output, is an exit line of `autoreview-codex/v1` or `v2`,
-  or the one of an adapter that predates the protocol line, which ends the run
-  with `review_nonce_mismatch`; an exit
-  line that the Codex transcript quotes before the end does not finish it, and
-  one without the request's nonce at the end ends the run with
-  `review_nonce_mismatch`.
+  or the one of an adapter older than `autoreview-codex/v3`, which ends the run
+  with `review_nonce_mismatch`; an exit line that the Codex transcript quotes
+  before the end does not finish it, and one without the request's nonce at the
+  end ends the run with `review_nonce_mismatch`.
   The adapter exits with the status of
   Codex, or with status 64 when the request's trusted lines, the checkout check
   before or after the run, or the report fail. Codex's stderr goes on to the

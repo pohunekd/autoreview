@@ -253,9 +253,8 @@ run as the user of the pohunek daemon on that host. It also writes the reviewer
 adapter that the profile starts, which needs Python 3.11 or newer as `python3`.
 The Codex adapter also needs Linux (`PR_SET_CHILD_SUBREAPER`): on another system,
 such as a Mac review host, `profiles install --agent codex` refuses with
-`profile_agent_unsupported` (from 0.6.0 on, #513), and
-the adapter itself exits with status 64 before Codex starts. Claude reviewers
-run on both.
+`profile_agent_unsupported` (from 0.6.0 on, #513), and the adapter itself exits
+with status 64 before Codex starts. Claude reviewers run on both.
 
 Check configuration, policy and prompts before every start, as the service user
 with the secrets file of path b:
