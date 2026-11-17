@@ -23,8 +23,10 @@ Docs group:
    fails.
 3. `setup-self-test` (`scripts/setup --self-test`): the version comparison,
    the target choice, the running-binary check, the path trust rule, the
-   timeout check, the printed `profiles install` command, the `UMask` of the
-   user units, the launchd agents (parsed with `plistlib`) and the Codex
+   timeout check, the notifier check and the `init` flags it adds, the printed
+   `profiles install` command, the `UMask` of the user units, the launchd agents
+   (parsed with `plistlib`, with their log paths), the `log:` block that setup
+   writes on macOS, read back by `scripts/macos-check log-block`, and the Codex
    reinstall notice of the setup script, over fixed tables; it reads nothing
    else.
 4. `launchd-lint` (`scripts/check-launchd`): the agents of

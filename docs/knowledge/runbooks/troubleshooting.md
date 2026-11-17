@@ -20,31 +20,36 @@ codes below are the ones in the [CLI reference](../../cli.md#error-codes).
 
 ## Logs
 
-The service writes one JSON line per event to stderr; "the log" below is where
-that goes:
+The service writes one JSON line per event to stderr, or to a file when
+`config.yaml` has a `log:` section; "the log" below is where that goes:
 
 | Install | Log | Rotation |
 |---|---|---|
 | systemd units of path b | `journalctl -u autoreview.service` (`autoreview-queue.service` for the queue) | the journal |
 | `scripts/setup` on Linux | `journalctl --user -u autoreview.service` | the journal |
-| `scripts/setup` on a Mac (from 0.6.0 on, #513) | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`) | none by launchd; see below |
+| `scripts/setup` on a Mac (on `main` after 0.7.0, #520) | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`), written by autoreview; launchd's own output is in `autoreview.stderr.log` and `autoreview-queue.stderr.log` there | autoreview, by size, from the `log:` section of `config.yaml` |
 
-launchd does not rotate these files, and rotation needs root. When
-`scripts/setup` installs the agents, it prints two lines for
-`/etc/newsyslog.d/autoreview.conf`, which keep 5 old files and rotate a log at
-10 MiB:
-
-```text
-/Users/<you>/.local/state/autoreview/logs/autoreview.log <you>:staff 600 5 10240 * N
-/Users/<you>/.local/state/autoreview/logs/autoreview-queue.log <you>:staff 600 5 10240 * N
-```
-
-newsyslog cannot signal a launchd job, so the review agent keeps writing to the
-rotated file until it restarts (a login, an upgrade, or `launchctl kickstart -k
-gui/$(id -u)/io.github.pohunekd.autoreview`); the queue job opens its log anew
-at every run. A log file that autoreview limits itself is #520. Whether an agent
-is loaded and running: `launchctl print gui/$(id -u)/io.github.pohunekd.autoreview`,
-or `scripts/macos-check service` for every check at once.
+launchd keeps the output files of an agent open, so it cannot rotate them. On a
+Mac, `scripts/setup` therefore writes a `log:` block to `config.yaml` (the log
+directory, 10 MiB per file, 5 rotated files kept), and `serve` and
+`review-queue` write and rotate `autoreview.log` and `autoreview-queue.log`
+themselves, with no root, no newsyslog and no restart. The `.stderr.log` files
+only take what the log file could not: they stay small. A `config.yaml` from an
+earlier run has no such block; `scripts/setup` prints it and stops (exit code 3)
+until you add it, and then replaces the agent files. The run that stopped has
+already installed the new autoreview, so add the block after that run, never
+after a `--dry-run` alone: it installs nothing, and an older release refuses the
+unknown `log` key on its next start or queue run. The old `autoreview.log`
+that launchd wrote is rotated at the first line of the new run; an old
+`autoreview-queue.log` can stay above the limit until the first queue run of the
+new release, so trust the `macos-check service` after that run. On Linux the
+`log:` section is optional, because the journal rotates. The section and the
+rotation rules are in the [configuration reference](../../configuration.md#log).
+Whether an agent is loaded and running:
+`launchctl print gui/$(id -u)/io.github.pohunekd.autoreview`, or
+`scripts/macos-check service` for every check at once, which also checks that
+the review agent's log exists and that no log file passes `max_file_bytes` plus
+one line.
 
 ## Symptom table
 
@@ -95,6 +100,8 @@ or `scripts/macos-check service` for every check at once.
 | `review_already_completed` | `retry` found a completed review of this head (it succeeded or went on to wait for an approval) against the current base branch and no later failed review of it, or one whose base branch is no longer known | Nothing to do when that review is current; approve it if it still waits ([Approval errors](#approval-errors)); push a new commit for a fresh review |
 | `pull_request_not_open`, `pull_request_draft`, `review_label_removed`, `review_request_not_active` | The pull request no longer asks for a review: closed, back in draft, label removed or review request withdrawn. A running review ends as superseded with the code, except one that resumes after a restart and looks for its own review posted before the stop: it completes as published when it finds it on the reviewed head, and fails with the error code of that lookup when the lookup fails ([resume after restart](../concepts/state-and-recovery.md#resume-after-restart)). `retry` refuses with `review_request_not_active` because the pull request is not among the candidates of its discovery pass | Check it with `autoreview candidates` ([Nothing gets reviewed](#nothing-gets-reviewed)); once it asks again, a review stopped as superseded starts anew, and a refused `retry` works once the pull request is in that list |
 | `configuration_missing`, `configuration_invalid` | A key is missing or invalid; the message names it | Fix the key, then run `validate` |
+| `log write failed`, `log rotation failed` on stderr (on a Mac, in the `.stderr.log` file) | autoreview could not write or rotate its own log file: a full disk, or a directory or file that is not writable. The lines the file missed are repeated on stderr, the writer retries the rotation after 60 s, and the file may pass `max_file_bytes` meanwhile | Free space or fix the mode of `log.directory`; see [log](../../configuration.md#log) |
+| `log file in use` | A second `serve`, `review-queue` or `mcp` on the same `log.directory` (or a filesystem without `flock`) logs to stderr only, so the file of the first stays whole | Stop the other process |
 | `pohunek_session_cleanup_failed` | A reviewer session could not be removed | [Stale sessions](stale-sessions-and-branches.md) |
 | `workflow_failed` | A failure without a more specific code, for example a stored review that misses a part it needs; the scheduler does not retry it | Read the `review failed` log line of the review and the lines before it, run `autoreview retry`, and report it as a defect when it repeats |
 
