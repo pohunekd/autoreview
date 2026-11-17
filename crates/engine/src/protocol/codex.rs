@@ -17,6 +17,12 @@ use crate::protocol::{decode_go_base64, go_utf8_lossy, refuse_case_variant_keys}
 /// Protocol name that opens every marker of a nonce-bound Codex output.
 const MARKER_PROTOCOL: &str = "autoreview-codex/v2";
 
+/// Opening of the exit line of the adapters that predate the protocol line.
+///
+/// Such an adapter ends its output with it and writes no marker the engine reads. The engine
+/// compares only this line, to stop the review at once with `review_adapter_outdated`.
+const OUTDATED_EXIT_LINE_PREFIX: &str = "[pohunek-codex-review exited with status ";
+
 /// Prefix of the prompt line that carries the nonce of a Codex request.
 ///
 /// The adapter removes the line before Codex runs, so the model never reads the nonce.
@@ -190,7 +196,8 @@ autoreview_go_compat::object_only_serde!(CodexVerdict);
 ///
 /// Returns `review_nonce_mismatch` for an output that does not end with the exit line of
 /// `nonce`, `review_result_invalid` for an output, report or head that the engine refuses,
-/// `review_adapter_outdated` for a report without `prior_findings` or a finding without
+/// `review_adapter_outdated` for an output that ends with the exit line of an adapter that
+/// predates the protocol line, a report without `prior_findings` or a finding without
 /// `blocking`, `review_head_unavailable` when the adapter refused a missing head, and
 /// `review_head_skills_refused` when it refused a head checkout whose repository skills differ
 /// from the trusted base. A `review_result_invalid` of a failed Codex run carries the adapter's
@@ -201,6 +208,9 @@ pub(crate) fn parse_codex_output(
     nonce: &str,
     raw: &str,
 ) -> Result<ReviewerResult, Error> {
+    if ends_with_exit_line_of(OUTDATED_EXIT_LINE_PREFIX, raw) {
+        return Err(review_adapter_outdated());
+    }
     let markers = Markers::new(nonce);
     if refused_with(&markers, &markers.head_unavailable, raw) {
         return Err(review_head_unavailable());
@@ -365,15 +375,19 @@ fn exit_without_result(markers: &Markers, raw: &str) -> Error {
 ///
 /// The line starts the output or follows `\n`; one of `ENDINGS` may follow it.
 fn ends_with_exit_line(markers: &Markers, raw: &str) -> bool {
+    ends_with_exit_line_of(markers.exit_line_prefix.as_str(), raw)
+}
+
+/// Reports whether the last line of `raw` is an exit line that opens with `prefix`.
+fn ends_with_exit_line_of(prefix: &str, raw: &str) -> bool {
     ENDINGS
         .iter()
         .filter_map(|ending| raw.strip_suffix(ending))
         .any(|rest| {
-            rest.rsplit_once(markers.exit_line_prefix.as_str())
-                .is_some_and(|(head, status)| {
-                    (head.is_empty() || head.ends_with('\n'))
-                        && status.strip_suffix(']').is_some_and(decimal_status)
-                })
+            rest.rsplit_once(prefix).is_some_and(|(head, status)| {
+                (head.is_empty() || head.ends_with('\n'))
+                    && status.strip_suffix(']').is_some_and(decimal_status)
+            })
         })
 }
 
@@ -805,7 +819,7 @@ supported";
                 ["ok", "review_head_unavailable", bound],
             ),
             (&v1, &v1, ["review_nonce_mismatch"; 3]),
-            (&legacy, &legacy, ["review_nonce_mismatch"; 3]),
+            (&legacy, &legacy, ["review_adapter_outdated"; 3]),
             (&other_nonce, &other_nonce, ["review_nonce_mismatch"; 3]),
             (&nonce_bound, &v1, ["review_nonce_mismatch"; 3]),
             (&other_nonce, &nonce_bound, ["review_result_invalid"; 3]),
