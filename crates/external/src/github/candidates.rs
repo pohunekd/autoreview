@@ -455,11 +455,11 @@ fn label_search_args(query: &str, after: &str) -> Vec<String> {
         "graphql".to_owned(),
         "-f".to_owned(),
         format!("query={}", graphql_search()),
-        "-F".to_owned(),
+        "-f".to_owned(),
         format!("searchQuery={query}"),
     ];
     if !after.is_empty() {
-        args.push("-F".to_owned());
+        args.push("-f".to_owned());
         args.push(format!("after={after}"));
     }
     args
@@ -472,7 +472,7 @@ fn mark_ready_args(id: &str) -> Vec<String> {
         "graphql".to_owned(),
         "-f".to_owned(),
         format!("query={GRAPHQL_MARK_READY}"),
-        "-F".to_owned(),
+        "-f".to_owned(),
         format!("id={id}"),
     ]
 }

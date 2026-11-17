@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use super::{GitHub, graphql_pull_request, response_invalid};
+use super::{GitHub, graphql_pull_request, repository_variables, response_invalid};
 
 /// Largest title in bytes that a pull request may have.
 const MAX_TITLE_BYTES: usize = 1024;
@@ -312,24 +312,18 @@ pub(super) fn ready_draft_id(
 ///
 /// The identity is checked before any call.
 pub(crate) fn pull_request_args(repository: &str, number: i64) -> Result<Vec<String>, Error> {
-    let Some((owner, name)) = repository.split_once('/') else {
-        return Err(Error::workflow("review_identity_invalid", true, None));
-    };
-    if !repository_valid(repository) || number <= 0 {
+    if !repository.contains('/') || !repository_valid(repository) || number <= 0 {
         return Err(Error::workflow("review_identity_invalid", true, None));
     }
-    Ok(vec![
+    let mut args = vec![
         "api".to_owned(),
         "graphql".to_owned(),
         "-f".to_owned(),
         format!("query={}", graphql_pull_request()),
-        "-F".to_owned(),
-        format!("owner={owner}"),
-        "-F".to_owned(),
-        format!("name={name}"),
-        "-F".to_owned(),
-        format!("number={number}"),
-    ])
+    ];
+    args.extend(repository_variables(repository));
+    args.extend(["-F".to_owned(), format!("number={number}")]);
+    Ok(args)
 }
 
 /// Reports whether the pull request asks `login` for a review, ignoring ASCII case.

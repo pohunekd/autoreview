@@ -14,7 +14,7 @@ use autoreview_engine::integrations::{CommentReaction, PullRequestSignals, Threa
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use super::{GitHub, response_invalid};
+use super::{GitHub, repository_variables, response_invalid};
 
 /// Query of one page of the signal read.
 ///
@@ -254,19 +254,14 @@ fn absorb_page(signals: &mut PullRequestSignals, output: &str) -> Result<NextPag
 ///
 /// A connection that ended is left out of the query; a cursor is sent only when it is not empty.
 fn signal_args(repository: &str, number: i64, next: &NextPages) -> Vec<String> {
-    let (owner, name) = repository.split_once('/').unwrap_or((repository, ""));
     let mut args = vec![
         "api".to_owned(),
         "graphql".to_owned(),
         "-f".to_owned(),
         format!("query={GRAPHQL_SIGNALS}"),
-        "-F".to_owned(),
-        format!("owner={owner}"),
-        "-F".to_owned(),
-        format!("name={name}"),
-        "-F".to_owned(),
-        format!("number={number}"),
     ];
+    args.extend(repository_variables(repository));
+    args.extend(["-F".to_owned(), format!("number={number}")]);
     let pages = [
         ("withReviews", "reviewsAfter", &next.reviews),
         ("withThreads", "threadsAfter", &next.threads),
