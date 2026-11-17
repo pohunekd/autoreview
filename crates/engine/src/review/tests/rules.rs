@@ -6,6 +6,8 @@ use autoreview_policy::VERIFIER_REVIEWER_ID;
 use serde_json::{Value, json};
 
 use crate::integrations::{ChangedFile, SessionRequest};
+use autoreview_policy::Level;
+
 use crate::model::PullRequest;
 use crate::model::review::Decision;
 use crate::protocol::fixtures::sha;
@@ -111,9 +113,31 @@ async fn the_base_review_rules_are_read_and_an_unusable_file_fails_the_review() 
         ..ChangedFile::default()
     }];
     h.fake.open(fix.clone(), h.rule(&fix.repository));
+    // The rule approves clean reviews and has no `human_review`: a pull request that changes
+    // REVIEW.md still waits for a person, so it cannot approve its own change to the rules.
+    h.poll_until("the approval request of the fix", || {
+        h.fake
+            .has_note(Level::Action, "human review signals: changes REVIEW.md.")
+    })
+    .await;
+    assert_eq!(h.publications(), 1, "the review of the fix is held");
+    h.wait_for("the approval to be accepted", || {
+        let Ok(resolved) = h.resolve(&fix) else {
+            return false;
+        };
+        h.approve(&resolved.workflow_id, &fix).is_ok()
+    })
+    .await;
     h.poll_until("the review of the fix", || h.publications() == 2)
         .await;
     assert_eq!(failures(&h, &fix), [String::new()]);
+    let (published, _, _, _) = h.fake.snapshot();
+    let fix_body = published.get(1).map(|review| review.body.as_str());
+    assert!(
+        fix_body.is_some_and(|body| body.contains("is invalid (`review_rules_invalid`)")
+            && body.contains("so no rules were applied")),
+        "published = {published:?}"
+    );
     h.fake.lock().changed = Vec::new();
 
     let unreadable = pull_request("rules/gone", "f");
@@ -187,6 +211,16 @@ async fn a_finding_in_a_skipped_path_is_a_note_with_its_reason() {
         mixed_review.body
     );
     assert_eq!(clean_review.decision, Decision::Approve);
+    let applied = format!(
+        "Repository review rules: REVIEW.md at base commit `{}` was applied; 1 finding(s) in \
+         skipped paths became notes.",
+        clean.base_sha.get(..12).unwrap_or_default()
+    );
+    assert!(
+        clean_review.body.contains(&applied),
+        "body = {}",
+        clean_review.body
+    );
     assert!(
         clean_review.body.contains(reason),
         "body = {}",

@@ -336,6 +336,9 @@ pub struct Artifact {
     /// What the intent check compared; absent for a pipeline without one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub intent: Option<IntentOutcome>,
+    /// What the repository review rules did; absent when the review read none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_rules: Option<ReviewRulesOutcome>,
     /// The text guard result when it changes the publication; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guard: Option<GuardOutcome>,

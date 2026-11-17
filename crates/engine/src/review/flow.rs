@@ -4,7 +4,9 @@
 
 use std::sync::atomic::AtomicI64;
 
-use autoreview_policy::{Event, IntentCheck, OnClean, OnSuspect, RepositoryReviewRules, Reviewer};
+use autoreview_policy::{
+    Event, HumanReview, IntentCheck, OnClean, OnSuspect, RepositoryReviewRules, Reviewer,
+};
 use autoreview_schedule::scheduler::superseded;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
@@ -43,6 +45,9 @@ use crate::publish::render::{
 use crate::review_rules::apply_skip;
 use crate::store::{RESULT_SUCCESS, ReviewStep, StepOutcome, StoredReview};
 use crate::verify::{apply_verification, claims_of, verifier_reviewer};
+
+/// Human review signal of a pull request that changes the `REVIEW.md` that reviews it.
+const REVIEW_RULES_CHANGED_SIGNAL: &str = "changes REVIEW.md";
 
 /// Step name of the lookup of a review posted before a restart, in the retry log.
 const STEP_PUBLISHED_REVIEW: &str = "published_review";
@@ -469,6 +474,7 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
         if let Some(linked) = &self.linked {
             artifact.intent = Some(linked.outcome());
         }
+        artifact.review_rules.clone_from(&self.rules);
         // Only a result that changes the publication rides on the artifact; `log` changes nothing.
         artifact.guard =
             (self.guard.clone()).filter(|guard| guard.suspect && guard.outcome != OnSuspect::Log);
@@ -489,14 +495,21 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
 
     /// Evaluates the human review signals of the rule once per review.
     ///
-    /// Only a clean review that its rule approves without the user needs them.
+    /// Only a clean review that its rule approves without the user needs them. A pull request
+    /// that changes `REVIEW.md` on a pipeline that reads it is a signal of its own, also for a
+    /// rule without `human_review`: a pull request cannot approve its own change to the rules.
     async fn human_review(
         &self,
         current: &PullRequest,
         artifact: &Artifact,
     ) -> Result<Vec<String>, Error> {
-        let Some(signals) = self.input.rule.human_review.as_ref() else {
-            return Ok(Vec::new());
+        let rules_changed =
+            (self.rules.as_ref()).is_some_and(|rules| rules.changed_by_pull_request);
+        let configured = HumanReview::default();
+        let signals = match self.input.rule.human_review.as_ref() {
+            Some(signals) => signals,
+            None if rules_changed => &configured,
+            None => return Ok(Vec::new()),
         };
         let blocking = blocking_count(&self.input, artifact);
         if self.input.rule.on_clean != OnClean::Approve || blocking > 0 {
@@ -524,7 +537,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                     notes,
                     list_budget,
                 };
-                Ok(human_review_signals(signals, &facts))
+                let mut matched = human_review_signals(signals, &facts);
+                if rules_changed {
+                    matched.insert(0, REVIEW_RULES_CHANGED_SIGNAL.to_owned());
+                }
+                Ok(matched)
             }
         })
         .await

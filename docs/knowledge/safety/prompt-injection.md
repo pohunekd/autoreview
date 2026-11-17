@@ -38,6 +38,14 @@ can edit an issue writes them. They are bounded by
 `limits.max_issue_characters` and sit on one line of JSON, so no issue text
 starts a line of the request and none can forge a trusted line.
 
+The `REVIEW.md` of the base commit, which a pipeline with
+`repository_review_rules: read` hands to the reviewers and the verifier, is
+untrusted too: whoever can write to the base branch writes it. It is bounded by
+`limits.max_review_rules_bytes` and sits on one line of JSON after fixed
+engine instructions, so no text of it starts a line of the request. Its `skip`
+globs turn findings into notes, which is the operator's opt-in per pipeline, see
+[REVIEW.md](../../review-rules.md#skipped-paths).
+
 The discussion, the issues, the prior findings and the verifier's claims are
 written as JSON with `\n`, U+0085 (next line), U+2028 and U+2029 escaped, so
 none of them holds a character that a reader takes as a line break.

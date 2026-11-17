@@ -159,7 +159,10 @@ default:
   `intent_check: issues` every reviewer and verifier request carries the closed
   issues (bounded by `limits.max_issue_characters`), so the value must cover
   them. Both limits count characters; JSON escaping can make one character up to
-  7 bytes of a `claude-structured` request (`<` becomes `\\u003c`).
+  7 bytes of a `claude-structured` request (`<` becomes `\\u003c`). With
+  `repository_review_rules: read` every request also carries the rules of the
+  repository's `REVIEW.md`, up to `limits.max_review_rules_bytes` bytes, so add
+  7 times that limit.
 - `--maximum-result-bytes` (Codex only, required there): the largest report the
   adapter prints. Keep it at most `limits.result_max_bytes`, which the engine
   enforces.

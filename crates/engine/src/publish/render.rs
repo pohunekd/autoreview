@@ -12,6 +12,7 @@ use crate::integrations::{ChangedFile, GitHubReview, InlineComment};
 use crate::intent::intent_line;
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN};
 use crate::model::{Artifact, Finding, GuardOutcome, PriorResult, ReviewInput};
+use crate::review_rules::rules_line;
 use crate::verify::{demoted, verification_line};
 
 /// Configured values that shape the rendered review.
@@ -83,6 +84,11 @@ pub(crate) fn render_review(
     }
     if let Some(intent) = &artifact.intent {
         sections.push(intent_line(intent));
+    }
+    if let Some(outcome) = &artifact.review_rules
+        && let Some(line) = rules_line(outcome, &artifact.findings)
+    {
+        sections.push(line);
     }
     let verification = verification_line(artifact.verification.as_ref());
     if !verification.is_empty() {

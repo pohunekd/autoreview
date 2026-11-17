@@ -94,7 +94,10 @@ A rule with `guard` scans the configured texts of the pull request for hidden
 instructions once per review, before any reviewer starts, and stores the result
 with the review; see [the text guard](../safety/prompt-injection.md#the-text-guard).
 A pipeline with `intent_check: issues` also hands the reviewers the issues that
-the pull request closes in its own repository, as untrusted data.
+the pull request closes in its own repository, as untrusted data. A pipeline
+with `repository_review_rules: read` reads the `REVIEW.md` of the base commit
+and hands its rules to the reviewers and the verifier; its `skip` globs turn
+findings in those paths into notes, see [REVIEW.md](../../review-rules.md).
 
 ## 3. Project routing on pohunek hosts
 

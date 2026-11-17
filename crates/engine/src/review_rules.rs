@@ -5,8 +5,9 @@
 use autoreview_policy::{ReviewRules, match_glob};
 
 use crate::error::Error;
-use crate::model::{Artifact, LinkedIssues};
+use crate::model::{Artifact, Finding, LinkedIssues, ReviewRulesOutcome};
 use crate::protocol::request::{go_json, request_invalid};
+use crate::publish::render::head_prefix;
 
 /// Instructions that precede the rules; the JSON line after them is untrusted.
 ///
@@ -53,6 +54,47 @@ pub(crate) fn apply_skip(mut artifact: Artifact, rules: Option<&ReviewRules>) ->
         }
     }
     artifact
+}
+
+/// Returns the line of the published review about the repository review rules, if it has one.
+///
+/// A review of a repository without a `REVIEW.md` that the pull request leaves alone has none.
+/// The base commit is shown as its first 12 characters in a code span.
+pub(crate) fn rules_line(outcome: &ReviewRulesOutcome, findings: &[Finding]) -> Option<String> {
+    let base = head_prefix(&outcome.base_sha);
+    let changes = "This pull request changes `REVIEW.md`.";
+    if !outcome.invalid_code.is_empty() {
+        return Some(format!(
+            "Repository review rules: the `REVIEW.md` at base commit `{base}` is invalid \
+             (`{}`) and this pull request changes it, so no rules were applied.",
+            outcome.invalid_code
+        ));
+    }
+    if outcome.rules.is_none() {
+        return outcome.changed_by_pull_request.then(|| {
+            format!(
+                "{changes} The base commit `{base}` has no REVIEW.md, so this review applied no \
+                 repository review rules; the version in this pull request is not applied until \
+                 it is merged."
+            )
+        });
+    }
+    let mut line =
+        format!("Repository review rules: REVIEW.md at base commit `{base}` was applied");
+    let skipped = findings.iter().filter(|f| !f.skipped_by.is_empty()).count();
+    if skipped > 0 {
+        line.push_str(&format!(
+            "; {skipped} finding(s) in skipped paths became notes"
+        ));
+    }
+    line.push('.');
+    if outcome.changed_by_pull_request {
+        line.push_str(&format!(
+            " {changes} This review applied the rules at base commit `{base}`, not the version \
+             in this pull request."
+        ));
+    }
+    Some(line)
 }
 
 /// Returns the rules section of a request: the instructions and the rules on one line of JSON.
