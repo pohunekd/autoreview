@@ -550,6 +550,8 @@ struct LimitsFile {
     max_discussion_characters: Option<Value>,
     /// Longest text of the closed issues handed to one reviewer request, in characters.
     max_issue_characters: Option<Value>,
+    /// Largest `REVIEW.md` of a repository, in bytes.
+    max_review_rules_bytes: Option<Value>,
     /// Longest path, in characters.
     max_path_characters: Option<Value>,
     /// Longest test entry, in characters.
@@ -1184,6 +1186,10 @@ fn map_file(
     )?;
     let max_issue_characters =
         positive(&limits.max_issue_characters, "limits.max_issue_characters")?;
+    let max_review_rules_bytes = positive(
+        &limits.max_review_rules_bytes,
+        "limits.max_review_rules_bytes",
+    )?;
     let max_path_characters = positive(&limits.max_path_characters, "limits.max_path_characters")?;
     let max_test_characters = positive(&limits.max_test_characters, "limits.max_test_characters")?;
     let excerpt_characters = positive(&limits.excerpt_characters, "limits.excerpt_characters")?;
@@ -1295,6 +1301,7 @@ fn map_file(
         max_body_characters,
         max_discussion_characters,
         max_issue_characters,
+        max_review_rules_bytes,
         max_path_characters,
         max_test_characters,
         github_body_max_bytes,
@@ -3397,6 +3404,11 @@ pub(crate) mod tests {
                     "configuration_invalid: limits.result_max_bytes: must not exceed ",
                     "session.output_max_bytes"
                 ),
+            ),
+            (
+                "  max_review_rules_bytes: 32768",
+                "  max_review_rules_bytes: 0",
+                "configuration_invalid: limits.max_review_rules_bytes: must be a positive integer",
             ),
             (
                 "  output_wait_ms: 8000",

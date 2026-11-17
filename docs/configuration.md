@@ -42,6 +42,10 @@ A `config.yaml` written for 0.4.0 needs five more keys from 0.5.0 on:
 to 0.4.0 removes them again, see
 [roll back](knowledge/runbooks/upgrade-and-backup.md#roll-back).
 
+A `config.yaml` written before the repository review rules needs one more key,
+`limits.max_review_rules_bytes`, together with `repository_review_rules` on
+every pipeline of the [policy](policy.md#pipelines).
+
 ## Complete file
 
 The values below are those of `examples/config.yaml`.
@@ -125,6 +129,7 @@ limits:
   max_body_characters: 2500
   max_discussion_characters: 40000
   max_issue_characters: 20000
+  max_review_rules_bytes: 32768
   max_path_characters: 4096
   max_test_characters: 1024
   excerpt_characters: 360
@@ -404,6 +409,7 @@ summary is too short or too long.
 | `max_title_characters`, `max_body_characters` | Finding title and body |
 | `max_discussion_characters` | Discussion of earlier findings handed to a re-review |
 | `max_issue_characters` | Titles and bodies of the issues a pull request closes, handed to the reviewers of a pipeline with `intent_check: issues` ([policy](policy.md#pipelines)); a longer text is cut and marked |
+| `max_review_rules_bytes` | Size of the `REVIEW.md` that a pipeline with `repository_review_rules: read` reads from the base commit ([policy](policy.md#pipelines)); a larger file fails the review with `review_rules_too_large`. Every adapter profile's `--maximum-input-bytes` must stay at least 7 times this value plus the prompt, because JSON escaping can make one byte of the text 7 bytes of the request |
 | `max_path_characters`, `max_test_characters` | Path and test entry |
 | `excerpt_characters` | Length of finding excerpts in notifications |
 
