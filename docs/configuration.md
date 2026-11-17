@@ -616,9 +616,9 @@ the engine lock, so a second `serve` with the same section fails with
 
 ## eval
 
-Optional; only `autoreview eval run` and `autoreview eval add` read it. When the section is present,
-every command validates it at load and every key is required; an `eval:` key
-without a value is refused with `configuration_missing: eval.credential`. Run
+Optional; only `autoreview eval run` and `autoreview eval add` read it. When the
+section is present, every command validates it at load and every key is
+required; an `eval:` key without a value is refused with `configuration_missing: eval.credential`. Run
 an eval from its own config file: `eval.credential` must name an entry of
 `github.credentials` with a read-only token, and the credential check of a
 configuration refuses a credential that no policy rule serves, so the eval file

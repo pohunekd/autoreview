@@ -440,14 +440,16 @@ fn check_add_arguments(
             "--head-branch is not a branch name that git accepts",
         ));
     }
-    let prefixes = [&config.session_branch_prefix, &eval.session_branch_prefix];
-    if prefixes
-        .iter()
-        .any(|prefix| branch.starts_with(prefix.as_str()))
-    {
+    if branch_reserved(config, eval, branch) {
         return Err(Error::workflow("eval_head_ref_reserved", true, None));
     }
     Ok(())
+}
+
+/// Reports whether `branch` is under a review branch prefix of the session or the eval section.
+fn branch_reserved(config: &Config, eval: &EvalConfig, branch: &str) -> bool {
+    let prefixes = [&config.session_branch_prefix, &eval.session_branch_prefix];
+    (prefixes.iter()).any(|prefix| branch.starts_with(prefix.as_str()))
 }
 
 /// The pull request, diff and title that a case pins.
@@ -627,6 +629,10 @@ async fn add_case(
         .await?;
     let range = read_range().await?;
     let lines: BTreeMap<String, (i64, i64)> = arguments.lines.iter().cloned().collect();
+    if lines.len() != arguments.lines.len() {
+        let cause = "--lines is given twice for one path".into();
+        return Err(command_invalid(Some(cause)));
+    }
     let select = FixSelection {
         paths: &arguments.paths,
         lines: &lines,
@@ -773,15 +779,9 @@ async fn run_suite(
     if rule.pipeline.checkout != Checkout::Base {
         return Err(Error::workflow("eval_checkout_unsupported", true, None));
     }
-    let prefixes = [&config.session_branch_prefix, &eval.session_branch_prefix];
-    let reserved = |branch: &str| {
-        prefixes
-            .iter()
-            .any(|prefix| branch.starts_with(prefix.as_str()))
-    };
     if (selected.iter())
         .filter_map(|case| case.head_ref.strip_prefix("refs/heads/"))
-        .any(reserved)
+        .any(|branch| branch_reserved(&config, &eval, branch))
     {
         return Err(Error::workflow("eval_head_ref_reserved", true, None));
     }

@@ -148,16 +148,29 @@ fn old_side_groups(patch: &str) -> Result<Vec<(i64, i64)>, Error> {
 ///
 /// # Errors
 ///
-/// Returns `eval_add_path_unknown` for a selected path that the fix does not change,
-/// `eval_add_range_too_wide` for a range of `MAX_RANGE_LINES` lines or more,
-/// `eval_add_no_reviewable_path` when no file is left, `eval_add_path_required` when several
-/// are left and the operator selected none, and `github_response_invalid` for a malformed patch.
+/// Returns `eval_add_path_unknown` for a selected path that the fix does not change
+/// or for a `--lines` path that ends up skipped, `eval_add_range_too_wide` for a range of
+/// more than `MAX_RANGE_LINES` lines, `eval_add_path_unsafe` for a path with a control or format
+/// character, `eval_add_no_reviewable_path` when no file is left, `eval_add_path_required` when
+/// several are left and the operator selected none, and `github_response_invalid` for a
+/// malformed patch.
 pub fn fix_ranges(
     files: &[CommitFile],
     commentable: &CommentableLines,
     select: &FixSelection<'_>,
 ) -> Result<(Vec<FixRange>, Vec<Skipped>), Error> {
     let old_path = |file: &CommitFile| file.previous_path.as_ref().unwrap_or(&file.path).clone();
+    for file in files {
+        let paths = [Some(&file.path), file.previous_path.as_ref()];
+        if paths
+            .into_iter()
+            .flatten()
+            .any(|p| p.chars().any(is_neutralized))
+        {
+            let detail = "a path of the fix has a control or format character";
+            return Err(refused("eval_add_path_unsafe", detail));
+        }
+    }
     for name in select.paths.iter().chain(select.lines.keys()) {
         if !files.iter().any(|file| old_path(file) == *name) {
             return Err(refused("eval_add_path_unknown", name.as_str()));
@@ -202,6 +215,16 @@ pub fn fix_ranges(
             last_line,
             overridden,
         });
+    }
+    if let Some(name) = select
+        .lines
+        .keys()
+        .find(|n| !ranges.iter().any(|r| r.path == **n))
+    {
+        return Err(refused(
+            "eval_add_path_unknown",
+            format!("{name} is skipped"),
+        ));
     }
     let names = |paths: Vec<&str>| paths.join(", ");
     match ranges.len() {
@@ -266,7 +289,7 @@ pub enum Verdict {
 /// `open_at_merge`, `eval_add_verdict_input_invalid` for a `lines` or `description` the
 /// verdict does not take or lacks, `eval_add_head_has_other_blocking` when `Wrong` meets
 /// another blocking finding of the head, `eval_add_no_reviewable_path` for a path with no
-/// added line in the range, and `eval_add_range_too_wide` for 200 lines or more.
+/// added line in the range, and `eval_add_range_too_wide` for more than 200 lines.
 pub fn finding_expect(
     finding: &FindingOutcome,
     head_rows: &[FindingOutcome],
@@ -307,7 +330,7 @@ pub fn finding_expect(
                 return Err(refused("eval_add_no_reviewable_path", path.as_str()));
             }
             if last - first >= MAX_RANGE_LINES {
-                let detail = format!("{path}: {first}-{last}; the range is 200 lines or more");
+                let detail = format!("{path}: {first}-{last}; the range is over 200 lines");
                 return Err(refused("eval_add_range_too_wide", detail));
             }
             Ok(Expect::Blocking(vec![Expected {
@@ -416,11 +439,15 @@ pub fn write_case(
         .write_all(text.as_bytes())
         .and_then(|()| handle.sync_all())
     {
-        drop(fs::remove_file(&path));
+        let left = match fs::remove_file(&path) {
+            Ok(()) => String::new(),
+            Err(removal) => format!("; the partial file {file} stays: {removal}"),
+        };
+        let cause = format!("{error}{left}");
         return Err(Error::workflow(
             "eval_add_write_failed",
             false,
-            Some(Box::new(error)),
+            Some(cause.into()),
         ));
     }
     Ok(text)
@@ -542,6 +569,10 @@ mod tests {
             ("one file selected", ab, &["b.rs"], &[], "b.rs 5-5; a.rs !not_selected"),
             ("--lines replaces", vec![a.clone()], &[], &[("a.rs", 7, 9)], "a.rs 7-9 given"),
             ("--lines unknown path", vec![b], &[], &[("c.rs", 1, 2)], "err eval_add_path_unknown"),
+            ("--lines of a skipped file", vec![a.clone(), m("outside.rs")], &[],
+                &[("outside.rs", 1, 2)], "err eval_add_path_unknown"),
+            ("path with a bidi character", vec![m("a\u{202e}.rs")], &[], &[],
+                "err eval_add_path_unsafe"),
         ];
         for (name, files, paths, lines, want) in rows {
             assert_eq!(run(&files, paths, lines), want, "{name}");

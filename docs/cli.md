@@ -482,7 +482,7 @@ because the defect is in what the fix removed or rewrote:
   `not_selected` or `not_in_review_range`.
 - One range per file covers its first to its last changed line, so one defect is
   one finding. With more than one such file, `--path` names each file to keep. A
-  range of 200 lines or more is refused; give it with `--lines`.
+  range of more than 200 lines is refused; give it with `--lines`.
 - Those lines are the reviewed head's only where the file is byte-identical at the
   head and at the fix's parent. Otherwise the command refuses (`eval_add_fix_drift`)
   and the operator gives the range with `--lines`, which replaces the computed
@@ -505,7 +505,7 @@ pruned the review, `--base-sha` and `--base-branch` give the base.
 - `--verdict right` writes one expected finding in the finding's path. It needs
   `--description` and one `--lines` of that path, because the stored line is where
   anchoring put the finding, not where the defect is. The path needs an added line
-  in the reviewed range, and a range of 200 lines or more is refused.
+  in the reviewed range, and a range of more than 200 lines is refused.
 
 When the pull request ref no longer points at the head, `--head-branch`
 is required (a branch name that `eval run` accepts, outside both reserved
@@ -524,9 +524,9 @@ is exit code 1.
 | Code | Meaning |
 |---|---|
 | `eval_add_pull_request_not_found`, `eval_add_head_branch_required`, `eval_head_ref_reserved` | GitHub returned no pull request, the pull request ref differs from `--head-sha` and no `--head-branch` is given, or the branch is under a review branch prefix |
-| `eval_add_fix_not_single_parent`, `github_patch_omitted`, `github_search_limit_exceeded` | The fix is a merge or root commit, GitHub left out the patch of a file with changed lines, or the fix lists 300 files or more |
-| `eval_add_path_unknown`, `eval_add_no_reviewable_path`, `eval_add_path_required` | A `--path` or `--lines` path is not a file of the fix, no file of the fix qualifies, or several qualify and no `--path` is given |
-| `eval_add_range_too_wide`, `eval_add_fix_drift` | A range is 200 lines or more, or a file differs at the head and at the fix's parent; both name `--lines` |
+| `eval_add_fix_not_single_parent`, `github_patch_omitted`, `github_search_limit_exceeded` | The fix is a merge or root commit, GitHub left out the patch of a file with changed lines, or the fix or the reviewed range lists 300 files or more (the reviewed range raises the last two too) |
+| `eval_add_path_unknown`, `eval_add_no_reviewable_path`, `eval_add_path_required`, `eval_add_path_unsafe` | A `--path` or `--lines` path is not a file of the fix or ends up skipped, no file of the fix qualifies, several qualify and no `--path` is given, or a path of the fix has a control or format character |
+| `eval_add_range_too_wide`, `eval_add_fix_drift` | A range is over 200 lines, or a file differs at the head and at the fix's parent; both name `--lines` |
 | `eval_add_review_not_found`, `eval_add_finding_not_found`, `eval_add_outcome_unsupported` | The store has no usable review or finding for the arguments, or the finding's outcome is not `refuted` or `open_at_merge` |
 | `eval_add_verdict_input_invalid`, `eval_add_head_has_other_blocking`, `eval_add_store_unreadable` | `--lines` or `--description` does not fit the verdict, a clean case would count another blocking finding of the head as a false block (its keys are in the cause), or the store has no outcome table |
 | `eval_add_case_exists`, `eval_add_file_exists` | A case of the directory has the same repository, pull request and head, or the file exists; the cause names the file |
