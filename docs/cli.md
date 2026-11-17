@@ -93,7 +93,9 @@ with `policy_file`, the credential `login`, `pohunek.hosts` and the given layout
 flags set; every value it sets is written as a double-quoted string. Without the
 layout flags, edit its paths and, with the `matrix` notifier, its placeholder
 Matrix values before the first start.
-[`scripts/setup`](knowledge/guides/getting-started.md) passes every layout flag.
+[`scripts/setup`](knowledge/guides/getting-started.md) passes every path flag
+and `--notifier`, the Matrix flags only with `--notifier matrix` and
+`--webhook-format` only with `--notifier webhook`.
 
 `init` loads the example's policy and checks every path before it writes
 anything, and never overwrites. `--dir` and `prompts/` must be real directories
