@@ -3,6 +3,20 @@
 Release notes of autoreview, newest first. Unreleased changes are fragments
 under `changelog.d/`; `scripts/changelog fold` moves them here.
 
+## 0.8.0 - 2026-11-17
+
+### Added
+
+- `autoreview eval prune --git-binary PATH [--host HOST] [--yes]` lists the sessions and branches that a killed `eval run` left on the review hosts and, with `--yes`, removes the sessions and deletes the branches under the eval prefixes. The branches of a review host on another machine are reported as not checked. ([#552](https://github.com/pohunekd/autoreview/issues/552))
+
+### Changed
+
+- `scripts/setup` on macOS writes a `log:` block to the new `config.yaml` and points launchd at a small `.stderr.log` file, so autoreview rotates its logs without newsyslog or a restart; an existing `config.yaml` without the block makes setup print it and stop. `scripts/macos-check service` checks that the review agent's log exists and that no log file passes `max_file_bytes` plus one line. ([#520](https://github.com/pohunekd/autoreview/issues/520))
+
+### Removed
+
+- **Breaking:** The engine no longer reads the Claude result name `claude-otel-noninteractive/v2`, and the adapters refuse the `claude-otel-noninteractive/request-v1` request and a Codex prompt without a protocol line. Run `autoreview profiles install` for every Claude and Codex profile on every review host with this release before you upgrade the engine; a host that still runs an older Claude adapter stops its reviews with `review_adapter_outdated`, and an older Codex adapter ends them in `review_nonce_mismatch` after the fresh-session retries. ([#393](https://github.com/pohunekd/autoreview/issues/393))
+
 ## 0.7.0 - 2026-11-17
 
 ### Added
