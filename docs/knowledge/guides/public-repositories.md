@@ -55,6 +55,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base                   # the reviewer starts from the trusted base branch
     project_sources: [manual]
+    repository_review_rules: read
   untrusted:
     # Base checkout: the reviewer never works in code from the pull request.
     reviewers: [codex]
@@ -62,6 +63,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 
 repositories:
   - match: zajca/pohunek             # outside pohunekd/*, so it needs its own rule

@@ -54,6 +54,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
     verifier:
       reviewer: opus
       prompt: prompts/verifier.md
@@ -65,6 +66,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 
 repositories:
   - match: zajca/pohunek
@@ -157,6 +159,7 @@ A pipeline says how a pull request is reviewed.
 | `project_sources` | Which pohunek projects may serve the repository: `manual` (registered with `pohunek project add`), `auto` (discovered), or both. autoreview checks only the form of a name (lowercase letters, digits, `_` and `-`, at most 32 characters) and passes it to pohunek unchanged |
 | `verifier` | Optional, see below |
 | `intent_check` | Optional. `issues`: the reviewers compare the change with the issues the pull request closes, see [intent check](#intent-check). `off`, or no key: no comparison. `intent_check: null` is an error |
+| `repository_review_rules` | Required. `read`: the reviewers and the verifier get the `REVIEW.md` of the base commit. `ignore`: the file is never read. A missing key, `null` or any other value is an error. The key changes the policy digest only when it is `read` |
 
 ### Verifier
 
@@ -538,6 +541,8 @@ request content itself is always untrusted input. See
 | `authors is required` | State who the rule trusts; `trusted: any` reviews every author, forks included, with the rule's outcomes |
 | `untrusted pipeline must use checkout base` | Use a base-checkout pipeline for untrusted authors |
 | `pipeline <name>: intent_check must be off or issues` | Set `off` or `issues`, or remove the key |
+| `pipeline <name>: repository_review_rules is required` | Add `repository_review_rules: read` or `ignore` to the pipeline |
+| `pipeline <name>: repository_review_rules must be read or ignore` | Set `read` or `ignore`; `null` is refused |
 | `authors.untrusted is required unless trusted is any` | Add `untrusted: skip` or an untrusted mapping |
 | `authors.untrusted.on_clean must be comment or await, never approve` | Use `comment` or `await` |
 | `author_limit.reviews must be between 1 and 1000` | Set `reviews`; also shown when it is missing |

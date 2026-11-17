@@ -19,6 +19,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
   untrusted:
     # Base checkout: the reviewer never works in code from the pull request.
     reviewers: [codex]
@@ -26,6 +27,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 
 repositories:
   - match: zajca/pohunek

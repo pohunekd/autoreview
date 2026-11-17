@@ -25,6 +25,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
     verifier:
       reviewer: opus                 # must use protocol claude-structured
       prompt: prompts/verifier.md

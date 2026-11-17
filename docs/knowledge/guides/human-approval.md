@@ -58,6 +58,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
     verifier:
       reviewer: opus                 # must use claude-structured, which enforces the verdict schema
       prompt: prompts/verifier.md

@@ -143,6 +143,29 @@ impl IntentCheck {
     }
 }
 
+/// Whether the review hands the reviewers the repository's `REVIEW.md` from the base commit.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RepositoryReviewRules {
+    /// The reviewers and the verifier get the rules that the base commit holds.
+    #[serde(rename = "read")]
+    Read,
+    /// No repository text reaches the reviewers; a stored pipeline without the key gets it.
+    #[default]
+    #[serde(rename = "ignore")]
+    Ignore,
+    /// A value that a newer engine stored and this one does not know, kept as stored.
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl RepositoryReviewRules {
+    /// Reports whether the value is `ignore`, which a stored pipeline leaves out.
+    #[must_use]
+    pub fn is_ignore(&self) -> bool {
+        *self == Self::Ignore
+    }
+}
+
 /// Kind of event that starts a review.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TriggerKind {
@@ -521,6 +544,10 @@ pub struct Pipeline {
     /// Whether the reviewers compare the change with the issues it closes; `off` when absent.
     #[serde(skip_serializing_if = "IntentCheck::is_off")]
     pub intent_check: IntentCheck,
+    /// Whether the reviewers get the repository's `REVIEW.md` of the base commit; `ignore` when
+    /// absent.
+    #[serde(skip_serializing_if = "RepositoryReviewRules::is_ignore")]
+    pub repository_review_rules: RepositoryReviewRules,
 }
 
 autoreview_go_compat::object_only_serde!(Pipeline);

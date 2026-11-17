@@ -58,18 +58,21 @@ pipelines:
     prompt: prompts/companion.md     # Rust and Slint checklist
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
   android:
     reviewers: [sonnet]
     incremental_reviewers: [sonnet]
     prompt: prompts/android.md       # Kotlin checklist
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
   generic:
     reviewers: [codex]
     incremental_reviewers: [codex]
     prompt: prompts/generic.md       # written by init
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
 
 repositories:
   # Specific rules come first. A pohunekd/* rule above them would make them unreachable.

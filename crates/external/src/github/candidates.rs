@@ -755,7 +755,7 @@ reviewers:
     finding_prefix: O}
 pipelines:
   main: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompt.md, checkout: base,
-    project_sources: [manual]}
+    project_sources: [manual], repository_review_rules: ignore}
 repositories:
   - {match: acme/special, trigger: review-requested, pipeline: main, on_findings: comment,
     on_clean: comment, authors: {trusted: {logins: [maintainer]}, untrusted: skip}}

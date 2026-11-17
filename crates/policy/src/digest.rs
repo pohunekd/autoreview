@@ -9,7 +9,9 @@ use sha2::{Digest, Sha256};
 use crate::author_limit::AuthorLimit;
 use crate::authors::{Authors, Untrusted};
 use crate::guard::GuardField;
-use crate::types::{Event, IntentCheck, Level, Pipeline, Policy, Reviewer, Rule};
+use crate::types::{
+    Event, IntentCheck, Level, Pipeline, Policy, RepositoryReviewRules, Reviewer, Rule,
+};
 
 /// Renders an optional limit for the digest; an absent limit is the empty text.
 fn limit_text(limit: Option<i64>) -> String {
@@ -165,6 +167,10 @@ fn hash_pipeline_body(hasher: &mut Sha256, pipeline: &Pipeline) {
     // Only `issues` adds bytes, so a pipeline without the key or with `off` keeps its digest.
     if pipeline.intent_check == IntentCheck::Issues {
         hasher.update(b"intent_check\x00issues\x00");
+    }
+    // Only `read` adds bytes, so a pipeline that ignores the rules keeps its digest.
+    if pipeline.repository_review_rules == RepositoryReviewRules::Read {
+        hasher.update(b"repository_review_rules\x00read\x00");
     }
 }
 

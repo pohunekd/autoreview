@@ -51,6 +51,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: read
     verifier:
       reviewer: sonnet              # claude-structured, as the verifier requires
       prompt: prompts/verifier.md

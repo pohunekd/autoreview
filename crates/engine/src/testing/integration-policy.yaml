@@ -4,18 +4,19 @@ reviewers:
   sonnet: {protocol: claude-structured, agent_profile: claude-profile-sonnet, label: Sonnet, finding_prefix: S}
   codex: {protocol: codex-envelope, agent_profile: codex-profile, label: Codex, finding_prefix: X}
 pipelines:
-  manual: {reviewers: [opus, sonnet], incremental_reviewers: [sonnet], prompt: prompt.md, checkout: base, project_sources: [manual]}
-  dual: {reviewers: [opus, sonnet], incremental_reviewers: [opus, sonnet], prompt: prompt.md, checkout: base, project_sources: [manual]}
-  solo: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompt.md, checkout: head, project_sources: [manual]}
-  light: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompt.md, checkout: base, project_sources: [manual]}
-  single: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompt.md, checkout: base, project_sources: [manual]}
-  intent: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompt.md, checkout: base, project_sources: [manual], intent_check: issues}
+  manual: {reviewers: [opus, sonnet], incremental_reviewers: [sonnet], prompt: prompt.md, checkout: base, project_sources: [manual], repository_review_rules: ignore}
+  dual: {reviewers: [opus, sonnet], incremental_reviewers: [opus, sonnet], prompt: prompt.md, checkout: base, project_sources: [manual], repository_review_rules: ignore}
+  solo: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompt.md, checkout: head, project_sources: [manual], repository_review_rules: ignore}
+  light: {reviewers: [codex], incremental_reviewers: [codex], prompt: prompt.md, checkout: base, project_sources: [manual], repository_review_rules: ignore}
+  single: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompt.md, checkout: base, project_sources: [manual], repository_review_rules: ignore}
+  intent: {reviewers: [opus], incremental_reviewers: [opus], prompt: prompt.md, checkout: base, project_sources: [manual], repository_review_rules: ignore, intent_check: issues}
   checked:
     reviewers: [opus, sonnet]
     incremental_reviewers: [opus, sonnet]
     prompt: prompt.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: ignore
     verifier: {reviewer: opus, prompt: verifier.md, escalate_severities: [critical], escalate_count: 2}
 repositories:
   - {match: acme/manual, trigger: review-requested, pipeline: manual, on_findings: request_changes, on_clean: await, authors: {trusted: any}}

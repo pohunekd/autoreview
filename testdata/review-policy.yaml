@@ -29,6 +29,7 @@ pipelines:
     prompt: prompts/strict.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: ignore
     # Every blocking finding the verifier demotes asks a human.
     verifier:
       reviewer: opus
@@ -41,6 +42,7 @@ pipelines:
     prompt: prompts/generic.md
     checkout: base
     project_sources: [manual]
+    repository_review_rules: ignore
     verifier:
       reviewer: opus
       prompt: prompts/verifier.md
@@ -52,6 +54,7 @@ pipelines:
     prompt: prompts/personal.md
     checkout: head
     project_sources: [manual, auto]
+    repository_review_rules: ignore
 
 repositories:
   # A clean review waits for a human when the author asks for it with the
