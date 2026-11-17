@@ -6,7 +6,7 @@ use autoreview_policy::VERIFIER_REVIEWER_ID;
 use serde_json::{Value, json};
 
 use crate::integrations::{ChangedFile, SessionRequest};
-use autoreview_policy::Level;
+use autoreview_policy::{Level, OnClean, OnNotes, RepositoryReviewRules};
 
 use crate::model::PullRequest;
 use crate::model::review::Decision;
@@ -167,6 +167,86 @@ async fn the_base_review_rules_are_read_and_an_unusable_file_fails_the_review() 
     assert_eq!(h.publications(), 2, "the review of the cut listing is held");
     h.fake.lock().changed_truncated = false;
 
+    // A notes hand-off on a pull request that changes REVIEW.md. The operator then switches the
+    // rule to approve: the author's request at the same head adopts the hand-off and still waits.
+    let handed = pull_request("rules/handoff", "b");
+    let mut rule = h.rule(&handed.repository);
+    (rule.on_clean, rule.on_notes) = (OnClean::Await, OnNotes::Comment);
+    h.fake.lock().changed = vec![ChangedFile {
+        path: "REVIEW.md".to_owned(),
+        status: "modified".to_owned(),
+        ..ChangedFile::default()
+    }];
+    h.fake.lock().commentable = [("src/a.go".to_owned(), vec![3])].into();
+    h.set_output(reviewer_output(vec![json!({
+        "severity": "low", "confidence": "high", "blocking": false, "path": "src/a.go",
+        "line": 3, "title": "Naming", "body": "Could be clearer.",
+    })]));
+    h.fake.open(handed.clone(), rule.clone());
+    let handed_note = "Handed 1 non-blocking note(s) on rules/handoff";
+    h.poll_until("the hand-off comment", || {
+        h.publications() == 3 && h.fake.has_note(Level::Digest, handed_note)
+    })
+    .await;
+    let mut renewed = handed.clone();
+    renewed.review_request_id = 99;
+    rule.on_clean = OnClean::Approve;
+    h.fake.open(renewed.clone(), rule);
+    h.poll_until("the approval request of the adopted hand-off", || {
+        (h.fake).has_note(Level::Action, "The author requested the review again")
+    })
+    .await;
+    assert_eq!(h.publications(), 3, "the adopted hand-off is held");
+    h.wait_for("the approval to be accepted", || {
+        let Ok(resolved) = h.resolve(&renewed) else {
+            return false;
+        };
+        h.approve(&resolved.workflow_id, &renewed).is_ok()
+    })
+    .await;
+    h.poll_until("the approval of the hand-off", || h.publications() == 4)
+        .await;
+
+    // A hand-off stored by a pipeline that ignored the rules has no rules outcome. After the
+    // pipeline switches to read and the rule to approve, the renewed request is reviewed again
+    // instead of adopting it, and the changed REVIEW.md holds it.
+    let ignored = pull_request("rules/ignored", "b");
+    let mut rule = h.rule(&ignored.repository);
+    (rule.on_clean, rule.on_notes) = (OnClean::Await, OnNotes::Comment);
+    rule.pipeline.repository_review_rules = RepositoryReviewRules::Ignore;
+    h.fake.open(ignored.clone(), rule.clone());
+    h.poll_until("the hand-off comment under ignore", || {
+        h.publications() == 5
+            && (h.fake).has_note(
+                Level::Digest,
+                "Handed 1 non-blocking note(s) on rules/ignored",
+            )
+    })
+    .await;
+    let mut renewed = ignored.clone();
+    renewed.review_request_id = 99;
+    rule.on_clean = OnClean::Approve;
+    rule.pipeline.repository_review_rules = RepositoryReviewRules::Read;
+    h.fake.open(renewed.clone(), rule);
+    h.poll_until("the approval request of the reviewed hand-off", || {
+        (h.fake).has_note(Level::Action, "Review ID: rules/ignored")
+    })
+    .await;
+    assert_eq!(h.publications(), 5, "the hand-off without rules is held");
+    h.wait_for("the approval to be accepted", || {
+        let Ok(resolved) = h.resolve(&renewed) else {
+            return false;
+        };
+        h.approve(&resolved.workflow_id, &renewed).is_ok()
+    })
+    .await;
+    h.poll_until("the approval after the new review", || {
+        h.publications() == 6
+    })
+    .await;
+    h.fake.lock().changed = Vec::new();
+    h.set_output(reviewer_output(Vec::new()));
+
     // A transient failure keeps its own code, which the scheduler retries.
     let transient = pull_request("rules/flaky", "b");
     h.fake.lock().file_failure = Some(("github_request_failed".to_owned(), false));
@@ -255,10 +335,13 @@ async fn a_finding_in_a_skipped_path_is_a_note_with_its_reason() {
         clean_review.body
     );
     // Only the finding outside the skipped path is a claim, and the verifier sees the rules.
-    let verifier = (started.iter())
-        .find(|request| {
-            request.reviewer.id == VERIFIER_REVIEWER_ID && request.pull_request.key() == mixed.key()
-        })
+    let verified = |pr: &PullRequest| {
+        (started
+            .iter()
+            .filter(|request| request.reviewer.id == VERIFIER_REVIEWER_ID))
+        .find(|request| request.pull_request.key() == pr.key())
+    };
+    let verifier = verified(&mixed)
         .map(|request| request.prompt.clone())
         .unwrap_or_default();
     assert!(
@@ -270,9 +353,7 @@ async fn a_finding_in_a_skipped_path_is_a_note_with_its_reason() {
         "verifier = {verifier}"
     );
     assert!(
-        !started.iter().any(|request| {
-            request.reviewer.id == VERIFIER_REVIEWER_ID && request.pull_request.key() == clean.key()
-        }),
+        verified(&clean).is_none(),
         "a review of skipped findings only runs no verifier"
     );
 }

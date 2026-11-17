@@ -117,11 +117,20 @@ mod tests {
         json!({"data": {"repository": {"commit": commit, "file": file}}}).to_string()
     }
 
+    /// Returns a file node of the given size, flags and text.
+    fn blob(
+        size: u64,
+        binary: bool,
+        truncated: bool,
+        text: serde_json::Value,
+    ) -> serde_json::Value {
+        json!({"byteSize": size, "isBinary": binary, "isTruncated": truncated, "text": text})
+    }
+
     /// Each row is a GraphQL answer and the file it reads with a limit of 100 bytes, or the code.
     #[test]
     fn a_missing_file_is_told_apart_from_a_missing_commit_and_a_lossy_text() {
         let oid = json!({"oid": "abc"});
-        let blob = |size: u64, binary: bool, truncated: bool, text: serde_json::Value| json!({"byteSize": size, "isBinary": binary, "isTruncated": truncated, "text": text});
         let cases: Vec<(&str, String, Result<RepositoryFile, &str>)> = vec![
             (
                 "text",

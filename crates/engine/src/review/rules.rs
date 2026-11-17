@@ -23,12 +23,18 @@ const RULES_INVALID: &str = "review_rules_invalid";
 /// Code of a rules file that could not be read.
 const RULES_UNREADABLE: &str = "review_rules_unreadable";
 
+/// Code of an unusable base file and the cause for the logs.
+type Unusable = (&'static str, Option<BoxError>);
+
 /// Returns the failure of an unusable base file: its code and the cause for the logs.
-fn unusable(file: RepositoryFile) -> Result<Option<ReviewRules>, (&'static str, Option<BoxError>)> {
+fn unusable(file: RepositoryFile) -> Result<Option<ReviewRules>, Unusable> {
     match file {
         RepositoryFile::Absent => Ok(None),
         RepositoryFile::TooLarge => Err((RULES_TOO_LARGE, None)),
-        RepositoryFile::NotText => Err((RULES_INVALID, Some("REVIEW.md is not UTF-8 text".into()))),
+        RepositoryFile::NotText => {
+            let cause: BoxError = "REVIEW.md is not UTF-8 text".into();
+            Err((RULES_INVALID, Some(cause)))
+        }
         RepositoryFile::Text(text) => parse_review_rules(&text)
             .map(Some)
             .map_err(|error| (RULES_INVALID, Some(Box::new(error) as BoxError))),

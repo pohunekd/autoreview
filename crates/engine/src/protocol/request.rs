@@ -86,10 +86,10 @@ pub(crate) fn build_reviewer_request(
     nonce: &str,
     refused: Option<&Error>,
 ) -> Result<String, Error> {
-    let mut instructions = output_limits(cfg);
+    let mut limits = output_limits(cfg);
     if let Some(retry) = refused.and_then(retry_instruction) {
-        instructions.push_str("\n\n");
-        instructions.push_str(retry);
+        limits.push_str("\n\n");
+        limits.push_str(retry);
     }
     let intent = reviewer_section(sections.linked)?;
     let intent = intent.as_deref();
@@ -102,16 +102,9 @@ pub(crate) fn build_reviewer_request(
     match reviewer.protocol {
         Protocol::ClaudeStructured => {
             let schema = review_schema(cfg)?;
-            claude_request(
-                input,
-                reviewer,
-                discussion,
-                &sections,
-                &instructions,
-                &schema,
-            )
+            claude_request(input, reviewer, discussion, &sections, &limits, &schema)
         }
-        Protocol::CodexEnvelope => codex_prompt(input, discussion, &sections, &instructions, nonce),
+        Protocol::CodexEnvelope => codex_prompt(input, discussion, &sections, &limits, nonce),
         Protocol::Unset | Protocol::Other(_) => {
             Err(Error::workflow("review_protocol_invalid", true, None))
         }

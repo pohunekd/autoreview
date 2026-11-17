@@ -23,8 +23,10 @@ const RULES_INSTRUCTIONS: &str = concat!(
 );
 
 /// Sentence the verifier gets after the instructions.
-const VERIFIER_SENTENCE: &str = " A finding in a skipped path is already a note, and a claim that only restates what a \
-     `ci_tools` tool would report is not blocking.";
+const VERIFIER_SENTENCE: &str = concat!(
+    " A finding in a skipped path is already a note, and a claim that only restates what a ",
+    "`ci_tools` tool would report is not blocking."
+);
 
 /// The data besides the discussion that a reviewer request may carry.
 #[derive(Debug, Clone, Copy, Default)]

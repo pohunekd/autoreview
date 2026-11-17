@@ -460,6 +460,11 @@ impl<I: Integrations, C: Clock> Review<'_, I, C> {
                 .fail(Error::workflow("handoff_review_mismatch", true, None))
                 .await;
         }
+        // The stored outcome holds the `REVIEW.md` facts of the hand-off. The current rule still
+        // decides whether they hold an approval, so a pipeline that reads the rules keeps them.
+        if self.input.rule.pipeline.repository_review_rules == RepositoryReviewRules::Read {
+            self.rules.clone_from(&artifact.review_rules);
+        }
         self.plan(&current, artifact).await
     }
 

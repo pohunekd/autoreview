@@ -32,10 +32,9 @@ use crate::messages::{
     SessionCleanupFailure, approved_review_failed_message, orphaned_session_message,
     session_cleanup_failed_message, superseded_message,
 };
+use crate::model::ReviewRulesOutcome;
 use crate::model::review::milliseconds;
-use crate::model::{
-    Discussion, GuardOutcome, LinkedIssues, PullRequest, ReviewInput, ReviewRulesOutcome, RunLimits,
-};
+use crate::model::{Discussion, GuardOutcome, LinkedIssues, PullRequest, ReviewInput, RunLimits};
 use crate::notify::Notification;
 use crate::review_rules::RequestSections;
 use crate::store::{RESULT_FAILURE, ReviewStep, StepOutcome, StepRun};

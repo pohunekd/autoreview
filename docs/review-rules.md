@@ -131,18 +131,22 @@ says so:
   rules; the version in this pull request is not applied until it is merged."
 
 The change is detected from the pull request's changed files (the path or the
-source of a rename). A listing that is cut short (more than 3000 changed files) is
-held as well, with the signal `changed files exceed the listing limit`, because
-`REVIEW.md` could lie past its end.
+source of a rename). A listing that is cut short (more than 3000 changed files)
+is held as well, with the signal `changed files exceed the listing limit`,
+because `REVIEW.md` could lie past its end.
 
 On a rule that approves clean reviews, such a pull request is never approved
 without a person: it counts as a human review signal (`changes REVIEW.md`), also
 when the rule has no `human_review` section, so the review waits for the user as
 for a match of `human_review.paths`. Otherwise an author whose clean pull
 requests are approved could add `skip: ["**"]` and have the engine approve it.
-A rule that does not approve clean reviews is not affected. The hold applies only
-while the pipeline reads `REVIEW.md`: check the base `REVIEW.md` of each
-repository before switching a pipeline from `ignore` to `read`.
+A rule that does not approve clean reviews is not affected. The hold applies
+only while the pipeline reads `REVIEW.md`: check the base `REVIEW.md` of each
+repository before switching a pipeline from `ignore` to `read`. The author's
+renewed request at the same head, after the notes were handed to them, is held
+the same way under the rule in force when it is made. A hand-off stored while
+the pipeline ignored `REVIEW.md` is not reused after a switch to `read`: the
+pull request is reviewed again with the rules.
 
 ## Errors
 
@@ -158,15 +162,18 @@ goes to the service log (the warning `REVIEW.md of the base commit is unusable`
 with the review ID and the base commit), never to the pull request. The failed
 review is announced like any failed review: the scheduler's `review_stopped`
 notice names the code (`review_rules_invalid`, `review_rules_too_large`) and
-points to the service log.
+points to the service log. Fixing the base `REVIEW.md` does not restart a
+stopped pull request (`review_rules_invalid`, `review_rules_too_large`,
+`review_rules_unreadable`): it is reviewed again on its next push, or with
+`autoreview retry` ([CLI](cli.md#autoreview-retry)).
 
 The exception is a pull request that changes `REVIEW.md`: when the base file is
 too large or invalid, that pull request, which may be the fix, is reviewed
 without rules, the summary says the base `REVIEW.md` is invalid, names the code
 and says that no rules were applied, and one `review_stopped` notice names the
-code, although the review goes on (the policy has no event for a degraded review,
-so route `review_stopped` accordingly). A failed read always fails the review,
-also for a pull request that changes `REVIEW.md`.
+code, although the review goes on (the policy has no event for a degraded
+review, so route `review_stopped` accordingly). A failed read always fails the
+review, also for a pull request that changes `REVIEW.md`.
 
 ## Rollback
 
