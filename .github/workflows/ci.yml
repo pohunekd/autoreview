@@ -187,10 +187,15 @@ jobs:
 
   # Validates every changelog fragment and, on a pull request, requires one unless
   # the pull request carries `no-changelog`. Needs the full history for the base.
+  # The labels are read from the API when the step runs: a label set right after
+  # `opened` is not in the event payload of that run.
   changelog:
     name: changelog
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -210,10 +215,14 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          NO_CHANGELOG: ${{ contains(github.event.pull_request.labels.*.name, 'no-changelog') }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ "$NO_CHANGELOG" = "true" ]; then
+          no_changelog="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels \
+            --jq 'any(.labels[]; .name == "no-changelog")')"
+          if [ "$no_changelog" = "true" ]; then
             echo "Labelled no-changelog: no fragment required."
             exit 0
           fi
