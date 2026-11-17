@@ -27,7 +27,7 @@ The service writes one JSON line per event to stderr, or to a file when
 |---|---|---|
 | systemd units of path b | `journalctl -u autoreview.service` (`autoreview-queue.service` for the queue) | the journal |
 | `scripts/setup` on Linux | `journalctl --user -u autoreview.service` | the journal |
-| `scripts/setup` on a Mac (from 0.7.0 on, #520) | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`), written by autoreview; launchd's own output is in `autoreview.stderr.log` and `autoreview-queue.stderr.log` there | autoreview, by size, from the `log:` section of `config.yaml` |
+| `scripts/setup` on a Mac (on `main` after 0.7.0, #520) | `$XDG_STATE_HOME/autoreview/logs/autoreview.log` and `autoreview-queue.log` (`~/.local/state/...`), written by autoreview; launchd's own output is in `autoreview.stderr.log` and `autoreview-queue.stderr.log` there | autoreview, by size, from the `log:` section of `config.yaml` |
 
 launchd keeps the output files of an agent open, so it cannot rotate them. On a
 Mac, `scripts/setup` therefore writes a `log:` block to `config.yaml` (the log
@@ -36,14 +36,20 @@ directory, 10 MiB per file, 5 rotated files kept), and `serve` and
 themselves, with no root, no newsyslog and no restart. The `.stderr.log` files
 only take what the log file could not: they stay small. A `config.yaml` from an
 earlier run has no such block; `scripts/setup` prints it and stops (exit code 3)
-until you add it, and then replaces the agent files. The old `autoreview.log`
-that launchd wrote is rotated at the first line of the new run. On Linux the
+until you add it, and then replaces the agent files. The run that stopped has
+already installed the new autoreview, so add the block after that run, never
+after a `--dry-run` alone: it installs nothing, and an older release refuses the
+unknown `log` key on its next start or queue run. The old `autoreview.log`
+that launchd wrote is rotated at the first line of the new run; an old
+`autoreview-queue.log` can stay above the limit until the first queue run of the
+new release, so trust the `macos-check service` after that run. On Linux the
 `log:` section is optional, because the journal rotates. The section and the
 rotation rules are in the [configuration reference](../../configuration.md#log).
 Whether an agent is loaded and running:
 `launchctl print gui/$(id -u)/io.github.pohunekd.autoreview`, or
 `scripts/macos-check service` for every check at once, which also checks that
-the log files exist and stay within `max_file_bytes`.
+the review agent's log exists and that no log file passes `max_file_bytes` plus
+one line.
 
 ## Symptom table
 

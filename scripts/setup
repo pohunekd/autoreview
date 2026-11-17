@@ -67,6 +67,8 @@ LAUNCHCTL_EINPROGRESS=36
 # bytes at which autoreview rotates a log file, and the rotated files it keeps.
 LOG_MAX_FILE_BYTES=10485760
 LOG_KEPT_FILES=5
+# The exit status of `scripts/macos-check log-block` for a block that is not the one setup writes.
+LOG_BLOCK_REFUSED=3
 # The reviewer adapters need Python 3.11 or newer.
 PYTHON_MIN_VERSION="3.11.0"
 POHUNEK_REPOSITORY="zajca/pohunek"
@@ -665,14 +667,14 @@ self_test() {
     check "no Codex notice after 0.4.0" "" "$(codex_notice 0.4.0 two || echo error)"
     check "no Codex notice after a newer release" "" "$(codex_notice 0.10.0 two || echo error)"
     check "no Codex notice without a Codex profile" "" "$(codex_notice 0.3.0 || echo error)"
-    # scripts/macos-check reads the log: block of the config.yaml on stdin; only status 1 is a
-    # refusal. log_block_values gives it the lines of its arguments.
+    # scripts/macos-check reads the log: block of the config.yaml on stdin; only its status
+    # LOG_BLOCK_REFUSED is a refusal. log_block_values gives it the lines of its arguments.
     log_read() {
         local status=0 output
-        output=$(sh "${BASH_SOURCE[0]%/*}/macos-check" log-block) || status=$?
+        output=$(sh "$(dirname "${BASH_SOURCE[0]}")/macos-check" log-block) || status=$?
         case $status in
             0) printf '%s\n' "${output//$'\n'/ }" ;;
-            1) echo refused ;;
+            "$LOG_BLOCK_REFUSED") echo refused ;;
             *) echo "error $status" ;;
         esac
     }
@@ -697,6 +699,8 @@ self_test() {
         'log:' '  directory: /h/logs' '  max_file_bytes: 1048576')"
     check "log block with a relative directory" refused "$(log_block_values \
         'log:' '  directory: logs' '  max_file_bytes: 1048576' '  kept_files: 1')"
+    check "log block with an escape that setup does not write" refused "$(log_block_values \
+        'log:' '  directory: "/h/a\tb"' '  max_file_bytes: 1048576' '  kept_files: 1')"
     check "log block with a comment after the directory" refused "$(log_block_values \
         'log:' '  directory: /h/logs # old' '  max_file_bytes: 1048576' '  kept_files: 1')"
     check "log block with a size that is not a number" refused "$(log_block_values \
@@ -714,8 +718,15 @@ self_test() {
         '  directory: "/h/a \"b\"\\c d"' "$(log_block '/h/a "b"\c d' | sed -n 2p)"
     check "log block of that directory, read back" '/h/a "b"\c d 10485760 5' \
         "$(log_block '/h/a "b"\c d' | log_read)"
+    # Only status 1 of config_has_log is an absent section.
     log_section() {
-        if printf '%s\n' "$@" | config_has_log; then echo present; else echo absent; fi
+        local status=0
+        config_has_log < <(printf '%s\n' "$@") || status=$?
+        case $status in
+            0) echo present ;;
+            1) echo absent ;;
+            *) echo "error $status" ;;
+        esac
     }
     check "config without a log section" absent \
         "$(log_section 'version: 1' '# log:' '#   kept_files: 5')"

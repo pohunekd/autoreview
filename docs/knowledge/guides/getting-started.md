@@ -206,8 +206,11 @@ step that is in place is skipped without a question.
    `kept_files: 5`
    ([configuration](../../configuration.md#log)). With an existing
    `config.yaml` that has no top-level `log:` key, a Mac run prints that block
-   and stops with exit code 3; add it at the end of the file and run the script
-   again. It never edits an existing configuration. On Linux the journal rotates
+   and stops with exit code 3. The run that stopped has already installed the
+   new autoreview, so add the block at the end of the file after that run
+   (never after a `--dry-run` alone, which installs nothing: an older release
+   refuses the unknown `log` key) and run the script again. It never edits an
+   existing configuration. On Linux the journal rotates
    the log, so the `log:` section is optional there.
 5. **Secrets file.** Creates the empty secrets file with mode 0600 when it is
    missing.

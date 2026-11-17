@@ -25,9 +25,10 @@
 # that neither log file is larger than max_file_bytes plus one line.
 #
 # `log-block` reads a config.yaml on stdin and prints the directory, max_file_bytes and
-# kept_files of its top-level `log:` block, one per line; it exits 1 and prints nothing unless
-# the block is the three lines `  directory: V`, `  max_file_bytes: N`, `  kept_files: N`.
-# V is plain or double-quoted, with `\\` and `\"` as its only escapes.
+# kept_files of its top-level `log:` block, one per line. It exits 3 (LOG_BLOCK_REFUSED) and
+# prints nothing unless the block is the three lines `  directory: V`, `  max_file_bytes: N`,
+# `  kept_files: N`; V is plain or double-quoted, with `\\` and `\"` as its only escapes. A
+# failure of the reader itself is a FAIL with exit 1, never a refusal.
 
 set -eu
 
@@ -48,6 +49,8 @@ SERVE_LOG_FILE=autoreview.log
 QUEUE_LOG_FILE=autoreview-queue.log
 # Room for the one line that may take a log file past max_file_bytes; more means a rotation failed.
 LOG_LINE_ALLOWANCE=65536
+# The exit status of `log-block` for a block that is not the three lines of scripts/setup.
+LOG_BLOCK_REFUSED=3
 
 ok() {
     printf 'ok    %s\n' "$*"
@@ -86,26 +89,37 @@ mode_owner() {
 }
 
 # Reads a config.yaml on stdin and prints the directory, max_file_bytes and kept_files of its
-# top-level log: block, one per line. Fails, printing nothing, unless the three lines after
-# `log:` are the ones scripts/setup writes.
+# top-level log: block, one per line. Returns LOG_BLOCK_REFUSED, printing nothing, unless the
+# three lines after `log:` are the ones scripts/setup writes; a sed error is a FAIL.
 read_log_block() {
-    block=$(sed -n '/^log:[[:space:]]*$/{n;p;n;p;n;p;}') || return 1
-    directory=$(printf '%s\n' "$block" | sed -n '1s/^  directory: *\(.*\)$/\1/p')
-    max_bytes=$(printf '%s\n' "$block" | sed -n '2s/^  max_file_bytes: *\([0-9][0-9]*\)$/\1/p')
-    kept=$(printf '%s\n' "$block" | sed -n '3s/^  kept_files: *\([0-9][0-9]*\)$/\1/p')
+    block=$(sed -n '/^log:[[:space:]]*$/{n;p;n;p;n;p;}') || fail "sed of the log: block"
+    directory=$(printf '%s\n' "$block" | sed -n '1s/^  directory: *\(.*\)$/\1/p') \
+        || fail "sed of the log directory"
+    max_bytes=$(printf '%s\n' "$block" | sed -n '2s/^  max_file_bytes: *\([0-9][0-9]*\)$/\1/p') \
+        || fail "sed of max_file_bytes"
+    kept=$(printf '%s\n' "$block" | sed -n '3s/^  kept_files: *\([0-9][0-9]*\)$/\1/p') \
+        || fail "sed of kept_files"
     if [ -z "$directory" ] || [ -z "$max_bytes" ] || [ -z "$kept" ]; then
-        return 1
+        return "$LOG_BLOCK_REFUSED"
     fi
     case $directory in
         \"*\")
             directory=${directory#\"}
-            directory=$(printf '%s\n' "${directory%\"}" | sed 's/\\\(.\)/\1/g')
+            directory=${directory%\"}
+            # Only the escapes that scripts/setup writes; any other backslash is refused.
+            rest=$(printf '%s\n' "$directory" | sed 's/\\[\\"]//g') \
+                || fail "sed of the log directory"
+            case $rest in
+                *\\*) return "$LOG_BLOCK_REFUSED" ;;
+            esac
+            directory=$(printf '%s\n' "$directory" | sed 's/\\\(.\)/\1/g') \
+                || fail "sed of the log directory"
             ;;
-        *\ \#*) return 1 ;;
+        *\ \#*) return "$LOG_BLOCK_REFUSED" ;;
     esac
     case $directory in
         /*) ;;
-        *) return 1 ;;
+        *) return "$LOG_BLOCK_REFUSED" ;;
     esac
     printf '%s\n%s\n%s\n' "$directory" "$max_bytes" "$kept"
 }
@@ -114,11 +128,17 @@ read_log_block() {
 # neither file is larger than max_file_bytes plus LOG_LINE_ALLOWANCE. The queue file exists
 # only after the first hourly run. A config without the block that setup writes is skipped.
 check_log_files() {
-    if ! values=$(read_log_block <"$1"); then
-        printf 'skip  log files (%s has no log: block of the three lines scripts/setup writes)\n' \
-            "$1"
-        return
-    fi
+    reader=0
+    values=$(read_log_block <"$1") || reader=$?
+    case $reader in
+        0) ;;
+        "$LOG_BLOCK_REFUSED")
+            printf 'skip  log files (%s has no log: block of the %s)\n' "$1" \
+                "three lines scripts/setup writes"
+            return
+            ;;
+        *) fail "reading the log: block of $1 ended with status $reader" ;;
+    esac
     log_directory=$(printf '%s\n' "$values" | sed -n 1p)
     log_limit=$(printf '%s\n' "$values" | sed -n 2p)
     for name in "$SERVE_LOG_FILE" "$QUEUE_LOG_FILE"; do
