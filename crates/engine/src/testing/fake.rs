@@ -164,6 +164,8 @@ pub(crate) struct FakeState {
     pub(crate) fetch_ref_hosts: BTreeSet<String>,
     /// Number of the next capability reads that fail as a transient `pohunek_request_failed`.
     pub(crate) fetch_ref_failures: usize,
+    /// Whether every session removal fails, so a session stays open.
+    pub(crate) keeping_sessions: bool,
     /// The hook report of every host; `None` reports the switch and no host script.
     pub(crate) head_checkout_hooks: Option<HeadCheckoutHooks>,
     /// Number of the next hook reports that fail as a transient `pohunek_request_failed`.
@@ -586,6 +588,9 @@ impl Integrations for FakeIntegration {
             )));
         }
         let mut state = self.lock();
+        if state.keeping_sessions {
+            return ready(Err(Error::workflow(WORKFLOW_FAILED, false, None)));
+        }
         state.sessions.remove(&session.session_id);
         ready(Ok(()))
     }

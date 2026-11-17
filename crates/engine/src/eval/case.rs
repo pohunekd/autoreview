@@ -226,6 +226,8 @@ fn identifier_valid(value: &str) -> bool {
 fn head_branch_valid(branch: &str) -> bool {
     branch_valid(branch)
         && !branch.starts_with('-')
+        && !branch.ends_with('.')
+        && branch != "HEAD"
         && branch
             .split('/')
             .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"))
@@ -465,9 +467,8 @@ pub fn parse_case(file: &str, text: &str) -> Result<Case, Vec<CaseError>> {
 /// starts with a dot is ignored. Extensions compare ignoring ASCII case. A symbolic link or any
 /// other entry that is not a regular file, named like a case file, is an error, so no case is
 /// read from outside the directory and no pipe is opened; an entry that cannot be read is an
-/// error of its own
-/// while the rest of the directory is still checked. Two cases of one repository, pull request
-/// and head are the same review identity.
+/// error of its own while the rest of the directory is still checked. Two cases of one
+/// repository, pull request and head are the same review identity.
 ///
 /// # Errors
 ///
@@ -641,6 +642,8 @@ lines: [40, 52]\n      description: Lock released before the entry is inserted.\
             (head_ref("refs/heads/.x"), "eval_case_head_ref_invalid"),
             (head_ref("refs/heads/a/.x"), "eval_case_head_ref_invalid"),
             (head_ref("refs/heads/-x"), "eval_case_head_ref_invalid"),
+            (head_ref("refs/heads/x."), "eval_case_head_ref_invalid"),
+            (head_ref("refs/heads/HEAD"), "eval_case_head_ref_invalid"),
             (head_ref("refs/tags/v1"), "eval_case_head_ref_invalid"),
             (head_ref("main"), "eval_case_head_ref_invalid"),
             (head_ref("\"\""), "eval_case_head_ref_invalid"),

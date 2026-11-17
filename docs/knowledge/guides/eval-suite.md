@@ -95,6 +95,12 @@ and not in others is `flaky`.
   answer without files, or a changed file with added lines and no patch fails the
   trial instead of scoring with fewer lines.
 - A pipeline with `checkout: head` cannot be evaluated and is refused at the start.
+- With `checkout: base`, a trial's worktree starts at today's tip of the base
+  branch, not at the case's `base_sha`. The reviewer reads the change and the head
+  code through git, but repository guidance and the surrounding code come from the
+  current base branch, so an old case can score differently as that branch moves.
+- A session that the review host keeps after a trial is listed in `sessions_left`
+  of the report; remove it by hand.
 - A branch on a review host that is not the machine of the run, or that a session,
   worktree or hook keeps, is left and listed in `branches_left`.
 - A killed eval run (SIGKILL) leaves its sessions and branches on the review host

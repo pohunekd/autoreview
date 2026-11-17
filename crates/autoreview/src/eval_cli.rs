@@ -13,7 +13,7 @@ use autoreview_engine::eval::case::{Case, CaseError, load_cases};
 use autoreview_engine::eval::config::EvalConfig;
 use autoreview_engine::eval::integration::{EvalIntegration, RunCounters};
 use autoreview_engine::eval::report::{
-    CaseKind, CaseReport, Gate, REPORT_SCHEMA, Totals, TrialReport, TrialStatus,
+    CaseKind, CaseReport, Gate, REPORT_SCHEMA, Totals, TrialReport, TrialStatus, VerifierState,
     check_thresholds_have_cases, evaluate_gate, exit_status, totals,
 };
 use autoreview_engine::eval::trial::{eval_pull_request, eval_rule};
@@ -49,6 +49,9 @@ const EXIT_TRIALS_FAILED: u8 = 3;
 
 /// Code of a trial that ran past `eval.trial_timeout_seconds`.
 const TRIAL_TIMEOUT: &str = "eval_trial_timeout";
+
+/// Code of a trial whose task panicked.
+const TRIAL_PANICKED: &str = "eval_trial_panicked";
 
 /// The `eval` commands.
 #[derive(Debug, Subcommand)]
@@ -159,6 +162,31 @@ struct RunReport {
     branches_deleted: Vec<RunBranch>,
     /// The review branches of the run that stay on their host.
     branches_left: Vec<RunBranch>,
+    /// The sessions of the run that could not be removed and stay open on their host.
+    sessions_left: Vec<RunSession>,
+}
+
+/// A review session that stays open on its host.
+#[derive(Debug, Serialize)]
+struct RunSession {
+    /// The host as `pohunek.hosts` names it.
+    host: String,
+    /// Identifier of the session on the host.
+    session_id: String,
+}
+
+/// Returns the report of a trial whose task panicked.
+fn panicked_trial(repeat: i64, sessions: u32) -> TrialReport {
+    TrialReport {
+        repeat,
+        status: TrialStatus::Failed,
+        error_code: TRIAL_PANICKED.to_owned(),
+        duration_ms: 0,
+        sessions,
+        verifier: VerifierState::None,
+        findings: Vec::new(),
+        stages: None,
+    }
 }
 
 /// Returns the exit code of an error that `eval` already printed its document for.
@@ -322,7 +350,8 @@ async fn run_suite(
     let counters = Arc::new(RunCounters::default());
     let (nonce, started) = (run_nonce(), Instant::now());
     let permits = Arc::new(Semaphore::new(eval.max_concurrent_trials));
-    let (mut tasks, mut integrations) = (JoinSet::new(), Vec::new());
+    // The case index, repeat and integration of every spawned trial, for one that panics.
+    let (mut tasks, mut spawned) = (JoinSet::new(), BTreeMap::new());
     for (index, case) in selected.iter().enumerate() {
         for attempt in 1..=arguments.repeat {
             let pull_request = eval_pull_request(case, &config.github_host, nonce);
@@ -333,7 +362,7 @@ async fn run_suite(
                 Arc::clone(&counters),
                 eval.max_sessions,
             ));
-            integrations.push(Arc::clone(&integration));
+            let tracked = Arc::clone(&integration);
             let engine = Engine::new(
                 engine_config.clone(),
                 Arc::clone(&store),
@@ -346,7 +375,7 @@ async fn run_suite(
                 cancel.child_token(),
                 eval.trial_timeout,
             );
-            tasks.spawn(async move {
+            let task = tasks.spawn(async move {
                 let permit = permits.acquire().await;
                 let run = engine.run_eval_trial(&child, &case, &rule, &credential, attempt);
                 tokio::pin!(run);
@@ -364,26 +393,33 @@ async fn run_suite(
                 drop(permit);
                 (index, trial)
             });
+            spawned.insert(task.id(), (index, attempt, tracked));
         }
     }
     let mut found: Vec<Vec<TrialReport>> = selected.iter().map(|_| Vec::new()).collect();
-    let mut panicked = None;
-    while let Some(joined) = tasks.join_next().await {
+    let mut panicked = false;
+    while let Some(joined) = tasks.join_next_with_id().await {
         match joined {
-            Ok((index, trial)) => {
+            Ok((_, (index, trial))) => {
                 if let Some(slot) = found.get_mut(index) {
                     slot.push(trial);
                 }
             }
-            // The other trials stop through the token and clean up; the run has no report.
+            // A panicked trial is a failed one; the other trials stop through the token.
             Err(error) => {
+                tracing::error!(%error, "eval trial panicked");
                 cancel.cancel();
-                panicked.get_or_insert(error);
+                panicked = true;
+                if let Some((index, repeat, integration)) = spawned.get(&error.id())
+                    && let Some(slot) = found.get_mut(*index)
+                {
+                    slot.push(panicked_trial(*repeat, integration.trial_sessions()));
+                }
             }
         }
     }
-    if panicked.is_some() {
-        for integration in &integrations {
+    if panicked {
+        for (_, _, integration) in spawned.values() {
             integration.remove_sessions(config.session_timeout).await;
         }
     }
@@ -397,13 +433,6 @@ async fn run_suite(
         &branches,
     )
     .await;
-    if let Some(error) = panicked {
-        return Err(Error::workflow(
-            "workflow_failed",
-            true,
-            Some(Box::new(error)),
-        ));
-    }
     let mut reports = Vec::new();
     for case in &cases {
         let position = selected.iter().position(|chosen| chosen.id == case.id);
@@ -450,6 +479,11 @@ async fn run_suite(
         gate,
         branches_deleted: cleaned.deleted,
         branches_left: cleaned.left,
+        sessions_left: counters
+            .sessions_left()
+            .into_iter()
+            .map(|(host, session_id)| RunSession { host, session_id })
+            .collect(),
     })?;
     match status {
         0 => Ok(()),

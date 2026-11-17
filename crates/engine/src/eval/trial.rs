@@ -122,7 +122,8 @@ impl<I: Integrations + Send + Sync, C: Clock> Engine<EvalIntegration<I>, C> {
     /// Nothing is published: the integrations of the engine only read. A review that cannot be
     /// measured is a failed trial with its error code, never a score. A token that is already
     /// cancelled fails the trial with `shutdown` before anything starts, and every session
-    /// that a failed trial started is removed before it returns.
+    /// that the trial started is removed before it returns, a completed trial included; one
+    /// that stays is listed in `RunCounters::sessions_left`.
     pub async fn run_eval_trial(
         &self,
         cancel: &CancellationToken,
@@ -139,10 +140,9 @@ impl<I: Integrations + Send + Sync, C: Clock> Engine<EvalIntegration<I>, C> {
             self.measure(cancel, rule, credential, repeat, &workflow_id)
                 .await
         };
-        if measured.is_err() {
-            let limit = self.config.session_timeout;
-            self.integration.remove_sessions(limit).await;
-        }
+        self.integration
+            .remove_sessions(self.config.session_timeout)
+            .await;
         let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
         let sessions = self.integration.trial_sessions();
         let mut trial = TrialReport {
@@ -424,5 +424,15 @@ mod tests {
             (published.len(), started.len(), open),
             (0, started_before, 0)
         );
+        // A completed trial whose sessions the host keeps lists them, and it stays completed.
+        assert!(counters.sessions_left().is_empty());
+        fake.lock().keeping_sessions = true;
+        let (engine, kept_case) = trial(case("kept", Expect::Clean), 17, 100);
+        let seventh = engine
+            .run_eval_trial(&cancel, &kept_case, &rule, &credential, 1)
+            .await;
+        assert_eq!(seventh.status, TrialStatus::Completed);
+        let open = fake.snapshot().3;
+        assert!(open > 0 && counters.sessions_left().len() == open);
     }
 }

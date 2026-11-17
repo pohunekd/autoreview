@@ -46,6 +46,8 @@ pub struct RunCounters {
     pub would_publish: AtomicUsize,
     /// The review host and branch of every admitted session start.
     branches: Mutex<BTreeSet<(String, String)>>,
+    /// The review host and session ID of every session that could not be removed.
+    left: Mutex<BTreeSet<(String, String)>>,
 }
 
 impl RunCounters {
@@ -61,6 +63,12 @@ impl RunCounters {
     pub fn branches(&self) -> BTreeSet<(String, String)> {
         let branches = self.branches.lock();
         branches.unwrap_or_else(PoisonError::into_inner).clone()
+    }
+
+    /// Returns the `(host, session ID)` of every session that stays open on its host.
+    pub fn sessions_left(&self) -> BTreeSet<(String, String)> {
+        let left = self.left.lock();
+        left.unwrap_or_else(PoisonError::into_inner).clone()
     }
 }
 
@@ -130,8 +138,9 @@ impl<I> EvalIntegration<I> {
 impl<I: Integrations + Send + Sync> EvalIntegration<I> {
     /// Removes every session this trial started, also one whose start did not return.
     ///
-    /// It uses a token that is not cancelled and gives each call at most `limit`; a session
-    /// that stays is logged.
+    /// It uses a token that is not cancelled and gives each call at most `limit`. A session
+    /// that is gone already is a no-op; one that stays is logged and listed in
+    /// [`RunCounters::sessions_left`].
     pub async fn remove_sessions(&self, limit: Duration) {
         let fresh = CancellationToken::new();
         let (mut sessions, pending) = {
@@ -150,7 +159,12 @@ impl<I: Integrations + Send + Sync> EvalIntegration<I> {
             let removal = self.inner.remove_session_confirmed(&fresh, session);
             match tokio::time::timeout(limit, removal).await {
                 Ok(Ok(())) => {}
-                _ => tracing::warn!(session = %session.session_id, "eval session not removed"),
+                _ => {
+                    tracing::warn!(session = %session.session_id, "eval session not removed");
+                    let key = (session.host.clone(), session.session_id.clone());
+                    let left = self.counters.left.lock();
+                    left.unwrap_or_else(PoisonError::into_inner).insert(key);
+                }
             }
         }
     }

@@ -835,13 +835,7 @@ fn nested(first: &str, second: &str) -> bool {
 
 /// Reports whether `prefix` can start a git ref name.
 fn ref_prefix_valid(prefix: &str) -> bool {
-    !prefix.is_empty()
-        && !prefix.starts_with(['-', '/'])
-        && !prefix.contains("..")
-        && !prefix.contains("@{")
-        && !prefix
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c))
+    !prefix.is_empty() && usable_in_ref_name(prefix)
 }
 
 /// Reads the `log` section; `None` when the configuration has no `log` key.
@@ -2091,16 +2085,23 @@ fn usage_limit_delay_seconds(value: &Value) -> Result<Vec<time::Duration>, Error
 fn branch_prefix(value: &Option<Value>) -> Result<String, Error> {
     let key = "session.branch_prefix";
     let prefix = text(value, key)?;
-    let refused = prefix.starts_with(['-', '/'])
-        || prefix.contains("..")
-        || prefix.contains("@{")
-        || prefix
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
-    if refused {
+    if !usable_in_ref_name(&prefix) {
         return Err(invalid(key, "must be usable in a git ref name"));
     }
     Ok(prefix)
+}
+
+/// Reports whether `prefix` can be the start of a git ref name.
+///
+/// It refuses whitespace, a control character, `..`, `@{`, one of `~^:?*[\` and a leading `-`
+/// or `/`.
+fn usable_in_ref_name(prefix: &str) -> bool {
+    !prefix.starts_with(['-', '/'])
+        && !prefix.contains("..")
+        && !prefix.contains("@{")
+        && !prefix
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c))
 }
 
 /// Reads `session.name_prefix`, which starts every review session name.
