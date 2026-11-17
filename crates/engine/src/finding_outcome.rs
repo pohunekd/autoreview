@@ -7,9 +7,10 @@ use time::OffsetDateTime;
 
 use crate::engine::{Clock, Engine};
 use crate::error::error_code;
-use crate::integrations::Integrations;
+use crate::integrations::{GitHubReview, Integrations};
 use crate::model::review::{PRIOR_ANSWERED, PRIOR_FIXED, PRIOR_OPEN, prior_key};
-use crate::model::{Artifact, ReviewInput};
+use crate::model::{Artifact, Decision, PublishResult, ReviewInput};
+use crate::store::signals::SignalIds;
 use crate::store::{
     FindingCategory, FindingOutcome, OUTCOME_ANSWERED, OUTCOME_FIXED, OUTCOME_OPEN, Settlement,
 };
@@ -68,6 +69,71 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             );
         }
     }
+
+    /// Stores the GitHub review ID and the finding IDs of a published review beside the outcome
+    /// rows of its findings.
+    ///
+    /// It runs only with `schedule.signal_check_interval_seconds` and makes no GitHub call: the
+    /// publish answer carries the review ID. A store failure is logged and never fails the review.
+    pub(crate) fn record_signal_ids(
+        &self,
+        input: &ReviewInput,
+        review: &GitHubReview,
+        result: &PublishResult,
+        artifact: &Artifact,
+    ) {
+        if self.config.signal_check_interval.is_none() || result.github_review_id <= 0 {
+            return;
+        }
+        let ids = signal_ids(artifact, review, result);
+        let recorded = (self.store).record_signal_ids(&artifact.repository, artifact.number, &ids);
+        if let Err(err) = recorded {
+            tracing::error!(
+                review_id = %input.pull_request.review_id(),
+                error_code = error_code(&err),
+                error = %err,
+                "finding signal IDs not recorded"
+            );
+        }
+    }
+}
+
+/// Reports whether the inline comment `body` is the one of finding `id`.
+///
+/// The heading opens a comment as `**ID `, whatever the severity says after it.
+pub(crate) fn heads_comment(body: &str, id: &str) -> bool {
+    let rest = body
+        .strip_prefix("**")
+        .and_then(|rest| rest.strip_prefix(id));
+    !id.is_empty() && rest.is_some_and(|rest| rest.starts_with(' '))
+}
+
+/// Returns the signal IDs of each finding of `artifact`, by the key that tracks its row.
+///
+/// A finding keeps its ID only when an inline comment of `review` is headed by it.
+fn signal_ids(
+    artifact: &Artifact,
+    review: &GitHubReview,
+    result: &PublishResult,
+) -> Vec<SignalIds> {
+    let requested_changes = result.decision == Decision::RequestChanges;
+    let mut ids = Vec::new();
+    for finding in &artifact.findings {
+        let commented =
+            (review.comments.iter()).any(|comment| heads_comment(&comment.body, &finding.id));
+        ids.push(SignalIds {
+            tracked_key: prior_key(&artifact.head_sha, &finding.id),
+            review_id: result.github_review_id,
+            head_sha: artifact.head_sha.clone(),
+            finding_id: if commented {
+                finding.id.clone()
+            } else {
+                String::new()
+            },
+            requested_changes,
+        });
+    }
+    ids
 }
 
 /// Reports whether finding `id` of `artifact` publishes a prior finding again.
@@ -190,7 +256,52 @@ mod tests {
     use crate::store::Settlement;
     use crate::verify::{VERDICT_REOPENED, VERDICT_UPHELD};
 
-    use super::settlements;
+    use super::{settlements, signal_ids};
+    use crate::integrations::{GitHubReview, InlineComment};
+    use crate::model::{Decision, PublishResult};
+
+    /// A finding keeps its ID only for the inline comment its heading opens, whatever the
+    /// severity says; a longer ID that starts the same does not match.
+    #[test]
+    fn a_finding_keeps_its_id_only_for_the_comment_its_heading_opens() {
+        let finding = |id: &str| Finding {
+            id: id.to_owned(),
+            ..Finding::default()
+        };
+        let artifact = Artifact {
+            head_sha: sha("c"),
+            findings: ["O001", "O002", "O003", "O01"].map(finding).to_vec(),
+            ..Artifact::default()
+        };
+        let comment = |heading: &str| InlineComment {
+            body: format!("**{heading} — Bug** (confidence: high)\n\nBody."),
+            ..InlineComment::default()
+        };
+        let review = GitHubReview {
+            comments: ["O001 HIGH", "O002 BLOCKER", "O010 LOW"]
+                .map(comment)
+                .to_vec(),
+            ..GitHubReview::default()
+        };
+        for (decision, requested) in [(Decision::RequestChanges, true), (Decision::Comment, false)]
+        {
+            let result = PublishResult {
+                decision,
+                github_review_id: 7,
+                ..PublishResult::default()
+            };
+            let ids = signal_ids(&artifact, &review, &result);
+            let found: Vec<_> = ids
+                .iter()
+                .map(|ids| (ids.finding_id.as_str(), ids.requested_changes))
+                .collect();
+            let want = [("O001", requested), ("O002", requested)];
+            assert_eq!(found[..2], want, "{requested}");
+            assert_eq!(found[2..], [("", requested), ("", requested)]);
+            assert!(ids.iter().all(|ids| ids.review_id == 7));
+            assert_eq!(ids[0].tracked_key, prior_key(&sha("c"), "O001"));
+        }
+    }
 
     #[test]
     fn prior_verdicts_settle_open_findings_as_the_publication_does() {
