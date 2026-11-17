@@ -524,6 +524,8 @@ struct ScheduleFile {
     state_entry_limit: Option<Value>,
     /// Shortest time between two state reads for finding outcomes, in seconds.
     outcome_check_interval_seconds: Option<Value>,
+    /// Shortest time between two signal reads of a pull request, in seconds; optional.
+    signal_check_interval_seconds: Option<Value>,
 }
 
 /// The `limits` section.
@@ -1156,6 +1158,11 @@ fn map_file(
         &schedule_file.outcome_check_interval_seconds,
         "schedule.outcome_check_interval_seconds",
     )?;
+    // An absent key and a key without a value both leave the signal reads off.
+    let signal_check_interval = match &schedule_file.signal_check_interval_seconds {
+        None => None,
+        value => Some(seconds(value, "schedule.signal_check_interval_seconds")?),
+    };
     let limits = section(&file.limits, "limits")?;
     let result_max_bytes = positive(&limits.result_max_bytes, "limits.result_max_bytes")?;
     let max_findings = positive(&limits.max_findings, "limits.max_findings")?;
@@ -1266,6 +1273,7 @@ fn map_file(
         published_retention,
         outcome_retention,
         outcome_check_interval,
+        signal_check_interval,
         session_start_attempts,
         session_cleanup_attempts,
         reviewer_run_attempts,
@@ -3805,6 +3813,35 @@ pub(crate) mod tests {
             parse_file(&unknown).is_err(),
             "the section refuses an unknown key"
         );
+    }
+
+    #[test]
+    fn signal_check_interval_is_optional_and_a_positive_number_of_seconds() {
+        let example = parse(EXAMPLE, secret, example_policy).expect("the example loads");
+        assert_eq!(
+            example.signal_check_interval, None,
+            "no key, no signal read"
+        );
+        let anchor = "  outcome_check_interval_seconds: 3600\n";
+        let with = |line: &str| mutated(anchor, &format!("{anchor}  {line}\n"));
+        let key = "signal_check_interval_seconds";
+        let loaded = parse(&with(&format!("{key}: 600")), secret, example_policy);
+        let loaded = loaded.expect("the key loads");
+        assert_eq!(loaded.signal_check_interval, Some(Duration::from_secs(600)));
+        let prefix = "configuration_invalid: schedule.signal_check_interval_seconds: must be";
+        let (integer, positive) = ("an integer", "a positive integer");
+        let cases = [
+            ("0", positive),
+            ("-5", positive),
+            ("\"600\"", integer),
+            ("1.5", integer),
+            ("true", integer),
+        ];
+        for (value, expected) in cases {
+            let result = parse(&with(&format!("{key}: {value}")), secret, example_policy);
+            let text = result.expect_err("the key is refused").to_string();
+            assert_eq!(text, format!("{prefix} {expected}"), "{value}");
+        }
     }
 
     #[test]
