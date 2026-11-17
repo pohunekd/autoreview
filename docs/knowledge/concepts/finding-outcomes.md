@@ -52,6 +52,7 @@ finding as an earlier one, the first row loses its tracked key and stays
 | `refuted`, `not_blocking` | The [verifier](verification.md) demoted the blocking finding before it was published |
 | `fixed` | A later published review settled the finding as `fixed`, or as `answered` and the verifier upheld the answer |
 | `answered` | A later published review settled the finding as `answered`, and no verifier upheld it: none ran, or it did not finish |
+| `dismissed` | The review that published the finding requested changes and GitHub shows it dismissed, while the finding was still `open`; see [signals from GitHub](#signals-from-github) |
 | `open_at_merge`, `open_at_close` | The pull request was merged, or closed unmerged, while the finding was still `open` |
 
 Only an `open` row changes, and only when the later review is published: a
@@ -83,6 +84,57 @@ rows. If one is still `open` when the pull request ends again, that end
 closes it and replaces the stored end. Otherwise the pull request is not read
 again and keeps its earlier end.
 
+## Signals from GitHub
+
+With `schedule.signal_check_interval_seconds` (see
+[configuration](../../configuration.md#schedule)) the engine also reads two
+signals. Without the key it makes none of the reads below and stores nothing
+for them; a review published before the key was set has no stored IDs and gets
+no signal.
+
+When a review is published, the engine stores beside the outcome row of each
+finding the GitHub ID of the review (from the publish answer), the head the
+review was made on, whether it requested changes, and the ID of the finding in
+that review (`O003`) when the finding has an inline comment. It makes no GitHub
+call for this. A finding that publishes an earlier one again moves the earlier
+row to the new review; a finding whose key another review already reused gets
+nothing.
+
+A pull request is read at most once per interval, in the discovery poll after
+its pass is saved and its notices are sent, without the discovery lock, with
+one GraphQL query per page: the state of its reviews (100 per page) and the
+first comment of each review thread with its reactions (50 threads per page,
+at most 100 reactions per comment). A pull request is due while one of its
+`open` findings can produce a signal: its review requested changes, or it has
+an inline comment. The forced pass of `autoreview retry` makes no read. The
+read never writes to GitHub and never delays or changes a review. A pull
+request is read even while it is still in the review search; one in a
+repository whose search failed in that poll is not. A read that fails, has more
+pages than `schedule.search_page_limit`, or has a comment with more than 100
+reactions changes no row, logs `signals of finding outcomes unreadable` and is
+made again after the interval. A finding matches a thread when the thread's
+first comment belongs to the finding's review and starts with `**`, the
+finding's ID and a space; no match, two matches, or a comment that was edited
+since leave the stored reactions as they are. Each write holds only while the
+row still points to the review that was read.
+
+- **Dismissed review.** An `open` finding of a review that requested changes
+  becomes `dismissed`, at the head the review was made on, when GitHub reports
+  that review `DISMISSED`, on whichever head the pull request is now: GitHub
+  dismisses stale approvals on a push, never a request for changes. A decided
+  outcome is never rewritten. A `dismissed` finding stays dismissed when a
+  later review publishes it again. It does not count for a
+  [guidance](../../configuration.md#guidance) suggestion: only `fixed` does.
+  `autoreview report` counts it in `findings` only.
+- **Author reaction.** Only reactions by the pull request author count. They
+  are stored as the sorted set of contents as GitHub's REST API names them
+  (`+1`, `-1`, `laugh`, `hooray`, `confused`, `heart`, `rocket`, `eyes`; any
+  other content is dropped), replace the stored set at every read (a removed
+  reaction disappears), and never change the outcome. Once every finding of the
+  pull request is decided the pull request is no longer read, so its stored
+  reactions stop changing. `autoreview findings list` shows them as
+  `author_reactions`.
+
 ## When recording fails
 
 The rows of a review and what it settles about earlier findings are written
@@ -107,7 +159,7 @@ failed`, and the next check after the interval ends it.
 one repository published at or after midnight UTC of `DATE`, oldest first, one
 JSON object per line, each with how its pull request ended, as far as a state
 read saw it: the end stays empty for a pull request whose rows were all decided
-before it ended. The
+before it ended, and with the author's reactions to its comment. The
 [CLI reference](../../cli.md#autoreview-findings-list) lists every field. A
 pull request that is reopened after it ended keeps its earlier end in the list
 until it ends again with an `open` row. `autoreview report` counts the

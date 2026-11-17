@@ -153,6 +153,8 @@ async fn author_reactions_are_stored_beside_the_unchanged_outcome() {
     h.poll_until("a failed read", || signal_reads(&h, &pr) > reads)
         .await;
     assert_eq!(reactions(&h), [vec!["-1".to_owned()], Vec::<String>::new()]);
+    let shown = listed(&h, &pr);
+    assert_eq!(shown[0].author_reactions, ["-1"], "findings list shows it");
     h.fake.lock().failing_signal_reads.clear();
     h.poll_until("the removed reaction", || {
         reactions(&h) == [Vec::<String>::new(), Vec::<String>::new()]
