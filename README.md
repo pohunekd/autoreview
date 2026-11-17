@@ -68,7 +68,8 @@ Rules:
    login autoreview acts as
    and its token kind (fine-grained for one owner, or classic); the
    repositories or organisation; Claude Code, Codex or both; the review
-   hosts; where notifications go (setup asks for a Matrix room).
+   hosts; where notifications go (setup asks for `none`, `matrix` or
+   `webhook`).
    Then show me the plan and wait for my approval.
 3. Start with comments only: the `single-repo-comment` example, or
    `public-repositories` when people outside my team open pull requests, with

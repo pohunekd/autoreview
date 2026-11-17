@@ -11,8 +11,8 @@ intents: [setup, help]
 
 > **Status: after 0.6.0.** This page describes autoreview on `main` after the
 > 0.6.0 release and `scripts/setup`. The script installs the autoreview release
-> named by `AUTOREVIEW_VERSION` in the script, which must know the `init` layout
-> flags and `profiles install --pohunek-timeout-seconds` (0.4.0 or later). A
+> named by `AUTOREVIEW_VERSION` in the script, which must know
+> `init --notifier` (0.7.0 or later). A
 > part that is not available names its open issue. On a Mac the script needs a
 > release with an `aarch64-apple-darwin` archive, 0.6.0 or later (#513).
 
@@ -29,7 +29,8 @@ and autoreview then publishes one GitHub review with inline comments: a
 comment, a request for changes, an approval, or a wait for a person.
 
 autoreview keeps its state in SQLite, so a restarted service resumes its
-reviews, and it reports what needs attention to Matrix. The details are in
+reviews, and it reports what needs attention to Matrix, to a webhook, or only to
+its log. The details are in
 [how it works](../concepts/how-it-works.md).
 
 ## What the script sets up
@@ -88,7 +89,8 @@ automatic login. launchd does not rotate the logs; see
 - Claude Code or Codex on your `PATH`, run once so that its config home
   (`~/.claude`, `~/.codex`) exists.
 - A GitHub account for autoreview ([GitHub identity](../concepts/github-identity.md)),
-  its token, and a Matrix room with an access token
+  its token, and for notifications a Matrix room with an access token or an
+  incoming-webhook URL; without either, choose the `none` notifier
   ([notifiers](notifiers.md)).
 - Paths without spaces: the configuration directory, `HOME` and
   `XDG_CONFIG_HOME` may hold only letters, digits, `.`, `_`, `-` and `/`,
@@ -156,8 +158,10 @@ scripts/setup --dir "$HOME/autoreview"
 `--dry-run` detects and prints the plan and changes nothing; it asks nothing.
 Without a terminal the script refuses to run unless `--dry-run` is given. The
 answers can be given as flags: `--dir`, `--login`, `--pohunek-host`,
-`--example`, `--matrix-homeserver-url`, `--matrix-room`,
-`--matrix-mention-user` and `--pohunek-timeout-seconds`. A missing answer is
+`--example`, `--notifier`, `--webhook-format`, `--matrix-homeserver-url`,
+`--matrix-room`, `--matrix-mention-user` and `--pohunek-timeout-seconds`; the
+script refuses the Matrix flags with `--notifier none` or `webhook`, and
+`--webhook-format` with any notifier but `webhook`. A missing answer is
 asked; an empty answer stops the script. There is no `--yes`.
 
 Before each step that changes the machine, the script prints the exact
@@ -182,8 +186,16 @@ step that is in place is skipped without a question.
 4. **Configuration.** When `<dir>/config.yaml` does not exist, asks the GitHub
    login, the pohunek host name of this machine (`local` names it as well; any
    other name must resolve to the same `host_id`), the
-   [example](../../../examples/README.md) to start from and the three Matrix
-   values, then runs `autoreview init` with them and with the paths of this
+   [example](../../../examples/README.md) to start from and the notifier
+   (there is no default):
+
+   | Notifier | Asked next | Secret to write |
+   |---|---|---|
+   | `none` | nothing; each message is only logged | none |
+   | `matrix` | homeserver URL, room, mentioned user | `AUTOREVIEW_MATRIX_TOKEN` |
+   | `webhook` | the format: `json`, `slack` (Slack and Slack-compatible services) or `discord` | `AUTOREVIEW_WEBHOOK_URL`, the URL |
+
+   Then it runs `autoreview init` with the answers and with the paths of this
    machine (`--store-path`, `--gh-bin`, `--pohunek-bin`,
    `--pohunek-state-home`, `--pohunek-runtime-dir`; on a Mac the last one only
    when `XDG_RUNTIME_DIR` is set). An existing configuration is never
@@ -194,8 +206,8 @@ step that is in place is skipped without a question.
 The run that created the configuration stops here: every example names
 repositories of other people. Edit `<dir>/policy.yaml` and set the
 repositories you want reviewed, then write each secret as a `NAME=value` line
-into the secrets file with an editor (`AUTOREVIEW_GH_TOKEN` and
-`AUTOREVIEW_MATRIX_TOKEN` in every example). Never type a token on a command
+into the secrets file with an editor (`AUTOREVIEW_GH_TOKEN`, and the secret of
+the notifier from the table above). Never type a token on a command
 line. Then run the script again with the same `--dir`, as the stop message
 prints it; it goes on with:
 

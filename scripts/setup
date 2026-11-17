@@ -5,7 +5,8 @@
 # user service: systemd user units on Linux, launchd agents on macOS.
 #
 # usage: scripts/setup [--dry-run] [--dir DIR] [--login LOGIN]
-#                      [--pohunek-host HOST] [--example NAME]
+#                      [--pohunek-host HOST] [--example NAME] [--notifier NAME]
+#                      [--webhook-format FORMAT]
 #                      [--matrix-homeserver-url URL] [--matrix-room ROOM]
 #                      [--matrix-mention-user USER]
 #                      [--pohunek-timeout-seconds SECONDS]
@@ -32,9 +33,9 @@ fi
 POHUNEK_VERSION="0.43.1"
 # The oldest pohunek release that is kept.
 POHUNEK_MIN_VERSION="0.41.0"
-# The autoreview release that is installed; it must know the init layout flags
-# and the --pohunek-timeout-seconds of profiles install (0.4.0 or later).
-AUTOREVIEW_VERSION="0.6.0"
+# The autoreview release that is installed; it must know the init --notifier
+# flag (0.7.0 or later).
+AUTOREVIEW_VERSION="0.7.0"
 # The first release that refuses the Codex adapter of every earlier release
 # (review_nonce_mismatch); a Codex profile written before it needs a reinstall.
 CODEX_ADAPTER_RELEASE="0.4.0"
@@ -74,6 +75,10 @@ AUTOREVIEW_REPOSITORY="pohunekd/autoreview"
 AUTOREVIEW_WORKFLOW="pohunekd/autoreview/.github/workflows/release.yml"
 EXAMPLES=(auto-approve coding-agent-drafts human-approval notes-handoff org-wildcard
     public-repositories single-repo-comment solo-maintainer)
+# The backends of init --notifier; only matrix takes the Matrix values.
+NOTIFIERS=(none matrix webhook)
+# The formats of init --webhook-format, which only webhook takes.
+WEBHOOK_FORMATS=(json slack discord)
 EFFORTS=(low medium high xhigh max)
 PROFILE_MARKER="# Written by autoreview profiles install; sha256="
 # The config.yaml keys that name a secret variable.
@@ -355,6 +360,7 @@ self_test() {
     local autoreview_bin=/h/.local/bin/autoreview pohunek_timeout=45
     local dir=/h/autoreview env_file=/h/.config/autoreview/autoreview.env
     local AUTOREVIEW_VERSION=0.5.0 CODEX_ADAPTER_RELEASE=0.4.0 os=Linux
+    local notifier="" matrix_url="" matrix_room="" matrix_user="" webhook_format=""
     local -a install_command=() unit_names=() unit_texts=()
     local -A profile_agent=([one]=claude [two]=codex) profile_model=([one]=m-1 [two]=m.2)
     local -A profile_effort=([one]=max [two]=xhigh) profile_input=([one]=1048576 [two]=2048)
@@ -525,6 +531,46 @@ self_test() {
     check "timeout of words" refused "$(seconds abc)"
     check "timeout with a space" refused "$(seconds '45 ')"
     check "empty timeout" refused "$(seconds '')"
+    # check_notifier stops the run, so it runs in a subshell; its message is not checked.
+    notifier_state() {
+        if (check_notifier) 2>/dev/null; then echo ok; else echo refused; fi
+    }
+    check "notifier none" ok "$(notifier=none notifier_state)"
+    check "notifier webhook" ok "$(notifier=webhook notifier_state)"
+    check "notifier matrix with its values" ok \
+        "$(notifier=matrix matrix_url=https://m.example.org matrix_room='!r:example.org' \
+            matrix_user='@u:example.org' notifier_state)"
+    check "notifier of another name" refused "$(notifier=slack notifier_state)"
+    check "notifier in capitals" refused "$(notifier=None notifier_state)"
+    check "Matrix room with the webhook notifier" refused \
+        "$(notifier=webhook matrix_room='!r:example.org' notifier_state)"
+    check "Matrix homeserver with the none notifier" refused \
+        "$(notifier=none matrix_url=https://m.example.org notifier_state)"
+    check "Matrix user with the none notifier" refused \
+        "$(notifier=none matrix_user='@u:example.org' notifier_state)"
+    check "webhook format slack" ok "$(notifier=webhook webhook_format=slack notifier_state)"
+    check "webhook format discord" ok "$(notifier=webhook webhook_format=discord notifier_state)"
+    check "webhook format of another name" refused \
+        "$(notifier=webhook webhook_format=teams notifier_state)"
+    check "webhook format in capitals" refused \
+        "$(notifier=webhook webhook_format=JSON notifier_state)"
+    check "webhook format with the none notifier" refused \
+        "$(notifier=none webhook_format=json notifier_state)"
+    check "webhook format with the matrix notifier" refused \
+        "$(notifier=matrix webhook_format=json notifier_state)"
+    notifier_flags() {
+        local -a command=()
+        add_notifier_flags
+        printf '%q ' "${command[@]}"
+    }
+    check "init flags of the none notifier" "--notifier none " "$(notifier=none notifier_flags)"
+    check "init flags of the webhook notifier" "--notifier webhook --webhook-format discord " \
+        "$(notifier=webhook webhook_format=discord notifier_flags)"
+    expected="--notifier matrix --matrix-homeserver-url https://m.example.org --matrix-room"
+    expected+=" room:example.org --matrix-mention-user @u\\ v:example.org "
+    check "init flags of the matrix notifier" "$expected" \
+        "$(notifier=matrix matrix_url=https://m.example.org matrix_room=room:example.org \
+            matrix_user='@u v:example.org' notifier_flags)"
     expected="/h/.local/bin/autoreview profiles install --host local --agent claude --name one"
     expected+=" --model m-1 --effort max --agent-binary /opt/my\\ tools/claude"
     expected+=" --maximum-input-bytes 1048576 --pohunek-timeout-seconds 45 "
@@ -709,6 +755,36 @@ check_pohunek_timeout() {
             "give the pohunek.timeout_seconds of config.yaml"
 }
 
+# Stops unless notifier is one of NOTIFIERS, the Matrix values come only with
+# matrix and a webhook format only with webhook, as init refuses them with the
+# other notifiers, and a given webhook format is one of WEBHOOK_FORMATS. An empty
+# webhook format passes, as it is asked later.
+check_notifier() {
+    is_one_of "$notifier" "${NOTIFIERS[@]}" \
+        || fail 1 "the notifier must be one of: ${NOTIFIERS[*]}"
+    [ "$notifier" = matrix ] || [ -z "$matrix_url$matrix_room$matrix_user" ] \
+        || fail 1 "--matrix-homeserver-url, --matrix-room and --matrix-mention-user" \
+            "need --notifier matrix"
+    if [ "$notifier" = webhook ]; then
+        [ -z "$webhook_format" ] || is_one_of "$webhook_format" "${WEBHOOK_FORMATS[@]}" \
+            || fail 1 "the webhook format must be one of: ${WEBHOOK_FORMATS[*]}"
+    elif [ -n "$webhook_format" ]; then
+        fail 1 "--webhook-format needs --notifier webhook"
+    fi
+}
+
+# Appends the notifier flags of init to the array command: --notifier, the three
+# Matrix values for matrix, and the webhook format for webhook.
+add_notifier_flags() {
+    command+=(--notifier "$notifier")
+    if [ "$notifier" = matrix ]; then
+        command+=(--matrix-homeserver-url "$matrix_url" --matrix-room "$matrix_room"
+            --matrix-mention-user "$matrix_user")
+    elif [ "$notifier" = webhook ]; then
+        command+=(--webhook-format "$webhook_format")
+    fi
+}
+
 # Sets the variable named $1 to the answer of question $2 unless it holds one.
 # An empty answer stops the run.
 ask() {
@@ -757,20 +833,21 @@ in_place() {
 
 usage() {
     fail 1 "usage: scripts/setup [--dry-run] [--dir DIR] [--login LOGIN]" \
-        "[--pohunek-host HOST] [--example NAME] [--matrix-homeserver-url URL]" \
-        "[--matrix-room ROOM] [--matrix-mention-user USER]" \
+        "[--pohunek-host HOST] [--example NAME] [--notifier NAME] [--webhook-format FORMAT]" \
+        "[--matrix-homeserver-url URL] [--matrix-room ROOM] [--matrix-mention-user USER]" \
         "[--pohunek-timeout-seconds SECONDS] | --self-test"
 }
 
 parse_arguments() {
     dry_run=0
-    dir="" login="" pohunek_host="" example=""
+    dir="" login="" pohunek_host="" example="" notifier="" webhook_format=""
     matrix_url="" matrix_room="" matrix_user="" pohunek_timeout=""
     while [ "$#" -gt 0 ]; do
         case $1 in
             --dry-run) dry_run=1 ;;
-            --dir | --login | --pohunek-host | --example | --matrix-homeserver-url | \
-                --matrix-room | --matrix-mention-user | --pohunek-timeout-seconds)
+            --dir | --login | --pohunek-host | --example | --notifier | --webhook-format | \
+                --matrix-homeserver-url | --matrix-room | --matrix-mention-user | \
+                --pohunek-timeout-seconds)
                 if [ "$#" -lt 2 ] || [ -z "$2" ]; then
                     usage
                 fi
@@ -779,6 +856,8 @@ parse_arguments() {
                     --login) login=$2 ;;
                     --pohunek-host) pohunek_host=$2 ;;
                     --example) example=$2 ;;
+                    --notifier) notifier=$2 ;;
+                    --webhook-format) webhook_format=$2 ;;
                     --matrix-homeserver-url) matrix_url=$2 ;;
                     --matrix-room) matrix_room=$2 ;;
                     --matrix-mention-user) matrix_user=$2 ;;
@@ -1252,17 +1331,25 @@ step_config() {
     check_local_host "$pohunek_host"
     ask example "Example to start from (${EXAMPLES[*]})"
     is_one_of "$example" "${EXAMPLES[@]}" || fail 1 "the example must be one of: ${EXAMPLES[*]}"
-    ask matrix_url "Matrix homeserver URL"
-    ask matrix_room "Matrix room of the notifications"
-    ask matrix_user "Matrix user that the notifications mention"
+    ask notifier "Notifier of the review messages (${NOTIFIERS[*]})"
+    check_notifier
+    if [ "$notifier" = matrix ]; then
+        ask matrix_url "Matrix homeserver URL"
+        ask matrix_room "Matrix room of the notifications"
+        ask matrix_user "Matrix user that the notifications mention"
+    elif [ "$notifier" = webhook ]; then
+        local formats
+        printf -v formats '%s, ' "${WEBHOOK_FORMATS[@]}"
+        ask webhook_format "Webhook format (${formats%, })"
+        check_notifier
+    fi
     local output
     local -a command=("$autoreview_bin" init --dir "$dir" --login "$login"
         --pohunek-host "$pohunek_host" --example "$example" --store-path "$dir/autoreview.db"
         --gh-bin "$gh_bin" --pohunek-bin "$pohunek_bin" --pohunek-state-home "$state_home")
     # Without the flag, init on macOS writes no pohunek.runtime_dir: pohunek's default applies.
     [ -z "$runtime_dir" ] || command+=(--pohunek-runtime-dir "$runtime_dir")
-    command+=(--matrix-homeserver-url "$matrix_url" --matrix-room "$matrix_room"
-        --matrix-mention-user "$matrix_user")
+    add_notifier_flags
     approve "configuration" "umask 077" "$(printf '%q ' "${command[@]}")"
     # $dir holds the store too. The umask keeps it 0700 also when the installed
     # release's init creates it with the mode of the umask.
@@ -2193,6 +2280,7 @@ main() {
     fi
     parse_arguments "$@"
     [ -z "$pohunek_timeout" ] || check_pohunek_timeout
+    [ -z "$notifier" ] || check_notifier
     detect_machine
     if [ "$dry_run" -eq 0 ]; then
         [ -t 0 ] \
