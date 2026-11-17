@@ -66,23 +66,23 @@ reviewed head SHA. A report without `prior_findings`, or with a finding without
 Between the engine and an adapter the protocols are named `autoreview-claude/v1`
 and `autoreview-codex/v3`. The Claude adapter answers in the name of the request
 it got; the Codex adapter answers a `v3` request in the `autoreview-codex/v2`
-markers, which carry the nonce of the request. The engine reads the legacy
-Claude result name too, so a review that an earlier engine started still
-finishes; a later release removes the legacy names (#393). Claude and Codex
-profiles must be installed from this release before the engine is updated
-(see below); a rollback of the engine needs no reinstall.
+markers, which carry the nonce of the request. Claude and Codex profiles must
+be installed from this release before the engine is updated (see below); a
+rollback of the engine to a release that sends these names needs no reinstall.
 
 - `autoreview-claude/v1` is the `protocol` field of the request and of the
   result line, and the engine sends every Claude request under it. The adapter
-  accepts a request of that name or of the legacy name
-  `claude-otel-noninteractive/request-v1`, and answers in `autoreview-claude/v1`
-  or in the legacy result name `claude-otel-noninteractive/v2`; a plain prompt
-  gets the legacy name. The engine reads a result line of either name with the
-  same checks. An adapter from release 0.3.0 or earlier runs a request of the
-  new name as a plain prompt: it answers in mode `text`, with the refusal
-  `checkout_invalid`, as it finds no trusted line in the one-line request. The
-  engine stops such a review with `review_adapter_outdated`, without a fresh
-  session; run `autoreview profiles install` for the profile (#392).
+  accepts a request of that name only and answers in the same name. A JSON
+  prompt whose `protocol` starts with `autoreview-claude/` or
+  `claude-otel-noninteractive/` but is not that name is refused with status 64;
+  any other prompt runs as a plain prompt and is answered in mode `text`. An
+  adapter from release 0.3.0 or earlier runs a request of the new name as a
+  plain prompt: it answers in mode `text` under the result name
+  `claude-otel-noninteractive/v2`, with the refusal `checkout_invalid`, as it
+  finds no trusted line in the one-line request. The engine reads no result
+  line under that name: it stops such a review with `review_adapter_outdated`,
+  without a fresh session; run `autoreview profiles install` for the profile
+  (#392, #393).
 - `autoreview-codex/v3` is named in the trusted line
   `- Trusted protocol: autoreview-codex/v3` of the request, followed by the line
   `- Trusted nonce: <nonce>`: 16 bytes from the engine host's random source in
@@ -101,8 +101,9 @@ profiles must be installed from this release before the engine is updated
   adapter's. An output that does not end with the exit line of that nonce is
   `review_nonce_mismatch`, which gets a fresh session.
 - An adapter from an earlier release does not know `autoreview-codex/v3`: it
-  stops the run with status 64 and the legacy exit line, before Codex runs, and
-  every run of the review ends in `review_nonce_mismatch`. Run
+  stops the run with status 64 and the exit line of its own name, before Codex
+  runs, and the engine stops the review at once with `review_adapter_outdated`.
+  Run
   `autoreview profiles install` for every Codex profile before the engine is
   updated. An adapter from release 0.3.0 or earlier reads no protocol line, but
   it finds no `- Trusted head SHA:` line either, so it stops the run the same
@@ -114,15 +115,11 @@ profiles must be installed from this release before the engine is updated
   finding with a field it does not know; an engine rollback needs no profile
   reinstall. A request with
   `- Trusted protocol: autoreview-codex/v1` gets the markers
-  `[autoreview-codex/v1 result:<base64>]` and so on, and a request without the
-  line in the legacy markers `[pohunek-codex-review-result-v1:<base64>]`,
-  `[pohunek-codex-review-reason-v1:<base64>]`,
-  `[pohunek-codex-review-refused-v1:head_unavailable]`,
-  `[pohunek-codex-review-refused-v1:repository_skills]` and
-  `[pohunek-codex-review exited with status N]`. A nonce line under either, a
-  second protocol line or nonce line, a missing or malformed nonce under
-  `autoreview-codex/v2` or `v3`, or another name stops the run with status 64
-  and the legacy exit line.
+  `[autoreview-codex/v1 result:<base64>]` and so on. A request without the
+  protocol line, a nonce line under `autoreview-codex/v1`, a second protocol
+  line or nonce line, a missing or malformed nonce under `autoreview-codex/v2`
+  or `v3`, or another name stops the run with status 64 and the exit line
+  `[autoreview-codex/v1 exited with status 64]`.
 
 ## What the adapter enforces
 
@@ -215,12 +212,13 @@ the Python standard library (Python 3.11 or newer). It has two parts:
   without a `refusal` whose exit code is not 0 as `review_wrapper_invalid` and
   logs the end of its stderr with it, when it has one (see
   [troubleshooting](../runbooks/troubleshooting.md#claude-code-failed)). A line
-  without a `refusal` whose protocol is `autoreview-claude/v1` or
-  `claude-otel-noninteractive/v2` and whose `checked_checkout` is not the
-  pipeline's checkout is
-  `review_adapter_outdated` instead, whatever its exit code. A line of either
+  without a `refusal` whose protocol is `autoreview-claude/v1` and whose
+  `checked_checkout` is not the pipeline's checkout is
+  `review_adapter_outdated` instead, whatever its exit code. A line of that
   name in mode `text` is `review_adapter_outdated` too, with or without a
   `refusal`: only an adapter that ran the request as a plain prompt writes it.
+  So is a line under `claude-otel-noninteractive/v2`, the result name of the
+  adapters from before the request protocol, whatever it holds.
   A line whose Claude Code result message has `is_error`, subtype `success`
   and `api_error_status` 429 is `reviewer_usage_limited`, whatever its exit
   code (see [troubleshooting](../runbooks/troubleshooting.md#reviewer-usage-limit)).
@@ -402,7 +400,9 @@ install --agent codex` refuses such a host, a Mac for example, with
   The adapter then stays alive for the retention time, so that the coordinator
   can read the output before it removes the session.
   The engine reads the output as finished once its last line, read up to the
-  current end of the output, is an exit line of any of the three names; an exit
+  current end of the output, is an exit line of `autoreview-codex/v1` or `v2`,
+  or the one of an adapter that predates the protocol line, which is
+  `review_adapter_outdated`; an exit
   line that the Codex transcript quotes before the end does not finish it, and
   one without the request's nonce at the end ends the run with
   `review_nonce_mismatch`.

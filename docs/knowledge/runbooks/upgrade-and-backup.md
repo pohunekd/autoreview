@@ -74,8 +74,10 @@ retention settings (`store.review_retention_seconds`,
    `autoreview retry` for a pull request whose review stopped in that window.
    Install every Codex profile before the restart:
    the engine binds each Codex run to a nonce that only the adapter of this
-   release writes back, and fails the runs of an older one with
-   `review_nonce_mismatch`. The Codex adapter of this release gives the
+   release writes back, and the runs of an older one end in
+   `review_adapter_outdated`. The engine no longer reads the result names of
+   adapters older than the request protocols, so a host that misses the install
+   stops its reviews. The Codex adapter of this release gives the
    finding `category` only to an engine that names `autoreview-codex/v3`, so
    an older engine that runs while the adapter is already installed gets the
    reports it always got.
