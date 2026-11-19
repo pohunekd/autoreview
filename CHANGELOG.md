@@ -3,7 +3,7 @@
 Release notes of autoreview, newest first. Unreleased changes are fragments
 under `changelog.d/`; `scripts/changelog fold` moves them here.
 
-## 0.8.0 - 2026-11-17
+## 0.8.0 - 2026-11-19
 
 ### Added
 
