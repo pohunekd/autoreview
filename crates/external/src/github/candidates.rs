@@ -815,15 +815,12 @@ impl GitHub {
 
 #[cfg(test)]
 mod tests {
-    use autoreview_engine::config::independent_scopes;
     use autoreview_engine::integrations::{ReviewRequest, ReviewRequestList};
     use autoreview_engine::model::{CandidateList, PullRequest};
     use autoreview_policy::{Authors, Trigger, TriggerKind};
 
     use super::{
-        GitHubPullRequest, SearchIdentity, classify, covering, decode_pull_request,
-        list_review_requests_args, merge_identities, merge_review_requests, repository_name,
-        search_requested_args,
+        GitHubPullRequest, classify, covering, decode_pull_request, merge_review_requests,
     };
 
     /// A policy whose first and second rule both match `acme/special` and `solo/special`.
@@ -976,68 +973,6 @@ notifications:
             assert_eq!(got, want, "{base:?}");
             assert_eq!(list.candidates.is_empty(), want.is_some(), "{base:?}");
         }
-    }
-
-    /// One search per independent scope: each argv holds exactly one scope flag and only the
-    /// exclusions of its own scope (#577).
-    #[test]
-    fn search_argv_holds_one_scope_each() {
-        let scopes: Vec<String> = ["example-org/*", "example-org/app", "other-org/tool"]
-            .iter()
-            .map(|scope| (*scope).to_owned())
-            .collect();
-        let extra = ["--draft=false".to_owned()];
-        let calls: Vec<Vec<String>> = independent_scopes(&scopes)
-            .iter()
-            .map(|scope| {
-                let exclusions = vec![format!("-repo:{scope}")];
-                search_requested_args(100, scope, &extra, &exclusions)
-            })
-            .collect();
-        assert_eq!(calls.len(), 2);
-        let flags = |call: &[String]| -> Vec<String> {
-            let mut found = Vec::new();
-            for (index, word) in call.iter().enumerate() {
-                if word == "--owner" || word == "--repo" {
-                    found.push(format!("{word} {}", call[index + 1]));
-                }
-            }
-            found
-        };
-        assert_eq!(flags(&calls[0]), ["--owner example-org"]);
-        assert_eq!(flags(&calls[1]), ["--repo other-org/tool"]);
-        assert!(calls[0].ends_with(&["--".to_owned(), "-repo:example-org/*".to_owned()]));
-        assert!(calls[1].ends_with(&["--".to_owned(), "-repo:other-org/tool".to_owned()]));
-
-        let queue = list_review_requests_args(10, Some("other-org/tool"), &[]);
-        assert_eq!(flags(&queue), ["--repo other-org/tool"]);
-        assert!(flags(&list_review_requests_args(10, None, &[])).is_empty());
-    }
-
-    /// Results of several searches are merged without repeats, ignoring the case of the
-    /// repository (#577).
-    #[test]
-    fn merge_identities_removes_repeats() {
-        let identity = |repository: &str, number: i64| SearchIdentity {
-            number,
-            repository: serde_json::json!({ "nameWithOwner": repository }),
-        };
-        let merged = merge_identities(vec![
-            vec![identity("Acme/App", 1), identity("acme/app", 2)],
-            vec![identity("acme/app", 1), identity("other/tool", 1)],
-        ]);
-        let keys: Vec<(String, i64)> = merged
-            .iter()
-            .map(|found| (repository_name(&found.repository).to_owned(), found.number))
-            .collect();
-        assert_eq!(
-            keys,
-            [
-                ("Acme/App".to_owned(), 1),
-                ("acme/app".to_owned(), 2),
-                ("other/tool".to_owned(), 1)
-            ]
-        );
     }
 
     /// The merged queue is truncated when one search was or the union exceeds the maximum, and

@@ -590,7 +590,7 @@ the credential matches `*`.
 GitHub allows 30 searches per minute for a user, and credentials of the same
 user share that limit. Compare `searches_per_pass` of the credentials of one
 user, added up, with `30 x schedule.poll_interval_seconds / 60`. When the
-search count is higher, GitHub's secondary rate limit refuses searches and the
+search count is higher, GitHub's search API rate limit refuses searches and the
 credential's pass fails with `github_request_failed`. Prefer `owner/*` entries
 in `match` over many single-repository entries, and raise
 `schedule.poll_interval_seconds`.
