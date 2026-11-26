@@ -701,7 +701,7 @@ impl GitHub {
                 continue;
             }
             let outcome = self
-                .get_pull_request(cancel, credential, &repository, number, &trigger)
+                .get_pull_request(cancel, credential, &repository, number, &trigger, true)
                 .await;
             if cancel.is_cancelled() && outcome.is_err() {
                 return outcome.map(|_| CandidateList::default());

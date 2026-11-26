@@ -775,6 +775,67 @@ mod tests {
         );
     }
 
+    /// A refused read of one pull request gets its own code through `get_pull_request` only when
+    /// the caller is discovery; a review's read retries (#576). The `gh` stand-in is a script
+    /// that prints a synthetic GraphQL error body and exits 1.
+    #[tokio::test]
+    async fn get_pull_request_isolates_a_refused_read_only_for_discovery() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use autoreview_policy::{Trigger, TriggerKind};
+        use tokio_util::sync::CancellationToken;
+
+        let directory = std::env::temp_dir().join(format!("autoreview-gh-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("the directory is created");
+        let binary = directory.join("gh");
+        std::fs::write(
+            &binary,
+            concat!(
+                "#!/bin/sh\n",
+                "printf '%s' '{\"data\":null,\"errors\":[{\"type\":\"FORBIDDEN\",",
+                "\"path\":[\"repository\"],\"message\":\"x\"}]}'\n",
+                "exit 1\n",
+            ),
+        )
+        .expect("the script is written");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+            .expect("the script is executable");
+        let credential = credential("first", "synthetic-first", "example-one/*");
+        let github = GitHub {
+            binary: binary.to_string_lossy().into_owned(),
+            credentials: Credentials::new(vec![credential.clone()])
+                .expect("the credentials are valid"),
+            host: "github.com".to_owned(),
+            timeout: Duration::from_secs(30),
+            poll_limit: 100,
+            search_page_limit: 10,
+            secret_variables: BTreeSet::new(),
+            ai_signed_pattern: "Written by AI:".to_owned(),
+        };
+        let trigger = Trigger {
+            kind: TriggerKind::ReviewRequested,
+            label: String::new(),
+        };
+        let cancel = CancellationToken::new();
+        let mut got = Vec::new();
+        for discovery in [true, false] {
+            let error = github
+                .get_pull_request(
+                    &cancel,
+                    &credential,
+                    "example-one/widget",
+                    7,
+                    &trigger,
+                    discovery,
+                )
+                .await
+                .expect_err("the read is refused");
+            got.push(error_code(&error).to_owned());
+        }
+        std::fs::remove_dir_all(&directory).expect("the directory is removed");
+        assert_eq!(got, ["github_read_forbidden", "github_request_failed"]);
+    }
+
     /// The search selection stays within GitHub's node limit: it names no team members, while the
     /// single pull request read does (#576).
     #[test]

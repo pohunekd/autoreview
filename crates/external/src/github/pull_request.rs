@@ -662,6 +662,7 @@ impl GitHub {
     /// Reads a pull request with `credential` and checks it against the trigger of its rule.
     ///
     /// The response must name the requested pull request before any read that uses it.
+    /// `discovery` gives a permanent read failure its own code, see [`GitHub::graphql_read`].
     pub(crate) async fn get_pull_request(
         &self,
         cancel: &CancellationToken,
@@ -669,8 +670,10 @@ impl GitHub {
         repository: &str,
         number: i64,
         trigger: &Trigger,
+        discovery: bool,
     ) -> Result<PullRequest, Error> {
-        let raw = (self.fetch_pull_request(cancel, credential, repository, number, false)).await?;
+        let raw =
+            (self.fetch_pull_request(cancel, credential, repository, number, discovery)).await?;
         let mut pull_request = decode_pull_request(&raw, &self.host, &credential.login, trigger)?;
         if pull_request.repository != repository || pull_request.number != number {
             return Err(response_invalid(None));

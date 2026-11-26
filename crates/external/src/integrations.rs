@@ -129,7 +129,7 @@ impl Integrations for External {
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
         self.github
-            .get_pull_request(cancel, credential, repository, number, trigger)
+            .get_pull_request(cancel, credential, repository, number, trigger, false)
             .await
     }
 
