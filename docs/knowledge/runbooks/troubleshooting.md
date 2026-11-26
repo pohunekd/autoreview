@@ -584,7 +584,8 @@ narrowed to the policy's repositories; a scope that another scope of the same
 credential covers (`example-org/app` next to `example-org/*`) is not searched.
 `autoreview serve` logs the number for each credential at start
 (`searches_per_pass`). The review queue adds one search per `match` entry of a
-credential, unless the credential matches `*`.
+credential that no other entry of the credential covers, or a single search when
+the credential matches `*`.
 
 GitHub allows 30 searches per minute for a user, and credentials of the same
 user share that limit. Compare `searches_per_pass` of the credentials of one

@@ -326,12 +326,11 @@ fn merge_identities(lists: Vec<Vec<SearchIdentity>>) -> Vec<SearchIdentity> {
     merged
 }
 
-/// Returns `lists`, the results of the searches of one scope each, as one list of at most
-/// `max` requests (`ListReviewRequests`).
+/// Returns `lists`, the results of the searches of one scope each, as one list without
+/// repeats (`ListReviewRequests`).
 ///
-/// The list is `truncated` when one search was, or when the repeat-free union exceeds `max`.
-/// Then the first `max` requests in the order of repository and number remain. One list is
-/// returned as it is.
+/// The list is `truncated` when one search was, or when the union exceeds `max`. The union is
+/// not cut: the queue sorts by priority first and cuts after. One list is returned as it is.
 fn merge_review_requests(mut lists: Vec<ReviewRequestList>, max: i64) -> ReviewRequestList {
     if lists.len() == 1 {
         return lists.remove(0);
@@ -348,13 +347,7 @@ fn merge_review_requests(mut lists: Vec<ReviewRequestList>, max: i64) -> ReviewR
         }
     }
     let limit = usize::try_from(max).unwrap_or(0);
-    if truncated || requests.len() > limit {
-        truncated = true;
-        requests.sort_by(|left, right| {
-            (&left.repository, left.number).cmp(&(&right.repository, right.number))
-        });
-        requests.truncate(limit);
-    }
+    truncated |= requests.len() > limit;
     ReviewRequestList {
         requests,
         truncated,
@@ -1048,9 +1041,9 @@ notifications:
     }
 
     /// The merged queue is truncated when one search was or the union exceeds the maximum, and
-    /// then keeps the first requests by repository and number (#577).
+    /// it always holds the whole union for the queue's priority sort (#577).
     #[test]
-    fn merge_review_requests_truncates_by_repository_and_number() {
+    fn merge_review_requests_keeps_the_union_and_flags_truncation() {
         let request = |repository: &str, number: i64| ReviewRequest {
             repository: repository.to_owned(),
             number,
@@ -1077,7 +1070,7 @@ notifications:
                     list(vec![request("c/one", 3)], false),
                 ],
                 2,
-                vec![("a/one", 1), ("b/one", 2)],
+                vec![("b/one", 2), ("a/one", 1), ("c/one", 3)],
                 true,
             ),
             (
@@ -1086,7 +1079,7 @@ notifications:
                     list(vec![request("a/one", 1)], false),
                 ],
                 5,
-                vec![("a/one", 1), ("b/one", 2)],
+                vec![("b/one", 2), ("a/one", 1)],
                 true,
             ),
             (
