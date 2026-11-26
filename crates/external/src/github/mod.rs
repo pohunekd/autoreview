@@ -208,20 +208,22 @@ impl GitHub {
     /// success; the decoders then read the team request as an unreadable non-user request. A
     /// response whose errors are all `FORBIDDEN` fails with the permanent `github_read_forbidden`,
     /// and a GraphQL error body of typed errors that are not a rate limit with the permanent
-    /// `github_read_unrecognized`, so one pull request never stops the pass. Every other failure,
-    /// an untyped error included, maps as in [`GitHub::github`] and stays retryable.
+    /// `github_read_unrecognized`, so one pull request never stops a discovery pass. Those two
+    /// codes are given only when `discovery` is set: a review's own reads keep the retrying
+    /// mapping of [`GitHub::github`], as does every other failure, an untyped error included.
     pub(crate) async fn graphql_read(
         &self,
         cancel: &CancellationToken,
         credential: &Credential,
         args: &[String],
+        discovery: bool,
     ) -> Result<String, Error> {
         let environment = self.environment(std::env::vars_os(), credential);
         let result = run(cancel, &self.binary, args, &[], &environment, self.timeout).await;
         let output = match result {
             Ok(output) => output,
             Err(error) => {
-                return match graphql_failure(error.stdout()) {
+                return match scoped_failure(graphql_failure(error.stdout()), discovery) {
                     GraphqlFailure::ReviewerOnly => {
                         tracing::warn!(
                             credential = %credential.name,
@@ -312,6 +314,19 @@ fn graphql_failure(stdout: &str) -> GraphqlFailure {
         GraphqlFailure::Other
     } else {
         GraphqlFailure::Unrecognized
+    }
+}
+
+/// Keeps the per-pull-request failures only for a discovery read.
+///
+/// Any other read maps `Forbidden` and `Unrecognized` to `Other`, so it fails and retries as the
+/// plain GitHub reads do.
+fn scoped_failure(failure: GraphqlFailure, discovery: bool) -> GraphqlFailure {
+    match failure {
+        GraphqlFailure::Forbidden | GraphqlFailure::Unrecognized if !discovery => {
+            GraphqlFailure::Other
+        }
+        failure => failure,
     }
 }
 
@@ -738,6 +753,28 @@ mod tests {
         assert_eq!(got.err().as_deref(), Some("github_response_invalid"));
     }
 
+    /// A review's own read keeps the retrying mapping; only discovery isolates a pull request
+    /// (#576).
+    #[test]
+    fn permanent_read_failures_are_given_only_to_discovery() {
+        use super::scoped_failure;
+        for failure in [GraphqlFailure::Forbidden, GraphqlFailure::Unrecognized] {
+            assert_eq!(scoped_failure(failure, false), GraphqlFailure::Other);
+        }
+        assert_eq!(
+            scoped_failure(GraphqlFailure::Forbidden, true),
+            GraphqlFailure::Forbidden
+        );
+        assert_eq!(
+            scoped_failure(GraphqlFailure::Unrecognized, true),
+            GraphqlFailure::Unrecognized
+        );
+        assert_eq!(
+            scoped_failure(GraphqlFailure::ReviewerOnly, false),
+            GraphqlFailure::ReviewerOnly
+        );
+    }
+
     /// The search selection stays within GitHub's node limit: it names no team members, while the
     /// single pull request read does (#576).
     #[test]
@@ -747,7 +784,7 @@ mod tests {
     }
 
     /// A team request that stays on the pull request after the credential's login or a readable
-    /// team member has reviewed is not a team-only request (#576, MEDIUM1).
+    /// team member has reviewed is not a team-only request (#576).
     #[test]
     fn answered_team_request_is_not_reported_as_team_only() {
         use super::pull_request::{decode_pull_request, decode_pull_request_response};

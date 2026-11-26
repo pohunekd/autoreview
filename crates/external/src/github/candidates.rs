@@ -607,7 +607,7 @@ impl GitHub {
                     continue;
                 }
                 let raw = self
-                    .fetch_pull_request(cancel, credential, &repository, number)
+                    .fetch_pull_request(cancel, credential, &repository, number, true)
                     .await?;
                 let login = &credential.login;
                 let Some(id) = ready_draft_id(&raw, author, &repository, number, login) else {
@@ -731,7 +731,7 @@ impl GitHub {
         };
         for _ in 0..self.search_page_limit {
             let args = label_search_args(&query, &after);
-            let output = self.graphql_read(cancel, credential, &args).await?;
+            let output = self.graphql_read(cancel, credential, &args, true).await?;
             let page = decode_label_search_page(&output)?;
             for node in &page.nodes {
                 let (repository, number) = node.repository_and_number();

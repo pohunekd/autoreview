@@ -16,10 +16,11 @@ use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
 use crate::model::{REJECTED_CANDIDATE_CODES, RejectedCandidate};
 
-/// Code of a pull request that requests its review only from a team.
-const TEAM_REQUEST_CODE: &str = "review_requested_from_team";
 use crate::notify::Notification;
 use crate::store::DiscoveryState;
+
+/// Code of a pull request that requests its review only from a team.
+const TEAM_REQUEST_CODE: &str = "review_requested_from_team";
 
 pub(crate) mod authors;
 pub(crate) mod commands;

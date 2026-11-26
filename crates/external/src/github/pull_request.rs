@@ -670,7 +670,7 @@ impl GitHub {
         number: i64,
         trigger: &Trigger,
     ) -> Result<PullRequest, Error> {
-        let raw = (self.fetch_pull_request(cancel, credential, repository, number)).await?;
+        let raw = (self.fetch_pull_request(cancel, credential, repository, number, false)).await?;
         let mut pull_request = decode_pull_request(&raw, &self.host, &credential.login, trigger)?;
         if pull_request.repository != repository || pull_request.number != number {
             return Err(response_invalid(None));
@@ -695,20 +695,25 @@ impl GitHub {
         number: i64,
     ) -> Result<PullRequestState, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.graphql_read(cancel, credential, &args).await?;
+        let output = self.graphql_read(cancel, credential, &args, false).await?;
         decode_pull_request_state(repository, number, &output, &self.host, &credential.login)
     }
 
     /// Reads the raw pull request data of one pull request with `credential`'s token.
+    ///
+    /// `discovery` gives a permanent read failure its own code, see [`GitHub::graphql_read`].
     pub(super) async fn fetch_pull_request(
         &self,
         cancel: &CancellationToken,
         credential: &Credential,
         repository: &str,
         number: i64,
+        discovery: bool,
     ) -> Result<GitHubPullRequest, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.graphql_read(cancel, credential, &args).await?;
+        let output = self
+            .graphql_read(cancel, credential, &args, discovery)
+            .await?;
         decode_pull_request_response(&output)
     }
 
