@@ -8,12 +8,12 @@ use std::sync::{MutexGuard, PoisonError};
 use std::time::Duration;
 
 use autoreview_go_compat::go_time::format_rfc3339_seconds;
-use autoreview_policy::Event;
+use autoreview_policy::{Event, Policy};
 use serde::Serialize;
 use time::{Date, OffsetDateTime, UtcOffset};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Credential, Credentials};
+use crate::config::{Credential, Credentials, independent_scopes};
 use crate::engine::{Clock, Engine};
 use crate::error::{Error, error_code};
 use crate::integrations::{Integrations, TokenAnswer};
@@ -84,6 +84,42 @@ pub async fn check_credentials<I: Integrations>(
         });
     }
     Ok(statuses)
+}
+
+/// The review request searches that one discovery pass makes with one credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchBudget {
+    /// Name of the credential.
+    pub credential: String,
+    /// Number of search scopes of the credential, one search each.
+    pub scopes: usize,
+    /// Number of ready-draft authors of the policy; each adds one search per scope.
+    pub ready_draft_authors: usize,
+    /// Searches of one pass: `scopes * (1 + ready_draft_authors)`.
+    pub searches_per_pass: usize,
+}
+
+/// Returns the review request searches of one discovery pass for each credential in file order.
+///
+/// A credential with no scope in the policy makes none. The queue's searches and the label
+/// searches are not counted.
+#[must_use]
+pub fn search_budgets(credentials: &Credentials, policy: &Policy) -> Vec<SearchBudget> {
+    let requested = policy.review_request_scopes();
+    let authors = policy.ready_draft_authors().len();
+    credentials
+        .iter()
+        .map(|credential| {
+            let found = credentials.search_scopes(credential, &requested);
+            let scopes = independent_scopes(&found).len();
+            SearchBudget {
+                credential: credential.name.clone(),
+                scopes,
+                ready_draft_authors: authors,
+                searches_per_pass: scopes * (1 + authors),
+            }
+        })
+        .collect()
 }
 
 /// What the running service learned about the credentials' tokens; it never holds a token.

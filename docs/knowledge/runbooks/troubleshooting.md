@@ -575,6 +575,25 @@ do not count toward its limit. Narrow the work: use a more specific `match` or
 a label trigger, or split a large organization into rules. Raise
 `schedule.poll_limit` only when the narrowing is not enough.
 
+## Search budget
+
+A discovery pass makes one review request search for each search scope of a
+credential, and one more per scope for each `ready_draft_authors` entry: `S x
+(1 + A)` searches with `S` scopes and `A` authors. A scope is a `match` entry
+narrowed to the policy's repositories; a scope that another scope of the same
+credential covers (`example-org/app` next to `example-org/*`) is not searched.
+`autoreview serve` logs the number for each credential at start
+(`searches_per_pass`). The review queue adds one search per `match` entry of a
+credential, unless the credential matches `*`.
+
+GitHub allows 30 searches per minute for a user, and credentials of the same
+user share that limit. Compare `searches_per_pass` of the credentials of one
+user, added up, with `30 x schedule.poll_interval_seconds / 60`. When the
+search count is higher, GitHub's secondary rate limit refuses searches and the
+credential's pass fails with `github_request_failed`. Prefer `owner/*` entries
+in `match` over many single-repository entries, and raise
+`schedule.poll_interval_seconds`.
+
 ## Credential errors
 
 Each repository is served by the first credential whose `match` covers it, see

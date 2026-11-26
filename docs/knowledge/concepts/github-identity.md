@@ -149,7 +149,7 @@ the GitHub documentation assigns to it.
 | Engine call | GitHub endpoint or query | Fine-grained permission |
 |---|---|---|
 | Login check | `GET /user` | None listed; any valid token |
-| Review requests and label search | Search issues and pull requests (`gh search prs`, GraphQL search) | Access to the repository; no separate permission listed |
+| Review requests and label search | Search issues and pull requests (`gh search prs`, GraphQL search) | Access to the repository; no separate permission listed. The review request search runs once per search scope: `gh` joins several `--repo` flags into one search with an OR group, and GitHub then returns only the public results of a fine-grained token that mixes public and private repositories |
 | Pull request read | `GET /repos/{owner}/{repo}/pulls/{number}` and GraphQL pull request query | Pull requests: read |
 | Review request events | `GET /repos/{owner}/{repo}/issues/{number}/events` | Pull requests: read, or Issues: read |
 | Changed lines | `GET /repos/{owner}/{repo}/pulls/{number}/files` | Pull requests: read |

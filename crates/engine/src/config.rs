@@ -21,7 +21,7 @@ mod credentials;
 mod notify;
 mod symbols;
 
-pub use credentials::{Credential, Credentials};
+pub use credentials::{Credential, Credentials, independent_scopes};
 pub use notify::{
     BackendKind, MatrixBackend, NotifyBackend, NotifyRoute, NotifySettings, WebhookBackend,
     WebhookFormat,

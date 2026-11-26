@@ -7,9 +7,9 @@
 
 // Rust guideline compliant 2026-06-26
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use autoreview_engine::config::Credential;
+use autoreview_engine::config::{Credential, independent_scopes};
 use autoreview_engine::error::Error;
 use autoreview_engine::error_code;
 use autoreview_engine::integrations::{ReadiedDraft, ReviewRequest, ReviewRequestList};
@@ -309,13 +309,67 @@ fn decode_search_identities(output: &str, poll_limit: i64) -> Result<Vec<SearchI
     Ok(identities)
 }
 
-/// Returns the argv of a review request search with `extra` flags, the scope flags and the
+/// Returns `lists` as one list without repeats, keeping the first occurrence of each pull
+/// request (`searchRequested`).
+///
+/// Two results are the same pull request when their repository names match ignoring case and
+/// their numbers match.
+fn merge_identities(lists: Vec<Vec<SearchIdentity>>) -> Vec<SearchIdentity> {
+    let mut seen: BTreeSet<(String, i64)> = BTreeSet::new();
+    let mut merged = Vec::new();
+    for identity in lists.into_iter().flatten() {
+        let repository = repository_name(&identity.repository).to_ascii_lowercase();
+        if seen.insert((repository, identity.number)) {
+            merged.push(identity);
+        }
+    }
+    merged
+}
+
+/// Returns `lists`, the results of the searches of one scope each, as one list of at most
+/// `max` requests (`ListReviewRequests`).
+///
+/// The list is `truncated` when one search was, or when the repeat-free union exceeds `max`.
+/// Then the first `max` requests in the order of repository and number remain. One list is
+/// returned as it is.
+fn merge_review_requests(mut lists: Vec<ReviewRequestList>, max: i64) -> ReviewRequestList {
+    if lists.len() == 1 {
+        return lists.remove(0);
+    }
+    let mut truncated = false;
+    let mut seen: BTreeSet<(String, i64)> = BTreeSet::new();
+    let mut requests = Vec::new();
+    for list in lists {
+        truncated |= list.truncated;
+        for request in list.requests {
+            if seen.insert((request.repository.clone(), request.number)) {
+                requests.push(request);
+            }
+        }
+    }
+    let limit = usize::try_from(max).unwrap_or(0);
+    if truncated || requests.len() > limit {
+        truncated = true;
+        requests.sort_by(|left, right| {
+            (&left.repository, left.number).cmp(&(&right.repository, right.number))
+        });
+        requests.truncate(limit);
+    }
+    ReviewRequestList {
+        requests,
+        truncated,
+    }
+}
+
+/// Returns the argv of a review request search of one `scope` with `extra` flags and the
 /// negative qualifiers `exclusions` (`searchRequested`).
 ///
-/// A scope `owner/*` searches by `--owner`; any other scope searches by `--repo`.
+/// A scope `owner/*` searches by `--owner`; any other scope searches by `--repo`. `gh` joins
+/// several scope flags into one search whose results GitHub may cut for a fine-grained token,
+/// so a search carries one scope.
 fn search_requested_args(
     poll_limit: i64,
-    scopes: &[String],
+    scope: &str,
     extra: &[String],
     exclusions: &[String],
 ) -> Vec<String> {
@@ -330,7 +384,7 @@ fn search_requested_args(
         "number,repository".to_owned(),
     ];
     args.extend(extra.iter().cloned());
-    args.extend(scope_args(scopes));
+    args.extend(scope_args(scope));
     args.extend(query_args(exclusions));
     args
 }
@@ -348,28 +402,19 @@ fn query_args(exclusions: &[String]) -> Vec<String> {
 }
 
 /// Returns the scope flags of a search: `--owner` for `owner/*`, else `--repo`.
-fn scope_args(scopes: &[String]) -> Vec<String> {
-    let mut args = Vec::new();
-    for scope in scopes {
-        if let Some((owner, name)) = scope.split_once('/')
-            && name == "*"
-        {
-            args.push("--owner".to_owned());
-            args.push(owner.to_owned());
-            continue;
-        }
-        args.push("--repo".to_owned());
-        args.push(scope.clone());
+fn scope_args(scope: &str) -> Vec<String> {
+    if let Some((owner, "*")) = scope.split_once('/') {
+        return vec!["--owner".to_owned(), owner.to_owned()];
     }
-    args
+    vec!["--repo".to_owned(), scope.to_owned()]
 }
 
-/// Returns the argv of the search of requested reviews in the credential patterns `matches`
+/// Returns the argv of the search of requested reviews in the credential pattern `scope`
 /// without the negative qualifiers `exclusions` (`ListReviewRequests`).
 ///
 /// The search asks for one result more than `max`. `wrapping_add` wraps `i64::MAX` to
-/// `i64::MIN` in every build profile. With the pattern `*`, it searches every repository.
-fn list_review_requests_args(max: i64, matches: &[String], exclusions: &[String]) -> Vec<String> {
+/// `i64::MIN` in every build profile. Without a `scope`, it searches every repository.
+fn list_review_requests_args(max: i64, scope: Option<&str>, exclusions: &[String]) -> Vec<String> {
     let mut args = vec![
         "search".to_owned(),
         "prs".to_owned(),
@@ -381,8 +426,8 @@ fn list_review_requests_args(max: i64, matches: &[String], exclusions: &[String]
         "--json".to_owned(),
         "number,repository,title,url,author".to_owned(),
     ];
-    if !matches.iter().any(|pattern| pattern == "*") {
-        args.extend(scope_args(matches));
+    if let Some(scope) = scope {
+        args.extend(scope_args(scope));
     }
     args.extend(query_args(exclusions));
     args
@@ -621,14 +666,35 @@ impl GitHub {
         max: i64,
     ) -> Result<ReviewRequestList, Error> {
         let matches = &credential.matches;
-        let exclusions = self.credentials.search_exclusions(credential, matches);
-        let args = list_review_requests_args(max, matches, &exclusions);
-        let output = self.github::<()>(cancel, credential, &args, None).await?;
-        decode_review_request_search(&output, max, &self.host)
+        if matches.iter().any(|pattern| pattern == "*") {
+            let exclusions = self.credentials.search_exclusions(credential, matches);
+            let args = list_review_requests_args(max, None, &exclusions);
+            let output = self.github::<()>(cancel, credential, &args, None).await?;
+            return decode_review_request_search(&output, max, &self.host);
+        }
+        let mut lists = Vec::new();
+        for scope in independent_scopes(matches) {
+            let exclusions = self
+                .credentials
+                .search_exclusions(credential, std::slice::from_ref(&scope));
+            let args = list_review_requests_args(max, Some(&scope), &exclusions);
+            let output = self.github::<()>(cancel, credential, &args, None).await?;
+            let list = decode_review_request_search(&output, max, &self.host)?;
+            tracing::debug!(
+                credential = %credential.name,
+                scope = %scope,
+                found = list.requests.len(),
+                "review request queue search finished"
+            );
+            lists.push(list);
+        }
+        Ok(merge_review_requests(lists, max))
     }
 
-    /// Runs the review request search of `scopes` with the `extra` flags and `credential`'s
-    /// token (`searchRequested`).
+    /// Runs the review request search of each of `scopes` with the `extra` flags and
+    /// `credential`'s token, and returns the results without repeats (`searchRequested`).
+    ///
+    /// Each independent scope is one `gh` call, so no call holds an OR group of scopes.
     async fn search_requested(
         &self,
         cancel: &CancellationToken,
@@ -636,10 +702,23 @@ impl GitHub {
         scopes: &[String],
         extra: &[String],
     ) -> Result<Vec<SearchIdentity>, Error> {
-        let exclusions = self.credentials.search_exclusions(credential, scopes);
-        let args = search_requested_args(self.poll_limit, scopes, extra, &exclusions);
-        let output = self.github::<()>(cancel, credential, &args, None).await?;
-        decode_search_identities(&output, self.poll_limit)
+        let mut lists = Vec::new();
+        for scope in independent_scopes(scopes) {
+            let exclusions = self
+                .credentials
+                .search_exclusions(credential, std::slice::from_ref(&scope));
+            let args = search_requested_args(self.poll_limit, &scope, extra, &exclusions);
+            let output = self.github::<()>(cancel, credential, &args, None).await?;
+            let identities = decode_search_identities(&output, self.poll_limit)?;
+            tracing::debug!(
+                credential = %credential.name,
+                scope = %scope,
+                found = identities.len(),
+                "review request search finished"
+            );
+            lists.push(identities);
+        }
+        Ok(merge_identities(lists))
     }
 
     /// Returns the candidates that request a review from the login in the scopes of the policy
@@ -743,10 +822,16 @@ impl GitHub {
 
 #[cfg(test)]
 mod tests {
+    use autoreview_engine::config::independent_scopes;
+    use autoreview_engine::integrations::{ReviewRequest, ReviewRequestList};
     use autoreview_engine::model::{CandidateList, PullRequest};
     use autoreview_policy::{Authors, Trigger, TriggerKind};
 
-    use super::{GitHubPullRequest, classify, covering, decode_pull_request};
+    use super::{
+        GitHubPullRequest, SearchIdentity, classify, covering, decode_pull_request,
+        list_review_requests_args, merge_identities, merge_review_requests, repository_name,
+        search_requested_args,
+    };
 
     /// A policy whose first and second rule both match `acme/special` and `solo/special`.
     const OVERLAPPING_POLICY: &str = "version: 1
@@ -897,6 +982,129 @@ notifications:
             let got = list.rejected.first().map(|rejected| rejected.code.as_str());
             assert_eq!(got, want, "{base:?}");
             assert_eq!(list.candidates.is_empty(), want.is_some(), "{base:?}");
+        }
+    }
+
+    /// One search per independent scope: each argv holds exactly one scope flag and only the
+    /// exclusions of its own scope (#577).
+    #[test]
+    fn search_argv_holds_one_scope_each() {
+        let scopes: Vec<String> = ["example-org/*", "example-org/app", "other-org/tool"]
+            .iter()
+            .map(|scope| (*scope).to_owned())
+            .collect();
+        let extra = ["--draft=false".to_owned()];
+        let calls: Vec<Vec<String>> = independent_scopes(&scopes)
+            .iter()
+            .map(|scope| {
+                let exclusions = vec![format!("-repo:{scope}")];
+                search_requested_args(100, scope, &extra, &exclusions)
+            })
+            .collect();
+        assert_eq!(calls.len(), 2);
+        let flags = |call: &[String]| -> Vec<String> {
+            let mut found = Vec::new();
+            for (index, word) in call.iter().enumerate() {
+                if word == "--owner" || word == "--repo" {
+                    found.push(format!("{word} {}", call[index + 1]));
+                }
+            }
+            found
+        };
+        assert_eq!(flags(&calls[0]), ["--owner example-org"]);
+        assert_eq!(flags(&calls[1]), ["--repo other-org/tool"]);
+        assert!(calls[0].ends_with(&["--".to_owned(), "-repo:example-org/*".to_owned()]));
+        assert!(calls[1].ends_with(&["--".to_owned(), "-repo:other-org/tool".to_owned()]));
+
+        let queue = list_review_requests_args(10, Some("other-org/tool"), &[]);
+        assert_eq!(flags(&queue), ["--repo other-org/tool"]);
+        assert!(flags(&list_review_requests_args(10, None, &[])).is_empty());
+    }
+
+    /// Results of several searches are merged without repeats, ignoring the case of the
+    /// repository (#577).
+    #[test]
+    fn merge_identities_removes_repeats() {
+        let identity = |repository: &str, number: i64| SearchIdentity {
+            number,
+            repository: serde_json::json!({ "nameWithOwner": repository }),
+        };
+        let merged = merge_identities(vec![
+            vec![identity("Acme/App", 1), identity("acme/app", 2)],
+            vec![identity("acme/app", 1), identity("other/tool", 1)],
+        ]);
+        let keys: Vec<(String, i64)> = merged
+            .iter()
+            .map(|found| (repository_name(&found.repository).to_owned(), found.number))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("Acme/App".to_owned(), 1),
+                ("acme/app".to_owned(), 2),
+                ("other/tool".to_owned(), 1)
+            ]
+        );
+    }
+
+    /// The merged queue is truncated when one search was or the union exceeds the maximum, and
+    /// then keeps the first requests by repository and number (#577).
+    #[test]
+    fn merge_review_requests_truncates_by_repository_and_number() {
+        let request = |repository: &str, number: i64| ReviewRequest {
+            repository: repository.to_owned(),
+            number,
+            ..ReviewRequest::default()
+        };
+        let list = |requests: Vec<ReviewRequest>, truncated: bool| ReviewRequestList {
+            requests,
+            truncated,
+        };
+        // (lists, max, expected requests, expected truncated)
+        let rows = [
+            (
+                vec![
+                    list(vec![request("b/one", 2), request("a/one", 1)], false),
+                    list(vec![request("a/one", 1), request("c/one", 3)], false),
+                ],
+                10,
+                vec![("b/one", 2), ("a/one", 1), ("c/one", 3)],
+                false,
+            ),
+            (
+                vec![
+                    list(vec![request("b/one", 2), request("a/one", 1)], false),
+                    list(vec![request("c/one", 3)], false),
+                ],
+                2,
+                vec![("a/one", 1), ("b/one", 2)],
+                true,
+            ),
+            (
+                vec![
+                    list(vec![request("b/one", 2)], true),
+                    list(vec![request("a/one", 1)], false),
+                ],
+                5,
+                vec![("a/one", 1), ("b/one", 2)],
+                true,
+            ),
+            (
+                vec![list(vec![request("b/one", 2), request("a/one", 1)], true)],
+                1,
+                vec![("b/one", 2), ("a/one", 1)],
+                true,
+            ),
+        ];
+        for (lists, max, expected, truncated) in rows {
+            let merged = merge_review_requests(lists, max);
+            let got: Vec<(&str, i64)> = merged
+                .requests
+                .iter()
+                .map(|found| (found.repository.as_str(), found.number))
+                .collect();
+            assert_eq!(got, expected, "max {max}");
+            assert_eq!(merged.truncated, truncated, "max {max}");
         }
     }
 }

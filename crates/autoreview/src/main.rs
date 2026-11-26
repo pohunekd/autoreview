@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use autoreview_engine::config::{Config, Credentials};
-use autoreview_engine::credential_check::{CredentialStatus, check_credentials};
+use autoreview_engine::credential_check::{CredentialStatus, check_credentials, search_budgets};
 use autoreview_engine::mcp::McpConfig;
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::model::{
@@ -457,6 +457,7 @@ async fn run_engine(
 ) -> Result<(), Error> {
     let review_list_limit = config.review_list_limit;
     let credentials = config.credentials.clone();
+    let policy = config.policy.clone();
     let store = Arc::new(Store::open(
         Path::new(&config.state_db_path),
         Box::new(OffsetDateTime::now_utc),
@@ -476,7 +477,8 @@ async fn run_engine(
     });
     match command {
         EngineCommand::Serve => {
-            serve(&engine, &external, &credentials, sections.metrics, cancel).await
+            let checked = (&credentials, policy.as_ref());
+            serve(&engine, &external, checked, sections.metrics, cancel).await
         }
         EngineCommand::Mcp => {
             let Some(mcp) = sections.mcp else {
@@ -593,7 +595,7 @@ async fn validate(config: &Config, check: bool, cancel: &CancellationToken) -> R
 async fn serve(
     engine: &Arc<Engine<External, SystemClock>>,
     external: &External,
-    credentials: &Credentials,
+    (credentials, policy): (&Credentials, Option<&autoreview_policy::Policy>),
     metrics: Option<MetricsConfig>,
     cancel: &CancellationToken,
 ) -> Result<(), Error> {
@@ -618,6 +620,15 @@ async fn serve(
     for status in &statuses {
         let (name, expires_at) = (&status.name, status.expires_at.as_deref());
         tracing::info!(credential = %name, expires_at, "credential checked");
+    }
+    for budget in policy.map_or_else(Vec::new, |policy| search_budgets(credentials, policy)) {
+        tracing::info!(
+            credential = %budget.credential,
+            scopes = budget.scopes,
+            ready_draft_authors = budget.ready_draft_authors,
+            searches_per_pass = budget.searches_per_pass,
+            "review request searches of one pass"
+        );
     }
     let Some(metrics) = metrics else {
         return engine.serve(cancel).await;
