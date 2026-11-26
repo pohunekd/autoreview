@@ -192,8 +192,10 @@ impl GitHub {
     /// `gh` exits 1 when the response holds errors, with the response on stdout. A response whose
     /// only errors are on a requested reviewer (a team the token cannot read) is returned like a
     /// success; the decoders then read the team request as an unreadable non-user request. A
-    /// response whose errors are all `FORBIDDEN` fails with the permanent `github_read_forbidden`.
-    /// Every other failure maps as in [`GitHub::github`].
+    /// response whose errors are all `FORBIDDEN` fails with the permanent `github_read_forbidden`,
+    /// and any other GraphQL error body except a rate limit with the permanent
+    /// `github_read_unrecognized`, so one pull request never stops the pass. Every other failure
+    /// maps as in [`GitHub::github`].
     pub(crate) async fn graphql_read(
         &self,
         cancel: &CancellationToken,
@@ -218,6 +220,18 @@ impl GitHub {
                         true,
                         Some(Box::new(error)),
                     )),
+                    GraphqlFailure::Unrecognized => {
+                        tracing::warn!(
+                            credential = %credential.name,
+                            error_types = %error_types(error.stdout()),
+                            "pull request read has GraphQL errors of an unknown shape, skipping it"
+                        );
+                        Err(Error::workflow(
+                            "github_read_unrecognized",
+                            true,
+                            Some(Box::new(error)),
+                        ))
+                    }
                     GraphqlFailure::Other => {
                         let (code, permanent) = gh_failure(&error.to_string());
                         Err(Error::workflow(code, permanent, Some(Box::new(error))))
@@ -239,13 +253,25 @@ enum GraphqlFailure {
     ReviewerOnly,
     /// Every error is of type `FORBIDDEN`: GitHub refuses the token's read.
     Forbidden,
-    /// Anything else: no GraphQL body, or errors of another kind.
+    /// A GraphQL error body of another shape, such as an unknown error type or an error without
+    /// a type: the read of this pull request is skipped and the rest of the pass goes on.
+    Unrecognized,
+    /// Anything else: no GraphQL body, or a rate limit, which a later pass can retry.
     Other,
+}
+
+/// Error type of a GraphQL rate limit, which is transient.
+const RATE_LIMITED: &str = "RATE_LIMITED";
+
+/// Returns the `type` of a GraphQL error, `None` when it has none or it is not text.
+fn error_type(error: &serde_json::Value) -> Option<&str> {
+    error.get("type").and_then(serde_json::Value::as_str)
 }
 
 /// Sorts the stdout of a failed `gh api graphql` call.
 ///
-/// The decision rests on the error paths and types, never on the message text.
+/// The decision rests on the documented GraphQL error format (`errors[].type`, `message` and
+/// `path`), on the error paths and types, never on the message text.
 fn graphql_failure(stdout: &str) -> GraphqlFailure {
     let Ok(response) = serde_json::from_str::<serde_json::Value>(stdout) else {
         return GraphqlFailure::Other;
@@ -261,12 +287,37 @@ fn graphql_failure(stdout: &str) -> GraphqlFailure {
         GraphqlFailure::ReviewerOnly
     } else if errors
         .iter()
-        .all(|error| error.get("type").and_then(serde_json::Value::as_str) == Some("FORBIDDEN"))
+        .all(|error| error_type(error).is_some_and(|kind| kind.eq_ignore_ascii_case("FORBIDDEN")))
     {
         GraphqlFailure::Forbidden
-    } else {
+    } else if errors
+        .iter()
+        .any(|error| error_type(error).is_some_and(|kind| kind.eq_ignore_ascii_case(RATE_LIMITED)))
+    {
         GraphqlFailure::Other
+    } else {
+        GraphqlFailure::Unrecognized
     }
+}
+
+/// Lists the error types of a GraphQL error body for the log, `none` for an error without one.
+///
+/// Only the types are logged, never the message text.
+fn error_types(stdout: &str) -> String {
+    let Ok(response) = serde_json::from_str::<serde_json::Value>(stdout) else {
+        return String::new();
+    };
+    response
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .map(|errors| {
+            errors
+                .iter()
+                .map(|error| error_type(error).unwrap_or("none"))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default()
 }
 
 /// Reports whether `errors` is non-empty and every error is on the `requestedReviewer` of a
@@ -565,6 +616,20 @@ mod tests {
             ),
             (
                 serde_json::json!({"data": data, "errors": [reviewer_error(0), unknown]}),
+                GraphqlFailure::Unrecognized,
+            ),
+            (
+                serde_json::json!({"data": null, "errors": [{"message": "no type"}, "text"]}),
+                GraphqlFailure::Unrecognized,
+            ),
+            (
+                serde_json::json!({"data": null, "errors": [{"type": "forbidden", "path": [],
+                    "message": "x"}]}),
+                GraphqlFailure::Forbidden,
+            ),
+            (
+                serde_json::json!({"data": null, "errors": [{"type": "RATE_LIMITED",
+                    "message": "x"}, unknown]}),
                 GraphqlFailure::Other,
             ),
             (
