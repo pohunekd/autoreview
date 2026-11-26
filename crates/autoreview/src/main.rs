@@ -23,7 +23,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use autoreview_engine::config::{Config, Credentials};
-use autoreview_engine::credential_check::{CredentialStatus, check_credentials, search_budgets};
+use autoreview_engine::credential_check::{
+    CredentialStatus, SEARCH_LIMIT_PER_MINUTE, check_credentials, search_budgets,
+};
 use autoreview_engine::mcp::McpConfig;
 use autoreview_engine::metrics::MetricsConfig;
 use autoreview_engine::model::{
@@ -629,6 +631,15 @@ async fn serve(
             searches_per_pass = budget.searches_per_pass,
             "review request searches of one pass"
         );
+        if budget.searches_per_pass > SEARCH_LIMIT_PER_MINUTE {
+            tracing::warn!(
+                credential = %budget.credential,
+                searches_per_pass = budget.searches_per_pass,
+                limit_per_minute = SEARCH_LIMIT_PER_MINUTE,
+                "one pass needs more review request searches than GitHub allows a user per minute; \
+                 the searches are paced and a pass takes longer than a minute"
+            );
+        }
     }
     let Some(metrics) = metrics else {
         return engine.serve(cancel).await;

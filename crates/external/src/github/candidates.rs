@@ -662,6 +662,7 @@ impl GitHub {
         if matches.iter().any(|pattern| pattern == "*") {
             let exclusions = self.credentials.search_exclusions(credential, matches);
             let args = list_review_requests_args(max, None, &exclusions);
+            self.wait_for_search_slot(cancel, credential).await;
             let output = self.github::<()>(cancel, credential, &args, None).await?;
             return decode_review_request_search(&output, max, &self.host);
         }
@@ -671,6 +672,7 @@ impl GitHub {
                 .credentials
                 .search_exclusions(credential, std::slice::from_ref(&scope));
             let args = list_review_requests_args(max, Some(&scope), &exclusions);
+            self.wait_for_search_slot(cancel, credential).await;
             let output = self.github::<()>(cancel, credential, &args, None).await?;
             let list = decode_review_request_search(&output, max, &self.host)?;
             tracing::debug!(
@@ -701,6 +703,7 @@ impl GitHub {
                 .credentials
                 .search_exclusions(credential, std::slice::from_ref(&scope));
             let args = search_requested_args(self.poll_limit, &scope, extra, &exclusions);
+            self.wait_for_search_slot(cancel, credential).await;
             let output = self.github::<()>(cancel, credential, &args, None).await?;
             let identities = decode_search_identities(&output, self.poll_limit)?;
             tracing::debug!(

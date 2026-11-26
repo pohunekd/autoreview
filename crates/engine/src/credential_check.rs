@@ -86,6 +86,10 @@ pub async fn check_credentials<I: Integrations>(
     Ok(statuses)
 }
 
+/// Searches per minute that GitHub allows one user; searches are paced to it and the startup
+/// log warns when one pass needs more.
+pub const SEARCH_LIMIT_PER_MINUTE: usize = 30;
+
 /// The review request searches that one discovery pass makes with one credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchBudget {

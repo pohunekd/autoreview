@@ -587,13 +587,15 @@ credential covers (`example-org/app` next to `example-org/*`) is not searched.
 credential that no other entry of the credential covers, or a single search when
 the credential matches `*`.
 
-GitHub allows 30 searches per minute for a user, and credentials of the same
-user share that limit. Compare `searches_per_pass` of the credentials of one
-user, added up, with `30 x schedule.poll_interval_seconds / 60`. When the
-search count is higher, GitHub's search API rate limit refuses searches and the
-credential's pass fails with `github_request_failed`. Prefer `owner/*` entries
-in `match` over many single-repository entries, and raise
-`schedule.poll_interval_seconds`.
+GitHub allows 30 searches per minute for a user. The engine starts the searches
+of one credential at least two seconds apart, retries included, so a credential
+stays at that rate. A pass that needs more than 30 searches takes longer than a
+minute, and `autoreview serve` warns at start when `searches_per_pass` is above
+30. Credentials of the same user are paced separately, so together they can
+still pass the limit; GitHub's search API rate limit then refuses searches and
+the pass fails with `github_request_failed`. To lower the number, cut scopes
+(prefer `owner/*` entries in `match` over many single-repository entries) and
+`ready_draft_authors` entries.
 
 ## Credential errors
 
