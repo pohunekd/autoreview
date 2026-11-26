@@ -242,7 +242,7 @@ pub struct ReviewRequest {
 /// The result of a search of requested reviews.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReviewRequestList {
-    /// Review requests found, at most the requested maximum.
+    /// Review requests found; more than the requested maximum when `truncated`.
     pub requests: Vec<ReviewRequest>,
     /// Whether the search found more than the requested maximum.
     pub truncated: bool,
@@ -561,9 +561,10 @@ pub trait Integrations {
         notification: &Notification,
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
-    /// Returns the open review requests of `credential`'s login, at most `max` of them.
+    /// Returns the open review requests of `credential`'s login, without repeats.
     ///
-    /// It searches with `credential`'s token.
+    /// It searches with `credential`'s token. The list is `truncated` when a search found more
+    /// than `max`; it may then hold more than `max` requests, and the caller cuts it.
     fn list_review_requests(
         &self,
         cancel: &CancellationToken,

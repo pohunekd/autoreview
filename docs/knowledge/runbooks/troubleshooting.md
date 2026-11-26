@@ -575,6 +575,30 @@ do not count toward its limit. Narrow the work: use a more specific `match` or
 a label trigger, or split a large organization into rules. Raise
 `schedule.poll_limit` only when the narrowing is not enough.
 
+## Search budget
+
+A discovery pass makes one review request search for each search scope of a
+credential, and one more per scope for each `ready_draft_authors` entry: `S x
+(1 + A)` searches with `S` scopes and `A` authors. A scope is a `match` entry
+narrowed to the policy's repositories; a scope that another scope of the same
+credential covers (`example-org/app` next to `example-org/*`) is not searched.
+`autoreview serve` logs the number for each credential at start
+(`searches_per_pass`). The review queue adds one search per `match` entry of a
+credential that no other entry of the credential covers, or a single search when
+the credential matches `*`.
+
+GitHub allows 30 searches per minute for a user. The engine starts the searches
+of one credential at least two seconds apart, retries included, so a credential
+stays at that rate. The pacing is per process: `serve`, `review-queue`, `mcp` and
+each CLI command pace separately, so processes that run at the same time can
+still pass the limit together. A pass that needs more than 30 searches takes longer than a
+minute, and `autoreview serve` warns at start when `searches_per_pass` is above
+30. Credentials of the same user are paced separately, so together they can
+still pass the limit; GitHub's search API rate limit then refuses searches and
+the pass fails with `github_request_failed`. To lower the number, cut scopes
+(prefer `owner/*` entries in `match` over many single-repository entries) and
+`ready_draft_authors` entries.
+
 ## Credential errors
 
 Each repository is served by the first credential whose `match` covers it, see

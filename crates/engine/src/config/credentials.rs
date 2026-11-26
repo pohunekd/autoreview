@@ -274,6 +274,24 @@ fn covers(pattern: &str, target: &str) -> bool {
     }
 }
 
+/// Returns `scopes` without the scopes that another scope covers, and without duplicates.
+///
+/// The order of the remaining scopes is kept. One search of each remaining scope finds every
+/// repository that a search of all of `scopes` would.
+#[must_use]
+pub fn independent_scopes(scopes: &[String]) -> Vec<String> {
+    let mut kept: Vec<String> = Vec::new();
+    for (index, scope) in scopes.iter().enumerate() {
+        let covered = scopes.iter().enumerate().any(|(other, wider)| {
+            other != index && covers(wider, scope) && (wider != scope || other < index)
+        });
+        if !covered {
+            kept.push(scope.clone());
+        }
+    }
+    kept
+}
+
 /// Returns the pattern of the repositories that both patterns match, if any.
 ///
 /// Patterns either nest or share no repository, so the result is one of the two.
@@ -294,7 +312,31 @@ fn error(code: &str, key: &str, message: String) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{Credential, Credentials};
+    use super::{Credential, Credentials, independent_scopes};
+
+    /// A scope that another scope covers, and a repeated scope, are dropped; the order holds.
+    #[test]
+    fn independent_scopes_drop_covered_and_repeated_scopes() {
+        let rows: [(&[&str], &[&str]); 7] = [
+            (&[], &[]),
+            (
+                &["acme/*", "acme/app", "other/tool"],
+                &["acme/*", "other/tool"],
+            ),
+            (&["acme/app", "acme/*"], &["acme/*"]),
+            (
+                &["acme/app", "other/tool", "acme/app"],
+                &["acme/app", "other/tool"],
+            ),
+            (&["acme/*", "acme/*"], &["acme/*"]),
+            (&["acme/app", "*", "other/*"], &["*"]),
+            (&["b/one", "a/*", "b/two"], &["b/one", "a/*", "b/two"]),
+        ];
+        for (scopes, expected) in rows {
+            let scopes: Vec<String> = scopes.iter().map(|scope| (*scope).to_owned()).collect();
+            assert_eq!(independent_scopes(&scopes), expected, "{scopes:?}");
+        }
+    }
 
     /// A stored review keeps its credential while it still matches the repository and its
     /// publisher, also behind a narrower credential added before it (#18).

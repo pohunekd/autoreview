@@ -17,16 +17,19 @@ mod reviews;
 mod signals;
 mod token;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fmt;
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use autoreview_engine::config::{Config, Credential, Credentials};
+use autoreview_engine::credential_check::SEARCH_LIMIT_PER_MINUTE;
 use autoreview_engine::error::{BoxError, Error};
 use serde::Deserialize;
 use serde::Serialize;
 use serde::de::IgnoredAny;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::process::{GH_INHERITED, child_environment, run};
@@ -96,6 +99,8 @@ pub(crate) struct GitHub {
     secret_variables: BTreeSet<String>,
     /// Text that marks a discussion comment as machine-written.
     ai_signed_pattern: String,
+    /// The earliest next search of each credential, by name.
+    search_slots: Mutex<BTreeMap<String, Instant>>,
 }
 
 impl fmt::Debug for GitHub {
@@ -124,7 +129,31 @@ impl GitHub {
             search_page_limit: config.search_page_limit,
             secret_variables: config.secret_variables.clone(),
             ai_signed_pattern: config.ai_signed_pattern.clone(),
+            search_slots: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Waits until a `gh search` of `credential`'s login may start without passing GitHub's
+    /// search limit.
+    ///
+    /// Searches of one credential start at least `60 s / SEARCH_LIMIT_PER_MINUTE` apart,
+    /// whichever pass or retry makes them. A cancel ends the wait; the call that follows then fails
+    /// as cancelled.
+    async fn wait_for_search_slot(&self, cancel: &CancellationToken, credential: &Credential) {
+        let gap = Duration::from_secs(60) / u32::try_from(SEARCH_LIMIT_PER_MINUTE).unwrap_or(1);
+        let start = {
+            let mut slots = (self.search_slots)
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let now = Instant::now();
+            let slot = slots.entry(credential.name.clone()).or_insert(now);
+            let start = (*slot).max(now);
+            *slot = start + gap;
+            start
+        };
+        cancel
+            .run_until_cancelled(tokio::time::sleep_until(start))
+            .await;
     }
 
     /// Returns the environment of a `gh` child that acts with `credential`.
@@ -315,8 +344,9 @@ fn response_invalid(cause: Option<BoxError>) -> Error {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::ffi::OsString;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use autoreview_engine::config::{Credential, Credentials};
@@ -375,6 +405,7 @@ mod tests {
             search_page_limit: 10,
             secret_variables: BTreeSet::from(["EXAMPLE_SECOND_TOKEN".to_owned()]),
             ai_signed_pattern: "Written by AI:".to_owned(),
+            search_slots: Mutex::new(BTreeMap::new()),
         };
         let parent = pairs(&[
             ("PATH", "/usr/bin"),
