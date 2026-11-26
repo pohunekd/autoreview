@@ -722,7 +722,10 @@ no state.
   `untrusted`) and the `rule` it would run under; for an untrusted author that is
   the rule of the `untrusted` section.
 - `rejected`: pull requests whose data or author permission read was refused,
-  with the `code`.
+  that request their review only from a team (`review_requested_from_team`), or
+  whose read failed permanently (for example `github_read_forbidden`), with the
+  `code`. Such a read failure rejects only its own pull request; the others are
+  still searched.
 - `skipped`: pull requests whose rule skips their untrusted author
   (`untrusted: skip`), with `author`, `fork`, `author_class` and the `reason`
   `untrusted_author`.
@@ -1035,6 +1038,8 @@ repository in `error`. Without `--host`, a skipped host or repository keeps exit
 | `base_branch_changed` | The pull request's base branch changed while its review ran; the review ends as `superseded` and the pull request is reviewed again, see [incremental reviews](knowledge/concepts/incremental-reviews.md) |
 | `review_history_limit_exceeded` | The store holds more reviews than `schedule.state_entry_limit`; the discovery pass dispatches nothing rather than over a review it cannot see |
 | `review_request_event_missing` | GitHub lists no review request event for a pull request that asks for a review; `candidates` shows it as rejected with this code |
+| `review_requested_from_team` | The pull request requests its review only from a team, or from a reviewer the token cannot read (organization permission Members: read); `candidates` shows it as rejected with this code, one notice is sent, and an approval wait for it ends as `superseded`; request the credential's login directly |
+| `github_read_forbidden` | GitHub refused the token's read of one pull request; `candidates` shows it as rejected with this code, the other pull requests are still searched, and the read is repeated on the next pass; check the token's permissions |
 | `base_branch_unsupported` | The pull request's base branch name is longer than 255 bytes, or has a character other than ASCII letters, digits, `.`, `_`, `/` and `-`, or `..` (an empty name is `github_response_invalid`); GitHub allows such names, autoreview does not, see [prompt injection](knowledge/safety/prompt-injection.md); `candidates` shows it as rejected with this code, and a review whose pull request moved to such a branch fails with it, and an approval wait for it ends as `superseded`; not retried |
 | `pohunek_session_not_found`, `pohunek_response_invalid` | A pohunek call named a session that the review host does not have, or its answer did not read; a route lookup that fails this way waits for a review host, as after `pohunek_request_failed` |
 | `session_identity_ambiguous`, `session_identity_invalid` | The review host lists two sessions of the review's name, or the session of that name has another profile, project or branch, reports malformed IDs or runtime generation, or is not running live in a linked worktree; not retried |

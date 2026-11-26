@@ -153,6 +153,20 @@ pub fn error_code<'a>(err: &'a (dyn StdError + 'static)) -> &'a str {
     workflow.or_else(config).unwrap_or(WORKFLOW_FAILED)
 }
 
+/// Reports whether the first workflow failure in the chain of `err` is marked permanent.
+///
+/// The chain is searched, not only its top, and the first workflow failure in it decides.
+pub fn is_permanent(err: &Error) -> bool {
+    let mut current: Option<&dyn StdError> = Some(err);
+    while let Some(error) = current {
+        if let Some(Error::Workflow { permanent, .. }) = error.downcast_ref::<Error>() {
+            return *permanent;
+        }
+        current = error.source();
+    }
+    false
+}
+
 /// Returns the pohunek error code of `err`.
 ///
 /// The outermost pohunek CLI failure in the chain, or `None` when the CLI

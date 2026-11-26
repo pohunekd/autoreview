@@ -140,7 +140,7 @@ The wait ends in one of three ways, and the first one that happens decides:
 | Ending | Trigger | Event | Publication |
 |---|---|---|---|
 | Approved | `autoreview approve` with the current head | `approved` after publication | `APPROVE` |
-| Superseded | A new head, or the trigger stops asking: the review request is removed, the label is removed, or the pull request is closed or turned back into a draft. Also a pull request that the search rejects as `base_branch_unsupported` or `review_request_event_missing` | `superseded` | None |
+| Superseded | A new head, or the trigger stops asking: the review request is removed, the label is removed, or the pull request is closed or turned back into a draft. Also a pull request that the search rejects as `base_branch_unsupported`, `review_request_event_missing` or `review_requested_from_team` | `superseded` | None |
 | Expired | `approval.timeout_hours` passed | `approval_expired` | None |
 
 A renewed review request for the same head does not supersede the wait. Only a

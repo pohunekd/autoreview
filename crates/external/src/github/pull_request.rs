@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use super::{GitHub, graphql_pull_request, repository_variables, response_invalid};
+use super::{
+    GitHub, graphql_pull_request, repository_variables, response_invalid, reviewer_errors_tolerated,
+};
 
 /// Largest title in bytes that a pull request may have.
 const MAX_TITLE_BYTES: usize = 1024;
@@ -193,7 +195,7 @@ autoreview_go_compat::object_only_serde!(ReviewRequests);
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 struct ReviewRequestNode {
-    /// The requested reviewer, `null` for a request to a team.
+    /// The requested reviewer; `null` for a team the token cannot read.
     #[serde(rename = "requestedReviewer")]
     requested_reviewer: Option<Reviewer>,
 }
@@ -204,7 +206,10 @@ autoreview_go_compat::object_only_serde!(ReviewRequestNode);
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 struct Reviewer {
-    /// Login of the reviewer.
+    /// GraphQL type name, `User` or `Team`.
+    #[serde(rename = "__typename", deserialize_with = "null_default::deserialize")]
+    typename: String,
+    /// Login of the reviewer; empty for a team.
     #[serde(deserialize_with = "null_default::deserialize")]
     login: String,
 }
@@ -268,7 +273,7 @@ pub(crate) struct ReviewRequestPage {
 pub(crate) fn decode_pull_request_response(output: &str) -> Result<GitHubPullRequest, Error> {
     let response: GraphQlResponse =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
-    if !response.errors.is_empty() {
+    if !response.errors.is_empty() && !reviewer_errors_tolerated(output, &response.errors) {
         return Err(response_invalid(None));
     }
     let repository = response
@@ -336,6 +341,16 @@ pub(super) fn requests(raw: &GitHubPullRequest, login: &str) -> bool {
         }
     }
     false
+}
+
+/// Reports whether some review request is not a user: a `Team`, or a reviewer the token cannot
+/// read (`null`).
+fn team_requested(raw: &GitHubPullRequest) -> bool {
+    raw.review_requests.nodes.iter().any(|node| {
+        node.requested_reviewer
+            .as_ref()
+            .is_none_or(|reviewer| reviewer.typename == "Team")
+    })
 }
 
 /// Reports whether the pull request carries `label`, ignoring ASCII case.
@@ -433,6 +448,9 @@ pub(crate) fn decode_pull_request(
         }
         TriggerKind::ReviewRequested => {
             if !requests(raw, login) {
+                if team_requested(raw) {
+                    return Err(Error::workflow("review_requested_from_team", true, None));
+                }
                 return Err(Error::workflow("review_request_not_active", true, None));
             }
         }
@@ -589,7 +607,7 @@ impl GitHub {
         number: i64,
     ) -> Result<PullRequestState, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.github::<()>(cancel, credential, &args, None).await?;
+        let output = self.graphql_read(cancel, credential, &args).await?;
         decode_pull_request_state(repository, number, &output, &self.host, &credential.login)
     }
 
@@ -602,7 +620,7 @@ impl GitHub {
         number: i64,
     ) -> Result<GitHubPullRequest, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.github::<()>(cancel, credential, &args, None).await?;
+        let output = self.graphql_read(cancel, credential, &args).await?;
         decode_pull_request_response(&output)
     }
 

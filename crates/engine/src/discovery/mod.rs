@@ -14,7 +14,10 @@ use crate::config::{Credential, NotifyRoute};
 use crate::engine::{Clock, Engine, retry_step};
 use crate::error::{Error, error_code};
 use crate::integrations::Integrations;
-use crate::model::RejectedCandidate;
+use crate::model::{REJECTED_CANDIDATE_CODES, RejectedCandidate};
+
+/// Code of a pull request that requests its review only from a team.
+const TEAM_REQUEST_CODE: &str = "review_requested_from_team";
 use crate::notify::Notification;
 use crate::store::DiscoveryState;
 
@@ -241,9 +244,21 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             if reported == item.code {
                 continue;
             }
-            let message = match &item.permission_login {
-                Some(login) => permission_message(&key, &item.code, &item.repository, login),
-                None => rejected_message(&key, &item.code),
+            let message = if let Some(login) = &item.permission_login {
+                permission_message(&key, &item.code, &item.repository, login)
+            } else if item.code == TEAM_REQUEST_CODE {
+                let login = self
+                    .config
+                    .credentials
+                    .serving(&item.repository)
+                    .map_or("the credential's login", |credential| {
+                        credential.login.as_str()
+                    });
+                team_request_message(&key, login)
+            } else if REJECTED_CANDIDATE_CODES.contains(&item.code.as_str()) {
+                rejected_message(&key, &item.code)
+            } else {
+                read_failed_message(&key, &item.code)
             };
             notices.push(self.notice(Event::ReviewStopped, &key, message)?);
         }
@@ -314,6 +329,26 @@ fn rejected_message(key: &str, code: &str) -> String {
     format!(
         "Review for {key} is not started: GitHub returned data the review service refuses \
          ({code}). Check the pull request; it is reviewed once the data is valid."
+    )
+}
+
+/// Returns the notice of a pull request that requests its review only from a team.
+fn team_request_message(key: &str, login: &str) -> String {
+    format!(
+        "Review for {key} is not started: the pull request requests the review only from a \
+         team. autoreview reviews requests to the credential's login; request {login} \
+         directly."
+    )
+}
+
+/// Returns the notice of a pull request whose read GitHub refused or the engine could not do.
+///
+/// It names the code and holds no `gh` output.
+fn read_failed_message(key: &str, code: &str) -> String {
+    format!(
+        "Review for {key} is not started: reading the pull request failed ({code}). Check the \
+         token's permissions for the repository; the pull request is read again on the next \
+         pass."
     )
 }
 

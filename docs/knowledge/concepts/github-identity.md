@@ -151,6 +151,7 @@ the GitHub documentation assigns to it.
 | Login check | `GET /user` | None listed; any valid token |
 | Review requests and label search | Search issues and pull requests (`gh search prs`, GraphQL search) | Access to the repository; no separate permission listed |
 | Pull request read | `GET /repos/{owner}/{repo}/pulls/{number}` and GraphQL pull request query | Pull requests: read |
+| Team review requests | GraphQL `reviewRequests.requestedReviewer` on a `Team` | Organization permission Members: read |
 | Review request events | `GET /repos/{owner}/{repo}/issues/{number}/events` | Pull requests: read, or Issues: read |
 | Changed lines | `GET /repos/{owner}/{repo}/pulls/{number}/files` | Pull requests: read |
 | Closed issues (`intent_check: issues`) | GraphQL `closingIssuesReferences` of the pull request | Pull requests: read, and Issues: read on the pull request's repository (issues of other repositories are never read); without it the review states that the issues could not be read |
@@ -179,6 +180,10 @@ verified: the GraphQL reference page fetched did not include it.
 - **Metadata: read.** Not verified in this pass. Most fine-grained tokens get it by default, and no call above needs more.
 - **Issues: read.** Optional. The event and label reads also accept Pull requests
   read, so Issues read is not needed on its own.
+- **Members: read (organization).** Optional. It lets the engine tell a team review
+  request apart from an unreadable one in organizations that request teams as
+  reviewers. Without it, a request to the credential's login still works, and a pull
+  request requested only from a team is rejected with `review_requested_from_team`.
 - **Contents: read.** Required by the linear history check, the compare call in the
   table above. Without it, a re-review cannot be marked incremental (see
   [incremental reviews](incremental-reviews.md#full-or-incremental)).

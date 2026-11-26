@@ -124,3 +124,37 @@ async fn rejected_approval_wait_holds_up_no_other_review() {
     assert_eq!(h.publications(), 1, "the ended wait posted a review");
     h.stop_engine().await;
 }
+
+/// A pull request requested only from a team is announced once and holds up no other review
+/// (#576).
+#[tokio::test]
+async fn team_only_request_is_announced_and_holds_up_no_other_review() {
+    let mut h = start_harness(|_| {}).await;
+    h.fake
+        .lock()
+        .rejected
+        .push(crate::model::RejectedCandidate {
+            repository: "acme/widget".to_owned(),
+            number: 7,
+            code: "review_requested_from_team".to_owned(),
+            permission_login: None,
+        });
+    let other = integration_pull_request("acme/widget", &sha("b"));
+    h.fake.open(other.clone(), h.rule(&other.repository));
+    h.poll_until("the review of the other pull request", || {
+        h.publications() == 1
+    })
+    .await;
+    let (_, notes, _, _) = h.fake.snapshot();
+    let announced = notes
+        .iter()
+        .filter(|note| {
+            note.message.contains("acme/widget#7")
+                && note
+                    .message
+                    .contains("requests the review only from a team")
+        })
+        .count();
+    assert_eq!(announced, 1, "the team-only request is announced once");
+    h.stop_engine().await;
+}

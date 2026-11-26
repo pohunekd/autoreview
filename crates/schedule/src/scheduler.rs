@@ -883,6 +883,7 @@ pub fn superseded(code: &str) -> bool {
             | "review_label_removed"
             | "review_request_changed"
             | "review_request_not_active"
+            | "review_requested_from_team"
             | "pull_request_not_open"
             | "pull_request_draft"
     )

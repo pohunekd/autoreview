@@ -36,7 +36,7 @@ pub use discovery::commands::PullRequestReviewStatus;
 #[doc(inline)]
 pub use engine::{Clock, Engine, SystemClock};
 #[doc(inline)]
-pub use error::{BoxError, Error, WORKFLOW_FAILED, error_code, pohunek_error_code};
+pub use error::{BoxError, Error, WORKFLOW_FAILED, error_code, is_permanent, pohunek_error_code};
 #[doc(inline)]
 pub use protocol::request::go_json;
 #[doc(inline)]
