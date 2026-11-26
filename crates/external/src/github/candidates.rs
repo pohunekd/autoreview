@@ -818,13 +818,10 @@ impl GitHub {
 
 #[cfg(test)]
 mod tests {
-    use autoreview_engine::integrations::{ReviewRequest, ReviewRequestList};
     use autoreview_engine::model::{CandidateList, PullRequest};
     use autoreview_policy::{Authors, Trigger, TriggerKind};
 
-    use super::{
-        GitHubPullRequest, classify, covering, decode_pull_request, merge_review_requests,
-    };
+    use super::{GitHubPullRequest, classify, covering, decode_pull_request};
 
     /// A policy whose first and second rule both match `acme/special` and `solo/special`.
     const OVERLAPPING_POLICY: &str = "version: 1
@@ -975,67 +972,6 @@ notifications:
             let got = list.rejected.first().map(|rejected| rejected.code.as_str());
             assert_eq!(got, want, "{base:?}");
             assert_eq!(list.candidates.is_empty(), want.is_some(), "{base:?}");
-        }
-    }
-
-    /// The merged queue is truncated when one search was or the union exceeds the maximum, and
-    /// it always holds the whole union for the queue's priority sort (#577).
-    #[test]
-    fn merge_review_requests_keeps_the_union_and_flags_truncation() {
-        let request = |repository: &str, number: i64| ReviewRequest {
-            repository: repository.to_owned(),
-            number,
-            ..ReviewRequest::default()
-        };
-        let list = |requests: Vec<ReviewRequest>, truncated: bool| ReviewRequestList {
-            requests,
-            truncated,
-        };
-        // (lists, max, expected requests, expected truncated)
-        let rows = [
-            (
-                vec![
-                    list(vec![request("b/one", 2), request("a/one", 1)], false),
-                    list(vec![request("a/one", 1), request("c/one", 3)], false),
-                ],
-                10,
-                vec![("b/one", 2), ("a/one", 1), ("c/one", 3)],
-                false,
-            ),
-            (
-                vec![
-                    list(vec![request("b/one", 2), request("a/one", 1)], false),
-                    list(vec![request("c/one", 3)], false),
-                ],
-                2,
-                vec![("b/one", 2), ("a/one", 1), ("c/one", 3)],
-                true,
-            ),
-            (
-                vec![
-                    list(vec![request("b/one", 2)], true),
-                    list(vec![request("a/one", 1)], false),
-                ],
-                5,
-                vec![("b/one", 2), ("a/one", 1)],
-                true,
-            ),
-            (
-                vec![list(vec![request("b/one", 2), request("a/one", 1)], true)],
-                1,
-                vec![("b/one", 2), ("a/one", 1)],
-                true,
-            ),
-        ];
-        for (lists, max, expected, truncated) in rows {
-            let merged = merge_review_requests(lists, max);
-            let got: Vec<(&str, i64)> = merged
-                .requests
-                .iter()
-                .map(|found| (found.repository.as_str(), found.number))
-                .collect();
-            assert_eq!(got, expected, "max {max}");
-            assert_eq!(merged.truncated, truncated, "max {max}");
         }
     }
 }

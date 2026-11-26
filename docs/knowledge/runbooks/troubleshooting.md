@@ -589,7 +589,9 @@ the credential matches `*`.
 
 GitHub allows 30 searches per minute for a user. The engine starts the searches
 of one credential at least two seconds apart, retries included, so a credential
-stays at that rate. A pass that needs more than 30 searches takes longer than a
+stays at that rate. The pacing is per process: `serve`, `review-queue`, `mcp` and
+each CLI command pace separately, so processes that run at the same time can
+still pass the limit together. A pass that needs more than 30 searches takes longer than a
 minute, and `autoreview serve` warns at start when `searches_per_pass` is above
 30. Credentials of the same user are paced separately, so together they can
 still pass the limit; GitHub's search API rate limit then refuses searches and
