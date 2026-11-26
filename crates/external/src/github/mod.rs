@@ -755,6 +755,8 @@ mod tests {
 
         let team = serde_json::json!({"requestedReviewer": {"__typename": "Team",
             "members": {"nodes": [{"login": "Team-Mate"}, {"login": "other-mate"}]}}});
+        let team_with_author = serde_json::json!({"requestedReviewer": {"__typename": "Team",
+            "members": {"nodes": [{"login": "colleague"}, {"login": "team-mate"}]}}});
         let unreadable = serde_json::json!({"requestedReviewer": null});
         let review = |login: &str| serde_json::json!({"author": {"login": login}});
         let rows = [
@@ -778,6 +780,17 @@ mod tests {
                 vec![unreadable.clone()],
                 vec![review("team-mate")],
                 "review_requested_from_team",
+            ),
+            // The pull request author is a team member and reviewed their own pull request.
+            (
+                vec![team_with_author.clone()],
+                vec![review("Colleague")],
+                "review_requested_from_team",
+            ),
+            (
+                vec![team_with_author.clone()],
+                vec![review("colleague"), review("team-mate")],
+                "review_request_not_active",
             ),
         ];
         let trigger = Trigger {

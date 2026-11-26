@@ -412,11 +412,22 @@ fn team_requested(raw: &GitHubPullRequest, login: &str) -> bool {
 }
 
 /// Reports whether `login`, or a member of a requested team, already has a review.
+///
+/// A review by the pull request's own author never answers a request. The query carries no
+/// review or request times, so a review cannot be dated against the team request.
 fn team_answered(raw: &GitHubPullRequest, login: &str) -> bool {
+    let pull_request_author = raw
+        .author
+        .as_ref()
+        .map_or("", |author| author.login.as_str());
     raw.latest_reviews
         .nodes
         .iter()
         .filter_map(|review| review.author.as_ref())
+        .filter(|author| {
+            pull_request_author.is_empty()
+                || !author.login.eq_ignore_ascii_case(pull_request_author)
+        })
         .any(|author| {
             author.login.eq_ignore_ascii_case(login)
                 || raw
