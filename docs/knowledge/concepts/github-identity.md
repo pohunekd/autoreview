@@ -181,8 +181,9 @@ verified: the GraphQL reference page fetched did not include it.
 - **Issues: read.** Optional. The event and label reads also accept Pull requests
   read, so Issues read is not needed on its own.
 - **Members: read (organization).** Optional. It lets the engine read the members of a
-  requested team, so a team request that a member has already answered with a review
-  is not reported. Without it, a request to the credential's login still works, a pull
+  requested team when it reads a single pull request, so a team request that a member
+  has already answered with a review is not reported there. The search names no team
+  members. Without it, a request to the credential's login still works, a pull
   request requested only from a team is rejected with `review_requested_from_team`,
   and the credential's own earlier review is the only one that ends that notice. An
   unreadable request on a pull request that also requests the credential's login does

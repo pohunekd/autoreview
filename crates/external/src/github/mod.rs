@@ -31,16 +31,30 @@ use tokio_util::sync::CancellationToken;
 
 use crate::process::{GH_INHERITED, child_environment, run};
 
-/// Fields of a pull request in the GraphQL selection.
-const PULL_REQUEST_FIELDS: &str = concat!(
-    "id number title url state isDraft isCrossRepository\n",
-    "      headRefOid headRefName baseRefOid baseRefName\n",
-    "      author { __typename login }\n",
-    "      labels(first: 100) { nodes { name } }\n",
-    "      reviewRequests(first: 100) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { members(first: 100) { nodes { login } } } } } }\n",
-    "      latestReviews(first: 100) { nodes { author { login } } }\n",
-    "      repository { nameWithOwner }",
-);
+/// Returns the fields of a pull request in the GraphQL selection.
+///
+/// `team_members` adds the members of a requested team. It is left out of the search, where the
+/// nested page sizes would exceed GitHub's node limit (`MAX_NODE_LIMIT_EXCEEDED`) and fail the
+/// label search of every pull request.
+fn pull_request_fields(team_members: bool) -> String {
+    let members = if team_members {
+        " ... on Team { members(first: 100) { nodes { login } } }"
+    } else {
+        ""
+    };
+    format!(
+        concat!(
+            "id number title url state isDraft isCrossRepository\n",
+            "      headRefOid headRefName baseRefOid baseRefName\n",
+            "      author {{ __typename login }}\n",
+            "      labels(first: 100) {{ nodes {{ name }} }}\n",
+            "      reviewRequests(first: 100) {{ nodes {{ requestedReviewer {{ __typename ... on User {{ login }}{members} }} }} }}\n",
+            "      latestReviews(first: 100) {{ nodes {{ author {{ login }} }} }}\n",
+            "      repository {{ nameWithOwner }}",
+        ),
+        members = members
+    )
+}
 
 /// Variables the `gh` child sets besides its token: plain output and no prompts.
 const GH_CHILD_ENVIRONMENT: [(&str, &str); 2] = [("GH_PAGER", "cat"), ("GH_PROMPT_DISABLED", "1")];
@@ -59,7 +73,7 @@ pub(crate) fn graphql_search() -> String {
             "  }}\n",
             "}}"
         ),
-        PULL_REQUEST_FIELDS = PULL_REQUEST_FIELDS
+        PULL_REQUEST_FIELDS = pull_request_fields(false)
     )
 }
 
@@ -73,7 +87,7 @@ fn graphql_pull_request() -> String {
             "  }}\n",
             "}}"
         ),
-        PULL_REQUEST_FIELDS = PULL_REQUEST_FIELDS
+        PULL_REQUEST_FIELDS = pull_request_fields(true)
     )
 }
 
@@ -193,9 +207,9 @@ impl GitHub {
     /// only errors are on a requested reviewer (a team the token cannot read) is returned like a
     /// success; the decoders then read the team request as an unreadable non-user request. A
     /// response whose errors are all `FORBIDDEN` fails with the permanent `github_read_forbidden`,
-    /// and any other GraphQL error body except a rate limit with the permanent
-    /// `github_read_unrecognized`, so one pull request never stops the pass. Every other failure
-    /// maps as in [`GitHub::github`].
+    /// and a GraphQL error body of typed errors that are not a rate limit with the permanent
+    /// `github_read_unrecognized`, so one pull request never stops the pass. Every other failure,
+    /// an untyped error included, maps as in [`GitHub::github`] and stays retryable.
     pub(crate) async fn graphql_read(
         &self,
         cancel: &CancellationToken,
@@ -253,10 +267,11 @@ enum GraphqlFailure {
     ReviewerOnly,
     /// Every error is of type `FORBIDDEN`: GitHub refuses the token's read.
     Forbidden,
-    /// A GraphQL error body of another shape, such as an unknown error type or an error without
-    /// a type: the read of this pull request is skipped and the rest of the pass goes on.
+    /// A GraphQL error body whose errors all have a type that is none of the above, such as an
+    /// unknown type: the read of this pull request is skipped and the rest of the pass goes on.
     Unrecognized,
-    /// Anything else: no GraphQL body, or a rate limit, which a later pass can retry.
+    /// Anything else: no GraphQL body, an error without a type, or a rate limit, which a later
+    /// pass can retry.
     Other,
 }
 
@@ -292,7 +307,7 @@ fn graphql_failure(stdout: &str) -> GraphqlFailure {
         GraphqlFailure::Forbidden
     } else if errors
         .iter()
-        .any(|error| error_type(error).is_some_and(|kind| kind.eq_ignore_ascii_case(RATE_LIMITED)))
+        .any(|error| error_type(error).is_none_or(|kind| kind.eq_ignore_ascii_case(RATE_LIMITED)))
     {
         GraphqlFailure::Other
     } else {
@@ -489,7 +504,10 @@ mod tests {
     use autoreview_engine::config::{Credential, Credentials};
     use autoreview_engine::error_code;
 
-    use super::{GitHub, GraphqlFailure, graphql_failure, repository_variables};
+    use super::{
+        GitHub, GraphqlFailure, graphql_failure, graphql_pull_request, graphql_search,
+        repository_variables,
+    };
     use crate::pohunek::local_environment;
 
     /// Each row is a repository and the owner and name that `gh` receives as raw strings: a
@@ -620,7 +638,7 @@ mod tests {
             ),
             (
                 serde_json::json!({"data": null, "errors": [{"message": "no type"}, "text"]}),
-                GraphqlFailure::Unrecognized,
+                GraphqlFailure::Other,
             ),
             (
                 serde_json::json!({"data": null, "errors": [{"type": "forbidden", "path": [],
@@ -718,6 +736,14 @@ mod tests {
         let got = decode_pull_request_response(&without_data.to_string())
             .map_err(|error| error_code(&error).to_owned());
         assert_eq!(got.err().as_deref(), Some("github_response_invalid"));
+    }
+
+    /// The search selection stays within GitHub's node limit: it names no team members, while the
+    /// single pull request read does (#576).
+    #[test]
+    fn search_query_leaves_team_members_out() {
+        assert!(!graphql_search().contains("members"));
+        assert!(graphql_pull_request().contains("members(first: 100)"));
     }
 
     /// A team request that stays on the pull request after the credential's login or a readable
