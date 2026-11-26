@@ -37,7 +37,8 @@ const PULL_REQUEST_FIELDS: &str = concat!(
     "      headRefOid headRefName baseRefOid baseRefName\n",
     "      author { __typename login }\n",
     "      labels(first: 100) { nodes { name } }\n",
-    "      reviewRequests(first: 100) { nodes { requestedReviewer { __typename ... on User { login } } } }\n",
+    "      reviewRequests(first: 100) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { members(first: 100) { nodes { login } } } } } }\n",
+    "      latestReviews(first: 100) { nodes { author { login } } }\n",
     "      repository { nameWithOwner }",
 );
 
@@ -271,7 +272,8 @@ fn graphql_failure(stdout: &str) -> GraphqlFailure {
 /// Reports whether `errors` is non-empty and every error is on the `requestedReviewer` of a
 /// review request node.
 ///
-/// The error path ends in `reviewRequests`, `nodes`, an index and `requestedReviewer`.
+/// The error path contains `reviewRequests`, `nodes`, an index and `requestedReviewer`, and may
+/// go deeper into the reviewer, such as its team members.
 pub(super) fn reviewer_errors_only(errors: &[serde_json::Value]) -> bool {
     !errors.is_empty() && errors.iter().all(reviewer_error)
 }
@@ -281,13 +283,12 @@ fn reviewer_error(error: &serde_json::Value) -> bool {
     let Some(path) = error.get("path").and_then(serde_json::Value::as_array) else {
         return false;
     };
-    let [.., requests, nodes, index, reviewer] = path.as_slice() else {
-        return false;
-    };
-    requests.as_str() == Some("reviewRequests")
-        && nodes.as_str() == Some("nodes")
-        && index.is_u64()
-        && reviewer.as_str() == Some("requestedReviewer")
+    path.windows(4).any(|window| {
+        window[0].as_str() == Some("reviewRequests")
+            && window[1].as_str() == Some("nodes")
+            && window[2].is_u64()
+            && window[3].as_str() == Some("requestedReviewer")
+    })
 }
 
 /// Reports whether a decoded response with `errors` may be used: `data` is an object and every
@@ -652,5 +653,67 @@ mod tests {
         let got = decode_pull_request_response(&without_data.to_string())
             .map_err(|error| error_code(&error).to_owned());
         assert_eq!(got.err().as_deref(), Some("github_response_invalid"));
+    }
+
+    /// A team request that stays on the pull request after the credential's login or a readable
+    /// team member has reviewed is not a team-only request (#576, MEDIUM1).
+    #[test]
+    fn answered_team_request_is_not_reported_as_team_only() {
+        use super::pull_request::{decode_pull_request, decode_pull_request_response};
+        use autoreview_policy::{Trigger, TriggerKind};
+
+        let team = serde_json::json!({"requestedReviewer": {"__typename": "Team",
+            "members": {"nodes": [{"login": "Team-Mate"}, {"login": "other-mate"}]}}});
+        let unreadable = serde_json::json!({"requestedReviewer": null});
+        let review = |login: &str| serde_json::json!({"author": {"login": login}});
+        let rows = [
+            (vec![team.clone()], vec![], "review_requested_from_team"),
+            (
+                vec![team.clone()],
+                vec![review("team-mate")],
+                "review_request_not_active",
+            ),
+            (
+                vec![team.clone()],
+                vec![review("outsider")],
+                "review_requested_from_team",
+            ),
+            (
+                vec![unreadable.clone()],
+                vec![review("Example-User")],
+                "review_request_not_active",
+            ),
+            (
+                vec![unreadable.clone()],
+                vec![review("team-mate")],
+                "review_requested_from_team",
+            ),
+        ];
+        let trigger = Trigger {
+            kind: TriggerKind::ReviewRequested,
+            label: String::new(),
+        };
+        for (nodes, reviews, want) in rows {
+            let response = serde_json::json!({
+                "data": {"repository": {"pullRequest": {
+                    "id": "PR_node", "number": 7, "title": "Add widget",
+                    "url": "https://github.com/acme/widget/pull/7", "state": "OPEN",
+                    "isDraft": false, "isCrossRepository": false,
+                    "headRefOid": "a".repeat(40), "headRefName": "feature",
+                    "baseRefOid": "b".repeat(40), "baseRefName": "main",
+                    "author": {"__typename": "User", "login": "colleague"},
+                    "labels": {"nodes": []},
+                    "reviewRequests": {"nodes": nodes},
+                    "latestReviews": {"nodes": reviews},
+                    "repository": {"nameWithOwner": "acme/widget"},
+                }}},
+            })
+            .to_string();
+            let got = decode_pull_request_response(&response)
+                .and_then(|raw| decode_pull_request(&raw, "github.com", "example-user", &trigger))
+                .map(|_| ())
+                .map_err(|error| error_code(&error).to_owned());
+            assert_eq!(got, Err(want.to_owned()), "{response}");
+        }
     }
 }

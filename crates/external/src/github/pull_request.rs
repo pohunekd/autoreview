@@ -126,6 +126,12 @@ pub(crate) struct GitHubPullRequest {
         deserialize_with = "null_default::deserialize"
     )]
     review_requests: ReviewRequests,
+    /// The latest review of each reviewer.
+    #[serde(
+        rename = "latestReviews",
+        deserialize_with = "null_default::deserialize"
+    )]
+    latest_reviews: LatestReviews,
     /// The repository of the pull request.
     #[serde(deserialize_with = "null_default::deserialize")]
     repository: RepositoryName,
@@ -202,6 +208,49 @@ struct ReviewRequestNode {
 
 autoreview_go_compat::object_only_serde!(ReviewRequestNode);
 
+/// The latest review of each reviewer of a pull request.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct LatestReviews {
+    /// The review nodes; `null` reads as none and a `null` entry as an empty review.
+    #[serde(deserialize_with = "null_entries::deserialize")]
+    nodes: Vec<ReviewNode>,
+}
+
+autoreview_go_compat::object_only_serde!(LatestReviews);
+
+/// One review of a pull request.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct ReviewNode {
+    /// The reviewer, `null` for a deleted account.
+    author: Option<Member>,
+}
+
+autoreview_go_compat::object_only_serde!(ReviewNode);
+
+/// The members of a requested team.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct TeamMembers {
+    /// The member nodes; `null` reads as none and a `null` entry as an empty member.
+    #[serde(deserialize_with = "null_entries::deserialize")]
+    nodes: Vec<Member>,
+}
+
+autoreview_go_compat::object_only_serde!(TeamMembers);
+
+/// A user named by a review or a team membership.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct Member {
+    /// Login of the user.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    login: String,
+}
+
+autoreview_go_compat::object_only_serde!(Member);
+
 /// A user that a review was requested from.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
@@ -212,6 +261,9 @@ struct Reviewer {
     /// Login of the reviewer; empty for a team.
     #[serde(deserialize_with = "null_default::deserialize")]
     login: String,
+    /// The members of a team the token can read; empty for a user or an unreadable team.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    members: TeamMembers,
 }
 
 autoreview_go_compat::object_only_serde!(Reviewer);
@@ -343,14 +395,39 @@ pub(super) fn requests(raw: &GitHubPullRequest, login: &str) -> bool {
     false
 }
 
-/// Reports whether some review request is not a user: a `Team`, or a reviewer the token cannot
-/// read (`null`).
-fn team_requested(raw: &GitHubPullRequest) -> bool {
-    raw.review_requests.nodes.iter().any(|node| {
+/// Reports whether the pull request waits on a team request: some review request is not a
+/// user (a `Team`, or a reviewer the token cannot read, `null`), and nobody who could answer it
+/// has reviewed yet.
+///
+/// The credential's own login and every readable member of a requested team count as
+/// answering. Members of a team the token cannot read are not known, so only the credential's
+/// own review counts there.
+fn team_requested(raw: &GitHubPullRequest, login: &str) -> bool {
+    let pending = raw.review_requests.nodes.iter().any(|node| {
         node.requested_reviewer
             .as_ref()
             .is_none_or(|reviewer| reviewer.typename == "Team")
-    })
+    });
+    pending && !team_answered(raw, login)
+}
+
+/// Reports whether `login`, or a member of a requested team, already has a review.
+fn team_answered(raw: &GitHubPullRequest, login: &str) -> bool {
+    raw.latest_reviews
+        .nodes
+        .iter()
+        .filter_map(|review| review.author.as_ref())
+        .any(|author| {
+            author.login.eq_ignore_ascii_case(login)
+                || raw
+                    .review_requests
+                    .nodes
+                    .iter()
+                    .filter_map(|node| node.requested_reviewer.as_ref())
+                    .filter(|reviewer| reviewer.typename == "Team")
+                    .flat_map(|team| &team.members.nodes)
+                    .any(|member| member.login.eq_ignore_ascii_case(&author.login))
+        })
 }
 
 /// Reports whether the pull request carries `label`, ignoring ASCII case.
@@ -448,7 +525,7 @@ pub(crate) fn decode_pull_request(
         }
         TriggerKind::ReviewRequested => {
             if !requests(raw, login) {
-                if team_requested(raw) {
+                if team_requested(raw, login) {
                     return Err(Error::workflow("review_requested_from_team", true, None));
                 }
                 return Err(Error::workflow("review_request_not_active", true, None));
