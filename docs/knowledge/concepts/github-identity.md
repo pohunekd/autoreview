@@ -180,10 +180,13 @@ verified: the GraphQL reference page fetched did not include it.
 - **Metadata: read.** Not verified in this pass. Most fine-grained tokens get it by default, and no call above needs more.
 - **Issues: read.** Optional. The event and label reads also accept Pull requests
   read, so Issues read is not needed on its own.
-- **Members: read (organization).** Optional. It lets the engine tell a team review
-  request apart from an unreadable one in organizations that request teams as
-  reviewers. Without it, a request to the credential's login still works, and a pull
-  request requested only from a team is rejected with `review_requested_from_team`.
+- **Members: read (organization).** Optional. It lets the engine read the members of a
+  requested team, so a team request that a member has already answered with a review
+  is not reported. Without it, a request to the credential's login still works, a pull
+  request requested only from a team is rejected with `review_requested_from_team`,
+  and the credential's own earlier review is the only one that ends that notice. An
+  unreadable request on a pull request that also requests the credential's login does
+  not stop the discovery of any other pull request.
 - **Contents: read.** Required by the linear history check, the compare call in the
   table above. Without it, a re-review cannot be marked incremental (see
   [incremental reviews](incremental-reviews.md#full-or-incremental)).
