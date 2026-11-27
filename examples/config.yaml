@@ -14,6 +14,8 @@ github:
       login: review-bot
       token_env: AUTOREVIEW_GH_TOKEN
       match: ["*"]
+      # Optional: a review request to a listed team counts as a request to login.
+      # review_teams: ["acme/backend"]
 
 pohunek:
   bin: /usr/local/bin/pohunek

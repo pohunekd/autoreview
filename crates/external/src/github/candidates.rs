@@ -666,7 +666,9 @@ impl GitHub {
                     Err(error) => return Err(error),
                 };
                 let login = &credential.login;
-                let Some(id) = ready_draft_id(&raw, author, &repository, number, login) else {
+                let teams = &credential.review_teams;
+                let Some(id) = ready_draft_id(&raw, author, &repository, number, login, teams)
+                else {
                     continue;
                 };
                 let args = mark_ready_args(&id);
@@ -836,7 +838,13 @@ impl GitHub {
                 if !self.owns(credential, &repository) {
                     continue;
                 }
-                let outcome = decode_pull_request(node, &self.host, &credential.login, &trigger);
+                let outcome = decode_pull_request(
+                    node,
+                    &self.host,
+                    &credential.login,
+                    &credential.review_teams,
+                    &trigger,
+                );
                 classify(&mut list, &repository, number, covered, outcome)?;
             }
             if !page.has_next_page {
@@ -1011,7 +1019,7 @@ notifications:
                 "repository": {"nameWithOwner": "solo/tool"},
             });
             let raw: GitHubPullRequest = serde_json::from_value(node).expect("the node decodes");
-            let outcome = decode_pull_request(&raw, "github.com", "example-user", &label);
+            let outcome = decode_pull_request(&raw, "github.com", "example-user", &[], &label);
             let mut list = CandidateList::default();
             classify(&mut list, "solo/tool", 7, covered, outcome)
                 .expect("a refused pull request never fails the search");

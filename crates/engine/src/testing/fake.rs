@@ -33,7 +33,8 @@ use crate::integrations::{
 use crate::model::review::PRIOR_FIXED;
 use crate::model::{
     Candidate, CandidateList, Decision, Discussion, HostCapacity, LinkedIssues, PriorFinding,
-    ProjectRoute, PublishResult, PullRequest, RejectedCandidate, SessionIdentity,
+    ProjectRoute, PublishResult, PullRequest, RejectedCandidate, RequestStatus, RequestedReviewer,
+    SessionIdentity, request_status,
 };
 use crate::notify::Notification;
 use crate::protocol::claude::CLAUDE_RESULT_PROTOCOL;
@@ -124,6 +125,10 @@ pub(crate) struct FakeState {
     pub(crate) rewritten: BTreeSet<String>,
     /// Refused candidates that the candidate search returns.
     pub(crate) rejected: Vec<RejectedCandidate>,
+    /// Pending review requests by `repository#number`; the rule of [`request_status`] decides
+    /// whether such a pull request is a candidate. A pull request without an entry is requested
+    /// from the credential's login.
+    pub(crate) requested_reviewers: BTreeMap<String, Vec<RequestedReviewer>>,
     /// Every review submission that was published.
     pub(crate) published: Vec<GitHubReview>,
     /// Head SHA of each review in `published`, in the same order.
@@ -254,6 +259,20 @@ impl FakeIntegration {
         state.answered.remove(&key);
     }
 
+    /// Registers a pull request whose pending review requests are `reviewers`.
+    ///
+    /// The search and the state read decide with [`request_status`] whether they ask the
+    /// credential that reads.
+    pub(crate) fn open_requested(
+        &self,
+        pr: PullRequest,
+        rule: Rule,
+        reviewers: Vec<RequestedReviewer>,
+    ) {
+        self.lock().requested_reviewers.insert(pr.key(), reviewers);
+        self.open(pr, rule);
+    }
+
     /// Marks a pull request as closed.
     pub(crate) fn close(&self, pr: PullRequest) {
         let mut state = self.lock();
@@ -323,6 +342,17 @@ fn transient_error() -> Error {
 }
 
 impl FakeState {
+    /// Returns what the pending requests of `key` mean for `credential`, or `None` when the pull
+    /// request has no listed reviewers.
+    fn request_status_of(&self, key: &str, credential: &Credential) -> Option<RequestStatus> {
+        let reviewers = self.requested_reviewers.get(key)?;
+        Some(request_status(
+            reviewers,
+            &credential.login,
+            &credential.review_teams,
+        ))
+    }
+
     /// Returns the search error of `credential`, if it fails.
     fn search_error(&self, credential: &Credential) -> Option<Error> {
         let code = self.failing_credentials.get(&credential.name)?;
@@ -342,8 +372,20 @@ impl Integrations for FakeIntegration {
             if let Some(err) = state.search_error(credential) {
                 Err(err)
             } else {
-                let candidates = state.candidates.values().cloned().collect();
-                let rejected = state.rejected.clone();
+                let mut rejected = state.rejected.clone();
+                let mut candidates = Vec::new();
+                for (key, candidate) in &state.candidates {
+                    match state.request_status_of(key, credential) {
+                        None | Some(RequestStatus::Requested) => candidates.push(candidate.clone()),
+                        Some(RequestStatus::TeamOnly) => rejected.push(RejectedCandidate {
+                            repository: candidate.pull_request.repository.clone(),
+                            number: candidate.pull_request.number,
+                            code: "review_requested_from_team".to_owned(),
+                            permission_login: None,
+                        }),
+                        Some(RequestStatus::NotRequested) => {}
+                    }
+                }
                 Ok(CandidateList {
                     candidates,
                     rejected,
@@ -380,6 +422,16 @@ impl Integrations for FakeIntegration {
                 // The open state is checked before the trigger, as `decode_pull_request` does.
                 if trigger.kind == TriggerKind::ReviewRequested && state.answered.contains(&key) {
                     Err(Error::workflow("review_request_not_active", true, None))
+                } else if trigger.kind == TriggerKind::ReviewRequested
+                    && let Some(status) = state.request_status_of(&key, credential)
+                    && status != RequestStatus::Requested
+                {
+                    let code = if status == RequestStatus::TeamOnly {
+                        "review_requested_from_team"
+                    } else {
+                        "review_request_not_active"
+                    };
+                    Err(Error::workflow(code, true, None))
                 } else {
                     Ok(pr.clone())
                 }
@@ -411,7 +463,10 @@ impl Integrations for FakeIntegration {
                 Some(pr) => Ok(PullRequestState {
                     open: !state.closed.contains(&key),
                     merged: state.merged.contains(&key),
-                    requested: state.candidates.contains_key(&key),
+                    requested: match state.request_status_of(&key, credential) {
+                        Some(status) => status == RequestStatus::Requested,
+                        None => state.candidates.contains_key(&key),
+                    },
                     title: pr.title.clone(),
                     url: pr.url.clone(),
                     author: pr.author.clone(),

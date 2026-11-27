@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use autoreview_policy::user_login_valid;
+
 use crate::error::{BoxError, Error};
 
 /// Key of the credential list in `config.yaml`.
@@ -26,6 +28,9 @@ pub struct Credential {
     pub token: String,
     /// Repository patterns in file order: `*`, `owner/*` or `owner/repository`.
     pub matches: Vec<String>,
+    /// Lowercase `org/team` slugs whose review requests count as requests to `login`; empty
+    /// when no team is listed.
+    pub review_teams: Vec<String>,
 }
 
 impl fmt::Debug for Credential {
@@ -35,6 +40,7 @@ impl fmt::Debug for Credential {
             .field("name", &self.name)
             .field("login", &self.login)
             .field("matches", &self.matches)
+            .field("review_teams", &self.review_teams)
             .finish_non_exhaustive()
     }
 }
@@ -256,6 +262,7 @@ impl Credentials {
                 login: login.to_owned(),
                 token: "placeholder-token".to_owned(),
                 matches: vec!["*".to_owned()],
+                review_teams: Vec::new(),
             }],
         }
     }
@@ -305,6 +312,54 @@ fn narrower<'a>(left: &'a str, right: &'a str) -> Option<&'a str> {
     }
 }
 
+/// Checks the `review_teams` of a credential that serves `matches`.
+///
+/// Every entry is a lowercase `org/team`, listed once, whose organization one of the credential's
+/// own patterns can serve: a team of another organization is never requested on its repositories.
+///
+/// # Errors
+///
+/// Returns the reason of the first entry that breaks a rule.
+pub fn check_review_teams(teams: &[String], matches: &[String]) -> Result<(), &'static str> {
+    for (index, team) in teams.iter().enumerate() {
+        let Some((org, slug)) = team.split_once('/') else {
+            return Err("must list org/team slugs");
+        };
+        if !org_valid(org) || !slug_valid(slug) {
+            return Err("must list lowercase org/team slugs");
+        }
+        if teams.iter().take(index).any(|earlier| earlier == team) {
+            return Err("must list each team once");
+        }
+        let served = matches.iter().any(|pattern| {
+            pattern == "*"
+                || pattern
+                    .split_once('/')
+                    .is_some_and(|(owner, _)| owner == org)
+        });
+        if !served {
+            return Err("must list teams of an organization that match serves");
+        }
+    }
+    Ok(())
+}
+
+/// Reports whether `org` is a lowercase GitHub organization login.
+fn org_valid(org: &str) -> bool {
+    user_login_valid(org) && !org.contains('_')
+}
+
+/// Reports whether `slug` is a lowercase team slug: `[a-z0-9][a-z0-9_.-]*`.
+fn slug_valid(slug: &str) -> bool {
+    let mut bytes = slug.bytes();
+    bytes
+        .next()
+        .is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'.' | b'-')
+        })
+}
+
 /// Builds the error `code` for the configuration key `key`.
 fn error(code: &str, key: &str, message: String) -> Error {
     Error::config(code, key, Some(BoxError::from(message)))
@@ -347,6 +402,7 @@ mod tests {
             login: login.to_owned(),
             token: format!("{name}-token"),
             matches: vec![pattern.to_owned()],
+            review_teams: Vec::new(),
         };
         let credentials = Credentials::new(vec![
             credential("tool", "tool-bot", "acme/tool"),

@@ -18,7 +18,7 @@ use autoreview_engine::Error;
 use autoreview_engine::config::{
     BackendKind, Config, Credential, Credentials, GuidanceConfig, HostHooksChoice, HostOrder,
     HostStateChoice, HostStateRules, MatrixBackend, NotifyBackend, NotifySettings, RouteOverride,
-    TextGuard, WebhookBackend, WebhookFormat, signature_text,
+    TextGuard, WebhookBackend, WebhookFormat, check_review_teams, signature_text,
 };
 use autoreview_engine::eval::config::EvalConfig;
 use autoreview_engine::mcp::{McpClientEntry, McpConfig, McpLimits};
@@ -401,6 +401,8 @@ struct CredentialFile {
     /// Repositories the credential serves: `*`, `owner/*` or `owner/repository`.
     #[serde(rename = "match")]
     matches: Option<Value>,
+    /// Teams whose review requests count as requests to the login; absent means none.
+    review_teams: Option<Value>,
 }
 
 /// The `pohunek` section.
@@ -1471,11 +1473,19 @@ fn github_credentials(
                 "must list owner/repository, owner/* or *",
             ));
         }
+        let review_teams = if entry.review_teams.is_some() {
+            text_list(&entry.review_teams, "github.credentials.review_teams")?
+        } else {
+            Vec::new()
+        };
+        check_review_teams(&review_teams, &matches)
+            .map_err(|reason| invalid("github.credentials.review_teams", reason))?;
         out.push(Credential {
             name,
             login,
             token,
             matches,
+            review_teams,
         });
     }
     Ok(out)
@@ -3306,6 +3316,63 @@ pub(crate) mod tests {
             let result = error_text(mapped(&text));
             assert!(result.contains(key), "{result} lacks {key}");
         }
+    }
+
+    /// `review_teams` is optional, and every entry is a lowercase `org/team` of an organization
+    /// that the credential serves, listed once (#579).
+    #[test]
+    fn review_teams_are_optional_and_validated() {
+        const MATCH: &str = "      match: [\"*\"]\n";
+        const KEY: &str = "configuration_invalid: github.credentials.review_teams: ";
+        let with = |line: &str| mutated(MATCH, &format!("{MATCH}      review_teams: {line}\n"));
+        let teams = |config: Config| {
+            config
+                .credentials
+                .iter()
+                .next()
+                .expect("one credential")
+                .review_teams
+                .clone()
+        };
+        assert!(teams(mapped(EXAMPLE).expect("the example loads")).is_empty());
+        assert!(teams(mapped(&with("[]")).expect("an empty list loads")).is_empty());
+        let loaded = mapped(&with("[\"acme/backend\", \"acme/front.end_2\"]"));
+        assert_eq!(
+            teams(loaded.expect("valid teams load")),
+            ["acme/backend", "acme/front.end_2"]
+        );
+        let rows = [
+            ("[\"acme\"]", "must list org/team slugs"),
+            ("[\"acme/\"]", "must list lowercase org/team slugs"),
+            ("[\"/backend\"]", "must list lowercase org/team slugs"),
+            ("[\"acme/backend/x\"]", "must list lowercase org/team slugs"),
+            ("[\"Acme/backend\"]", "must list lowercase org/team slugs"),
+            ("[\"acme/Backend\"]", "must list lowercase org/team slugs"),
+            ("[\"acme/*\"]", "must list lowercase org/team slugs"),
+            (
+                "[\"acme/backend\", \"acme/backend\"]",
+                "must list each team once",
+            ),
+            ("acme/backend", "must be a list"),
+            ("[1]", "must be a list of text"),
+        ];
+        for (line, reason) in rows {
+            let result = error_text(mapped(&with(line)));
+            assert_eq!(result, format!("{KEY}{reason}"), "{line}");
+        }
+        let narrow = mutated(
+            MATCH,
+            "      match: [\"example-org/*\"]\n      review_teams: [\"acme/backend\"]\n",
+        );
+        assert_eq!(
+            error_text(mapped(&narrow)),
+            format!("{KEY}must list teams of an organization that match serves")
+        );
+        let served = mutated(
+            MATCH,
+            "      match: [\"acme/*\"]\n      review_teams: [\"acme/backend\"]\n",
+        );
+        assert!(!error_text(mapped(&served)).contains("review_teams"));
     }
 
     #[test]

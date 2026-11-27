@@ -769,6 +769,7 @@ async fn dismissed_approval_is_replaced_after_a_retarget_away_and_back() {
                 login: "narrow-bot".to_owned(),
                 token: "narrow-token".to_owned(),
                 matches: vec!["claude/base".to_owned()],
+                review_teams: Vec::new(),
             };
             config.credentials =
                 Credentials::new(vec![narrower, only]).expect("the credentials load");

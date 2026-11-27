@@ -34,6 +34,7 @@ fn two_credentials(config: &mut Config) {
         login: login.to_owned(),
         token: format!("{name}-token"),
         matches: vec![pattern.to_owned()],
+        review_teams: Vec::new(),
     };
     let list = vec![
         credential("acme", "acme-bot", "acme/*"),

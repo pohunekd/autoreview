@@ -9,6 +9,7 @@ pub(crate) mod host_state;
 pub(crate) mod ids;
 pub(crate) mod pull_request;
 pub(crate) mod review;
+pub(crate) mod review_request;
 
 #[doc(inline)]
 pub use finding::{Finding, ReviewerResult, ReviewerSummary};
@@ -36,3 +37,5 @@ pub use review::{
     PublishResult, PublishedRecord, ResolveRequest, ResolveResult, RetryRequest, RetryResult,
     ReviewOutcome, ReviewRulesOutcome, SessionIdentity, Verification, prior_key,
 };
+#[doc(inline)]
+pub use review_request::{RequestStatus, RequestedReviewer, request_status, team_listed};

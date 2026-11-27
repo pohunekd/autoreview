@@ -9,7 +9,8 @@ use autoreview_engine::config::Credential;
 use autoreview_engine::error::Error;
 use autoreview_engine::integrations::PullRequestState;
 use autoreview_engine::model::{
-    PullRequest, branch_valid, pull_request_url_valid, repository_valid, sha_valid,
+    PullRequest, RequestStatus, RequestedReviewer, branch_valid, pull_request_url_valid,
+    repository_valid, request_status, sha_valid, team_listed,
 };
 use autoreview_go_compat::{go_time, null_default, null_entries};
 use autoreview_policy::{Trigger, TriggerKind, login_valid};
@@ -261,6 +262,12 @@ struct Reviewer {
     /// Login of the reviewer; empty for a team.
     #[serde(deserialize_with = "null_default::deserialize")]
     login: String,
+    /// Combined slug `org/team` of a team; empty for a user.
+    #[serde(
+        rename = "combinedSlug",
+        deserialize_with = "null_default::deserialize"
+    )]
+    combined_slug: String,
     /// The members of a team the token can read; empty for a user or an unreadable team.
     #[serde(deserialize_with = "null_default::deserialize")]
     members: TeamMembers,
@@ -282,6 +289,17 @@ struct RepositoryName {
 
 autoreview_go_compat::object_only_serde!(RepositoryName);
 
+/// The team that a review request event asked.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct RequestedTeam {
+    /// Slug of the team within its organization.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    slug: String,
+}
+
+autoreview_go_compat::object_only_serde!(RequestedTeam);
+
 /// One entry of the review events API, with the fields that the engine decodes.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
@@ -296,6 +314,8 @@ struct ReviewEvent {
     created_at: Option<String>,
     /// The reviewer that the event requested, for a review request.
     requested_reviewer: Option<Reviewer>,
+    /// The team that the event requested, for a team review request.
+    requested_team: Option<RequestedTeam>,
 }
 
 autoreview_go_compat::object_only_serde!(ReviewEvent);
@@ -341,13 +361,15 @@ pub(crate) fn decode_pull_request_response(output: &str) -> Result<GitHubPullReq
 /// Returns the node identifier of a draft that `login` is asked to review and that `author`
 /// opened, or `None` when the pull request is not such a draft (the `ReadyDrafts` check).
 ///
-/// The check compares the author, repository and number as ASCII case-insensitive text.
+/// The check compares the author, repository and number as ASCII case-insensitive text. A
+/// request to one of `teams` asks `login`.
 pub(super) fn ready_draft_id(
     raw: &GitHubPullRequest,
     author: &str,
     repository: &str,
     number: i64,
     login: &str,
+    teams: &[String],
 ) -> Option<String> {
     let eligible = raw.state == OPEN_STATE
         && raw.is_draft
@@ -360,7 +382,7 @@ pub(super) fn ready_draft_id(
             .name_with_owner
             .eq_ignore_ascii_case(repository)
         && raw.number == number
-        && requests(raw, login)
+        && requests(raw, login, teams)
         && !raw.id.is_empty();
     eligible.then(|| raw.id.clone())
 }
@@ -383,32 +405,37 @@ pub(crate) fn pull_request_args(repository: &str, number: i64) -> Result<Vec<Str
     Ok(args)
 }
 
-/// Reports whether the pull request asks `login` for a review, ignoring ASCII case.
-pub(super) fn requests(raw: &GitHubPullRequest, login: &str) -> bool {
-    for node in &raw.review_requests.nodes {
-        if let Some(reviewer) = &node.requested_reviewer
-            && reviewer.login.eq_ignore_ascii_case(login)
-        {
-            return true;
-        }
-    }
-    false
+/// Returns the pending review requests of the pull request as the engine's rule reads them.
+fn reviewers(raw: &GitHubPullRequest) -> Vec<RequestedReviewer> {
+    raw.review_requests
+        .nodes
+        .iter()
+        .map(|node| match &node.requested_reviewer {
+            None => RequestedReviewer::Unreadable,
+            Some(reviewer) if reviewer.typename == "Team" => {
+                RequestedReviewer::Team(reviewer.combined_slug.clone())
+            }
+            Some(reviewer) => RequestedReviewer::User(reviewer.login.clone()),
+        })
+        .collect()
 }
 
-/// Reports whether the pull request waits on a team request: some review request is not a
-/// user (a `Team`, or a reviewer the token cannot read, `null`), and nobody who could answer it
-/// has reviewed yet.
+/// Reports whether the pull request asks `login` for a review: a request to the login itself or
+/// to one of `teams`, ignoring ASCII case.
+pub(super) fn requests(raw: &GitHubPullRequest, login: &str, teams: &[String]) -> bool {
+    request_status(&reviewers(raw), login, teams) == RequestStatus::Requested
+}
+
+/// Reports whether the pull request waits on a team request: some review request is a team
+/// that is not listed in `teams`, or a reviewer the token cannot read (`null`), and nobody who
+/// could answer it has reviewed yet.
 ///
 /// The credential's own login and every readable member of a requested team count as
 /// answering. Members of a team the token cannot read are not known, so only the credential's
 /// own review counts there.
-fn team_requested(raw: &GitHubPullRequest, login: &str) -> bool {
-    let pending = raw.review_requests.nodes.iter().any(|node| {
-        node.requested_reviewer
-            .as_ref()
-            .is_none_or(|reviewer| reviewer.typename == "Team")
-    });
-    pending && !team_answered(raw, login)
+fn team_requested(raw: &GitHubPullRequest, login: &str, teams: &[String]) -> bool {
+    request_status(&reviewers(raw), login, teams) == RequestStatus::TeamOnly
+        && !team_answered(raw, login)
 }
 
 /// Reports whether `login`, or a member of a requested team, already has a review.
@@ -462,11 +489,13 @@ fn author_valid(author: &str) -> bool {
 /// Decodes and checks a pull request against the trigger of its rule (`decodePullRequest`).
 ///
 /// The result has `review_request_id` 0 and no `requested_at` for a `review-requested`
-/// trigger; the caller reads the request event after this check.
+/// trigger; the caller reads the request event after this check. A request to one of `teams`
+/// asks `login`.
 pub(crate) fn decode_pull_request(
     raw: &GitHubPullRequest,
     host: &str,
     login: &str,
+    teams: &[String],
     trigger: &Trigger,
 ) -> Result<PullRequest, Error> {
     if raw.state != OPEN_STATE {
@@ -535,8 +564,8 @@ pub(crate) fn decode_pull_request(
             }
         }
         TriggerKind::ReviewRequested => {
-            if !requests(raw, login) {
-                if team_requested(raw, login) {
+            if !requests(raw, login, teams) {
+                if team_requested(raw, login, teams) {
                     return Err(Error::workflow("review_requested_from_team", true, None));
                 }
                 return Err(Error::workflow("review_request_not_active", true, None));
@@ -559,6 +588,7 @@ pub(crate) fn decode_pull_request_state(
     output: &str,
     host: &str,
     login: &str,
+    teams: &[String],
 ) -> Result<PullRequestState, Error> {
     let raw = match decode_pull_request_response(output) {
         Ok(value) => value,
@@ -576,7 +606,7 @@ pub(crate) fn decode_pull_request_state(
     let state = PullRequestState {
         open: raw.state == OPEN_STATE,
         merged: raw.state == MERGED_STATE,
-        requested: requests(&raw, login),
+        requested: requests(&raw, login, teams),
         title: raw.title.trim().to_owned(),
         url: raw.url.clone(),
         author: author.clone(),
@@ -598,12 +628,16 @@ pub(crate) fn decode_pull_request_state(
 
 /// Decodes one page of the review events API (`latestReviewRequestID`, one page).
 ///
-/// Every element is decoded, and its time must parse. Only the events that
-/// request a review from `login` are checked for an id and a non-zero time.
+/// Every element is decoded, and its time must parse. Only the events that request a review
+/// from `login`, or from a team of `teams` in the organization that owns `repository`, are
+/// checked for an id and a non-zero time.
 pub(crate) fn decode_review_request_page(
     output: &str,
+    repository: &str,
     login: &str,
+    teams: &[String],
 ) -> Result<ReviewRequestPage, Error> {
+    let owner = repository.split_once('/').map_or("", |(owner, _)| owner);
     let entries: Vec<Option<ReviewEvent>> =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
     let events = null_entries::zero_entries(entries);
@@ -617,11 +651,15 @@ pub(crate) fn decode_review_request_page(
         } else {
             GO_ZERO_TIME_NANOS
         };
-        let is_requested = event.event == "review_requested"
-            && event
-                .requested_reviewer
-                .as_ref()
-                .is_some_and(|reviewer| reviewer.login.eq_ignore_ascii_case(login));
+        let requests_login = event
+            .requested_reviewer
+            .as_ref()
+            .is_some_and(|reviewer| reviewer.login.eq_ignore_ascii_case(login));
+        let requests_team = !owner.is_empty()
+            && event.requested_team.as_ref().is_some_and(|team| {
+                !team.slug.is_empty() && team_listed(&format!("{owner}/{}", team.slug), teams)
+            });
+        let is_requested = event.event == "review_requested" && (requests_login || requests_team);
         if !is_requested {
             continue;
         }
@@ -674,7 +712,13 @@ impl GitHub {
     ) -> Result<PullRequest, Error> {
         let raw =
             (self.fetch_pull_request(cancel, credential, repository, number, discovery)).await?;
-        let mut pull_request = decode_pull_request(&raw, &self.host, &credential.login, trigger)?;
+        let mut pull_request = decode_pull_request(
+            &raw,
+            &self.host,
+            &credential.login,
+            &credential.review_teams,
+            trigger,
+        )?;
         if pull_request.repository != repository || pull_request.number != number {
             return Err(response_invalid(None));
         }
@@ -699,7 +743,14 @@ impl GitHub {
     ) -> Result<PullRequestState, Error> {
         let args = pull_request_args(repository, number)?;
         let output = self.graphql_read(cancel, credential, &args, false).await?;
-        decode_pull_request_state(repository, number, &output, &self.host, &credential.login)
+        decode_pull_request_state(
+            repository,
+            number,
+            &output,
+            &self.host,
+            &credential.login,
+            &credential.review_teams,
+        )
     }
 
     /// Reads the raw pull request data of one pull request with `credential`'s token.
@@ -738,7 +789,8 @@ impl GitHub {
             let path = format!("repos/{repository}/issues/{number}/events?{query}");
             let args = vec!["api".to_owned(), path];
             let output = self.github::<()>(cancel, credential, &args, None).await?;
-            let decoded = decode_review_request_page(&output, login)?;
+            let decoded =
+                decode_review_request_page(&output, repository, login, &credential.review_teams)?;
             events.extend(decoded.events);
             if decoded.count < EVENTS_PER_PAGE {
                 break;

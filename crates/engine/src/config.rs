@@ -21,7 +21,7 @@ mod credentials;
 mod notify;
 mod symbols;
 
-pub use credentials::{Credential, Credentials, independent_scopes};
+pub use credentials::{Credential, Credentials, check_review_teams, independent_scopes};
 pub use notify::{
     BackendKind, MatrixBackend, NotifyBackend, NotifyRoute, NotifySettings, WebhookBackend,
     WebhookFormat,
@@ -401,6 +401,16 @@ impl Config {
             })
         {
             return Err(invalid("invalid GitHub configuration"));
+        }
+        for credential in self.credentials.iter() {
+            check_review_teams(&credential.review_teams, &credential.matches).map_err(
+                |reason| {
+                    invalid(format!(
+                        "github.credentials.review_teams of {}: {reason}",
+                        credential.name
+                    ))
+                },
+            )?;
         }
         for (label, value) in [
             ("GitHub CLI", self.gh_bin.as_str()),
