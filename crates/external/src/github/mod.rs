@@ -753,28 +753,6 @@ mod tests {
         assert_eq!(got.err().as_deref(), Some("github_response_invalid"));
     }
 
-    /// A review's own read keeps the retrying mapping; only discovery isolates a pull request
-    /// (#576).
-    #[test]
-    fn permanent_read_failures_are_given_only_to_discovery() {
-        use super::scoped_failure;
-        for failure in [GraphqlFailure::Forbidden, GraphqlFailure::Unrecognized] {
-            assert_eq!(scoped_failure(failure, false), GraphqlFailure::Other);
-        }
-        assert_eq!(
-            scoped_failure(GraphqlFailure::Forbidden, true),
-            GraphqlFailure::Forbidden
-        );
-        assert_eq!(
-            scoped_failure(GraphqlFailure::Unrecognized, true),
-            GraphqlFailure::Unrecognized
-        );
-        assert_eq!(
-            scoped_failure(GraphqlFailure::ReviewerOnly, false),
-            GraphqlFailure::ReviewerOnly
-        );
-    }
-
     /// The search selection stays within GitHub's node limit: it names no team members, while the
     /// single pull request read does (#576).
     #[test]

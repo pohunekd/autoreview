@@ -606,9 +606,27 @@ impl GitHub {
                 if rule.trigger.kind != TriggerKind::ReviewRequested {
                     continue;
                 }
-                let raw = self
+                let raw = match self
                     .fetch_pull_request(cancel, credential, &repository, number, true)
-                    .await?;
+                    .await
+                {
+                    Ok(raw) => raw,
+                    // A permanent refusal of one draft skips only that draft.
+                    Err(error)
+                        if !cancel.is_cancelled()
+                            && is_permanent(&error)
+                            && error_code(&error) != "credential_invalid" =>
+                    {
+                        tracing::warn!(
+                            repository = %repository,
+                            pull_request = number,
+                            error_code = error_code(&error),
+                            "draft read failed permanently, skipping the draft"
+                        );
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let login = &credential.login;
                 let Some(id) = ready_draft_id(&raw, author, &repository, number, login) else {
                     continue;
@@ -731,7 +749,9 @@ impl GitHub {
         };
         for _ in 0..self.search_page_limit {
             let args = label_search_args(&query, &after);
-            let output = self.graphql_read(cancel, credential, &args, true).await?;
+            // A search page holds many pull requests, so a refusal cannot be pinned on one:
+            // it keeps the retrying mapping.
+            let output = self.graphql_read(cancel, credential, &args, false).await?;
             let page = decode_label_search_page(&output)?;
             for node in &page.nodes {
                 let (repository, number) = node.repository_and_number();
