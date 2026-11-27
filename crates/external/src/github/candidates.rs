@@ -11,19 +11,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use autoreview_engine::config::{Credential, independent_scopes};
 use autoreview_engine::error::Error;
-use autoreview_engine::error_code;
 use autoreview_engine::integrations::{ReadiedDraft, ReviewRequest, ReviewRequestList};
 use autoreview_engine::model::{
     Candidate, CandidateList, PullRequest, REJECTED_CANDIDATE_CODES, RejectedCandidate,
     pull_request_url_valid, repository_valid,
 };
+use autoreview_engine::{error_code, is_permanent};
 use autoreview_go_compat::{null_default, null_entries};
 use autoreview_policy::{Authors, Policy, Rule, Trigger, TriggerKind};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::pull_request::{GitHubPullRequest, decode_pull_request, ready_draft_id};
-use super::{GitHub, graphql_search, response_invalid};
+use super::{GitHub, graphql_search, response_invalid, reviewer_errors_tolerated};
 
 /// Query that marks a draft pull request ready for review (`graphQLMarkReady`).
 const GRAPHQL_MARK_READY: &str = concat!(
@@ -234,9 +234,19 @@ fn covering<'a>(
         .filter(|(rule, _)| rule.trigger == *trigger)
 }
 
+/// Reports whether a failed read rejects its pull request instead of failing the search.
+///
+/// That is a code of [`REJECTED_CANDIDATE_CODES`] or any other permanent failure except
+/// `credential_invalid`. A transient failure stays an error, so the poll retries the whole
+/// search.
+fn rejects_candidate(error: &Error, code: &str) -> bool {
+    REJECTED_CANDIDATE_CODES.contains(&code)
+        || (is_permanent(error) && code != "credential_invalid")
+}
+
 /// Sorts the outcome of reading one candidate: kept, skipped because its trigger lapsed,
-/// rejected because its data is invalid or unsupported, or a failure that stops the search
-/// (`classify`).
+/// rejected because its data is invalid or unsupported or its read failed permanently, or a
+/// failure that stops the search (`classify`).
 ///
 /// A kept candidate carries `rule` and `authors`, which come from one policy match.
 fn classify(
@@ -261,7 +271,15 @@ fn classify(
                 Ok(())
             } else {
                 let code = error_code(&error);
-                if REJECTED_CANDIDATE_CODES.contains(&code) {
+                if rejects_candidate(&error, code) {
+                    if !REJECTED_CANDIDATE_CODES.contains(&code) {
+                        tracing::warn!(
+                            repository = %repository,
+                            pull_request = number,
+                            error_code = code,
+                            "pull request read failed permanently, rejecting the pull request"
+                        );
+                    }
                     list.rejected.push(RejectedCandidate {
                         repository: repository.to_owned(),
                         number,
@@ -519,7 +537,9 @@ fn mark_ready_args(id: &str) -> Vec<String> {
 fn decode_label_search_page(output: &str) -> Result<LabelSearchPage, Error> {
     let response: SearchResponse =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
-    if response.data.search.nodes.is_none() || !response.errors.is_empty() {
+    if response.data.search.nodes.is_none()
+        || (!response.errors.is_empty() && !reviewer_errors_tolerated(output, &response.errors))
+    {
         return Err(response_invalid(None));
     }
     let nodes = match response.data.search.nodes {
@@ -624,9 +644,27 @@ impl GitHub {
                 if rule.trigger.kind != TriggerKind::ReviewRequested {
                     continue;
                 }
-                let raw = self
-                    .fetch_pull_request(cancel, credential, &repository, number)
-                    .await?;
+                let raw = match self
+                    .fetch_pull_request(cancel, credential, &repository, number, true)
+                    .await
+                {
+                    Ok(raw) => raw,
+                    // A permanent refusal of one draft skips only that draft.
+                    Err(error)
+                        if !cancel.is_cancelled()
+                            && is_permanent(&error)
+                            && error_code(&error) != "credential_invalid" =>
+                    {
+                        tracing::warn!(
+                            repository = %repository,
+                            pull_request = number,
+                            error_code = error_code(&error),
+                            "draft read failed permanently, skipping the draft"
+                        );
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                };
                 let login = &credential.login;
                 let Some(id) = ready_draft_id(&raw, author, &repository, number, login) else {
                     continue;
@@ -756,8 +794,11 @@ impl GitHub {
                 continue;
             }
             let outcome = self
-                .get_pull_request(cancel, credential, &repository, number, &trigger)
+                .get_pull_request(cancel, credential, &repository, number, &trigger, true)
                 .await;
+            if cancel.is_cancelled() && outcome.is_err() {
+                return outcome.map(|_| CandidateList::default());
+            }
             classify(&mut list, &repository, number, covered, outcome)?;
         }
         Ok(list)
@@ -783,7 +824,9 @@ impl GitHub {
         };
         for _ in 0..self.search_page_limit {
             let args = label_search_args(&query, &after);
-            let output = self.github::<()>(cancel, credential, &args, None).await?;
+            // A search page holds many pull requests, so a refusal cannot be pinned on one:
+            // it keeps the retrying mapping.
+            let output = self.graphql_read(cancel, credential, &args, false).await?;
             let page = decode_label_search_page(&output)?;
             for node in &page.nodes {
                 let (repository, number) = node.repository_and_number();
@@ -820,6 +863,9 @@ impl GitHub {
 mod tests {
     use autoreview_engine::model::{CandidateList, PullRequest};
     use autoreview_policy::{Authors, Trigger, TriggerKind};
+
+    use autoreview_engine::error::Error;
+    use autoreview_engine::error_code;
 
     use super::{GitHubPullRequest, classify, covering, decode_pull_request};
 
@@ -972,6 +1018,59 @@ notifications:
             let got = list.rejected.first().map(|rejected| rejected.code.as_str());
             assert_eq!(got, want, "{base:?}");
             assert_eq!(list.candidates.is_empty(), want.is_some(), "{base:?}");
+        }
+    }
+
+    // A permanent read failure rejects its own pull request, a transient one, `credential_invalid`
+    // and the team-only code are told apart as the plan of #576 says.
+    #[test]
+    fn permanent_read_failure_rejects_only_its_pull_request() {
+        let policy = autoreview_policy::parse(OVERLAPPING_POLICY.as_bytes(), |_| {
+            Ok(b"Review the pull request.".to_vec())
+        })
+        .expect("the overlapping policy parses");
+        let covered =
+            covering(&policy, "acme/widget", &review_requested()).expect("acme/* covers it");
+        let cases = [
+            (
+                "github_read_forbidden",
+                true,
+                Some(Some("github_read_forbidden")),
+            ),
+            (
+                "review_requested_from_team",
+                true,
+                Some(Some("review_requested_from_team")),
+            ),
+            ("review_request_not_active", true, Some(None)),
+            ("github_request_failed", false, None),
+            ("credential_invalid", false, None),
+            ("credential_invalid", true, None),
+        ];
+        for (code, permanent, want) in cases {
+            let mut list = CandidateList::default();
+            let outcome = classify(
+                &mut list,
+                "acme/widget",
+                7,
+                covered,
+                Err(Error::workflow(code, permanent, None)),
+            );
+            match want {
+                None => assert_eq!(
+                    outcome.as_ref().err().map(|error| error_code(error)),
+                    Some(code),
+                    "{code} fails the search"
+                ),
+                Some(rejected) => {
+                    assert!(outcome.is_ok(), "{code} does not fail the search");
+                    assert_eq!(
+                        list.rejected.first().map(|item| item.code.as_str()),
+                        rejected,
+                        "{code}"
+                    );
+                }
+            }
         }
     }
 }

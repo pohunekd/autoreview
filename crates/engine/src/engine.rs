@@ -493,19 +493,7 @@ where
     }
 }
 
-/// Reports whether the first workflow failure in the chain of `err` is marked permanent.
-///
-/// The chain is searched, not only its top, and the first workflow failure in it decides.
-pub(crate) fn is_permanent(err: &Error) -> bool {
-    let mut current: Option<&dyn std::error::Error> = Some(err);
-    while let Some(error) = current {
-        if let Some(Error::Workflow { permanent, .. }) = error.downcast_ref::<Error>() {
-            return *permanent;
-        }
-        current = error.source();
-    }
-    false
-}
+pub(crate) use crate::error::is_permanent;
 
 #[cfg(test)]
 mod tests {

@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
-use super::{GitHub, graphql_pull_request, repository_variables, response_invalid};
+use super::{
+    GitHub, graphql_pull_request, repository_variables, response_invalid, reviewer_errors_tolerated,
+};
 
 /// Largest title in bytes that a pull request may have.
 const MAX_TITLE_BYTES: usize = 1024;
@@ -124,6 +126,12 @@ pub(crate) struct GitHubPullRequest {
         deserialize_with = "null_default::deserialize"
     )]
     review_requests: ReviewRequests,
+    /// The latest review of each reviewer.
+    #[serde(
+        rename = "latestReviews",
+        deserialize_with = "null_default::deserialize"
+    )]
+    latest_reviews: LatestReviews,
     /// The repository of the pull request.
     #[serde(deserialize_with = "null_default::deserialize")]
     repository: RepositoryName,
@@ -193,20 +201,69 @@ autoreview_go_compat::object_only_serde!(ReviewRequests);
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 struct ReviewRequestNode {
-    /// The requested reviewer, `null` for a request to a team.
+    /// The requested reviewer; `null` for a team the token cannot read.
     #[serde(rename = "requestedReviewer")]
     requested_reviewer: Option<Reviewer>,
 }
 
 autoreview_go_compat::object_only_serde!(ReviewRequestNode);
 
+/// The latest review of each reviewer of a pull request.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct LatestReviews {
+    /// The review nodes; `null` reads as none and a `null` entry as an empty review.
+    #[serde(deserialize_with = "null_entries::deserialize")]
+    nodes: Vec<ReviewNode>,
+}
+
+autoreview_go_compat::object_only_serde!(LatestReviews);
+
+/// One review of a pull request.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct ReviewNode {
+    /// The reviewer, `null` for a deleted account.
+    author: Option<Member>,
+}
+
+autoreview_go_compat::object_only_serde!(ReviewNode);
+
+/// The members of a requested team.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct TeamMembers {
+    /// The member nodes; `null` reads as none and a `null` entry as an empty member.
+    #[serde(deserialize_with = "null_entries::deserialize")]
+    nodes: Vec<Member>,
+}
+
+autoreview_go_compat::object_only_serde!(TeamMembers);
+
+/// A user named by a review or a team membership.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, remote = "Self")]
+struct Member {
+    /// Login of the user.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    login: String,
+}
+
+autoreview_go_compat::object_only_serde!(Member);
+
 /// A user that a review was requested from.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, remote = "Self")]
 struct Reviewer {
-    /// Login of the reviewer.
+    /// GraphQL type name, `User` or `Team`.
+    #[serde(rename = "__typename", deserialize_with = "null_default::deserialize")]
+    typename: String,
+    /// Login of the reviewer; empty for a team.
     #[serde(deserialize_with = "null_default::deserialize")]
     login: String,
+    /// The members of a team the token can read; empty for a user or an unreadable team.
+    #[serde(deserialize_with = "null_default::deserialize")]
+    members: TeamMembers,
 }
 
 autoreview_go_compat::object_only_serde!(Reviewer);
@@ -268,7 +325,7 @@ pub(crate) struct ReviewRequestPage {
 pub(crate) fn decode_pull_request_response(output: &str) -> Result<GitHubPullRequest, Error> {
     let response: GraphQlResponse =
         serde_json::from_str(output).map_err(|error| response_invalid(Some(Box::new(error))))?;
-    if !response.errors.is_empty() {
+    if !response.errors.is_empty() && !reviewer_errors_tolerated(output, &response.errors) {
         return Err(response_invalid(None));
     }
     let repository = response
@@ -336,6 +393,52 @@ pub(super) fn requests(raw: &GitHubPullRequest, login: &str) -> bool {
         }
     }
     false
+}
+
+/// Reports whether the pull request waits on a team request: some review request is not a
+/// user (a `Team`, or a reviewer the token cannot read, `null`), and nobody who could answer it
+/// has reviewed yet.
+///
+/// The credential's own login and every readable member of a requested team count as
+/// answering. Members of a team the token cannot read are not known, so only the credential's
+/// own review counts there.
+fn team_requested(raw: &GitHubPullRequest, login: &str) -> bool {
+    let pending = raw.review_requests.nodes.iter().any(|node| {
+        node.requested_reviewer
+            .as_ref()
+            .is_none_or(|reviewer| reviewer.typename == "Team")
+    });
+    pending && !team_answered(raw, login)
+}
+
+/// Reports whether `login`, or a member of a requested team, already has a review.
+///
+/// A review by the pull request's own author never answers a request. The query carries no
+/// review or request times, so a review cannot be dated against the team request.
+fn team_answered(raw: &GitHubPullRequest, login: &str) -> bool {
+    let pull_request_author = raw
+        .author
+        .as_ref()
+        .map_or("", |author| author.login.as_str());
+    raw.latest_reviews
+        .nodes
+        .iter()
+        .filter_map(|review| review.author.as_ref())
+        .filter(|author| {
+            pull_request_author.is_empty()
+                || !author.login.eq_ignore_ascii_case(pull_request_author)
+        })
+        .any(|author| {
+            author.login.eq_ignore_ascii_case(login)
+                || raw
+                    .review_requests
+                    .nodes
+                    .iter()
+                    .filter_map(|node| node.requested_reviewer.as_ref())
+                    .filter(|reviewer| reviewer.typename == "Team")
+                    .flat_map(|team| &team.members.nodes)
+                    .any(|member| member.login.eq_ignore_ascii_case(&author.login))
+        })
 }
 
 /// Reports whether the pull request carries `label`, ignoring ASCII case.
@@ -433,6 +536,9 @@ pub(crate) fn decode_pull_request(
         }
         TriggerKind::ReviewRequested => {
             if !requests(raw, login) {
+                if team_requested(raw, login) {
+                    return Err(Error::workflow("review_requested_from_team", true, None));
+                }
                 return Err(Error::workflow("review_request_not_active", true, None));
             }
         }
@@ -556,6 +662,7 @@ impl GitHub {
     /// Reads a pull request with `credential` and checks it against the trigger of its rule.
     ///
     /// The response must name the requested pull request before any read that uses it.
+    /// `discovery` gives a permanent read failure its own code, see [`GitHub::graphql_read`].
     pub(crate) async fn get_pull_request(
         &self,
         cancel: &CancellationToken,
@@ -563,8 +670,10 @@ impl GitHub {
         repository: &str,
         number: i64,
         trigger: &Trigger,
+        discovery: bool,
     ) -> Result<PullRequest, Error> {
-        let raw = (self.fetch_pull_request(cancel, credential, repository, number)).await?;
+        let raw =
+            (self.fetch_pull_request(cancel, credential, repository, number, discovery)).await?;
         let mut pull_request = decode_pull_request(&raw, &self.host, &credential.login, trigger)?;
         if pull_request.repository != repository || pull_request.number != number {
             return Err(response_invalid(None));
@@ -589,20 +698,25 @@ impl GitHub {
         number: i64,
     ) -> Result<PullRequestState, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.github::<()>(cancel, credential, &args, None).await?;
+        let output = self.graphql_read(cancel, credential, &args, false).await?;
         decode_pull_request_state(repository, number, &output, &self.host, &credential.login)
     }
 
     /// Reads the raw pull request data of one pull request with `credential`'s token.
+    ///
+    /// `discovery` gives a permanent read failure its own code, see [`GitHub::graphql_read`].
     pub(super) async fn fetch_pull_request(
         &self,
         cancel: &CancellationToken,
         credential: &Credential,
         repository: &str,
         number: i64,
+        discovery: bool,
     ) -> Result<GitHubPullRequest, Error> {
         let args = pull_request_args(repository, number)?;
-        let output = self.github::<()>(cancel, credential, &args, None).await?;
+        let output = self
+            .graphql_read(cancel, credential, &args, discovery)
+            .await?;
         decode_pull_request_response(&output)
     }
 

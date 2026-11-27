@@ -34,15 +34,30 @@ use tokio_util::sync::CancellationToken;
 
 use crate::process::{GH_INHERITED, child_environment, run};
 
-/// Fields of a pull request in the GraphQL selection.
-const PULL_REQUEST_FIELDS: &str = concat!(
-    "id number title url state isDraft isCrossRepository\n",
-    "      headRefOid headRefName baseRefOid baseRefName\n",
-    "      author { __typename login }\n",
-    "      labels(first: 100) { nodes { name } }\n",
-    "      reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } }\n",
-    "      repository { nameWithOwner }",
-);
+/// Returns the fields of a pull request in the GraphQL selection.
+///
+/// `team_members` adds the members of a requested team. It is left out of the search, where the
+/// nested page sizes would exceed GitHub's node limit (`MAX_NODE_LIMIT_EXCEEDED`) and fail the
+/// label search of every pull request.
+fn pull_request_fields(team_members: bool) -> String {
+    let members = if team_members {
+        " ... on Team { members(first: 100) { nodes { login } } }"
+    } else {
+        ""
+    };
+    format!(
+        concat!(
+            "id number title url state isDraft isCrossRepository\n",
+            "      headRefOid headRefName baseRefOid baseRefName\n",
+            "      author {{ __typename login }}\n",
+            "      labels(first: 100) {{ nodes {{ name }} }}\n",
+            "      reviewRequests(first: 100) {{ nodes {{ requestedReviewer {{ __typename ... on User {{ login }}{members} }} }} }}\n",
+            "      latestReviews(first: 100) {{ nodes {{ author {{ login }} }} }}\n",
+            "      repository {{ nameWithOwner }}",
+        ),
+        members = members
+    )
+}
 
 /// Variables the `gh` child sets besides its token: plain output and no prompts.
 const GH_CHILD_ENVIRONMENT: [(&str, &str); 2] = [("GH_PAGER", "cat"), ("GH_PROMPT_DISABLED", "1")];
@@ -61,7 +76,7 @@ pub(crate) fn graphql_search() -> String {
             "  }}\n",
             "}}"
         ),
-        PULL_REQUEST_FIELDS = PULL_REQUEST_FIELDS
+        PULL_REQUEST_FIELDS = pull_request_fields(false)
     )
 }
 
@@ -75,7 +90,7 @@ fn graphql_pull_request() -> String {
             "  }}\n",
             "}}"
         ),
-        PULL_REQUEST_FIELDS = PULL_REQUEST_FIELDS
+        PULL_REQUEST_FIELDS = pull_request_fields(true)
     )
 }
 
@@ -213,6 +228,188 @@ impl GitHub {
         }
         Ok(output)
     }
+
+    /// Runs a GraphQL read of pull request data with the token of `credential` and returns its
+    /// stdout.
+    ///
+    /// `gh` exits 1 when the response holds errors, with the response on stdout. A response whose
+    /// only errors are on a requested reviewer (a team the token cannot read) is returned like a
+    /// success; the decoders then read the team request as an unreadable non-user request. A
+    /// response whose errors are all `FORBIDDEN` fails with the permanent `github_read_forbidden`,
+    /// and a GraphQL error body of typed errors that are not a rate limit with the permanent
+    /// `github_read_unrecognized`, so one pull request never stops a discovery pass. Those two
+    /// codes are given only when `discovery` is set: a review's own reads keep the retrying
+    /// mapping of [`GitHub::github`], as does every other failure, an untyped error included.
+    pub(crate) async fn graphql_read(
+        &self,
+        cancel: &CancellationToken,
+        credential: &Credential,
+        args: &[String],
+        discovery: bool,
+    ) -> Result<String, Error> {
+        let environment = self.environment(std::env::vars_os(), credential);
+        let result = run(cancel, &self.binary, args, &[], &environment, self.timeout).await;
+        let output = match result {
+            Ok(output) => output,
+            Err(error) => {
+                return match scoped_failure(graphql_failure(error.stdout()), discovery) {
+                    GraphqlFailure::ReviewerOnly => {
+                        tracing::warn!(
+                            credential = %credential.name,
+                            "pull request read has errors only on a requested reviewer"
+                        );
+                        Ok(error.stdout().to_owned())
+                    }
+                    GraphqlFailure::Forbidden => Err(Error::workflow(
+                        "github_read_forbidden",
+                        true,
+                        Some(Box::new(error)),
+                    )),
+                    GraphqlFailure::Unrecognized => {
+                        tracing::warn!(
+                            credential = %credential.name,
+                            error_types = %error_types(error.stdout()),
+                            "pull request read has GraphQL errors of an unknown shape, skipping it"
+                        );
+                        Err(Error::workflow(
+                            "github_read_unrecognized",
+                            true,
+                            Some(Box::new(error)),
+                        ))
+                    }
+                    GraphqlFailure::Other => {
+                        let (code, permanent) = gh_failure(&error.to_string());
+                        Err(Error::workflow(code, permanent, Some(Box::new(error))))
+                    }
+                };
+            }
+        };
+        if serde_json::from_str::<IgnoredAny>(&output).is_err() {
+            return Err(response_invalid(None));
+        }
+        Ok(output)
+    }
+}
+
+/// How a failed GraphQL read is told apart from its stdout.
+#[derive(Debug, PartialEq, Eq)]
+enum GraphqlFailure {
+    /// `data` is present and every error is on a requested reviewer of a review request.
+    ReviewerOnly,
+    /// Every error is of type `FORBIDDEN`: GitHub refuses the token's read.
+    Forbidden,
+    /// A GraphQL error body whose errors all have a type that is none of the above, such as an
+    /// unknown type: the read of this pull request is skipped and the rest of the pass goes on.
+    Unrecognized,
+    /// Anything else: no GraphQL body, an error without a type, or a rate limit, which a later
+    /// pass can retry.
+    Other,
+}
+
+/// Error type of a GraphQL rate limit, which is transient.
+const RATE_LIMITED: &str = "RATE_LIMITED";
+
+/// Returns the `type` of a GraphQL error, `None` when it has none or it is not text.
+fn error_type(error: &serde_json::Value) -> Option<&str> {
+    error.get("type").and_then(serde_json::Value::as_str)
+}
+
+/// Sorts the stdout of a failed `gh api graphql` call.
+///
+/// The decision rests on the documented GraphQL error format (`errors[].type`, `message` and
+/// `path`), on the error paths and types, never on the message text.
+fn graphql_failure(stdout: &str) -> GraphqlFailure {
+    let Ok(response) = serde_json::from_str::<serde_json::Value>(stdout) else {
+        return GraphqlFailure::Other;
+    };
+    let Some(errors) = response
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .filter(|errors| !errors.is_empty())
+    else {
+        return GraphqlFailure::Other;
+    };
+    if reviewer_errors_tolerated(stdout, errors) {
+        GraphqlFailure::ReviewerOnly
+    } else if errors
+        .iter()
+        .all(|error| error_type(error).is_some_and(|kind| kind.eq_ignore_ascii_case("FORBIDDEN")))
+    {
+        GraphqlFailure::Forbidden
+    } else if errors
+        .iter()
+        .any(|error| error_type(error).is_none_or(|kind| kind.eq_ignore_ascii_case(RATE_LIMITED)))
+    {
+        GraphqlFailure::Other
+    } else {
+        GraphqlFailure::Unrecognized
+    }
+}
+
+/// Keeps the per-pull-request failures only for a discovery read.
+///
+/// Any other read maps `Forbidden` and `Unrecognized` to `Other`, so it fails and retries as the
+/// plain GitHub reads do.
+fn scoped_failure(failure: GraphqlFailure, discovery: bool) -> GraphqlFailure {
+    match failure {
+        GraphqlFailure::Forbidden | GraphqlFailure::Unrecognized if !discovery => {
+            GraphqlFailure::Other
+        }
+        failure => failure,
+    }
+}
+
+/// Lists the error types of a GraphQL error body for the log, `none` for an error without one.
+///
+/// Only the types are logged, never the message text.
+fn error_types(stdout: &str) -> String {
+    let Ok(response) = serde_json::from_str::<serde_json::Value>(stdout) else {
+        return String::new();
+    };
+    response
+        .get("errors")
+        .and_then(serde_json::Value::as_array)
+        .map(|errors| {
+            errors
+                .iter()
+                .map(|error| error_type(error).unwrap_or("none"))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default()
+}
+
+/// Reports whether `errors` is non-empty and every error is on the `requestedReviewer` of a
+/// review request node.
+///
+/// The error path contains `reviewRequests`, `nodes`, an index and `requestedReviewer`, and may
+/// go deeper into the reviewer, such as its team members.
+pub(super) fn reviewer_errors_only(errors: &[serde_json::Value]) -> bool {
+    !errors.is_empty() && errors.iter().all(reviewer_error)
+}
+
+/// Reports whether one GraphQL error is on a review request's `requestedReviewer`.
+fn reviewer_error(error: &serde_json::Value) -> bool {
+    let Some(path) = error.get("path").and_then(serde_json::Value::as_array) else {
+        return false;
+    };
+    path.windows(4).any(|window| {
+        window[0].as_str() == Some("reviewRequests")
+            && window[1].as_str() == Some("nodes")
+            && window[2].is_u64()
+            && window[3].as_str() == Some("requestedReviewer")
+    })
+}
+
+/// Reports whether a decoded response with `errors` may be used: `data` is an object and every
+/// error is on a requested reviewer.
+pub(super) fn reviewer_errors_tolerated(output: &str, errors: &[serde_json::Value]) -> bool {
+    reviewer_errors_only(errors)
+        && serde_json::from_str::<serde_json::Value>(output).is_ok_and(|response| {
+            response
+                .get("data")
+                .is_some_and(serde_json::Value::is_object)
+        })
 }
 
 /// The viewer object of `gh api user`.
@@ -352,7 +549,10 @@ mod tests {
     use autoreview_engine::config::{Credential, Credentials};
     use autoreview_engine::error_code;
 
-    use super::{GitHub, repository_variables};
+    use super::{
+        GitHub, GraphqlFailure, graphql_failure, graphql_pull_request, graphql_search,
+        repository_variables,
+    };
     use crate::pohunek::local_environment;
 
     /// Each row is a repository and the owner and name that `gh` receives as raw strings: a
@@ -445,5 +645,225 @@ mod tests {
             local_environment(parent),
             pairs(&[("PATH", "/usr/bin"), ("PAGER", "cat")])
         );
+    }
+
+    /// The error of a requested reviewer node a token cannot read, as GraphQL reports it.
+    fn reviewer_error(index: u64) -> serde_json::Value {
+        serde_json::json!({
+            "type": "FORBIDDEN",
+            "path": ["repository", "pullRequest", "reviewRequests", "nodes", index,
+                "requestedReviewer"],
+            "message": "Resource not accessible by personal access token",
+        })
+    }
+
+    /// Each row is the stdout of a failed GraphQL read and how it is sorted (#576).
+    #[test]
+    fn failed_graphql_read_is_sorted_by_error_path_and_type() {
+        let data = serde_json::json!({"repository": {"pullRequest": {}}});
+        let other = serde_json::json!({
+            "type": "FORBIDDEN", "path": ["repository", "pullRequest"], "message": "x",
+        });
+        let unknown = serde_json::json!({"type": "INTERNAL", "message": "x"});
+        let rows = [
+            (
+                serde_json::json!({"data": data, "errors": [reviewer_error(0), reviewer_error(2)]}),
+                GraphqlFailure::ReviewerOnly,
+            ),
+            (
+                serde_json::json!({"data": null, "errors": [reviewer_error(0)]}),
+                GraphqlFailure::Forbidden,
+            ),
+            (
+                serde_json::json!({"data": data, "errors": [reviewer_error(0), other.clone()]}),
+                GraphqlFailure::Forbidden,
+            ),
+            (
+                serde_json::json!({"data": data, "errors": [reviewer_error(0), unknown]}),
+                GraphqlFailure::Unrecognized,
+            ),
+            (
+                serde_json::json!({"data": null, "errors": [{"message": "no type"}, "text"]}),
+                GraphqlFailure::Other,
+            ),
+            (
+                serde_json::json!({"data": null, "errors": [{"type": "forbidden", "path": [],
+                    "message": "x"}]}),
+                GraphqlFailure::Forbidden,
+            ),
+            (
+                serde_json::json!({"data": null, "errors": [{"type": "RATE_LIMITED",
+                    "message": "x"}, unknown]}),
+                GraphqlFailure::Other,
+            ),
+            (
+                serde_json::json!({"data": data, "errors": []}),
+                GraphqlFailure::Other,
+            ),
+            (serde_json::json!({"data": data}), GraphqlFailure::Other),
+        ];
+        for (stdout, want) in rows {
+            assert_eq!(graphql_failure(&stdout.to_string()), want, "{stdout}");
+        }
+        assert_eq!(graphql_failure("not json"), GraphqlFailure::Other);
+        assert_eq!(graphql_failure(""), GraphqlFailure::Other);
+    }
+
+    /// Each row is the review requests of a pull request, with the reviewer errors GitHub adds,
+    /// and the result of decoding it for `example-user` (#576).
+    #[test]
+    fn team_review_requests_decode_to_a_candidate_or_a_rejection() {
+        use super::pull_request::{decode_pull_request, decode_pull_request_response};
+        use autoreview_policy::{Trigger, TriggerKind};
+
+        let user = serde_json::json!({"requestedReviewer": {"__typename": "User",
+            "login": "example-user"}});
+        let other_user = serde_json::json!({"requestedReviewer": {"__typename": "User",
+            "login": "colleague"}});
+        let team = serde_json::json!({"requestedReviewer": {"__typename": "Team"}});
+        let unreadable = serde_json::json!({"requestedReviewer": null});
+        let stray = serde_json::json!({"type": "FORBIDDEN", "path": ["repository", "labels"]});
+        let rows = [
+            (
+                vec![user.clone(), unreadable.clone()],
+                vec![reviewer_error(1)],
+                Ok(()),
+            ),
+            (vec![user.clone(), team.clone()], vec![], Ok(())),
+            (
+                vec![unreadable.clone()],
+                vec![reviewer_error(0)],
+                Err("review_requested_from_team"),
+            ),
+            (
+                vec![team.clone()],
+                vec![],
+                Err("review_requested_from_team"),
+            ),
+            (
+                vec![other_user.clone()],
+                vec![],
+                Err("review_request_not_active"),
+            ),
+            (vec![], vec![], Err("review_request_not_active")),
+            (
+                vec![user.clone(), unreadable.clone()],
+                vec![reviewer_error(1), stray],
+                Err("github_response_invalid"),
+            ),
+        ];
+        let trigger = Trigger {
+            kind: TriggerKind::ReviewRequested,
+            label: String::new(),
+        };
+        for (nodes, errors, want) in rows {
+            let response = serde_json::json!({
+                "data": {"repository": {"pullRequest": {
+                    "id": "PR_node", "number": 7, "title": "Add widget",
+                    "url": "https://github.com/acme/widget/pull/7", "state": "OPEN",
+                    "isDraft": false, "isCrossRepository": false,
+                    "headRefOid": "a".repeat(40), "headRefName": "feature",
+                    "baseRefOid": "b".repeat(40), "baseRefName": "main",
+                    "author": {"__typename": "User", "login": "colleague"},
+                    "labels": {"nodes": []},
+                    "reviewRequests": {"nodes": nodes},
+                    "repository": {"nameWithOwner": "acme/widget"},
+                }}},
+                "errors": errors,
+            })
+            .to_string();
+            let got = decode_pull_request_response(&response)
+                .and_then(|raw| decode_pull_request(&raw, "github.com", "example-user", &trigger))
+                .map(|_| ())
+                .map_err(|error| error_code(&error).to_owned());
+            assert_eq!(got, want.map_err(str::to_owned), "{response}");
+        }
+        let without_data = serde_json::json!({"data": null, "errors": [reviewer_error(0)]});
+        let got = decode_pull_request_response(&without_data.to_string())
+            .map_err(|error| error_code(&error).to_owned());
+        assert_eq!(got.err().as_deref(), Some("github_response_invalid"));
+    }
+
+    /// The search selection stays within GitHub's node limit: it names no team members, while the
+    /// single pull request read does (#576).
+    #[test]
+    fn search_query_leaves_team_members_out() {
+        assert!(!graphql_search().contains("members"));
+        assert!(graphql_pull_request().contains("members(first: 100)"));
+    }
+
+    /// A team request that stays on the pull request after the credential's login or a readable
+    /// team member has reviewed is not a team-only request (#576).
+    #[test]
+    fn answered_team_request_is_not_reported_as_team_only() {
+        use super::pull_request::{decode_pull_request, decode_pull_request_response};
+        use autoreview_policy::{Trigger, TriggerKind};
+
+        let team = serde_json::json!({"requestedReviewer": {"__typename": "Team",
+            "members": {"nodes": [{"login": "Team-Mate"}, {"login": "other-mate"}]}}});
+        let team_with_author = serde_json::json!({"requestedReviewer": {"__typename": "Team",
+            "members": {"nodes": [{"login": "colleague"}, {"login": "team-mate"}]}}});
+        let unreadable = serde_json::json!({"requestedReviewer": null});
+        let review = |login: &str| serde_json::json!({"author": {"login": login}});
+        let rows = [
+            (vec![team.clone()], vec![], "review_requested_from_team"),
+            (
+                vec![team.clone()],
+                vec![review("team-mate")],
+                "review_request_not_active",
+            ),
+            (
+                vec![team.clone()],
+                vec![review("outsider")],
+                "review_requested_from_team",
+            ),
+            (
+                vec![unreadable.clone()],
+                vec![review("Example-User")],
+                "review_request_not_active",
+            ),
+            (
+                vec![unreadable.clone()],
+                vec![review("team-mate")],
+                "review_requested_from_team",
+            ),
+            // The pull request author is a team member and reviewed their own pull request.
+            (
+                vec![team_with_author.clone()],
+                vec![review("Colleague")],
+                "review_requested_from_team",
+            ),
+            (
+                vec![team_with_author.clone()],
+                vec![review("colleague"), review("team-mate")],
+                "review_request_not_active",
+            ),
+        ];
+        let trigger = Trigger {
+            kind: TriggerKind::ReviewRequested,
+            label: String::new(),
+        };
+        for (nodes, reviews, want) in rows {
+            let response = serde_json::json!({
+                "data": {"repository": {"pullRequest": {
+                    "id": "PR_node", "number": 7, "title": "Add widget",
+                    "url": "https://github.com/acme/widget/pull/7", "state": "OPEN",
+                    "isDraft": false, "isCrossRepository": false,
+                    "headRefOid": "a".repeat(40), "headRefName": "feature",
+                    "baseRefOid": "b".repeat(40), "baseRefName": "main",
+                    "author": {"__typename": "User", "login": "colleague"},
+                    "labels": {"nodes": []},
+                    "reviewRequests": {"nodes": nodes},
+                    "latestReviews": {"nodes": reviews},
+                    "repository": {"nameWithOwner": "acme/widget"},
+                }}},
+            })
+            .to_string();
+            let got = decode_pull_request_response(&response)
+                .and_then(|raw| decode_pull_request(&raw, "github.com", "example-user", &trigger))
+                .map(|_| ())
+                .map_err(|error| error_code(&error).to_owned());
+            assert_eq!(got, Err(want.to_owned()), "{response}");
+        }
     }
 }
