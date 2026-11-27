@@ -184,7 +184,8 @@ verified: the GraphQL reference page fetched did not include it.
   requested team when it reads a single pull request, so a team request that a member
   has already answered with a review is not reported there. The search names no team
   members. Without it, a request to the credential's login still works, a pull
-  request requested only from a team is rejected with `review_requested_from_team`,
+  request requested only from a team is rejected with `review_requested_from_team`
+  unless the credential lists that team in `review_teams`,
   and the credential's own earlier review is the only one that ends that notice. An
   unreadable request on a pull request that also requests the credential's login does
   not stop the discovery of any other pull request.

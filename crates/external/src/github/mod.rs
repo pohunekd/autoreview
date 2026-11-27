@@ -41,7 +41,7 @@ use crate::process::{GH_INHERITED, child_environment, run};
 /// label search of every pull request.
 fn pull_request_fields(team_members: bool) -> String {
     let members = if team_members {
-        " ... on Team { members(first: 100) { nodes { login } } }"
+        " members(first: 100) { nodes { login } }"
     } else {
         ""
     };
@@ -51,7 +51,7 @@ fn pull_request_fields(team_members: bool) -> String {
             "      headRefOid headRefName baseRefOid baseRefName\n",
             "      author {{ __typename login }}\n",
             "      labels(first: 100) {{ nodes {{ name }} }}\n",
-            "      reviewRequests(first: 100) {{ nodes {{ requestedReviewer {{ __typename ... on User {{ login }}{members} }} }} }}\n",
+            "      reviewRequests(first: 100) {{ nodes {{ requestedReviewer {{ __typename ... on User {{ login }} ... on Team {{ combinedSlug{members} }} }} }} }}\n",
             "      latestReviews(first: 100) {{ nodes {{ author {{ login }} }} }}\n",
             "      repository {{ nameWithOwner }}",
         ),
@@ -584,6 +584,7 @@ mod tests {
             login: format!("{name}-bot"),
             token: token.to_owned(),
             matches: vec![pattern.to_owned()],
+            review_teams: Vec::new(),
         }
     }
 
@@ -721,42 +722,64 @@ mod tests {
         let other_user = serde_json::json!({"requestedReviewer": {"__typename": "User",
             "login": "colleague"}});
         let team = serde_json::json!({"requestedReviewer": {"__typename": "Team"}});
+        let backend = serde_json::json!({"requestedReviewer": {"__typename": "Team",
+            "combinedSlug": "acme/backend"}});
         let unreadable = serde_json::json!({"requestedReviewer": null});
         let stray = serde_json::json!({"type": "FORBIDDEN", "path": ["repository", "labels"]});
+        let listed = vec!["acme/backend".to_owned()];
         let rows = [
             (
                 vec![user.clone(), unreadable.clone()],
                 vec![reviewer_error(1)],
+                vec![],
                 Ok(()),
             ),
-            (vec![user.clone(), team.clone()], vec![], Ok(())),
+            (vec![user.clone(), team.clone()], vec![], vec![], Ok(())),
             (
                 vec![unreadable.clone()],
                 vec![reviewer_error(0)],
+                vec![],
                 Err("review_requested_from_team"),
             ),
             (
                 vec![team.clone()],
+                vec![],
                 vec![],
                 Err("review_requested_from_team"),
             ),
             (
                 vec![other_user.clone()],
                 vec![],
+                vec![],
                 Err("review_request_not_active"),
             ),
-            (vec![], vec![], Err("review_request_not_active")),
+            (vec![], vec![], vec![], Err("review_request_not_active")),
             (
                 vec![user.clone(), unreadable.clone()],
                 vec![reviewer_error(1), stray],
+                vec![],
                 Err("github_response_invalid"),
+            ),
+            // A team named in `review_teams` asks the login; any other team does not.
+            (vec![backend.clone()], vec![], listed.clone(), Ok(())),
+            (
+                vec![backend.clone()],
+                vec![],
+                vec![],
+                Err("review_requested_from_team"),
+            ),
+            (
+                vec![team.clone()],
+                vec![],
+                listed.clone(),
+                Err("review_requested_from_team"),
             ),
         ];
         let trigger = Trigger {
             kind: TriggerKind::ReviewRequested,
             label: String::new(),
         };
-        for (nodes, errors, want) in rows {
+        for (nodes, errors, teams, want) in rows {
             let response = serde_json::json!({
                 "data": {"repository": {"pullRequest": {
                     "id": "PR_node", "number": 7, "title": "Add widget",
@@ -773,7 +796,9 @@ mod tests {
             })
             .to_string();
             let got = decode_pull_request_response(&response)
-                .and_then(|raw| decode_pull_request(&raw, "github.com", "example-user", &trigger))
+                .and_then(|raw| {
+                    decode_pull_request(&raw, "github.com", "example-user", &teams, &trigger)
+                })
                 .map(|_| ())
                 .map_err(|error| error_code(&error).to_owned());
             assert_eq!(got, want.map_err(str::to_owned), "{response}");
@@ -860,10 +885,52 @@ mod tests {
             })
             .to_string();
             let got = decode_pull_request_response(&response)
-                .and_then(|raw| decode_pull_request(&raw, "github.com", "example-user", &trigger))
+                .and_then(|raw| {
+                    decode_pull_request(&raw, "github.com", "example-user", &[], &trigger)
+                })
                 .map(|_| ())
                 .map_err(|error| error_code(&error).to_owned());
             assert_eq!(got, Err(want.to_owned()), "{response}");
+        }
+    }
+
+    /// A `review_requested` event counts for the login, or for a listed team of the repository
+    /// owner; a listed slug under another owner, or an unlisted team, does not.
+    #[test]
+    fn review_request_events_count_for_the_login_or_a_listed_team() {
+        use super::pull_request::decode_review_request_page;
+
+        let at = "2026-01-02T03:04:05Z";
+        let direct = serde_json::json!({"id": 1, "event": "review_requested",
+            "created_at": at, "requested_reviewer": {"login": "Example-User"}});
+        let backend = serde_json::json!({"id": 2, "event": "review_requested",
+            "created_at": at, "requested_team": {"slug": "backend"}});
+        let frontend = serde_json::json!({"id": 3, "event": "review_requested",
+            "created_at": at, "requested_team": {"slug": "frontend"}});
+        let no_time = serde_json::json!({"id": 4, "event": "review_requested",
+            "requested_team": {"slug": "backend"}});
+        let listed = vec!["acme/backend".to_owned()];
+        // (event, repository, listed teams, ids counted or the error code)
+        let rows = [
+            (&direct, "acme/widget", vec![], Ok(vec![1])),
+            (&backend, "acme/widget", listed.clone(), Ok(vec![2])),
+            (&backend, "Acme/Widget", listed.clone(), Ok(vec![2])),
+            (&backend, "other/widget", listed.clone(), Ok(vec![])),
+            (&backend, "acme/widget", vec![], Ok(vec![])),
+            (&frontend, "acme/widget", listed.clone(), Ok(vec![])),
+            (
+                &no_time,
+                "acme/widget",
+                listed.clone(),
+                Err("github_response_invalid"),
+            ),
+        ];
+        for (event, repository, teams, want) in rows {
+            let page = serde_json::json!([event]).to_string();
+            let got = decode_review_request_page(&page, repository, "example-user", &teams)
+                .map(|page| page.events.iter().map(|event| event.id).collect::<Vec<_>>())
+                .map_err(|error| error_code(&error).to_owned());
+            assert_eq!(got, want.map_err(str::to_owned), "{page} {repository}");
         }
     }
 }

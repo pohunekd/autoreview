@@ -228,6 +228,16 @@ credentials:
 | `login` | The account the token belongs to. Reviews are requested from, published by, and approved as this account. A dispatched review keeps the login it was dispatched with, so a login change stops it with `credential_not_covered` until `autoreview retry` |
 | `token_env` | Environment variable that holds the token; its name must match `AUTOREVIEW_[A-Z0-9_]+` |
 | `match` | The repositories the credential serves: lowercase `owner/repository`, `owner/*` or `*` |
+| `review_teams` | Optional list of lowercase `org/team` slugs, empty when absent. A pending review request to a listed team counts as a request to `login`. Slugs match exactly, with no wildcards and no membership lookup. The loader refuses a slug that is not `org/team`, one with an uppercase letter, a repeated one, and one whose organization no `match` of the credential serves |
+
+With `review_teams: ["acme/backend"]`, a pull request of `acme/widget` whose only
+pending request is to `acme/backend` is reviewed once, and a request of a draft by
+an author of `ready_draft_authors` to that team marks the draft ready, which is a write on
+GitHub. The account must be a member of the team, or the `review-requested:@me`
+search does not find the pull request. The token must be able to read the team
+(organization permission Members: read), or the request reads as unreadable and
+stays `review_requested_from_team`. When a teammate reviews first, GitHub drops the
+team request and the review ends like a removed direct request.
 
 How the credential applies:
 

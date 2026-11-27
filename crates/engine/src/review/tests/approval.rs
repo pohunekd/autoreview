@@ -6,9 +6,12 @@ use std::collections::BTreeMap;
 
 use autoreview_policy::{EVENTS, Event, Level, Rule};
 
+use crate::config::{Credential, Credentials};
 use crate::model::ids::INPUT_VERSION;
 use crate::model::pull_request::SCOPE_FULL;
-use crate::model::{ProjectRoute, PullRequest, ReviewInput, ReviewScope, RunLimits};
+use crate::model::{
+    ProjectRoute, PullRequest, RequestedReviewer, ReviewInput, ReviewScope, RunLimits,
+};
 use crate::protocol::fixtures::sha;
 use crate::testing::harness::{integration_pull_request, start_harness};
 
@@ -157,4 +160,61 @@ async fn team_only_request_is_announced_and_holds_up_no_other_review() {
         .count();
     assert_eq!(announced, 1, "the team-only request is announced once");
     h.stop_engine().await;
+}
+
+/// A team-only request is announced and not reviewed until the credential lists the team in
+/// `review_teams`; then the same pull request is reviewed once (#579).
+#[tokio::test]
+async fn listed_team_request_is_reviewed_and_an_unlisted_one_is_not() {
+    let requested_from_team = || vec![RequestedReviewer::Team("acme/backend".to_owned())];
+
+    let mut without = start_harness(|_| {}).await;
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    let rule = without.rule(&pr.repository);
+    without
+        .fake
+        .open_requested(pr.clone(), rule, requested_from_team());
+    without.settle().await;
+    assert_eq!(without.publications(), 0, "an unlisted team asks nobody");
+    let (_, notes, _, _) = without.fake.snapshot();
+    let announced = notes
+        .iter()
+        .filter(|note| {
+            note.message.contains(&pr.key())
+                && note
+                    .message
+                    .contains("requests the review only from a team")
+        })
+        .count();
+    assert_eq!(announced, 1, "the team-only request is announced once");
+    without.stop_engine().await;
+
+    let mut listed = start_harness(|config| {
+        let credential = Credential {
+            name: "default".to_owned(),
+            login: "example-user".to_owned(),
+            token: "placeholder-token".to_owned(),
+            matches: vec!["*".to_owned()],
+            review_teams: vec!["acme/backend".to_owned()],
+        };
+        config.credentials = Credentials::new(vec![credential]).expect("the credentials load");
+    })
+    .await;
+    let pr = integration_pull_request("acme/widget", &sha("a"));
+    let rule = listed.rule(&pr.repository);
+    listed
+        .fake
+        .open_requested(pr.clone(), rule, requested_from_team());
+    listed
+        .poll_until("the review of the team request", || {
+            listed.publications() == 1
+        })
+        .await;
+    listed.settle().await;
+    assert_eq!(
+        listed.publications(),
+        1,
+        "the team request is reviewed once"
+    );
+    listed.stop_engine().await;
 }

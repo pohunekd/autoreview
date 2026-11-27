@@ -1038,6 +1038,7 @@ mod tests {
             login: login.to_owned(),
             token: format!("{name}-token"),
             matches: vec![pattern.to_owned()],
+            review_teams: Vec::new(),
         };
         let mut cfg = queue_config();
         cfg.credentials = Credentials::new(vec![
