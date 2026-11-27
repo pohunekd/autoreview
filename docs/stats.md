@@ -355,11 +355,16 @@ scrape_configs:
   running or awaiting review has no sample.
 - `autoreview_pull_requests_stopped` (label `repository`): `current.stopped_by_repository`,
   the pull requests stopped after their retries.
+- `autoreview_pull_requests_rejected` (labels `repository`, `error_code`): the pull requests
+  that discovery refuses to review, counted from the refusals of the discovery state per
+  repository and code, such as `review_requested_from_team`. A pull request leaves the count
+  when the next pass no longer refuses it; a pair without a refusal has no sample.
 
 ```text
 sum by (repository) (autoreview_reviews_queued + autoreview_reviews_running)
 sum by (host) (autoreview_reviews_running)
 sum(autoreview_pull_requests_stopped) > 0
+sum by (repository, error_code) (autoreview_pull_requests_rejected) > 0
 ```
 
 ### Counters
