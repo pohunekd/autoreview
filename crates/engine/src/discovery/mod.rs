@@ -245,6 +245,11 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
             if reported == item.code {
                 continue;
             }
+            tracing::info!(
+                review_key = %key,
+                error_code = %item.code,
+                "pull request rejected, it is not reviewed"
+            );
             let message = if let Some(login) = &item.permission_login {
                 permission_message(&key, &item.code, &item.repository, login)
             } else if item.code == TEAM_REQUEST_CODE {

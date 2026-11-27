@@ -1331,6 +1331,33 @@ pub(crate) fn stopped(records: &BTreeMap<String, Record>) -> Result<BTreeMap<Str
     Ok(repositories)
 }
 
+/// Counts the rejected pull requests per repository and refusal code.
+///
+/// The key of an entry is `repository#number`; its value is the code last reported for it.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` for a key without `#`.
+pub(crate) fn rejected(
+    entries: &BTreeMap<String, String>,
+) -> Result<BTreeMap<(String, String), i64>, Error> {
+    let mut counts: BTreeMap<(String, String), i64> = BTreeMap::new();
+    for (key, code) in entries {
+        let Some((repository, _)) = key.rsplit_once('#') else {
+            let cause = format!("rejected key {key:?} has no number");
+            return Err(Error::workflow(
+                "store_state_invalid",
+                true,
+                Some(cause.into()),
+            ));
+        };
+        *counts
+            .entry((repository.to_owned(), code.clone()))
+            .or_default() += 1;
+    }
+    Ok(counts)
+}
+
 /// Reports whether `review` counts in the current state.
 ///
 /// A queued or running row counts. An awaiting row counts only while it waits for a decision,

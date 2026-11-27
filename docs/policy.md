@@ -239,7 +239,7 @@ repositories before their owner wildcard.
 | Key | Value |
 |---|---|
 | `match` | Lowercase `owner/repository` or `owner/*`. The owner is an organization or a user; an Enterprise Managed User is `handle_shortcode`, such as `mona-cat_octo/*` |
-| `trigger` | `review-requested` (the pull request requests a review from the login of the [credential](configuration.md#credentials) that serves the repository) or `label:<name>` (`[A-Za-z0-9][A-Za-z0-9:._-]{0,49}`) |
+| `trigger` | `review-requested` (the pull request requests a review from the login of the [credential](configuration.md#credentials) that serves the repository; a pull request that requests its review only from a team is not reviewed, it is rejected as `review_requested_from_team`, logged once at info level and counted by `autoreview_pull_requests_rejected`) or `label:<name>` (`[A-Za-z0-9][A-Za-z0-9:._-]{0,49}`) |
 | `pipeline` | A pipeline name |
 | `on_findings` | What a review with blocking findings publishes: `request_changes` or `comment` |
 | `on_clean` | What a review without blocking findings does: `approve`, `await` (wait for a human approval) or `comment` |
