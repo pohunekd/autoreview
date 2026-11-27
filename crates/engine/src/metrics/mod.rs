@@ -86,11 +86,15 @@ impl<I: Integrations, C: Clock> Engine<I, C> {
     /// # Errors
     ///
     /// Returns the shutdown error after a cancel, the errors of `Store::stats_snapshot`, and
-    /// `store_state_invalid` for a schedule key without `#`.
+    /// `store_state_invalid` for a schedule or rejected key without `#`.
     pub fn metrics_text(&self, cancel: &CancellationToken) -> Result<String, Error> {
         live(cancel)?;
         let snapshot = self.store.stats_snapshot(None, SnapshotReads::Counted)?;
-        let gauges = Gauges::read(&snapshot.reviews, &snapshot.discovery.schedule)?;
+        let gauges = Gauges::read(
+            &snapshot.reviews,
+            &snapshot.discovery.schedule,
+            &snapshot.discovery.rejected,
+        )?;
         let none = Counts::default();
         let guard = self.metrics.as_ref().map(Metrics::lock);
         Ok(render(&gauges, guard.as_deref().unwrap_or(&none)))

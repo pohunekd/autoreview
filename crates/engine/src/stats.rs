@@ -1331,6 +1331,33 @@ pub(crate) fn stopped(records: &BTreeMap<String, Record>) -> Result<BTreeMap<Str
     Ok(repositories)
 }
 
+/// Counts the rejected pull requests per repository and refusal code.
+///
+/// The key of an entry is `repository#number`; its value is the code last reported for it.
+///
+/// # Errors
+///
+/// Returns `store_state_invalid` for a key without `#`.
+pub(crate) fn rejected(
+    entries: &BTreeMap<String, String>,
+) -> Result<BTreeMap<(String, String), i64>, Error> {
+    let mut counts: BTreeMap<(String, String), i64> = BTreeMap::new();
+    for (key, code) in entries {
+        let Some((repository, _)) = key.rsplit_once('#') else {
+            let cause = format!("rejected key {key:?} has no number");
+            return Err(Error::workflow(
+                "store_state_invalid",
+                true,
+                Some(cause.into()),
+            ));
+        };
+        *counts
+            .entry((repository.to_owned(), code.clone()))
+            .or_default() += 1;
+    }
+    Ok(counts)
+}
+
 /// Reports whether `review` counts in the current state.
 ///
 /// A queued or running row counts. An awaiting row counts only while it waits for a decision,
@@ -1610,11 +1637,35 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{StoredSlot, blocked_alone};
+    use super::{StoredSlot, blocked_alone, rejected};
 
     /// A stored reviewer slot with a result of `findings`.
     fn slot(findings: Value) -> Value {
         json!({"run": 1, "result": {"reviewer_id": "x", "summary": "S", "findings": findings}})
+    }
+
+    #[test]
+    fn rejected_counts_pull_requests_per_repository_and_code() {
+        let entries: BTreeMap<String, String> = [
+            ("example/a#1", "review_requested_from_team"),
+            ("example/a#2", "review_requested_from_team"),
+            ("example/a#3", "permission_denied"),
+            ("example/b#1", "review_requested_from_team"),
+        ]
+        .into_iter()
+        .map(|(key, code)| (key.to_owned(), code.to_owned()))
+        .collect();
+        let expected: BTreeMap<(String, String), i64> = [
+            (("example/a", "permission_denied"), 1),
+            (("example/a", "review_requested_from_team"), 2),
+            (("example/b", "review_requested_from_team"), 1),
+        ]
+        .into_iter()
+        .map(|((repository, code), count)| ((repository.to_owned(), code.to_owned()), count))
+        .collect();
+        assert_eq!(rejected(&entries).expect("counted"), expected);
+        let broken = BTreeMap::from([("example/a".to_owned(), "x".to_owned())]);
+        assert!(rejected(&broken).is_err());
     }
 
     #[test]

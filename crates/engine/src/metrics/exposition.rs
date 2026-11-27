@@ -46,6 +46,16 @@ pub(crate) fn render(gauges: &Gauges, counts: &Counts) -> String {
     for (repository, stopped) in &gauges.stopped {
         sample(&mut out, name, &[("repository", repository)], *stopped);
     }
+    let name = "autoreview_pull_requests_rejected";
+    let help = "Pull requests that discovery refuses to review, by refusal code.";
+    header(&mut out, name, "gauge", help);
+    for ((repository, code), rejected) in &gauges.rejected {
+        let labels = [
+            ("repository", repository.as_str()),
+            ("error_code", code.as_str()),
+        ];
+        sample(&mut out, name, &labels, *rejected);
+    }
     let totals: [CountFamily; 4] = [
         (
             "autoreview_reviews_started_total",

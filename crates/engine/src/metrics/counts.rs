@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 use autoreview_schedule::scheduler::Record;
 
 use crate::error::Error;
-use crate::stats::{Ending, Published, StateCounts, completed_ending, counts_now, stopped};
+use crate::stats::{
+    Ending, Published, StateCounts, completed_ending, counts_now, rejected, stopped,
+};
 use crate::store::{StepOutcome, StepRun, StoredReview};
 
 /// Upper bounds of the publication time buckets in seconds, from one minute to three days.
@@ -162,6 +164,8 @@ pub(crate) struct Gauges {
     pub(crate) reviews: BTreeMap<(String, String), StateCounts>,
     /// Pull requests stopped after their retries per repository.
     pub(crate) stopped: BTreeMap<String, i64>,
+    /// Rejected pull requests per repository and refusal code.
+    pub(crate) rejected: BTreeMap<(String, String), i64>,
 }
 
 impl Gauges {
@@ -169,10 +173,11 @@ impl Gauges {
     ///
     /// # Errors
     ///
-    /// Returns `store_state_invalid` for a schedule key without `#`.
+    /// Returns `store_state_invalid` for a schedule or rejected key without `#`.
     pub(crate) fn read(
         reviews: &[StoredReview],
         schedule: &BTreeMap<String, Record>,
+        refused: &BTreeMap<String, String>,
     ) -> Result<Self, Error> {
         let mut counts: BTreeMap<(String, String), StateCounts> = BTreeMap::new();
         for review in reviews.iter().filter(|review| counts_now(review)) {
@@ -186,6 +191,7 @@ impl Gauges {
         Ok(Self {
             reviews: counts,
             stopped: stopped(schedule)?,
+            rejected: rejected(refused)?,
         })
     }
 }
