@@ -3,6 +3,19 @@
 Release notes of autoreview, newest first. Unreleased changes are fragments
 under `changelog.d/`; `scripts/changelog fold` moves them here.
 
+## 0.9.0 - 2026-11-28
+
+### Added
+
+- Each pull request that discovery rejects is logged once at info level with its code, and the new gauge `autoreview_pull_requests_rejected` counts the rejected pull requests per repository and error code. ([#578](https://github.com/pohunekd/autoreview/issues/578))
+- A credential can list teams in `review_teams`; a pull request that requests its review from one of them is reviewed as if it requested the credential's login. Without the key, a team-only request is still rejected as `review_requested_from_team`. ([#579](https://github.com/pohunekd/autoreview/issues/579))
+
+### Fixed
+
+- A pull request that also requests a review from a team no longer stops the discovery of every other pull request of its credential when the token lacks the organization permission Members: read, and a pull request requested only from a team is listed as rejected with `review_requested_from_team` instead of being dropped silently. ([#576](https://github.com/pohunekd/autoreview/issues/576))
+- Review request searches run once per repository or owner pattern, so a fine-grained token that serves public and private repositories finds the pull requests of the private ones again with gh 2.100 or newer, and a credential that mixes an owner pattern with a repository of another owner finds both. ([#577](https://github.com/pohunekd/autoreview/issues/577))
+- Updated the `url` dependency to 2.5.9, which fixes a stack overflow in `Url::origin()` on deeply nested `blob:` URLs (RUSTSEC-2026-0592). ([#582](https://github.com/pohunekd/autoreview/issues/582))
+
 ## 0.8.0 - 2026-11-19
 
 ### Added
